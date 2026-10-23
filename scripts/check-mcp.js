@@ -26,11 +26,7 @@ function fakeHooks() {
     listAccounts: () => accounts.map((a) => ({ ...a, active: a.id === active })),
     regions: () => [{ key: 'auto', label: '自动' }, { key: 'us', label: '美国' }],
     activate: (id) => { active = id; },
-    addAccount: async ({ name, region }) => {
-      const acc = { id: `a${accounts.length + 1}`, name: name || '账号 3', muted: false, unread: 0, status: 'loading', problem: '', region };
-      accounts.push(acc);
-      return acc;
-    },
+    openAddAccount: ({ name, region }) => { state.editorOpened = { name, region }; },
     renameAccount: (id, name) => {
       const a = accounts.find((x) => x.id === id);
       if (!a) return false;
@@ -115,7 +111,8 @@ async function main() {
   const bad = await client.callTool({ name: 'switch_account', arguments: { id: 'nope' } });
   check(bad.isError, '不存在的账号返回错误');
   const added = json(await client.callTool({ name: 'add_account', arguments: { name: '新号', region: 'us' } }));
-  check(added.ok && added.name === '新号', 'add_account 新建账号');
+  check(added.ok && added.created === false && hooks.listAccounts().length === 2, 'add_account 不直接创建账号');
+  check(hooks.state.editorOpened && hooks.state.editorOpened.name === '新号' && hooks.state.editorOpened.region === 'us', 'add_account 打开预填名称和地区的添加窗口');
   const badRegion = await client.callTool({ name: 'add_account', arguments: { region: 'mars' } });
   check(badRegion.isError, 'add_account 拒绝不存在的地区');
   json(await client.callTool({ name: 'rename_account', arguments: { id: 'a1', name: '工作号2' } }));
@@ -123,11 +120,14 @@ async function main() {
 
   hooks.state.removeAnswer = 'cancelled';
   const rm1 = await client.callTool({ name: 'remove_account', arguments: { id: 'a1' } });
-  check(rm1.isError && hooks.listAccounts().length === 3, 'remove_account：用户没确认时账号保留');
+  check(rm1.isError && hooks.listAccounts().length === 2, 'remove_account：用户没确认时账号保留');
   check(hooks.state.removeCalls[0].timeoutMs === 120000, 'remove_account 的确认弹窗 2 分钟超时');
+  hooks.state.removeAnswer = 'busy';
+  const rmBusy = await client.callTool({ name: 'remove_account', arguments: { id: 'a1' } });
+  check(rmBusy.isError && /已经有一个删除确认框/.test(rmBusy.content[0].text), 'remove_account：已有确认框时返回忙');
   hooks.state.removeAnswer = 'removed';
   const rm2 = await client.callTool({ name: 'remove_account', arguments: { id: 'a1' } });
-  check(!rm2.isError && hooks.listAccounts().length === 2, 'remove_account：用户确认后删除');
+  check(!rm2.isError && hooks.listAccounts().length === 1, 'remove_account：用户确认后删除');
 
   check(ctl.status().clients.some((c) => c.name.startsWith('check-mcp')), '设置页能看到已连接的客户端');
   await client.close();
@@ -142,7 +142,7 @@ async function main() {
   const bt = await bridge.listTools();
   check(bt.tools.length === 7, `桥接程序转发工具列表（${bt.tools.length} 个）`);
   const bl = json(await bridge.callTool({ name: 'list_accounts', arguments: {} }));
-  check(bl.length === 2, '桥接程序转发工具调用');
+  check(bl.length === 1, '桥接程序转发工具调用');
 
   // 换 token：旧 token 失效，桥接程序自动用新 token 重连
   const oldToken = ctl.status().token;
@@ -150,7 +150,7 @@ async function main() {
   const oldStatus = await rawRequest(port, { token: oldToken });
   check(ctl.status().token !== oldToken && oldStatus === 401, `换 token 后旧 token 失效（${oldStatus}）`);
   const bl2 = json(await bridge.callTool({ name: 'list_accounts', arguments: {} }));
-  check(bl2.length === 2, '换 token 后桥接程序自动重连');
+  check(bl2.length === 1, '换 token 后桥接程序自动重连');
   await bridge.close();
 
   // 重启软件：沿用 token

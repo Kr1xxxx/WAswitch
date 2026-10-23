@@ -70,9 +70,9 @@ npx electron scripts/check-isolation.js
 | `get_unread_counts` | 各账号未读对话数和总数 |
 | `get_connection_status` | 各账号页面状态和错误说明（例如代理连不上） |
 | `switch_account` | 切换到某个账号并显示窗口 |
-| `add_account` | 新建账号并打开登录页，扫码仍由你在手机上完成 |
+| `add_account` | 打开“添加账号”窗口并预填名称和地区。不会直接创建：你确认代理并保存后才联网，扫码仍由你在手机上完成 |
 | `rename_account` | 修改账号显示名称 |
-| `remove_account` | 删除账号；软件会弹窗让你确认，2 分钟没人确认视为取消 |
+| `remove_account` | 删除账号；软件会弹窗让你确认，2 分钟没人确认视为取消；同一时间只会有一个确认框 |
 
 读消息、发消息、群发属于后续版本，会默认关闭、单独开关，并且每次发送都要在软件里确认。
 
@@ -81,6 +81,8 @@ npx electron scripts/check-isolation.js
 - 只监听 `127.0.0.1`，只接受本机连接；`Host` 头只接受 `127.0.0.1` 或 `localhost`，防止 DNS 重绑定。
 - 浏览器网页发起的请求（带 `Origin` 头）一律拒绝。
 - 每个请求都要带随机 token。token 和端口保存在软件数据目录下的 `mcp-token.json`，只有本人可读（0600）。关闭 MCP 时删除这个文件，重新开启或点“断开全部并更换 token”时换新 token。
+- 设置窗口里的 token 是打码显示的，点“复制命令”才会复制真实 token。注意 Claude Code 会把 token 保存在它自己的配置文件里；换 token 后要用新命令重新添加。
+- Windows 上 0600 权限不起作用，token 文件靠用户目录本身的权限保护（其他 Windows 用户读不到）。
 - 设置窗口显示当前已连接的客户端和调用次数。
 - 关闭时不加载任何 MCP 代码，不占内存。
 

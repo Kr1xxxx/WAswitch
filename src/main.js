@@ -183,10 +183,10 @@ const mcpHooks = {
   })),
   regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
   activate: (id) => { notifier.showWindow(); activate(id); },
-  addAccount: async ({ name, region }) => {
-    const acc = await addAccount({ name: name || nextName(), proxyStored: '', encPassword: '', region });
+  // 不直接创建：打开“添加账号”窗口并预填，由人确认代理后保存，避免新号先用真实 IP 联网
+  openAddAccount: ({ name, region }) => {
     notifier.showWindow();
-    return { id: acc.id, name: acc.name };
+    openEditor(null, { name, region });
   },
   renameAccount: (id, name) => {
     const acc = accounts.find((a) => a.id === id);
@@ -295,24 +295,33 @@ function activate(id) {
   pushState();
 }
 
-// 返回 'removed' | 'cancelled' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
+// 返回 'removed' | 'cancelled' | 'busy' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
+let removeDialogOpen = false;
 async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
   if (!acc) return 'not_found';
+  // 已经有一个删除确认框在等用户时，不再叠第二个
+  if (removeDialogOpen) return 'busy';
+  removeDialogOpen = true;
   const abort = new AbortController();
   const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : null;
   if (timeoutMs) notifier.showWindow();
-  const { response } = await dialog.showMessageBox(win, {
-    signal: abort.signal,
-    type: 'warning',
-    buttons: ['取消', '删除'],
-    defaultId: 0,
-    cancelId: 0,
-    title: '删除账号',
-    message: `删除「${acc.name}」？`,
-    detail: `会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
-  });
-  clearTimeout(timer);
+  let response;
+  try {
+    ({ response } = await dialog.showMessageBox(win, {
+      signal: abort.signal,
+      type: 'warning',
+      buttons: ['取消', '删除'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '删除账号',
+      message: `删除「${acc.name}」？`,
+      detail: `会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
+    }));
+  } finally {
+    clearTimeout(timer);
+    removeDialogOpen = false;
+  }
   if (response !== 1 || abort.signal.aborted) return 'cancelled';
   destroyView(id);
   problems.delete(id);
@@ -323,17 +332,6 @@ async function removeAccount(id, { timeoutMs } = {}) {
   saveAccounts();
   activate(accounts[0]?.id ?? null);
   return 'removed';
-}
-
-async function addAccount({ name, proxyStored, encPassword, region }) {
-  if (!fingerprint.regions[region]) region = 'auto';
-  const acc = { id: String(Date.now()), name, proxy: proxyStored, proxyPassword: encPassword, fingerprint: fingerprint.generate(region), muted: false };
-  accounts.push(acc);
-  saveAccounts();
-  await createView(acc);
-  activate(acc.id);
-  notifier.refresh();
-  return acc;
 }
 
 // 带用户名密码的 http 代理：按代理的地址和端口找到对应账号，取它的密码。
@@ -418,8 +416,11 @@ ipcMain.on('context', (_e, id) => {
 
 // ---------- 编辑窗口：新建账号和修改账号共用 ----------
 
-function openEditor(id) {
+// prefill：新建账号时预填的名称和地区（MCP 的 add_account 用）
+let editorPrefill = null;
+function openEditor(id, prefill = null) {
   if (editWin && !editWin.isDestroyed()) editWin.close();
+  editorPrefill = id ? null : prefill;
   editWin = new BrowserWindow({
     width: 480, height: 640, resizable: false, minimizable: false, maximizable: false,
     title: id ? '编辑账号' : '添加账号',
@@ -434,10 +435,10 @@ ipcMain.handle('editor:load', (_e, id) => {
   const acc = accounts.find((a) => a.id === id);
   return {
     isNew: !acc,
-    name: acc ? acc.name : nextName(),
+    name: acc ? acc.name : (editorPrefill?.name || nextName()),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
-    region: acc ? acc.fingerprint.region : 'auto',
+    region: acc ? acc.fingerprint.region : (editorPrefill?.region || 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
   };
 });
@@ -469,7 +470,11 @@ ipcMain.handle('editor:save', async (_e, { id, name, proxy: proxyText, password,
   }
 
   if (!acc) {
-    await addAccount({ name, proxyStored, encPassword, region });
+    acc = { id: String(Date.now()), name, proxy: proxyStored, proxyPassword: encPassword, fingerprint: fingerprint.generate(region) };
+    accounts.push(acc);
+    saveAccounts();
+    await createView(acc);
+    activate(acc.id);
   } else {
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region;
     acc.name = name;

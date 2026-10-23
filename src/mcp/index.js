@@ -30,11 +30,13 @@ function setupMcp({ hooks, lockLocalPage }) {
     };
   }
 
-  // 给设置窗口的数据：token 只出现在复制用的命令里
+  // 给设置窗口的数据：显示的命令里 token 打码，点“复制”时才取真实 token
   function view() {
     const s = controller.status();
     const { token, ...rest } = s;
-    return { ...rest, snippets: snippets(s) };
+    const shown = snippets(s);
+    if (token) shown.claudeCode = shown.claudeCode.replace(token, `${token.slice(0, 4)}••••••••`);
+    return { ...rest, snippets: shown };
   }
 
   ipcMain.handle('mcp:status', () => view());

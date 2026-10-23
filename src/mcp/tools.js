@@ -11,9 +11,9 @@ const STATUS_NOTE = 'status 含义：not_loaded 页面还没打开；loading 正
 //   listAccounts() -> [{ id, name, active, unread, muted, status, problem }]
 //   regions() -> [{ key, label }]
 //   activate(id)
-//   addAccount({ name, region }) -> { id, name }
+//   openAddAccount({ name, region })  打开预填的“添加账号”窗口，由人确认后保存
 //   renameAccount(id, name) -> boolean
-//   removeAccount(id, { timeoutMs }) -> 'removed' | 'cancelled' | 'not_found'
+//   removeAccount(id, { timeoutMs }) -> 'removed' | 'cancelled' | 'busy' | 'not_found'
 function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
   const find = (id) => hooks.listAccounts().find((a) => a.id === id);
   const idArg = z.string().min(1).describe('账号 id，来自 list_accounts');
@@ -58,16 +58,16 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
 
   server.registerTool('add_account', {
     title: '添加账号',
-    description: '新建一个账号并在窗口里打开 WhatsApp 登录页。之后需要用户自己用手机扫码登录。新账号不设代理；需要代理请在软件里右键账号编辑。',
+    description: '在 WAswitch 里打开“添加账号”窗口，并预填名称和地区。不会直接创建账号：用户要在窗口里确认代理并点保存，之后用手机扫码登录。这样新号不会在没设代理的情况下先联网。保存后可以用 list_accounts 查到新账号。',
     inputSchema: {
-      name: z.string().trim().min(1).max(40).optional().describe('账号名称，不填则自动命名'),
+      name: z.string().trim().min(1).max(40).optional().describe('预填的账号名称，不填则自动命名'),
       region: z.enum(hooks.regions().map((r) => r.key)).optional()
-        .describe(`地区（决定时区和语言），默认 auto。可选：${hooks.regions().map((r) => `${r.key}=${r.label}`).join('，')}`),
+        .describe(`预填的地区（决定时区和语言），默认 auto。可选：${hooks.regions().map((r) => `${r.key}=${r.label}`).join('，')}`),
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ name, region }) => {
-    const acc = await hooks.addAccount({ name, region: region || 'auto' });
-    return text({ ok: true, id: acc.id, name: acc.name, next: '请在 WAswitch 窗口里用手机 WhatsApp 扫码登录' });
+    hooks.openAddAccount({ name, region: region || 'auto' });
+    return text({ ok: true, created: false, next: '已在 WAswitch 里打开“添加账号”窗口。请用户确认名称、代理和地区后点保存，再用手机 WhatsApp 扫码登录。' });
   });
 
   server.registerTool('rename_account', {
@@ -86,6 +86,7 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
     const result = await hooks.removeAccount(id, { timeoutMs: confirmTimeoutMs });
     if (result === 'removed') return text({ ok: true, removed: id });
     if (result === 'not_found') return fail(`没有 id 为 ${id} 的账号`);
+    if (result === 'busy') return fail('已经有一个删除确认框在等用户处理，请稍后再试。');
     return fail('用户没有确认删除（取消或超时），账号保留。');
   });
 }
