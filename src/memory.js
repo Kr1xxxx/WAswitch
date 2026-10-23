@@ -25,13 +25,20 @@ const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
+// 0 表示关闭；其他值取最接近的一档（老版本存的 500 会变成 600）
+function nearestRecycle(v) {
+  if (v === 0) return 0;
+  if (!Number.isFinite(v) || v < 0) return DEFAULTS.recycleMB;
+  return RECYCLE_CHOICES.reduce((best, c) => (Math.abs(c - v) < Math.abs(best - v) ? c : best));
+}
+
 function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     const bool = (k) => (typeof raw[k] === 'boolean' ? raw[k] : DEFAULTS[k]);
     return {
       lowMemoryMode: bool('lowMemoryMode'),
-      recycleMB: Number.isFinite(raw.recycleMB) && raw.recycleMB >= 0 ? raw.recycleMB : DEFAULTS.recycleMB,
+      recycleMB: nearestRecycle(raw.recycleMB),
       closeToTray: bool('closeToTray'),
       openAtLogin: bool('openAtLogin'),
       sidebarCollapsed: bool('sidebarCollapsed'),

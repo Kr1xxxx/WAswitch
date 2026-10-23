@@ -20,18 +20,29 @@ const waPage = require('./wa-page');
 const isPrimary = app.requestSingleInstanceLock();
 if (!isPrimary) app.exit(0);
 
-// 出错时：记日志、提示、自动重启。刚启动就出错则不自动重启，免得反复崩溃。
+// 出错时：记日志、提示、自动重启。为免反复崩溃：刚启动 60 秒内出错不重启；
+// 10 分钟内已经自动重启过 3 次也不再重启。次数通过重启参数传给下一次运行。
+const CRASH_WINDOW_MS = 10 * 60 * 1000;
+function crashHistory() {
+  const arg = process.argv.find((a) => a.startsWith('--crash-history='));
+  const now = Date.now();
+  return (arg ? arg.split('=')[1].split(',').map(Number) : []).filter((t) => Number.isFinite(t) && now - t < CRASH_WINDOW_MS);
+}
 log.init((e) => {
   try {
     if (app.isReady()) {
-      const relaunch = process.uptime() > 60;
+      const history = crashHistory();
+      const relaunch = process.uptime() > 60 && history.length < 3;
       dialog.showMessageBoxSync({
         type: 'error',
         title: 'WAswitch 出错了',
         message: relaunch ? 'WAswitch 遇到错误，马上自动重启。' : 'WAswitch 启动时出错，已经退出。',
         detail: `${e && e.message ? e.message : e}\n\n详细情况已写入日志文件夹：${log.logDir()}`,
       });
-      if (relaunch) app.relaunch();
+      if (relaunch) {
+        const args = process.argv.slice(1).filter((a) => !a.startsWith('--crash-history=') && a !== '--hidden');
+        app.relaunch({ args: [...args, `--crash-history=${[...history, Date.now()].join(',')}`] });
+      }
     }
   } finally {
     app.exit(1);
@@ -50,8 +61,13 @@ const TOPBAR = 44; // 卡片顶栏高度
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
-const startHidden = process.argv.includes('--hidden')
-  || (process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin);
+// 开机自启时是否直接缩在托盘（在 app ready 之后判断）。
+// macOS 13 以后系统不告诉软件是不是开机启动的，所以 Mac 上开机自启会正常弹出窗口。
+function shouldStartHidden() {
+  if (process.argv.includes('--hidden')) return true;
+  if (process.platform !== 'darwin') return false;
+  try { return app.getLoginItemSettings().wasOpenedAtLogin === true; } catch { return false; }
+}
 
 // ---------- 安全：链接、跳转、权限 ----------
 
@@ -116,11 +132,13 @@ function saveAccounts() {
 function loadAccounts() {
   const file = storeFile();
   let list = [];
-  accountsFileOk = true;
+  // 只有文件存在并且读取成功，才允许清理残留分区。文件丢了不能当成“没有账号”去删数据
+  accountsFileOk = false;
   if (fs.existsSync(file)) {
     try {
       list = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!Array.isArray(list)) throw new Error('not an array');
+      accountsFileOk = true;
     } catch (e) {
       // 文件损坏时先备份，不直接覆盖，也不清理任何数据
       const backup = `${file}.broken-${Date.now()}`;
@@ -130,7 +148,8 @@ function loadAccounts() {
       accountsFileOk = false;
     }
   }
-  // 老版本的账号缺字段，补上
+  // 去掉不是账号的条目，老版本的账号缺字段，补上
+  list = list.filter((acc) => acc && typeof acc === 'object' && acc.id !== undefined && acc.id !== null);
   list.forEach((acc, i) => {
     acc.id = String(acc.id);
     acc.name = String(acc.name || '未命名').slice(0, 40);
@@ -639,7 +658,7 @@ app.whenReady().then(async () => {
   activeId = accounts[0]?.id ?? null;
   page = accounts.length ? 'account' : 'welcome';
   refresh();
-  if (!startHidden) win.show();
+  if (!shouldStartHidden()) win.show();
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
   powerMonitor.on('resume', () => {
@@ -727,7 +746,7 @@ handleShell('editor:load', (id) => {
 // 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同
 handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   const acc = findAcc(id);
-  const pass = password || (acc ? proxy.decryptPassword(acc.proxyPassword) : '');
+  const pass = String(password || '') || (acc ? proxy.decryptPassword(acc.proxyPassword) : '');
   const res = await proxy.test(String(proxyText || ''), pass);
   if (!res.ok) return res;
   res.region = findByTimezone(res.timezone);
@@ -751,7 +770,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   // 密码：新填的优先；地址里带的其次；都没有则保留原来的（地址变了用户名也变了就清掉）
   let encPassword = acc ? acc.proxyPassword : '';
   try {
-    const newPass = password || (parsed && parsed.password) || '';
+    const newPass = String(password || '') || (parsed && parsed.password) || '';
     if (newPass) encPassword = proxy.encryptPassword(newPass);
     if (!parsed || !parsed.username) encPassword = '';
   } catch (e) {
