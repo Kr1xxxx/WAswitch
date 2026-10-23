@@ -5,6 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "check": "electron scripts/check-isolation.js",
     "dist": "electron-builder"
   },
   "license": "MIT",
