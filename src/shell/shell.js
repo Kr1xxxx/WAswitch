@@ -72,9 +72,9 @@ function tint(color) {
 function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
   const avatar = h('span', { class: 'avatar', style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
-  if (acc.problem) avatar.append(h('span', { class: 'dot bad' }, '!'));
+  if (acc.problem || acc.needsQr) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${acc.muted ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
-  const tip = [acc.name, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem].filter(Boolean).join('\n');
+  const tip = [acc.name, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, acc.needsQr ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   return h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
@@ -83,7 +83,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
-    h('span', { class: `sub${acc.problem ? ' bad' : ''}` }, acc.problem ? acc.problemShort : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || acc.needsQr ? ' bad' : ''}` }, acc.problem ? acc.problemShort : acc.needsQr ? '需要扫码登录' : acc.proxyLabel)),
   acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
 }

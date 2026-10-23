@@ -13,6 +13,7 @@ const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
+const waPage = require('./wa-page');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -191,6 +192,9 @@ const views = new Map(); // id -> WebContentsView
 const problems = new Map(); // id -> { title, text, retrying, config }
 const retries = new Map(); // id -> { attempt, timer }
 const exitIps = new Map(); // id -> 最近一次测到的出口 IP
+// id -> 'logged_in' | 'needs_qr'。以后 MCP 的账号状态也从这里读
+const loginStates = new Map();
+const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
 let activeId = null;
 let page = 'account'; // account | editor | settings | welcome
@@ -293,6 +297,7 @@ function pushState() {
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
         retrying: !!(problem && problem.retrying),
+        needsQr: loginStates.get(acc.id) === 'needs_qr',
       };
     }),
     totalMB: memoryManager.totalMB(),
@@ -350,6 +355,29 @@ async function retryNow(id) {
   if (problem && problem.config) { openEditor(id); return; }
   if (!views.has(id)) { await createView(acc); refresh(); return; }
   reconnect(id);
+}
+
+// ---------- 掉线检测 ----------
+// 每 3 分钟只读检查一次每个账号是否停在扫码页（在隔离环境里看页面结构，不读聊天内容）。
+// 从“已登录”变成“要扫码”时，不管有没有关通知都提醒，因为掉线会漏掉所有消息。
+
+async function checkLogins() {
+  let changed = false;
+  for (const acc of accounts) {
+    const view = views.get(acc.id);
+    if (!view || problems.has(acc.id)) continue;
+    const state = await waPage.loginState(view.webContents);
+    if (state === 'unknown') continue;
+    const before = loginStates.get(acc.id);
+    if (state === before) continue;
+    if (state === 'needs_qr' && before === 'logged_in') {
+      console.warn(`账号 ${acc.id} 已退出登录，需要重新扫码`);
+      notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
+    }
+    loginStates.set(acc.id, state);
+    changed = true;
+  }
+  if (changed) pushState();
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
@@ -481,6 +509,7 @@ async function removeAccount(id) {
   destroyView(id);
   problems.delete(id);
   exitIps.delete(id);
+  loginStates.delete(id);
   notifier.forget(id);
   memoryManager.forget(id);
   await session.fromPartition(`persist:wa-${id}`).clearStorageData();
@@ -625,6 +654,8 @@ app.whenReady().then(async () => {
     refresh();
   }
   memoryManager.start();
+  setInterval(checkLogins, LOGIN_CHECK_MS);
+  setTimeout(checkLogins, 60 * 1000);
 });
 
 // ---------- 本地界面发来的操作 ----------
