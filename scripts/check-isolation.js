@@ -2,7 +2,8 @@
 // 检查三件事：
 //   1. 两个账号的浏览器标识、语言、时区各自生效、互不影响
 //   2. 设了代理的账号，流量确实走代理
-//   3. 代理连不上时，请求失败，而不是悄悄改成直连
+//   3. 页面刷新后以上设置仍然生效
+//   4. 代理连不上时，请求失败，而不是悄悄改成直连
 // 运行：npx electron scripts/check-isolation.js
 const { app, BrowserWindow, session } = require('electron');
 const http = require('http');
@@ -55,6 +56,9 @@ app.whenReady().then(async () => {
     await fingerprint.attach(w.webContents, fp);
     await w.loadURL(`http://account-${name}.check/`);
     results[name] = await w.webContents.executeJavaScript(PROBE);
+    // 自动回收会刷新页面，刷新后伪装必须仍然生效
+    await new Promise((resolve) => { w.webContents.once('did-finish-load', resolve); w.webContents.reload(); });
+    results[name].afterReload = await w.webContents.executeJavaScript(PROBE);
     // Client Hints 只在安全页面（https 或本地文件）里可读
     await w.loadFile(__filename.replace(/check-isolation\.js$/, 'blank.html'));
     const ch = await w.webContents.executeJavaScript(PROBE);
@@ -67,8 +71,12 @@ app.whenReady().then(async () => {
   check(results.A.timezone === 'Asia/Singapore' && results.B.timezone === 'America/New_York', '两个账号的时区各自生效');
   check(results.A.languages[0] === 'en-SG' && results.B.languages[0] === 'en-US', '两个账号的语言各自生效');
   check(!/Electron|waswitch/i.test(results.A.ua), 'UA 里没有 Electron 或应用名');
+  check(['A', 'B'].every((n) => {
+    const a = results[n].afterReload;
+    return a.ua === results[n].ua && a.timezone === results[n].timezone && a.languages[0] === results[n].languages[0];
+  }), '页面刷新（自动回收）后 UA、时区、语言仍然生效');
   check(results.A.chBrands && results.A.chBrands.includes('Google Chrome'), 'Client Hints 里有 Google Chrome');
-  check(results.A.body === 'via-proxy' && fake.hits.length === 2, '设了代理的账号流量走代理');
+  check(results.A.body === 'via-proxy' && fake.hits.length === 4, '设了代理的账号流量走代理');
 
   // 代理连不上：应该失败，而不是直连
   const ses = session.fromPartition('check-dead');

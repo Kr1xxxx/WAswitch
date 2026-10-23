@@ -10,6 +10,11 @@ const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
+const memory = require('./memory');
+
+// 省内存模式要在 app ready 之前生效
+const settings = memory.loadSettings();
+memory.applyStartupSwitches(settings);
 
 const WA_URL = 'https://web.whatsapp.com/';
 const SIDEBAR_WIDTH = 72;
@@ -116,20 +121,54 @@ const problems = new Map(); // id -> 错误说明（代理连不上等）
 let activeId = null;
 let quitting = false;
 
+const memoryManager = new memory.MemoryManager(settings, {
+  views,
+  isBackground: (id) => id !== activeId || !win || !win.isVisible(),
+  unreadOf: (id) => notifier.unread.get(id) || 0,
+  onUpdate: () => notifier.refresh(),
+});
+
 const notifier = new Notifier({
   getAccounts: () => accounts,
   getWindow: () => win,
   activate: (id) => activate(id),
   quit: () => { quitting = true; app.quit(); },
+  memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
+  totalMemory: () => memoryManager.totalMB(),
+  settingsMenu: () => [
+    {
+      label: `后台账号超过 ${settings.recycleMB || memory.DEFAULTS.recycleMB} MB 时自动刷新回收内存`,
+      type: 'checkbox',
+      checked: settings.recycleMB > 0,
+      click: () => {
+        settings.recycleMB = settings.recycleMB > 0 ? 0 : memory.DEFAULTS.recycleMB;
+        memory.saveSettings(settings);
+        notifier.refresh();
+      },
+    },
+    {
+      label: '省内存模式（关闭显卡加速，重启后生效）',
+      type: 'checkbox',
+      checked: settings.lowMemoryMode,
+      click: () => {
+        settings.lowMemoryMode = !settings.lowMemoryMode;
+        memory.saveSettings(settings);
+        notifier.refresh();
+      },
+    },
+  ],
 });
 
+// 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
+// Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 function layout() {
   const { width, height } = win.getContentBounds();
   sidebar.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height });
   for (const [id, view] of views) {
-    view.setBounds(id === activeId
-      ? { x: SIDEBAR_WIDTH, y: 0, width: width - SIDEBAR_WIDTH, height }
-      : { x: 0, y: 0, width: 0, height: 0 });
+    const active = id === activeId;
+    view.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: width - SIDEBAR_WIDTH, height });
+    view.setVisible(active);
+    memoryManager.markBackground(id, !active || !win.isVisible());
   }
 }
 
@@ -231,6 +270,7 @@ async function removeAccount(id) {
   destroyView(id);
   problems.delete(id);
   notifier.forget(id);
+  memoryManager.forget(id);
   await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   accounts = accounts.filter((a) => a.id !== id);
   saveAccounts();
@@ -258,6 +298,9 @@ app.whenReady().then(async () => {
 
   win = new BaseWindow({ width: 1280, height: 820, title: 'WAswitch', icon: path.join(__dirname, '..', 'assets', 'icon.png') });
   notifier.init();
+  // 窗口隐藏到托盘时，当前账号也算后台
+  win.on('hide', layout);
+  win.on('show', layout);
   // 关闭窗口时缩到托盘，后台继续收消息；从托盘菜单“退出”才真正退出
   let hintShown = false;
   // Windows 关机或注销时不要拦着
@@ -286,6 +329,7 @@ app.whenReady().then(async () => {
   for (const acc of accounts) await createView(acc);
   layout();
   pushState();
+  memoryManager.start();
 });
 
 // ---------- 侧边栏操作 ----------
