@@ -5,10 +5,10 @@ const { z } = require('zod');
 const text = (data) => ({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] });
 const fail = (message) => ({ content: [{ type: 'text', text: message }], isError: true });
 
-const STATUS_NOTE = 'status 含义：not_loaded 页面还没打开；loading 正在加载；ready 页面已加载（可能已登录，也可能停在扫码页，一层工具不读页面内容，无法区分）；error 加载失败，原因见 problem。';
+const STATUS_NOTE = 'status 含义：not_loaded 页面还没打开；loading 正在加载；ready 页面已加载；error 加载失败，原因见 problem。login 是否登录：logged_in 已登录，needs_qr 停在扫码页需要重新扫码，unknown 还没检测到（每 3 分钟只读检测一次，不读聊天内容）。';
 
 // hooks 由 main.js 提供：
-//   listAccounts() -> [{ id, name, active, unread, muted, status, problem }]
+//   listAccounts() -> [{ id, name, active, unread, muted, status, login, problem }]
 //   regions() -> [{ key, label }]
 //   activate(id)
 //   openAddAccount({ name, region })  打开预填的“添加账号”窗口，由人确认后保存
@@ -39,7 +39,7 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
     inputSchema: { id: idArg.optional() },
     annotations: { readOnlyHint: true },
   }, async ({ id }) => {
-    const list = hooks.listAccounts().map(({ id: i, name, status, problem }) => ({ id: i, name, status, problem }));
+    const list = hooks.listAccounts().map(({ id: i, name, status, login, problem }) => ({ id: i, name, status, login, problem }));
     if (!id) return text(list);
     const one = list.find((a) => a.id === id);
     return one ? text(one) : fail(`没有 id 为 ${id} 的账号`);

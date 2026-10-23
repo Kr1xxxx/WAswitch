@@ -10,22 +10,38 @@ const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
   lowMemoryMode: false, // 关闭显卡加速
   recycleMB: 800, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
+  closeToTray: true, // 关闭窗口时缩到托盘
+  openAtLogin: false, // 开机自动启动（启动后缩在托盘）
+  sidebarCollapsed: false, // 侧栏只显示图标
 };
+const RECYCLE_CHOICES = [600, 800, 1000, 1500];
 const CHECK_EVERY_MS = 60 * 1000;
 const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
 const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回收
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
+// 0 表示关闭；其他值取最接近的一档（老版本存的 500 会变成 600）
+function nearestRecycle(v) {
+  if (v === 0) return 0;
+  if (!Number.isFinite(v) || v < 0) return DEFAULTS.recycleMB;
+  return RECYCLE_CHOICES.reduce((best, c) => (Math.abs(c - v) < Math.abs(best - v) ? c : best));
+}
+
 function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    const bool = (k) => (typeof raw[k] === 'boolean' ? raw[k] : DEFAULTS[k]);
     return {
-      lowMemoryMode: raw.lowMemoryMode === true,
-      recycleMB: Number.isFinite(raw.recycleMB) && raw.recycleMB >= 0 ? raw.recycleMB : DEFAULTS.recycleMB,
+      lowMemoryMode: bool('lowMemoryMode'),
+      recycleMB: nearestRecycle(raw.recycleMB),
+      closeToTray: bool('closeToTray'),
+      openAtLogin: bool('openAtLogin'),
+      sidebarCollapsed: bool('sidebarCollapsed'),
     };
   } catch {
     return { ...DEFAULTS };
@@ -110,4 +126,4 @@ class MemoryManager {
   }
 }
 
-module.exports = { DEFAULTS, MemoryManager, loadSettings, saveSettings, applyStartupSwitches };
+module.exports = { DEFAULTS, RECYCLE_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches };

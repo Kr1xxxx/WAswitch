@@ -47,7 +47,7 @@ class Notifier {
     this.unread.set(acc.id, count);
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
-    if (count > before && !acc.muted && !userIsLooking) this.notify(acc, count);
+    if (count > before && !acc.muted && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
     this.refresh();
   }
 
@@ -56,11 +56,12 @@ class Notifier {
     this.refresh();
   }
 
-  notify(acc, count) {
+  // 标题是账号名，正文不含消息内容
+  notify(acc, body) {
     if (!Notification.isSupported()) return;
     const n = new Notification({
       title: acc.name,
-      body: `有 ${count} 个未读对话`,
+      body,
       icon: asset('icon.png'),
       silent: false,
     });
