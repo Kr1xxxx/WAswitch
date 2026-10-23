@@ -11,6 +11,7 @@ const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
+const { setupMcp } = require('./mcp');
 
 // 省内存模式要在 app ready 之前生效
 const settings = memory.loadSettings();
@@ -156,8 +157,48 @@ const notifier = new Notifier({
         notifier.refresh();
       },
     },
+    ...(mcp ? [{ type: 'separator' }, { label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
 });
+
+// MCP 接口（默认关闭）。在 app ready 之后创建。
+let mcp = null;
+
+function accountStatus(id) {
+  const view = views.get(id);
+  if (problems.has(id)) return 'error';
+  if (!view) return 'not_loaded';
+  return view.webContents.isLoading() ? 'loading' : 'ready';
+}
+
+const mcpHooks = {
+  listAccounts: () => accounts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    active: a.id === activeId,
+    unread: notifier.unread.get(a.id) || 0,
+    muted: a.muted,
+    status: accountStatus(a.id),
+    problem: problems.get(a.id) || '',
+  })),
+  regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
+  activate: (id) => { notifier.showWindow(); activate(id); },
+  addAccount: async ({ name, region }) => {
+    const acc = await addAccount({ name: name || nextName(), proxyStored: '', encPassword: '', region });
+    notifier.showWindow();
+    return { id: acc.id, name: acc.name };
+  },
+  renameAccount: (id, name) => {
+    const acc = accounts.find((a) => a.id === id);
+    if (!acc) return false;
+    acc.name = name;
+    saveAccounts();
+    pushState();
+    notifier.refresh();
+    return true;
+  },
+  removeAccount: (id, opts) => removeAccount(id, opts),
+};
 
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
@@ -254,19 +295,25 @@ function activate(id) {
   pushState();
 }
 
-async function removeAccount(id) {
+// 返回 'removed' | 'cancelled' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
+async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
-  if (!acc) return;
+  if (!acc) return 'not_found';
+  const abort = new AbortController();
+  const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : null;
+  if (timeoutMs) notifier.showWindow();
   const { response } = await dialog.showMessageBox(win, {
+    signal: abort.signal,
     type: 'warning',
     buttons: ['取消', '删除'],
     defaultId: 0,
     cancelId: 0,
     title: '删除账号',
     message: `删除「${acc.name}」？`,
-    detail: '会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。',
+    detail: `会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
   });
-  if (response !== 1) return;
+  clearTimeout(timer);
+  if (response !== 1 || abort.signal.aborted) return 'cancelled';
   destroyView(id);
   problems.delete(id);
   notifier.forget(id);
@@ -275,6 +322,18 @@ async function removeAccount(id) {
   accounts = accounts.filter((a) => a.id !== id);
   saveAccounts();
   activate(accounts[0]?.id ?? null);
+  return 'removed';
+}
+
+async function addAccount({ name, proxyStored, encPassword, region }) {
+  if (!fingerprint.regions[region]) region = 'auto';
+  const acc = { id: String(Date.now()), name, proxy: proxyStored, proxyPassword: encPassword, fingerprint: fingerprint.generate(region), muted: false };
+  accounts.push(acc);
+  saveAccounts();
+  await createView(acc);
+  activate(acc.id);
+  notifier.refresh();
+  return acc;
 }
 
 // 带用户名密码的 http 代理：按代理的地址和端口找到对应账号，取它的密码。
@@ -330,6 +389,10 @@ app.whenReady().then(async () => {
   layout();
   pushState();
   memoryManager.start();
+
+  mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
+  await mcp.init();
+  notifier.refresh();
 });
 
 // ---------- 侧边栏操作 ----------
@@ -406,11 +469,7 @@ ipcMain.handle('editor:save', async (_e, { id, name, proxy: proxyText, password,
   }
 
   if (!acc) {
-    acc = { id: String(Date.now()), name, proxy: proxyStored, proxyPassword: encPassword, fingerprint: fingerprint.generate(region) };
-    accounts.push(acc);
-    saveAccounts();
-    await createView(acc);
-    activate(acc.id);
+    await addAccount({ name, proxyStored, encPassword, region });
   } else {
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region;
     acc.name = name;

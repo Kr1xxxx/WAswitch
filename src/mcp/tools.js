@@ -1,0 +1,93 @@
+// 一层工具：账号管理。只用主进程已有的数据（账号列表、页面标题里的未读数、加载状态），
+// 不读取 WhatsApp 页面内容，也不往页面注入脚本。
+const { z } = require('zod');
+
+const text = (data) => ({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] });
+const fail = (message) => ({ content: [{ type: 'text', text: message }], isError: true });
+
+const STATUS_NOTE = 'status 含义：not_loaded 页面还没打开；loading 正在加载；ready 页面已加载（可能已登录，也可能停在扫码页，一层工具不读页面内容，无法区分）；error 加载失败，原因见 problem。';
+
+// hooks 由 main.js 提供：
+//   listAccounts() -> [{ id, name, active, unread, muted, status, problem }]
+//   regions() -> [{ key, label }]
+//   activate(id)
+//   addAccount({ name, region }) -> { id, name }
+//   renameAccount(id, name) -> boolean
+//   removeAccount(id, { timeoutMs }) -> 'removed' | 'cancelled' | 'not_found'
+function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
+  const find = (id) => hooks.listAccounts().find((a) => a.id === id);
+  const idArg = z.string().min(1).describe('账号 id，来自 list_accounts');
+
+  server.registerTool('list_accounts', {
+    title: '列出账号',
+    description: `列出 WAswitch 里所有 WhatsApp 账号：id、名称、是否当前显示、未读对话数、是否静音、页面状态。${STATUS_NOTE}`,
+    annotations: { readOnlyHint: true },
+  }, async () => text(hooks.listAccounts()));
+
+  server.registerTool('get_unread_counts', {
+    title: '未读数汇总',
+    description: '各账号的未读对话数和总数。数字来自页面标题，是“有未读消息的对话数”，不是消息条数。',
+    annotations: { readOnlyHint: true },
+  }, async () => {
+    const list = hooks.listAccounts().map(({ id, name, unread, muted }) => ({ id, name, unread, muted }));
+    return text({ total: list.reduce((s, a) => s + a.unread, 0), accounts: list });
+  });
+
+  server.registerTool('get_connection_status', {
+    title: '连接状态',
+    description: `各账号页面的状态和错误说明（例如代理连不上）。${STATUS_NOTE}`,
+    inputSchema: { id: idArg.optional() },
+    annotations: { readOnlyHint: true },
+  }, async ({ id }) => {
+    const list = hooks.listAccounts().map(({ id: i, name, status, problem }) => ({ id: i, name, status, problem }));
+    if (!id) return text(list);
+    const one = list.find((a) => a.id === id);
+    return one ? text(one) : fail(`没有 id 为 ${id} 的账号`);
+  });
+
+  server.registerTool('switch_account', {
+    title: '切换账号',
+    description: '在 WAswitch 窗口里切换到指定账号，并把窗口显示到前台。',
+    inputSchema: { id: idArg },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  }, async ({ id }) => {
+    if (!find(id)) return fail(`没有 id 为 ${id} 的账号`);
+    hooks.activate(id);
+    return text({ ok: true, active: id });
+  });
+
+  server.registerTool('add_account', {
+    title: '添加账号',
+    description: '新建一个账号并在窗口里打开 WhatsApp 登录页。之后需要用户自己用手机扫码登录。新账号不设代理；需要代理请在软件里右键账号编辑。',
+    inputSchema: {
+      name: z.string().trim().min(1).max(40).optional().describe('账号名称，不填则自动命名'),
+      region: z.enum(hooks.regions().map((r) => r.key)).optional()
+        .describe(`地区（决定时区和语言），默认 auto。可选：${hooks.regions().map((r) => `${r.key}=${r.label}`).join('，')}`),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  }, async ({ name, region }) => {
+    const acc = await hooks.addAccount({ name, region: region || 'auto' });
+    return text({ ok: true, id: acc.id, name: acc.name, next: '请在 WAswitch 窗口里用手机 WhatsApp 扫码登录' });
+  });
+
+  server.registerTool('rename_account', {
+    title: '改名',
+    description: '修改账号在 WAswitch 里显示的名称（不影响 WhatsApp 资料）。',
+    inputSchema: { id: idArg, name: z.string().trim().min(1).max(40) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  }, async ({ id, name }) => (hooks.renameAccount(id, name) ? text({ ok: true, id, name }) : fail(`没有 id 为 ${id} 的账号`)));
+
+  server.registerTool('remove_account', {
+    title: '删除账号',
+    description: `删除账号并清除它在本机的登录数据，之后要重新扫码。WAswitch 会弹窗让用户确认，${Math.round(confirmTimeoutMs / 1000)} 秒内没人确认视为取消。`,
+    inputSchema: { id: idArg },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  }, async ({ id }) => {
+    const result = await hooks.removeAccount(id, { timeoutMs: confirmTimeoutMs });
+    if (result === 'removed') return text({ ok: true, removed: id });
+    if (result === 'not_found') return fail(`没有 id 为 ${id} 的账号`);
+    return fail('用户没有确认删除（取消或超时），账号保留。');
+  });
+}
+
+module.exports = { registerAccountTools };

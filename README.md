@@ -56,6 +56,42 @@
 npx electron scripts/check-isolation.js
 ```
 
+## MCP 接口（可选，默认关闭）
+
+开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以通过 [MCP](https://modelcontextprotocol.io) 管理 WAswitch 里的账号。
+
+开启方法：托盘图标右键 →“MCP 接口设置…”→ 勾选“开启 MCP 接口”。设置窗口会生成 Claude Code 的添加命令和 Claude Desktop 的配置，复制即可。
+
+当前开放的工具（一层：账号管理，不读取聊天内容）：
+
+| 工具 | 作用 |
+| --- | --- |
+| `list_accounts` | 列出账号：名称、是否当前显示、未读对话数、是否静音、页面状态 |
+| `get_unread_counts` | 各账号未读对话数和总数 |
+| `get_connection_status` | 各账号页面状态和错误说明（例如代理连不上） |
+| `switch_account` | 切换到某个账号并显示窗口 |
+| `add_account` | 新建账号并打开登录页，扫码仍由你在手机上完成 |
+| `rename_account` | 修改账号显示名称 |
+| `remove_account` | 删除账号；软件会弹窗让你确认，2 分钟没人确认视为取消 |
+
+读消息、发消息、群发属于后续版本，会默认关闭、单独开关，并且每次发送都要在软件里确认。
+
+安全措施：
+
+- 只监听 `127.0.0.1`，只接受本机连接；`Host` 头只接受 `127.0.0.1` 或 `localhost`，防止 DNS 重绑定。
+- 浏览器网页发起的请求（带 `Origin` 头）一律拒绝。
+- 每个请求都要带随机 token。token 和端口保存在软件数据目录下的 `mcp-token.json`，只有本人可读（0600）。关闭 MCP 时删除这个文件，重新开启或点“断开全部并更换 token”时换新 token。
+- 设置窗口显示当前已连接的客户端和调用次数。
+- 关闭时不加载任何 MCP 代码，不占内存。
+
+Claude Desktop 只支持 stdio，所以通过 `bin/waswitch-mcp.js` 桥接。它每次连接时从 `mcp-token.json` 读最新的 token，换 token 后不用改配置。
+
+自检（不需要 Electron 和 WhatsApp 账号）：
+
+```bash
+npm run check:mcp
+```
+
 ## 本地运行
 
 需要 Node.js 20+。
