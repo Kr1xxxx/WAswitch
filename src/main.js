@@ -84,7 +84,9 @@ function createView(acc) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   ses.setUserAgent(UA);
   setupPermissions(ses);
-  const view = new WebContentsView({ webPreferences: { session: ses } });
+  const view = new WebContentsView({
+    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
   view.webContents.setUserAgent(UA);
   setupNavigationGuards(view.webContents);
   view.webContents.loadURL(WA_URL);
@@ -109,9 +111,12 @@ function activate(id) {
 }
 
 app.whenReady().then(() => {
+  // 侧边栏用的默认会话不需要任何权限
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
   win = new BaseWindow({ width: 1280, height: 820, title: 'WAswitch' });
   sidebar = new WebContentsView({
-    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
   win.contentView.addChildView(sidebar);
   sidebar.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
