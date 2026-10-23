@@ -69,6 +69,22 @@ async function apply(ses, raw) {
   }
 }
 
+// 通过某个会话访问查询出口 IP 的网址，返回出口 IP、国家、时区
+function queryExit(ses, onLogin) {
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url: 'https://ipinfo.io/json', session: ses, useSessionCookies: false });
+    const timer = setTimeout(() => { req.abort(); reject(new Error('连接超时（10 秒）')); }, 10000);
+    req.on('login', (authInfo, callback) => onLogin(authInfo, callback));
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => { clearTimeout(timer); res.statusCode === 200 ? resolve(data) : reject(new Error(`HTTP ${res.statusCode}`)); });
+    });
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.end();
+  });
+}
+
 // 测试代理：通过它访问一个查询出口 IP 的网址，返回出口 IP、国家、时区。
 // 用一个临时的内存会话，不影响任何账号。
 async function test(raw, password) {
@@ -80,20 +96,9 @@ async function test(raw, password) {
   await ses.setProxy({ mode: 'fixed_servers', proxyRules: p.rules, proxyBypassRules: '<local>' });
   const started = Date.now();
   try {
-    const body = await new Promise((resolve, reject) => {
-      const req = net.request({ url: 'https://ipinfo.io/json', session: ses, useSessionCookies: false });
-      const timer = setTimeout(() => { req.abort(); reject(new Error('连接超时（10 秒）')); }, 10000);
-      req.on('login', (authInfo, callback) => {
-        if (authInfo.isProxy && p.username) callback(p.username, password || p.password);
-        else callback();
-      });
-      req.on('response', (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => { clearTimeout(timer); res.statusCode === 200 ? resolve(data) : reject(new Error(`HTTP ${res.statusCode}`)); });
-      });
-      req.on('error', (e) => { clearTimeout(timer); reject(e); });
-      req.end();
+    const body = await queryExit(ses, (authInfo, callback) => {
+      if (authInfo.isProxy && p.username) callback(p.username, password || p.password);
+      else callback();
     });
     const info = JSON.parse(body);
     return { ok: true, ip: info.ip, country: info.country, city: info.city, timezone: info.timezone, ms: Date.now() - started };
@@ -105,4 +110,20 @@ async function test(raw, password) {
   }
 }
 
-module.exports = { parse, apply, test, encryptPassword, decryptPassword };
+// 查本机直连时的出口 IP（主号没设代理时，用来确认轻量小号和主号不在同一个 IP）。
+// 只访问 ipinfo.io，不访问 WhatsApp。
+async function testDirect() {
+  const ses = session.fromPartition('proxytest-direct', { cache: false });
+  await ses.setProxy({ mode: 'direct' });
+  try {
+    const info = JSON.parse(await queryExit(ses, (_a, callback) => callback()));
+    return { ok: true, ip: info.ip, country: info.country };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    ses.clearStorageData().catch(() => {});
+    ses.closeAllConnections().catch(() => {});
+  }
+}
+
+module.exports = { parse, apply, test, testDirect, encryptPassword, decryptPassword };

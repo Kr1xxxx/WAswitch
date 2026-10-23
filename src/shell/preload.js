@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld('wa', {
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
   editorTest: (data) => ipcRenderer.invoke('editor:test', data),
   editorSave: (data) => ipcRenderer.invoke('editor:save', data),
+  liteOpen: (id, jid) => ipcRenderer.send('lite:open', { id, jid }),
+  liteSend: (id, jid, text) => ipcRenderer.invoke('lite:send', { id, jid, text }),
+  openLink: (url) => ipcRenderer.send('open-link', url),
 });

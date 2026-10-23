@@ -83,7 +83,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
-    h('span', { class: `sub${acc.problem || acc.needsQr ? ' bad' : ''}` }, acc.problem ? acc.problemShort : acc.needsQr ? '需要扫码登录' : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || acc.needsQr ? ' bad' : ''}` }, acc.problem ? acc.problemShort : acc.needsQr ? '需要扫码登录' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
   acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
 }
@@ -129,13 +129,14 @@ function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
   if ($top.hidden) return;
+  const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
+    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
     h('span', { class: 'grow' }),
     h('span', { class: `chip${acc.problem ? ' bad' : ''}`, title: '网络线路' }, icon('globe', 12), acc.problem ? acc.problemShort : acc.proxyLabel),
-    h('span', { class: 'chip', title: '时区和语言' }, icon('clock', 12), acc.regionLabel),
-    acc.memMB ? h('span', { class: 'chip', title: '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
-    h('button', { class: 'icon-btn', title: '刷新', 'aria-label': '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
+    lite ? null : h('span', { class: 'chip', title: '时区和语言' }, icon('clock', 12), acc.regionLabel),
+    acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
+    h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
 }
 
@@ -149,7 +150,7 @@ function problemPage(acc) {
     acc.retrying ? h('p', { class: 'hint' }, '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
     h('div', { class: 'btns' },
       h('button', { class: 'btn', onclick: () => window.wa.edit(acc.id) }, '修改代理'),
-      h('button', { class: 'btn primary', onclick: () => window.wa.retry(acc.id) }, '重新连接'))));
+      h('button', { class: 'btn primary', onclick: () => window.wa.retry(acc.id) }, acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接'))));
 }
 
 function welcomePage() {
@@ -171,6 +172,31 @@ function editorPage(id) {
   window.wa.editorLoad(id).then((d) => {
     let color = d.color;
     let tested = null;
+    let mode = d.mode;
+    // 主号：只能用网页版。已经是主号的不能在这里取消，要在别的号里勾选来更换
+    const primary = h('input', { type: 'checkbox', checked: d.primary, disabled: d.primary && !d.isNew });
+    const primaryHint = h('span', { class: 'hint' },
+      d.primary && !d.isNew ? '要换主号，在另一个网页版账号里勾选。'
+        : d.primaryName ? `现在的主号是「${d.primaryName}」，勾选后改为这个号。` : '第一个网页版账号默认是主号。');
+    const primaryRow = h('div', { class: 'field' }, '主号',
+      h('label', { class: 'check-row' }, primary, h('span', null, '这是主号（主号只能用网页版）')), primaryHint);
+    const liteConfirm = h('input', { type: 'checkbox' });
+    const liteBox = h('div', { class: 'note bad lite-risk' },
+      h('b', null, '轻量模式不是官方客户端'),
+      h('span', null, '它直接连 WhatsApp 服务器，不开网页，每个号只占几十 MB 内存；但 WhatsApp 可能识别出来并封号（通常在几天到几周内）。只能收发文字，图片、语音等只显示类型。'),
+      d.isNew ? h('label', { class: 'check-row' }, liteConfirm, h('span', null, '我知道这个号可能被封。我会先用不重要的号试用两周，再考虑用在正式号上。')) : null);
+    const modeCard = (value, title, desc) => h('button', {
+      type: 'button', class: `mode${mode === value ? ' on' : ''}`, 'aria-pressed': String(mode === value), 'data-mode': value,
+      onclick: () => { if (!modeBtnDisabled(value)) { mode = value; onModeChange(); } },
+    }, h('b', null, title), h('span', null, desc));
+    const modeCards = h('div', { class: 'modes' },
+      modeCard('web', '网页版（推荐）', '和浏览器里的 WhatsApp Web 一样，最稳。每个号约 300 MB 内存。主号必须用这个。'),
+      modeCard('lite', '轻量模式（小号）', '不开网页，每个号几十 MB。只收发文字，有封号风险。'));
+    const modeBtnDisabled = (value) => value === 'lite' && (primary.checked || !d.liteAvailable);
+    const modeRow = d.isNew
+      ? h('div', { class: 'field' }, '账号类型', modeCards,
+        !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
+      : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
@@ -191,7 +217,7 @@ function editorPage(id) {
       onclick: () => { color = c; drawSwatches(); },
     })));
     const drawPresets = () => presets.replaceChildren(...PRESETS.map(([label, v]) => h('button', {
-      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button',
+      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button', hidden: mode === 'lite' && !v,
       onclick: () => { proxyInput.value = v; onProxyChange(); },
     }, label)));
     const drawTags = () => {
@@ -209,6 +235,32 @@ function editorPage(id) {
       drawPresets();
       drawTags();
     };
+    const regionRow = h('label', { class: 'field' }, '时区和语言', region, tags, h('span', { class: 'hint' }, '应该和代理出口所在地一致，点“测试”会自动选好。'));
+    const proxyHint = h('span', { class: 'hint' });
+    const onModeChange = () => {
+      const lite = mode === 'lite';
+      for (const b of modeCards.children) {
+        const on = b.dataset.mode === mode;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+        b.disabled = modeBtnDisabled(b.dataset.mode);
+        b.title = b.dataset.mode === 'lite' && primary.checked ? '主号只能用网页版' : '';
+      }
+      primaryRow.hidden = lite;
+      regionRow.hidden = lite;
+      liteBox.hidden = !lite;
+      proxyHint.textContent = lite
+        ? '轻量模式必须走代理，不能直连，并且要先“测试”通过才能保存。出口 IP 不能和主号相同。socks5 不支持密码，带密码的代理请用 http://。'
+        : '测试会通过这个代理访问 ipinfo.io 查询出口 IP。代理连不上时这个账号会暂停联网，不会改用直连。socks5 不支持密码，带密码的代理请用 http://。Clash 设置方法见 docs/clash.md。';
+      for (const b of presets.children) if (b.textContent === '直连') b.hidden = lite;
+      sidePanel.replaceChildren(...sideText());
+    };
+    primary.addEventListener('change', () => { if (primary.checked && mode === 'lite') mode = 'web'; onModeChange(); });
+    const sideText = () => (d.isNew
+      ? [h('div', { class: 'qr' }, mode === 'lite' ? '保存后右边会显示登录二维码' : '保存后右边会打开 WhatsApp 登录页，显示二维码'),
+        h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫码'))]
+      : [h('span', null, mode === 'lite' ? '修改代理后会重新连接，不需要重新扫码。' : '修改代理或时区后，这个账号的页面会重新加载，不需要重新扫码。')]);
+    const sidePanel = h('div', { class: 'side-panel' });
     proxyInput.addEventListener('input', onProxyChange);
     region.addEventListener('change', drawTags);
 
@@ -237,7 +289,9 @@ function editorPage(id) {
       error.textContent = '';
       if (!name.value.trim()) { error.textContent = '请填写名称'; name.focus(); return; }
       saveBtn.disabled = true;
-      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), color, proxy: proxyInput.value, password: password.value, region: region.value });
+      if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
+      if (mode === 'lite' && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
+      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
     };
@@ -252,16 +306,16 @@ function editorPage(id) {
         h('div', { class: 'hstack', style: { alignItems: 'flex-end', gap: '14px' } },
           h('label', { class: 'field', style: { flex: '1' } }, '名称', name),
           h('div', { class: 'field' }, '颜色', swatches)),
-        h('div', { class: 'field' }, '网络线路（代理）', presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result,
-          h('span', { class: 'hint' }, '测试会通过这个代理访问 ipinfo.io 查询出口 IP。代理连不上时这个账号会暂停联网，不会改用直连。socks5 不支持密码，带密码的代理请用 http://。Clash 设置方法见 docs/clash.md。')),
+        modeRow,
+        primaryRow,
+        h('div', { class: 'field' }, '网络线路（代理）', presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint),
         passwordRow,
-        h('label', { class: 'field' }, '时区和语言', region, tags, h('span', { class: 'hint' }, '应该和代理出口所在地一致，点“测试”会自动选好。')),
+        regionRow,
+        liteBox,
         error,
         h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: () => window.wa.showPage('account') }, '取消'), saveBtn)),
-      h('div', { class: 'side-panel' },
-        d.isNew ? [h('div', { class: 'qr' }, '保存后右边会打开 WhatsApp 登录页，显示二维码'),
-          h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫码'))]
-          : h('span', null, '修改代理或时区后，这个账号的页面会重新加载，不需要重新扫码。')));
+      sidePanel);
+    onModeChange();
     name.focus();
   });
   return root;
@@ -293,7 +347,7 @@ function settingsPage() {
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
-          h('span', { class: 'hint' }, a.problem ? a.problemShort : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
+          h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
         h('span', { class: 'hint' }, '近似值：只统计每个账号的主页面进程，实际会略高一点。')),
       setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? 800 : 0)),
@@ -372,9 +426,14 @@ function render(forceContent = false) {
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || document.activeElement.tagName !== 'SELECT') $content.replaceChildren(settingsPage());
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
+  } else if (acc && !acc.problem && acc.mode === 'lite') {
+    // 轻量模式聊天页：同一个元素反复更新，不重建
+    const el = litePage(acc, s.lite);
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else {
     $content.replaceChildren(acc && acc.problem ? problemPage(acc) : '');
   }
+  liteForget(s.accounts.map((a) => a.id));
   shown = key;
 }
 

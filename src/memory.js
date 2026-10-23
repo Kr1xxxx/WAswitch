@@ -61,7 +61,7 @@ function applyStartupSwitches(settings) {
 }
 
 class MemoryManager {
-  // hooks: { views: Map, isBackground(id), unreadOf(id), onUpdate() }
+  // hooks: { views: Map, isBackground(id), unreadOf(id), onUpdate(), extraUsage(byPid)（可选：不是网页的账号的占用） }
   constructor(settings, hooks) {
     this.settings = settings;
     this.hooks = hooks;
@@ -105,6 +105,7 @@ class MemoryManager {
       byPid.set(m.pid, kb / 1024);
     }
     const now = Date.now();
+    for (const [id, mb] of (this.hooks.extraUsage ? this.hooks.extraUsage(byPid) : [])) this.usageMB.set(id, mb);
     for (const [id, view] of this.hooks.views) {
       const wc = view.webContents;
       if (wc.isDestroyed()) continue;
