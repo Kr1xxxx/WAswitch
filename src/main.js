@@ -9,6 +9,7 @@ const fs = require('fs');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
+const { Notifier } = require('./notify');
 
 const WA_URL = 'https://web.whatsapp.com/';
 const SIDEBAR_WIDTH = 72;
@@ -27,8 +28,9 @@ function isWhatsAppUrl(raw) {
   }
 }
 
-// 只有 WhatsApp 页面能拿到这些权限（通知、语音消息的麦克风、视频、剪贴板），其他一律拒绝。
-const ALLOWED_PERMISSIONS = new Set(['notifications', 'media', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
+// 只有 WhatsApp 页面能拿到这些权限（语音消息的麦克风、视频、剪贴板），其他一律拒绝。
+// 网页通知也关掉：WhatsApp 自己的通知看不出是哪个号，改由 notify.js 按账号发。
+const ALLOWED_PERMISSIONS = new Set(['media', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
 function setupPermissions(ses) {
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     const origin = details.requestingUrl || wc.getURL();
@@ -94,6 +96,7 @@ function loadAccounts() {
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
+    acc.muted = acc.muted === true;
   }
   return list;
 }
@@ -111,6 +114,14 @@ let win, sidebar, editWin;
 const views = new Map(); // id -> WebContentsView
 const problems = new Map(); // id -> 错误说明（代理连不上等）
 let activeId = null;
+let quitting = false;
+
+const notifier = new Notifier({
+  getAccounts: () => accounts,
+  getWindow: () => win,
+  activate: (id) => activate(id),
+  quit: () => { quitting = true; app.quit(); },
+});
 
 function layout() {
   const { width, height } = win.getContentBounds();
@@ -158,7 +169,9 @@ async function createView(acc) {
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
-    sidebar.webContents.send('unread', { id: acc.id, count: m ? Number(m[1]) : 0 });
+    const count = m ? Number(m[1]) : 0;
+    sidebar.webContents.send('unread', { id: acc.id, count });
+    notifier.update(acc, count, { isActive: acc.id === activeId });
   });
   wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     if (!isMainFrame) return;
@@ -217,6 +230,7 @@ async function removeAccount(id) {
   if (response !== 1) return;
   destroyView(id);
   problems.delete(id);
+  notifier.forget(id);
   await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   accounts = accounts.filter((a) => a.id !== id);
   saveAccounts();
@@ -242,7 +256,21 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  win = new BaseWindow({ width: 1280, height: 820, title: 'WAswitch' });
+  win = new BaseWindow({ width: 1280, height: 820, title: 'WAswitch', icon: path.join(__dirname, '..', 'assets', 'icon.png') });
+  notifier.init();
+  // 关闭窗口时缩到托盘，后台继续收消息；从托盘菜单“退出”才真正退出
+  let hintShown = false;
+  // Windows 关机或注销时不要拦着
+  win.on('session-end', () => { quitting = true; });
+  win.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    win.hide();
+    if (!hintShown && process.platform !== 'darwin') {
+      hintShown = true;
+      notifier.tray.displayBalloon?.({ title: 'WAswitch 还在运行', content: '已缩到托盘，继续接收消息。右键托盘图标可以退出。' });
+    }
+  });
   sidebar = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
@@ -272,6 +300,10 @@ ipcMain.on('context', (_e, id) => {
   Menu.buildFromTemplate([
     { label: '编辑（名称、代理、地区）', click: () => openEditor(id) },
     { label: '重新加载', click: () => views.get(id)?.webContents.reload() },
+    {
+      label: '静音通知', type: 'checkbox', checked: acc.muted,
+      click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); },
+    },
     { type: 'separator' },
     { label: `删除「${acc.name}」并退出登录`, click: () => removeAccount(id) },
   ]).popup();
@@ -353,4 +385,8 @@ ipcMain.handle('editor:save', async (_e, { id, name, proxy: proxyText, password,
   return { ok: true };
 });
 
-app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => { quitting = true; });
+// 窗口只是隐藏，不因为“没有可见窗口”而退出
+app.on('window-all-closed', () => {});
+// macOS 点 Dock 图标时重新显示窗口
+app.on('activate', () => { if (win) { win.show(); win.focus(); } });

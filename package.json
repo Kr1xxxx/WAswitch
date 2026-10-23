@@ -16,7 +16,8 @@
   "build": {
     "appId": "com.waswitch.app",
     "productName": "WAswitch",
-    "files": ["src/**/*"],
+    "files": ["src/**/*", "assets/**/*"],
+    "icon": "assets/icon.png",
     "win": { "target": "nsis" },
     "mac": { "target": "dmg" },
     "linux": { "target": "AppImage" }
