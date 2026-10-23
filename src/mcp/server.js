@@ -11,6 +11,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const cfg = require('./config');
+const { ChatGate } = require('./chats');
 
 const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_BODY = 1024 * 1024;
@@ -59,6 +60,8 @@ class McpController {
     this.sessions = new Map(); // sessionId -> { transport, server, connectedAt, lastSeen, calls }
     this.error = '';
     this.sweeper = null;
+    // 二层的“10 分钟内允许”和读取记录，只在内存里
+    this.gate = new ChatGate({ hooks, onChange: () => this.onChange() });
   }
 
   status() {
@@ -70,6 +73,11 @@ class McpController {
       token: this.token,
       tokenFile: cfg.tokenPath(this.dataDir),
       error: this.error,
+      layer2: this.settings.layer2,
+      preview: this.settings.preview,
+      layer2Acknowledged: this.settings.layer2Acknowledged,
+      allows: this.gate.activeAllows(),
+      readLog: this.gate.log,
       clients: [...this.sessions.values()].map((s) => {
         const c = s.server.server.getClientVersion();
         return {
@@ -104,6 +112,27 @@ class McpController {
     this.onChange();
   }
 
+  // 第二层开关。打开/关闭时通知已连接的客户端工具列表变了（tools/list_changed）
+  setLayer2(on) {
+    this.settings.layer2 = !!on;
+    if (on) this.settings.layer2Acknowledged = true;
+    cfg.saveSettings(this.dataDir, this.settings);
+    if (!on) this.gate.clearAll();
+    for (const s of this.sessions.values()) {
+      if (!s.chatTool) continue;
+      if (on) s.chatTool.enable(); else s.chatTool.disable();
+    }
+    this.onChange();
+  }
+
+  setPreview(on) {
+    const turnedOn = !this.settings.preview && !!on;
+    this.settings.preview = !!on;
+    cfg.saveSettings(this.dataDir, this.settings);
+    if (turnedOn) this.gate.previewTurnedOn();
+    this.onChange();
+  }
+
   // 断开所有客户端并换新 token，旧配置立即失效
   async regenerateToken() {
     if (!this.settings.enabled) return;
@@ -121,7 +150,8 @@ class McpController {
     const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
     const { isInitializeRequest } = require('@modelcontextprotocol/sdk/types.js');
     const { registerAccountTools } = require('./tools');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools };
+    const { registerChatTools } = require('./chats');
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -159,6 +189,7 @@ class McpController {
     const s = this.sessions.get(id);
     if (!s) return;
     this.sessions.delete(id);
+    this.gate.clearSession(id);
     try { await s.transport.close(); } catch { /* 已经断开 */ }
     try { await s.server.close(); } catch { /* 已经断开 */ }
   }
@@ -210,12 +241,23 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。当前只开放账号管理（一层），不能读取或发送消息。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）。不能发送消息。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
+    entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
+      gate: this.gate,
+      previewAllowed: () => this.settings.preview,
+      confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
+    // 第二层关着时工具不出现在列表里
+    if (!this.settings.layer2) entry.chatTool.disable();
     const transport = new this.sdk.StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id) => {

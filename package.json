@@ -8,6 +8,7 @@
     "check": "electron scripts/check-isolation.js",
     "check:mcp": "node scripts/check-mcp.js",
     "check:lite": "node scripts/run-check-lite.js",
+    "check:wa-page": "electron scripts/check-wa-page.js",
     "dist": "electron-builder"
   },
   "license": "MIT",
