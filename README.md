@@ -19,10 +19,10 @@
 
 ## 本地运行
 
-需要 Node.js 18+。
+需要 Node.js 20+。
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
