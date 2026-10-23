@@ -22,7 +22,34 @@ function render(s) {
     body.appendChild(tr);
   }
   $('noClients').hidden = s.clients.length > 0;
+
+  $('layer2').checked = s.layer2;
+  $('preview').checked = s.preview;
+  $('preview').disabled = !s.layer2;
+  const allows = $('allows');
+  allows.innerHTML = '';
+  for (const a of s.allows) {
+    const li = document.createElement('li');
+    li.textContent = `允许客户端（自称 ${a.client}）读「${a.account}」${a.preview ? '（含预览）' : ''}，到 ${time(a.until)}`;
+    const btn = document.createElement('button');
+    btn.textContent = '撤销';
+    btn.onclick = async () => render(await window.mcp.revoke(a.key));
+    li.appendChild(btn);
+    allows.appendChild(li);
+  }
+  $('allowsBox').hidden = !s.allows.length;
+  const log = $('readLog');
+  log.innerHTML = '';
+  for (const r of s.readLog) {
+    const li = document.createElement('li');
+    li.textContent = `${time(r.at)} ${r.client} 读了「${r.account}」${r.count} 个对话${r.preview ? '（含预览）' : ''}`;
+    log.appendChild(li);
+  }
+  $('logBox').hidden = !s.readLog.length;
 }
+
+$('layer2').onchange = async (e) => render(await window.mcp.setLayer2(e.target.checked));
+$('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target.checked));
 
 $('enabled').onchange = async (e) => render(await window.mcp.setEnabled(e.target.checked));
 $('regenerate').onclick = async () => render(await window.mcp.regenerate());
