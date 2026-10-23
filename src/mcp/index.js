@@ -59,7 +59,23 @@ function setupMcp({ hooks, lockLocalPage }) {
     controller.setLayer2(on);
     return view();
   });
-  ipcMain.handle('mcp:set-preview', (_e, on) => { controller.setPreview(on); return view(); });
+  // 打开预览就是开始读消息内容，再确认一次
+  ipcMain.handle('mcp:set-preview', async (e, on) => {
+    if (on && !controller.settings.preview) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
+        type: 'warning',
+        buttons: ['取消', '打开预览'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '允许读取消息预览',
+        message: '预览是消息内容',
+        detail: '打开后，AI 读对话列表时还会读到每个对话的最后一条消息（截到 100 字），这些内容会发给你用的 AI 服务商。聊天对方不会知道。\n\n之前给过的“10 分钟内允许”会全部清掉，下次读取会重新问你。',
+      });
+      if (response !== 1) return view();
+    }
+    controller.setPreview(on);
+    return view();
+  });
   ipcMain.handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   ipcMain.handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];

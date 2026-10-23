@@ -172,6 +172,8 @@ async function main() {
 
   const st0 = hooks.state;
   const call = (args) => client.callTool({ name: 'list_chats', arguments: args });
+  // 有些用例故意先拒绝，再测别的路径；拒绝冷却单独测，这里清掉
+  const forgetDenials = () => { ctl.gate.denials.clear(); ctl.gate.denyHistory.clear(); ctl.gate.blockedUntil.clear(); };
   const r1 = await call({ id: 'a2' });
   check(r1.isError && /重新扫码/.test(r1.content[0].text) && st0.confirmCalls.length === 0, '账号需要扫码时直接说明，不弹确认框');
   st0.login.a2 = 'unknown';
@@ -184,6 +186,28 @@ async function main() {
   check(r2.isError && st0.readCalls.length === 0, '用户拒绝时不读');
   check(/客户端自称|check-mcp/.test(st0.confirmCalls[0].client) && st0.confirmCalls[0].timeoutMs === 120000, '确认框带客户端名称，2 分钟超时');
 
+  // 拒绝冷却：60 秒内不再弹框
+  const n0 = st0.confirmCalls.length;
+  const rc1 = await call({ id: 'a2' });
+  check(rc1.isError && /刚拒绝过/.test(rc1.content[0].text) && st0.confirmCalls.length === n0, '拒绝后 60 秒内再调用：不弹框，直接返回“刚拒绝过”');
+  clock += 61000;
+  st0.confirmAnswers.push('deny');
+  await call({ id: 'a2' });
+  check(st0.confirmCalls.length === n0 + 1, '60 秒后可以再弹框');
+  clock += 61000;
+  st0.confirmAnswers.push('deny');
+  await call({ id: 'a2' });
+  // 到这里 10 分钟内已经拒绝 3 次
+  clock += 61000;
+  const rc2 = await call({ id: 'a2' });
+  check(rc2.isError && /拒绝了 3 次/.test(rc2.content[0].text) && st0.confirmCalls.length === n0 + 2, '10 分钟内拒绝 3 次：这个连接 10 分钟内不再弹框');
+  clock += 10 * 60 * 1000 + 1;
+  st0.confirmAnswers.push('deny');
+  await call({ id: 'a2' });
+  check(st0.confirmCalls.length === n0 + 3, '10 分钟后恢复弹框');
+  forgetDenials();
+  clock += 61000;
+
   st0.confirmAnswers.push('once');
   const r3 = json(await call({ id: 'a2' }));
   check(r3.chats.length === 3 && r3.chats.every((c) => !('preview' in c)) && r3.preview_included === false, '允许一次：返回对话列表，预览开关关着时不含预览');
@@ -194,8 +218,10 @@ async function main() {
   check(r4.isError && /5 秒/.test(r4.content[0].text), '同一账号 5 秒内第二次读被限制');
   clock += 6000;
   st0.confirmAnswers.push('deny');
+  const before5 = st0.confirmCalls.length;
   const r5 = await call({ id: 'a2' });
-  check(r5.isError && st0.confirmCalls.length === 3, '“允许一次”之后下一次还要确认');
+  check(r5.isError && st0.confirmCalls.length === before5 + 1, '“允许一次”之后下一次还要确认');
+  forgetDenials();
 
   clock += 6000;
   st0.confirmAnswers.push('ten');
@@ -214,6 +240,7 @@ async function main() {
   st0.confirmAnswers.push('deny');
   const r7 = await other.callTool({ name: 'list_chats', arguments: { id: 'a2' } });
   check(r7.isError && st0.confirmCalls.length === callsAfterTen + 1, '同名的另一个连接要重新确认（按会话记，不按客户端名字）');
+  forgetDenials();
   await other.close();
 
   // 预览开关从关变开：清掉允许
@@ -251,6 +278,7 @@ async function main() {
   const before = st0.confirmCalls.length;
   await call({ id: 'a2' });
   check(st0.confirmCalls.length === before + 1, '10 分钟到期后要重新确认');
+  forgetDenials();
 
   // 结构认不出、页面在加载、忙
   clock += 6000;
@@ -275,6 +303,10 @@ async function main() {
   await new Promise((r) => setTimeout(r, 200));
   check(listChanged > changedBefore && !(await toolNames()).includes('list_chats'), '关闭二层：通知客户端，工具消失');
   check(ctl.status().allows.length === 0, '关闭二层时清掉所有允许');
+  // 拿不到会话 id：“10 分钟内允许”只当“允许这一次”
+  st0.confirmAnswers.push('ten');
+  const okUnknown = await ctl.gate.check({ session: 'unknown', client: 'x', account: { id: 'a2', name: '客服号' }, preview: false, timeoutMs: 1000 });
+  check(okUnknown === null && ctl.status().allows.length === 0, '没有会话 id 时“10 分钟内允许”只当一次');
   ctl.setPreview(false);
 
   check(ctl.status().clients.some((c) => c.name.startsWith('check-mcp')), '设置页能看到已连接的客户端');
