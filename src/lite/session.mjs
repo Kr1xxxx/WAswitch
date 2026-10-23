@@ -16,6 +16,7 @@ import { ChatStore } from './store.mjs';
 export const SEND_LIMIT = 10;
 const SEND_WINDOW_MS = 60 * 1000;
 const MAX_TEXT = 4000;
+const MAX_SAME_ERROR = 5; // 同一个错误码连续断开这么多次就不再重连
 
 // 只记录错误的简短说明，长数字（可能是号码）换掉
 const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 300);
@@ -157,6 +158,8 @@ export class Session {
     }
     if (connection === 'open') {
       this.attempt = 0;
+      this.lastCode = null;
+      this.sameCode = 0;
       this.setStatus('open');
       this.changed();
       // 群名称
@@ -185,6 +188,10 @@ export class Session {
     if (code === 405) { this.setStatus('outdated'); return; }
     if (code === DisconnectReason.restartRequired) { this.start(); return; } // 扫码成功后的正常重启
     if (this.qrShown && !this.auth.state.creds.me) { this.setStatus('qrExpired'); return; }
+    // 同一个错误（例如 500 badSession、411）连续出现，重连也没用，停下来让用户处理
+    this.sameCode = code && code === this.lastCode ? this.sameCode + 1 : 1;
+    this.lastCode = code;
+    if (code && this.sameCode >= MAX_SAME_ERROR) { this.setStatus('stuck', { code }); return; }
     this.setStatus('reconnecting', { code: code || 0 });
     this.scheduleRetry();
   }

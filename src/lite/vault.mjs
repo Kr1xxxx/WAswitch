@@ -1,6 +1,6 @@
 // 轻量模式的本地数据：登录凭据和聊天缓存都用 AES-256-GCM 加密后写盘。
 // 密钥由主进程生成，用系统钥匙串加密保存在 accounts.json 里，启动时传给这个进程，不落盘明文。
-// 写盘带防抖：凭据 1.5 秒、聊天缓存 10 秒内的多次变化合并成一次；停止和退出时立即写。
+// 写盘：登录凭据（creds）一变就立即写，避免崩溃时丢掉；Signal 密钥 1.5 秒防抖，聊天缓存 10 秒防抖；停止和退出时立即写。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,7 +83,8 @@ export function makeAuthState(dir, key, onError) {
 
   return {
     state: { creds: data.creds, keys },
-    saveCreds: () => save.schedule(),
+    // 凭据变化不频繁，立即写盘（连同已有的密钥），不等防抖
+    saveCreds: () => { save.schedule(); save.flush(); },
     flush: () => save.flush(),
     // 退出登录后删掉凭据，下次启动重新扫码
     wipe() {

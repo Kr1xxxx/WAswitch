@@ -6,6 +6,8 @@
 import net from 'node:net';
 import dns from 'node:dns';
 import dgram from 'node:dgram';
+import childProcess from 'node:child_process';
+import workerThreads from 'node:worker_threads';
 import { syncBuiltinESMExports } from 'node:module';
 
 const allowed = new Set(); // 允许连接的代理主机（小写）
@@ -70,22 +72,44 @@ export function installGuard(report) {
     if (net.isIP(String(hostname)) || isAllowed(hostname)) return plookup.call(this, hostname, options);
     return Promise.reject(blocked('DNS 查询', hostname));
   };
-  for (const target of [dns, dns.promises]) {
-    for (const name of Object.keys(target)) {
-      if (!/^resolve/.test(name) || typeof target[name] !== 'function') continue;
-      target[name] = function guardedResolve(hostname, ...rest) {
-        const err = blocked('DNS 查询', hostname);
-        if (target === dns.promises) return Promise.reject(err);
-        const cb = rest.find((x) => typeof x === 'function');
-        if (cb) process.nextTick(() => cb(err));
-        return undefined;
-      };
+  // dns.resolve*、dns.reverse、dns.lookupService，以及 Resolver 实例上的同名方法（走 c-ares 自己发 UDP，不经过 dgram）
+  const isQuery = (name) => /^(resolve|reverse|lookupService$)/.test(name);
+  const blockQuery = (isPromise) => function guardedResolve(hostname, ...rest) {
+    const err = blocked('DNS 查询', hostname);
+    if (isPromise) return Promise.reject(err);
+    const cb = rest.find((x) => typeof x === 'function');
+    if (cb) process.nextTick(() => cb(err));
+    return undefined;
+  };
+  const targets = [
+    [dns, false],
+    [dns.promises, true],
+    [dns.Resolver.prototype, false],
+    [dns.promises.Resolver.prototype, true],
+  ];
+  for (const [target, isPromise] of targets) {
+    for (const name of Object.getOwnPropertyNames(target)) {
+      if (!isQuery(name) || typeof target[name] !== 'function') continue;
+      target[name] = blockQuery(isPromise);
     }
   }
 
-  // UDP 一律不用
+  // UDP 一律不用（包括直接 new dgram.Socket()）
   dgram.createSocket = function guardedUdp() {
     throw blocked('UDP', '');
+  };
+  dgram.Socket = function GuardedUdpSocket() {
+    throw blocked('UDP', '');
+  };
+
+  // 新线程、子进程里没有护栏，一律禁止
+  for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+    childProcess[name] = function guardedChild() {
+      throw blocked('启动子进程', name);
+    };
+  }
+  workerThreads.Worker = function GuardedWorker() {
+    throw blocked('启动新线程', 'Worker');
   };
 
   // 让 import { lookup } from 'node:dns' 这类写法拿到的也是加了护栏的版本

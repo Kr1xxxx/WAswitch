@@ -33,13 +33,13 @@ async function until(fn, ms = 15000) {
 
 // ---------- 网络护栏 + 打桩 ----------
 const { installGuard, setAllowedHosts } = await import('../src/lite/guard.mjs');
+let deliberate = false; // 第 3 步故意发起的测试请求不计入汇总
 const blocked = [];
-installGuard((b) => blocked.push(b));
+installGuard((b) => blocked.push({ ...b, deliberate }));
 setAllowedHosts(['127.0.0.1']);
 
 // 在护栏外面再包一层，记录所有“尝试”过的 DNS 查询和连接
 const lookups = [];
-let deliberate = false; // 下面故意发起的测试查询不计入
 const guardedLookup = dns.lookup;
 dns.lookup = function (hostname, ...rest) { if (!deliberate) lookups.push(String(hostname)); return guardedLookup.call(this, hostname, ...rest); };
 const plookup = dns.promises.lookup;
@@ -115,7 +115,8 @@ try {
   const r1 = await fetch('https://mmg.whatsapp.net/v/t62/test', { dispatcher: t.dispatcher }).then(() => 'ok', (e) => String(e.cause?.message || e.message));
   check('HTTP 下载经 socks5 代理（mmg.whatsapp.net）', socks.seen.slice(before).some((x) => x.host === 'mmg.whatsapp.net' && x.type === 'domain'), r1);
 
-  // 3. 不带代理的请求被护栏拦下
+  // 3. 不带代理的请求被护栏拦下（这一步的请求都是故意发起的）
+  deliberate = true;
   const b0 = blocked.length;
   const r2 = await fetch('https://mmg.whatsapp.net/direct').then(() => 'ok', (e) => String(e.cause?.code || e.cause?.message || e.message));
   check('绕过代理的 fetch 被网络护栏拦下', r2 !== 'ok' && blocked.slice(b0).some((b) => b.host.startsWith('mmg.whatsapp.net')), r2);
@@ -125,14 +126,34 @@ try {
     sock.once('error', (e) => resolve(e.code));
   });
   check('直接连 IP 被网络护栏拦下', r3 === 'EWASWITCHBLOCKED', r3);
-  deliberate = true;
   const r4 = await new Promise((resolve) => dns.lookup('web.whatsapp.com', (e) => resolve(e ? e.code : 'resolved')));
-  deliberate = false;
   check('本机 DNS 查询 WhatsApp 域名被拦下', r4 === 'EWASWITCHBLOCKED', r4);
   const { createSocket } = await import('node:dgram');
   let udp = 'allowed';
   try { createSocket('udp4'); } catch (e) { udp = e.code; }
   check('UDP 被禁用', udp === 'EWASWITCHBLOCKED', udp);
+  const dgramMod = (await import('node:dgram')).default;
+  let udp2 = 'allowed';
+  try { new dgramMod.Socket('udp4'); } catch (e) { udp2 = e.code; }
+  check('直接 new dgram.Socket() 也被禁用', udp2 === 'EWASWITCHBLOCKED', udp2);
+  const r5 = await new Promise((resolve) => new dns.Resolver().resolve4('web.whatsapp.com', (e) => resolve(e ? e.code : 'resolved')));
+  const r6 = await new dns.promises.Resolver().resolve4('web.whatsapp.com').then(() => 'resolved', (e) => e.code);
+  const r7 = await new Promise((resolve) => dns.reverse('157.240.0.53', (e) => resolve(e ? e.code : 'resolved')));
+  check('dns.Resolver 实例的查询被拦下（c-ares 自己发 UDP）', r5 === 'EWASWITCHBLOCKED' && r6 === 'EWASWITCHBLOCKED', `${r5} / ${r6}`);
+  check('dns.reverse 被拦下', r7 === 'EWASWITCHBLOCKED', r7);
+  const cp = await import('node:child_process');
+  const wt = await import('node:worker_threads');
+  const tries = {
+    spawn: () => cp.spawn('curl', ['https://web.whatsapp.com']),
+    exec: () => cp.exec('curl https://web.whatsapp.com'),
+    execFileSync: () => cp.execFileSync('curl'),
+    fork: () => cp.default.fork('x.js'),
+    Worker: () => new wt.Worker('setTimeout(()=>{},1)', { eval: true }),
+  };
+  const notBlocked = Object.entries(tries).filter(([, fn]) => { try { fn(); return true; } catch (e) { return e.code !== 'EWASWITCHBLOCKED'; } }).map(([n]) => n);
+  check('子进程和新线程一律禁止（里面没有护栏）', !notBlocked.length, notBlocked.join(', '));
+
+  deliberate = false;
 
   // 4. http 代理
   const hp = await fakeHttpProxy();
@@ -155,7 +176,8 @@ try {
   const nonProxy = connects.filter((c) => !c.startsWith('127.0.0.1:'));
   const expected = ['mmg.whatsapp.net:443', '157.240.0.53:443']; // 上面第 3 步故意发起、并被拦下的两次
   check('除了故意测试的两次，全程只连过本机代理', nonProxy.every((c) => expected.includes(c)), nonProxy.join(', '));
-  check('护栏只拦下了故意测试的请求', blocked.every((b) => /mmg\.whatsapp\.net|157\.240\.0\.53|web\.whatsapp\.com|^$/.test(b.host)), JSON.stringify(blocked));
+  const unexpected = blocked.filter((b) => !b.deliberate);
+  check('真实连接过程中护栏没有拦到任何请求（说明全程走代理）', !unexpected.length, JSON.stringify(unexpected));
   socks.server.close();
   hp.server.close();
 
@@ -174,9 +196,14 @@ try {
   const authDir = path.join(tmp, 'auth');
   const a = makeAuthState(authDir, key, () => {});
   await a.state.keys.set({ 'pre-key': { 1: { public: Buffer.from('x'), private: Buffer.from('y') } } });
-  check('凭据防抖：修改后不立刻写盘', !fs.existsSync(path.join(authDir, 'auth.enc')));
+  check('Signal 密钥防抖：修改后不立刻写盘', !fs.existsSync(path.join(authDir, 'auth.enc')));
   a.flush();
-  check('凭据在 flush 时写盘', fs.existsSync(path.join(authDir, 'auth.enc')));
+  check('密钥在 flush 时写盘', fs.existsSync(path.join(authDir, 'auth.enc')));
+  const credDir = path.join(tmp, 'cred');
+  const c = makeAuthState(credDir, key, () => {});
+  c.state.creds.registered = true;
+  c.saveCreds();
+  check('登录凭据（creds）一变就立即写盘', fs.existsSync(path.join(credDir, 'auth.enc')) && readSealed(path.join(credDir, 'auth.enc'), key).creds.registered === true);
   const a2 = makeAuthState(authDir, key, () => {});
   const got = await a2.state.keys.get('pre-key', ['1']);
   check('重新打开后凭据还在', got['1'] && got['1'].private.toString() === 'y');
@@ -239,6 +266,14 @@ try {
   last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
   await sleep(20);
   check('普通断线会自动重连', statusOf('4') === 'reconnecting' && !!s4.retryTimer);
+  // 同一个错误码连续 5 次：停止重连
+  for (let i = 0; i < 4; i++) {
+    clearTimeout(s4.retryTimer);
+    await s4.start();
+    last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+    await sleep(10);
+  }
+  check('同一个错误连续 5 次后停止重连', statusOf('4') === 'stuck', statusOf('4'));
   s4.stop();
   socks2.server.close();
 
@@ -258,6 +293,11 @@ try {
   const socketSrc = fs.readdirSync(path.join(root, 'node_modules', 'baileys', 'lib', 'Socket')).filter((f) => f.endsWith('.js'))
     .map((f) => fs.readFileSync(path.join(root, 'node_modules', 'baileys', 'lib', 'Socket', f), 'utf8')).join('\n');
   check('Baileys 建立连接时不会自己查询版本号', !/fetchLatest\w*Version/.test(socketSrc));
+  const workerFiles = fs.readdirSync(path.join(root, 'src', 'lite')).filter((f) => f.endsWith('.mjs'));
+  const usesElectron = workerFiles.filter((f) => /from\s+['"]electron['"]|import\(\s*['"]electron['"]|require\(\s*['"]electron['"]/.test(fs.readFileSync(path.join(root, 'src', 'lite', f), 'utf8')));
+  check('后台进程的代码不使用 electron 模块（electron.net 会绕过护栏）', !usesElectron.length, usesElectron.join(', '));
+  const risky = ['link-preview-js', 'sharp', 'jimp'].filter((m) => fs.existsSync(path.join(root, 'node_modules', m)));
+  check('没有安装 link-preview-js、sharp、jimp（会抓网页或起原生线程）', !risky.length, risky.join(', '));
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   check('baileys 版本固定为 7.0.0-rc14', pkg.dependencies.baileys === '7.0.0-rc14');
 } finally {
@@ -265,5 +305,6 @@ try {
 }
 
 const failed = results.filter((r) => !r.ok);
-console.log(`\n${results.length - failed.length}/${results.length} 通过`);
+console.log(`\n运行环境：Node ${process.versions.node}${process.versions.electron ? `（Electron ${process.versions.electron} 内置）` : ''}`);
+console.log(`${results.length - failed.length}/${results.length} 通过`);
 process.exit(failed.length ? 1 : 0);

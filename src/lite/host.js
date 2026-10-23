@@ -55,7 +55,11 @@ class LiteHost extends EventEmitter {
       this.crashes.push(now);
       console.warn(`轻量模式后台进程意外退出（${code}）`);
       for (const id of this.sessions.keys()) this.emit('state', { id, status: 'crashed' });
-      if (this.crashes.length > 3) return;
+      if (this.crashes.length > 3) {
+        // 反复崩溃：不再自动恢复，让用户手动点“重新连接”
+        for (const id of this.sessions.keys()) this.emit('state', { id, status: 'crashLoop' });
+        return;
+      }
       setTimeout(() => {
         if (this.shuttingDown || this.proc) return;
         for (const cfg of this.sessions.values()) this.send({ type: 'start', ...cfg, ...this.watchFor(cfg.id) });
@@ -105,6 +109,7 @@ class LiteHost extends EventEmitter {
 
   // proxy：socks5h://… 或 http(s)://…；key：这个号的数据密钥（hex）
   start(id, { proxy, key, os }) {
+    if (!this.proc) this.crashes = []; // 用户手动重新连接时重新计数
     const cfg = { id, proxy, key, os, dir: this.dirOf(id) };
     this.sessions.set(id, cfg);
     this.send({ type: 'start', ...cfg, ...this.watchFor(id) });

@@ -61,7 +61,12 @@ port.on('message', (e) => {
   );
 });
 
-process.on('uncaughtException', (e) => post({ type: 'log', msg: `后台进程错误：${String(e && e.message).replace(/\d{6,}/g, '[号码]')}` }));
+// 未处理的异常：进程状态已经不可靠，先把所有账号的数据写盘，再退出，由主进程按次数上限重启
+process.on('uncaughtException', (e) => {
+  post({ type: 'log', msg: `后台进程错误，正在重启：${String(e && e.message).replace(/\d{6,}/g, '[号码]')}` });
+  for (const x of sessions.values()) { try { x.flush(); } catch { /* 尽量写 */ } }
+  setTimeout(() => process.exit(1), 50);
+});
 process.on('unhandledRejection', (e) => post({ type: 'log', msg: `后台进程错误：${String(e && e.message).replace(/\d{6,}/g, '[号码]')}` }));
 
 post({ type: 'ready' });

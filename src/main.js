@@ -682,6 +682,16 @@ const LITE_PROBLEMS = {
     short: '数据读不出',
     text: '登录数据可能损坏了。为了安全没有自动清除。可以删除这个号后重新添加。',
   }),
+  stuck: () => ({
+    title: '连接反复失败，已停止重连',
+    short: '连接失败',
+    text: 'WhatsApp 连续几次用同样的原因断开（可能是登录数据失效）。点“重新连接”再试一次；如果还是不行，删除这个号后重新添加、重新扫码。',
+  }),
+  crashLoop: () => ({
+    title: '轻量模式后台进程反复出错，已停止自动恢复',
+    short: '后台出错',
+    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，请在设置 › 关于里打开日志文件夹，把最近的日志发给我们。',
+  }),
   crashed: () => ({
     title: '轻量模式后台进程意外退出',
     short: '后台出错',
@@ -1139,6 +1149,11 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (mode === 'lite' && !acc) {
     try { liteKey = newLiteKey(); } catch (e) { return { error: e.message }; }
   }
+  // 换了主号、或主号换了代理：轻量小号只在保存时和主号比过出口，提醒跑一次隔离自检
+  const oldPrimary = accounts.find((a) => a.primary);
+  const primaryMoved = wantPrimary && oldPrimary && oldPrimary.id !== id;
+  const primaryProxyChanged = wantPrimary && acc && acc.primary && acc.proxy !== proxyStored;
+  const remindCheck = (primaryMoved || primaryProxyChanged) && accounts.some(isLite);
   if (wantPrimary) for (const a of accounts) if (a.id !== id) a.primary = false;
 
   if (!acc) {
@@ -1185,6 +1200,14 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     refresh();
   }
   notifier.refresh();
+  if (remindCheck) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: '请跑一次隔离自检',
+      message: primaryMoved ? '主号已更换' : '主号的代理已修改',
+      detail: '轻量小号只在保存时和主号比较过出口 IP。请到 设置 › 隔离自检 跑一次，确认小号和主号不在同一个 IP。',
+    }).catch(() => {});
+  }
   return { ok: true };
 });
 
