@@ -11,6 +11,7 @@ const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
+const { setupMcp } = require('./mcp');
 
 // 省内存模式要在 app ready 之前生效
 const settings = memory.loadSettings();
@@ -156,8 +157,48 @@ const notifier = new Notifier({
         notifier.refresh();
       },
     },
+    ...(mcp ? [{ type: 'separator' }, { label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
 });
+
+// MCP 接口（默认关闭）。在 app ready 之后创建。
+let mcp = null;
+
+function accountStatus(id) {
+  const view = views.get(id);
+  if (problems.has(id)) return 'error';
+  if (!view) return 'not_loaded';
+  return view.webContents.isLoading() ? 'loading' : 'ready';
+}
+
+const mcpHooks = {
+  listAccounts: () => accounts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    active: a.id === activeId,
+    unread: notifier.unread.get(a.id) || 0,
+    muted: a.muted,
+    status: accountStatus(a.id),
+    problem: problems.get(a.id) || '',
+  })),
+  regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
+  activate: (id) => { notifier.showWindow(); activate(id); },
+  // 不直接创建：打开“添加账号”窗口并预填，由人确认代理后保存，避免新号先用真实 IP 联网
+  openAddAccount: ({ name, region }) => {
+    notifier.showWindow();
+    openEditor(null, { name, region });
+  },
+  renameAccount: (id, name) => {
+    const acc = accounts.find((a) => a.id === id);
+    if (!acc) return false;
+    acc.name = name;
+    saveAccounts();
+    pushState();
+    notifier.refresh();
+    return true;
+  },
+  removeAccount: (id, opts) => removeAccount(id, opts),
+};
 
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
@@ -254,19 +295,34 @@ function activate(id) {
   pushState();
 }
 
-async function removeAccount(id) {
+// 返回 'removed' | 'cancelled' | 'busy' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
+let removeDialogOpen = false;
+async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
-  if (!acc) return;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'warning',
-    buttons: ['取消', '删除'],
-    defaultId: 0,
-    cancelId: 0,
-    title: '删除账号',
-    message: `删除「${acc.name}」？`,
-    detail: '会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。',
-  });
-  if (response !== 1) return;
+  if (!acc) return 'not_found';
+  // 已经有一个删除确认框在等用户时，不再叠第二个
+  if (removeDialogOpen) return 'busy';
+  removeDialogOpen = true;
+  const abort = new AbortController();
+  const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : null;
+  if (timeoutMs) notifier.showWindow();
+  let response;
+  try {
+    ({ response } = await dialog.showMessageBox(win, {
+      signal: abort.signal,
+      type: 'warning',
+      buttons: ['取消', '删除'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '删除账号',
+      message: `删除「${acc.name}」？`,
+      detail: `会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
+    }));
+  } finally {
+    clearTimeout(timer);
+    removeDialogOpen = false;
+  }
+  if (response !== 1 || abort.signal.aborted) return 'cancelled';
   destroyView(id);
   problems.delete(id);
   notifier.forget(id);
@@ -275,6 +331,7 @@ async function removeAccount(id) {
   accounts = accounts.filter((a) => a.id !== id);
   saveAccounts();
   activate(accounts[0]?.id ?? null);
+  return 'removed';
 }
 
 // 带用户名密码的 http 代理：按代理的地址和端口找到对应账号，取它的密码。
@@ -330,6 +387,10 @@ app.whenReady().then(async () => {
   layout();
   pushState();
   memoryManager.start();
+
+  mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
+  await mcp.init();
+  notifier.refresh();
 });
 
 // ---------- 侧边栏操作 ----------
@@ -355,8 +416,11 @@ ipcMain.on('context', (_e, id) => {
 
 // ---------- 编辑窗口：新建账号和修改账号共用 ----------
 
-function openEditor(id) {
+// prefill：新建账号时预填的名称和地区（MCP 的 add_account 用）
+let editorPrefill = null;
+function openEditor(id, prefill = null) {
   if (editWin && !editWin.isDestroyed()) editWin.close();
+  editorPrefill = id ? null : prefill;
   editWin = new BrowserWindow({
     width: 480, height: 640, resizable: false, minimizable: false, maximizable: false,
     title: id ? '编辑账号' : '添加账号',
@@ -371,10 +435,10 @@ ipcMain.handle('editor:load', (_e, id) => {
   const acc = accounts.find((a) => a.id === id);
   return {
     isNew: !acc,
-    name: acc ? acc.name : nextName(),
+    name: acc ? acc.name : (editorPrefill?.name || nextName()),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
-    region: acc ? acc.fingerprint.region : 'auto',
+    region: acc ? acc.fingerprint.region : (editorPrefill?.region || 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
   };
 });

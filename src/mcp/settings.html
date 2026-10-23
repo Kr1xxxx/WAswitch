@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>MCP 接口设置</title>
+  <style>
+    body { margin: 0; padding: 24px; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; color: #16181d; background: #fff; font-size: 14px; }
+    h1 { margin: 0 0 6px; font-size: 20px; }
+    h2 { margin: 22px 0 8px; font-size: 14px; }
+    p, li { line-height: 1.6; }
+    .hint { color: #4a505a; font-size: 12px; }
+    .switch { display: flex; align-items: center; gap: 10px; margin: 16px 0 4px; font-weight: 600; }
+    .switch input { width: 18px; height: 18px; }
+    #state { font-size: 13px; min-height: 20px; }
+    #state.ok { color: #0f7a4d; }
+    #state.bad { color: #b42318; }
+    pre { margin: 0; padding: 10px 12px; background: #f6f7f9; border: 1px solid #e3e6ea; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    .block { display: flex; flex-direction: column; gap: 6px; }
+    .actions { display: flex; gap: 8px; }
+    button { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid #d5d9de; background: #f6f7f9; font: inherit; font-size: 13px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eceef1; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>MCP 接口</h1>
+  <p class="hint">开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以列出账号、看未读数、切换、添加、改名和删除账号。当前版本不能读取或发送消息。只接受本机连接，需要 token。</p>
+
+  <label class="switch"><input id="enabled" type="checkbox"> 开启 MCP 接口</label>
+  <div id="state" role="status"></div>
+
+  <div id="details" hidden>
+    <h2>Claude Code（直接连接）</h2>
+    <div class="block">
+      <pre id="claudeCode"></pre>
+      <div class="actions"><button data-copy="claudeCode">复制命令</button></div>
+    </div>
+
+    <h2>Claude Desktop（通过桥接程序）</h2>
+    <div class="block">
+      <span class="hint">把下面的内容合并到 Claude Desktop 的 claude_desktop_config.json，然后重启 Claude Desktop。桥接程序会自动读取最新的 token，换 token 后不用改配置。</span>
+      <pre id="claudeDesktop"></pre>
+      <div class="actions"><button data-copy="claudeDesktop">复制配置</button></div>
+    </div>
+
+    <h2>已连接的客户端</h2>
+    <table>
+      <thead><tr><th>客户端</th><th>连接时间</th><th>最近活动</th><th>工具调用次数</th></tr></thead>
+      <tbody id="clients"></tbody>
+    </table>
+    <p class="hint" id="noClients">暂无</p>
+    <div class="actions"><button id="regenerate">断开全部并更换 token</button></div>
+    <p class="hint">更换 token 后，Claude Code 需要用新命令重新添加；Claude Desktop 不用改。</p>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

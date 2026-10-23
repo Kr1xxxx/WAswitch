@@ -6,9 +6,14 @@
   "scripts": {
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
+    "check:mcp": "node scripts/check-mcp.js",
     "dist": "electron-builder"
   },
   "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "3.25.76"
+  },
   "devDependencies": {
     "electron": "44.9.3",
     "electron-builder": "26.15.3"
@@ -16,7 +21,7 @@
   "build": {
     "appId": "com.waswitch.app",
     "productName": "WAswitch",
-    "files": ["src/**/*", "assets/**/*"],
+    "files": ["src/**/*", "bin/**/*", "assets/**/*"],
     "icon": "assets/icon.png",
     "win": { "target": "nsis" },
     "mac": { "target": "dmg" },
