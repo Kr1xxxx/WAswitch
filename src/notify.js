@@ -89,12 +89,15 @@ class Notifier {
     if (win) win.setTitle(total ? `(${total}) WAswitch` : 'WAswitch');
 
     if (!this.tray) return;
-    this.tray.setToolTip(total ? `WAswitch · ${total} 个未读对话` : 'WAswitch');
+    const mem = this.hooks.totalMemory ? this.hooks.totalMemory() : 0;
+    const memText = mem ? ` · 共占用 ${mem} MB` : '';
+    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}`);
     const accounts = this.hooks.getAccounts();
     const items = accounts.map((acc) => {
       const n = this.unread.get(acc.id) || 0;
+      const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
-        label: `${acc.name}${n ? `（${n}）` : ''}${acc.muted ? ' · 已静音（仍计入总数）' : ''}`,
+        label: `${acc.name}${n ? `（${n}）` : ''}${acc.muted ? ' · 已静音（仍计入总数）' : ''}${mb ? ` · ${mb} MB` : ''}`,
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });
@@ -103,6 +106,7 @@ class Notifier {
       { type: 'separator' },
       ...items,
       { type: 'separator' },
+      ...(this.hooks.settingsMenu ? [...this.hooks.settingsMenu(), { type: 'separator' }] : []),
       { label: '退出 WAswitch', click: () => this.hooks.quit() },
     ]));
   }
