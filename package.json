@@ -1,0 +1,23 @@
+{
+  "name": "waswitch",
+  "version": "0.1.0",
+  "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.waswitch.app",
+    "productName": "WAswitch",
+    "files": ["src/**/*"],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "AppImage" }
+  }
+}
