@@ -5,14 +5,14 @@
 // 2. 后台降级：不在看的账号设为“隐藏”，Chromium 会降低它的优先级、节流定时器、释放画面缓存。
 //    WhatsApp 的消息是服务器推送的，节流不会耽误收消息。
 // 3. 省内存模式：关闭显卡加速，整体再省一些内存，代价是动画没那么顺滑。需要重启生效。
-// 4. 统计每个账号占用的内存，显示在托盘菜单里。
+// 4. 统计每个账号占用的内存，显示在托盘菜单里。只统计主页面进程，是近似值，略低于实际。
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const DEFAULTS = {
   lowMemoryMode: false, // 关闭显卡加速
-  recycleMB: 500, // 后台账号超过这个值就自动刷新，0 表示不自动刷新
+  recycleMB: 800, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
 };
 const CHECK_EVERY_MS = 60 * 1000;
 const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
@@ -32,8 +32,11 @@ function loadSettings() {
   }
 }
 
+// 先写临时文件再改名，写到一半断电也不会把设置文件写坏
 function saveSettings(settings) {
-  fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
+  const file = settingsFile();
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(settings, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
 }
 
 // 必须在 app ready 之前调用
@@ -107,4 +110,4 @@ class MemoryManager {
   }
 }
 
-module.exports = { MemoryManager, loadSettings, saveSettings, applyStartupSwitches };
+module.exports = { DEFAULTS, MemoryManager, loadSettings, saveSettings, applyStartupSwitches };

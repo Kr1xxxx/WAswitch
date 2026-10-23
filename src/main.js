@@ -137,11 +137,11 @@ const notifier = new Notifier({
   totalMemory: () => memoryManager.totalMB(),
   settingsMenu: () => [
     {
-      label: `后台账号超过 ${settings.recycleMB || 500} MB 时自动刷新回收内存`,
+      label: `后台账号超过 ${settings.recycleMB || memory.DEFAULTS.recycleMB} MB 时自动刷新回收内存`,
       type: 'checkbox',
       checked: settings.recycleMB > 0,
       click: () => {
-        settings.recycleMB = settings.recycleMB > 0 ? 0 : 500;
+        settings.recycleMB = settings.recycleMB > 0 ? 0 : memory.DEFAULTS.recycleMB;
         memory.saveSettings(settings);
         notifier.refresh();
       },
