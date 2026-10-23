@@ -304,6 +304,7 @@ async function main() {
   check(listChanged > changedBefore && !(await toolNames()).includes('list_chats'), '关闭二层：通知客户端，工具消失');
   check(ctl.status().allows.length === 0, '关闭二层时清掉所有允许');
   // 拿不到会话 id：“10 分钟内允许”只当“允许这一次”
+  clock += 61000;
   st0.confirmAnswers.push('ten');
   const okUnknown = await ctl.gate.check({ session: 'unknown', client: 'x', account: { id: 'a2', name: '客服号' }, preview: false, timeoutMs: 1000 });
   check(okUnknown === null && ctl.status().allows.length === 0, '没有会话 id 时“10 分钟内允许”只当一次');
