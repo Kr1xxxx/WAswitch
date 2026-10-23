@@ -1,0 +1,178 @@
+// 主进程这边的轻量模式管理：按需启动后台进程（utilityProcess），转发命令和事件。
+// 没有轻量模式账号时不启动后台进程，不占内存；最后一个轻量账号删掉后关掉它。
+const { utilityProcess } = require('electron');
+const { EventEmitter } = require('events');
+const path = require('path');
+
+const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 500);
+
+class LiteHost extends EventEmitter {
+  constructor({ dataDir }) {
+    super();
+    this.dataDir = dataDir;
+    this.proc = null;
+    this.ready = false;
+    this.queue = [];
+    this.pending = new Map(); // reqId -> { resolve, reject, timer }
+    this.nextReq = 1;
+    this.sessions = new Map(); // id -> start 参数（后台进程意外退出后用来恢复）
+    this.watch = { id: null, jid: null };
+    this.shuttingDown = false;
+    this.crashes = [];
+  }
+
+  dirOf(id) {
+    if (!/^\d+$/.test(String(id))) throw new Error('账号编号不对');
+    return path.join(this.dataDir, 'lite', String(id));
+  }
+
+  pid() {
+    return this.proc && this.ready ? this.proc.pid : null;
+  }
+
+  ensure() {
+    if (this.proc) return;
+    this.ready = false;
+    const proc = utilityProcess.fork(path.join(__dirname, 'worker.mjs'), [], { serviceName: 'WAswitch 轻量模式', stdio: 'pipe' });
+    this.proc = proc;
+    const pipe = (stream, level) => stream && stream.on('data', (d) => {
+      for (const line of String(d).split('\n')) if (line.trim()) console[level](`[轻量模式] ${scrub(line)}`);
+    });
+    pipe(proc.stdout, 'log');
+    pipe(proc.stderr, 'warn');
+    proc.on('message', (m) => { if (this.proc === proc) this.onMessage(m); });
+    proc.on('exit', (code) => {
+      if (this.proc !== proc) return;
+      this.proc = null;
+      this.ready = false;
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('后台进程已退出')); }
+      this.pending.clear();
+      this.queue = [];
+      if (this.shuttingDown || !this.sessions.size) return;
+      // 意外退出：10 分钟内最多自动恢复 3 次
+      const now = Date.now();
+      this.crashes = this.crashes.filter((t) => now - t < 10 * 60 * 1000);
+      this.crashes.push(now);
+      console.warn(`轻量模式后台进程意外退出（${code}）`);
+      for (const id of this.sessions.keys()) this.emit('state', { id, status: 'crashed' });
+      if (this.crashes.length > 3) return;
+      setTimeout(() => {
+        if (this.shuttingDown || this.proc) return;
+        for (const cfg of this.sessions.values()) this.send({ type: 'start', ...cfg, ...this.watchFor(cfg.id) });
+      }, 3000);
+    });
+  }
+
+  onMessage(m) {
+    if (!m || typeof m !== 'object') return;
+    if (m.type === 'ready') {
+      this.ready = true;
+      const q = this.queue;
+      this.queue = [];
+      for (const x of q) this.proc.postMessage(x);
+      return;
+    }
+    if (m.type === 'reply') {
+      const p = this.pending.get(m.reqId);
+      if (!p) return;
+      this.pending.delete(m.reqId);
+      clearTimeout(p.timer);
+      if (m.ok) p.resolve(m.value); else p.reject(new Error(m.error));
+      return;
+    }
+    if (m.type === 'log') { console.warn(`[轻量模式${m.id ? ` ${m.id}` : ''}] ${scrub(m.msg)}`); return; }
+    if (m.type === 'guard') { console.warn(`[轻量模式] 网络护栏拦下了${m.what} ${scrub(m.host)}`); }
+    this.emit(m.type, m);
+  }
+
+  send(msg) {
+    this.ensure();
+    if (this.ready) this.proc.postMessage(msg); else this.queue.push(msg);
+  }
+
+  request(msg, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+      const reqId = this.nextReq++;
+      const timer = setTimeout(() => { this.pending.delete(reqId); reject(new Error('后台进程没有响应')); }, timeoutMs);
+      this.pending.set(reqId, { resolve, reject, timer });
+      this.send({ ...msg, reqId });
+    });
+  }
+
+  watchFor(id) {
+    return { watched: this.watch.id === id, jid: this.watch.id === id ? this.watch.jid : null };
+  }
+
+  // proxy：socks5h://… 或 http(s)://…；key：这个号的数据密钥（hex）
+  start(id, { proxy, key, os }) {
+    const cfg = { id, proxy, key, os, dir: this.dirOf(id) };
+    this.sessions.set(id, cfg);
+    this.send({ type: 'start', ...cfg, ...this.watchFor(id) });
+  }
+
+  stop(id) {
+    if (!this.sessions.delete(id)) return;
+    if (this.proc) this.send({ type: 'stop', id });
+    this.stopIfIdle();
+  }
+
+  async logout(id) {
+    const had = this.sessions.delete(id);
+    if (had && this.proc) {
+      try { await this.request({ type: 'logout', id }, 15000); } catch (e) { console.warn(`轻量模式退出登录失败：${e.message}`); }
+    }
+    this.stopIfIdle();
+  }
+
+  // 告诉后台进程现在正在看哪个号、哪个对话（只有这个号会推送对话列表）
+  setWatch(id, jid) {
+    if (this.watch.id === id && this.watch.jid === jid) return;
+    this.watch = { id, jid };
+    if (this.proc) this.send({ type: 'watch', id, jid });
+  }
+
+  read(id, jid) {
+    if (this.sessions.has(id)) this.send({ type: 'read', id, jid });
+  }
+
+  sendText(id, jid, text) {
+    if (!this.sessions.has(id)) return Promise.reject(new Error('这个号没有在运行'));
+    return this.request({ type: 'send', id, jid, text }, 30000);
+  }
+
+  stopIfIdle() {
+    if (this.sessions.size || !this.proc) return;
+    this.shutdownProc();
+  }
+
+  // 关掉后台进程：先让它把数据写盘再退出，4 秒没退就强制结束。
+  // 先把 this.proc 置空，之后再有账号启动会开一个新进程，不会把命令发给正在退出的旧进程。
+  async shutdownProc() {
+    const proc = this.proc;
+    if (!proc) return;
+    const wasReady = this.ready;
+    this.proc = null;
+    this.ready = false;
+    this.queue = [];
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('后台进程已关闭')); }
+    this.pending.clear();
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => { try { proc.kill(); } catch { /* 已经退出 */ } resolve(); }, 4000);
+      proc.once('exit', () => { clearTimeout(timer); resolve(); });
+      if (!wasReady) { clearTimeout(timer); try { proc.kill(); } catch { /* 已经退出 */ } resolve(); return; }
+      try { proc.postMessage({ type: 'shutdown' }); } catch { clearTimeout(timer); resolve(); }
+    });
+  }
+
+  running() {
+    return !!this.proc;
+  }
+
+  // 退出软件前调用：让后台进程把凭据和缓存写盘
+  async shutdown() {
+    this.shuttingDown = true;
+    await this.shutdownProc();
+  }
+}
+
+module.exports = { LiteHost };
