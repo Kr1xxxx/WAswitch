@@ -42,11 +42,13 @@ function resolve(fp) {
   const full = process.versions.chrome;
   const major = full.split('.')[0];
   const region = regions[fp.region] || regions.auto;
+  // 平台一律跟随本机，不用保存的值：账号数据拷到另一台系统不同的电脑上时，
+  // 声称的平台和实际行为对不上反而容易被识别
   const osInfo = {
     win: { ua: 'Windows NT 10.0; Win64; x64', platform: 'Win32', chPlatform: 'Windows', chVersion: '10.0.0', arch: 'x86' },
     mac: { ua: 'Macintosh; Intel Mac OS X 10_15_7', platform: 'MacIntel', chPlatform: 'macOS', chVersion: '14.5.0', arch: process.arch === 'arm64' ? 'arm' : 'x86' },
     linux: { ua: 'X11; Linux x86_64', platform: 'Linux x86_64', chPlatform: 'Linux', chVersion: '6.5.0', arch: 'x86' },
-  }[fp.os];
+  }[hostOs()];
   const languages = region.languages;
   return {
     userAgent: `Mozilla/5.0 (${osInfo.ua}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,

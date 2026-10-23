@@ -1,23 +1,56 @@
-// WAswitch 主进程：左侧账号栏 + 右侧 WhatsApp Web。
+// WAswitch 主进程。
+// 窗口 = 一个本地界面视图（侧栏、顶栏、设置等，铺满整个窗口）+ 每个账号一个 WhatsApp 视图（盖在右侧卡片里）。
 // 每个账号三层隔离：
 //   1. 数据：独立的 session 分区（persist:wa-<id>），cookie、存储、缓存互不相通
 //   2. 网络：独立代理（proxy.js），代理不通时不回落直连，并禁止 WebRTC 绕过代理
 //   3. 环境：独立的浏览器标识、语言、时区（fingerprint.js），只用官方接口设置
-const { app, BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, dialog } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
 
+// ---------- 只允许运行一个 WAswitch ----------
+// 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
+const isPrimary = app.requestSingleInstanceLock();
+if (!isPrimary) app.exit(0);
+
+// 出错时：记日志、提示、自动重启。刚启动就出错则不自动重启，免得反复崩溃。
+log.init((e) => {
+  try {
+    if (app.isReady()) {
+      const relaunch = process.uptime() > 60;
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'WAswitch 出错了',
+        message: relaunch ? 'WAswitch 遇到错误，马上自动重启。' : 'WAswitch 启动时出错，已经退出。',
+        detail: `${e && e.message ? e.message : e}\n\n详细情况已写入日志文件夹：${log.logDir()}`,
+      });
+      if (relaunch) app.relaunch();
+    }
+  } finally {
+    app.exit(1);
+  }
+});
+
 // 省内存模式要在 app ready 之前生效
 const settings = memory.loadSettings();
 memory.applyStartupSwitches(settings);
 
 const WA_URL = 'https://web.whatsapp.com/';
-const SIDEBAR_WIDTH = 72;
+const SIDE_EXPANDED = 200;
+const SIDE_COLLAPSED = 64;
+const GAP = 8; // 右侧卡片和窗口边缘的间距
+const TOPBAR = 44; // 卡片顶栏高度
+const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
+const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
+const startHidden = process.argv.includes('--hidden')
+  || (process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin);
 
 // ---------- 安全：链接、跳转、权限 ----------
 
@@ -61,7 +94,7 @@ function setupNavigationGuards(wc) {
   });
 }
 
-// 本地页面（侧边栏、编辑窗口）不允许打开新窗口或跳走
+// 本地界面不允许打开新窗口或跳走
 function lockLocalPage(wc) {
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (event) => event.preventDefault());
@@ -71,6 +104,7 @@ function lockLocalPage(wc) {
 
 const storeFile = () => path.join(app.getPath('userData'), 'accounts.json');
 let accounts = [];
+let accountsFileOk = false; // 账号文件读取正常时才清理残留的分区文件夹
 
 function saveAccounts() {
   const file = storeFile();
@@ -80,29 +114,32 @@ function saveAccounts() {
 
 function loadAccounts() {
   const file = storeFile();
-  let list = null;
+  let list = [];
+  accountsFileOk = true;
   if (fs.existsSync(file)) {
     try {
       list = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!Array.isArray(list)) throw new Error('not an array');
     } catch (e) {
-      // 文件损坏时先备份，不直接覆盖
+      // 文件损坏时先备份，不直接覆盖，也不清理任何数据
       const backup = `${file}.broken-${Date.now()}`;
       fs.copyFileSync(file, backup);
       console.warn(`accounts.json 无法读取（${e.message}），已备份到 ${backup}`);
-      list = null;
+      list = [];
+      accountsFileOk = false;
     }
   }
-  if (!list || !list.length) list = [{ id: String(Date.now()), name: '账号 1' }];
-  // 老版本的账号没有代理和环境字段，补上
-  for (const acc of list) {
+  // 老版本的账号缺字段，补上
+  list.forEach((acc, i) => {
     acc.id = String(acc.id);
-    acc.name = acc.name || '未命名';
+    acc.name = String(acc.name || '未命名').slice(0, 40);
+    acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
+    acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
     acc.muted = acc.muted === true;
-  }
+  });
   return list;
 }
 
@@ -113,25 +150,66 @@ function nextName() {
   return `账号 ${n}`;
 }
 
-// ---------- 窗口和账号视图 ----------
+function nextColor() {
+  return COLORS.find((c) => !accounts.some((a) => a.color === c)) || COLORS[accounts.length % COLORS.length];
+}
 
-let win, sidebar, editWin;
+// 账号分区在磁盘上的文件夹。id 只能是数字，路径必须正好在 Partitions 下面，
+// 防止 accounts.json 被改坏后删到别的地方。
+function partitionDir(id) {
+  if (!/^\d+$/.test(id)) return null;
+  const base = path.join(app.getPath('userData'), 'Partitions');
+  const dir = path.join(base, `wa-${id}`);
+  return path.dirname(dir) === base ? dir : null;
+}
+
+// 启动时删掉已删除账号残留的分区文件夹（删除账号时文件可能还被占用，删不掉）
+function cleanupPartitions() {
+  if (!accountsFileOk) return;
+  const base = path.join(app.getPath('userData'), 'Partitions');
+  let names = [];
+  try { names = fs.readdirSync(base); } catch { return; }
+  const keep = new Set(accounts.map((a) => `wa-${a.id}`));
+  for (const name of names) {
+    const m = name.match(/^wa-(\d+)$/);
+    if (!m || keep.has(name)) continue;
+    const dir = partitionDir(m[1]);
+    if (!dir) continue;
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`已清理残留的账号数据 ${name}`);
+    } catch (e) {
+      console.warn(`清理 ${name} 失败：${e.message}`);
+    }
+  }
+}
+
+// ---------- 状态 ----------
+
+let win, shellView;
 const views = new Map(); // id -> WebContentsView
-const problems = new Map(); // id -> 错误说明（代理连不上等）
+const problems = new Map(); // id -> { title, text, retrying, config }
+const retries = new Map(); // id -> { attempt, timer }
+const exitIps = new Map(); // id -> 最近一次测到的出口 IP
+let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
 let activeId = null;
+let page = 'account'; // account | editor | settings | welcome
+let editorId = null;
+let editorNonce = 0;
+let editorColor = null;
 let quitting = false;
 
 const memoryManager = new memory.MemoryManager(settings, {
   views,
-  isBackground: (id) => id !== activeId || !win || !win.isVisible(),
+  isBackground: (id) => id !== activeId || page !== 'account' || !win || !win.isVisible(),
   unreadOf: (id) => notifier.unread.get(id) || 0,
-  onUpdate: () => notifier.refresh(),
+  onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
 const notifier = new Notifier({
   getAccounts: () => accounts,
   getWindow: () => win,
-  activate: (id) => activate(id),
+  activate: (id) => { page = 'account'; activate(id); },
   quit: () => { quitting = true; app.quit(); },
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
@@ -140,64 +218,157 @@ const notifier = new Notifier({
       label: `后台账号超过 ${settings.recycleMB || memory.DEFAULTS.recycleMB} MB 时自动刷新回收内存`,
       type: 'checkbox',
       checked: settings.recycleMB > 0,
-      click: () => {
-        settings.recycleMB = settings.recycleMB > 0 ? 0 : memory.DEFAULTS.recycleMB;
-        memory.saveSettings(settings);
-        notifier.refresh();
-      },
+      click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : memory.DEFAULTS.recycleMB),
     },
     {
       label: '省内存模式（关闭显卡加速，重启后生效）',
       type: 'checkbox',
       checked: settings.lowMemoryMode,
-      click: () => {
-        settings.lowMemoryMode = !settings.lowMemoryMode;
-        memory.saveSettings(settings);
-        notifier.refresh();
-      },
+      click: () => setSetting('lowMemoryMode', !settings.lowMemoryMode),
     },
+    { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
   ],
 });
+
+const regionName = (() => {
+  let names = null;
+  try { names = new Intl.DisplayNames(['zh-CN'], { type: 'region' }); } catch { /* 没有 ICU 时直接显示代码 */ }
+  return (code) => (names && code ? names.of(code) : code || '');
+})();
+
+function proxyLabel(acc) {
+  const p = proxy.parse(acc.proxy);
+  if (!p) return '直连';
+  if (p.error) return '代理设置有误';
+  return acc.exitLabel ? `${acc.exitLabel} · ${p.port}` : `${p.scheme} · ${p.port}`;
+}
+
+function sideWidth() {
+  return page !== 'settings' && settings.sidebarCollapsed ? SIDE_COLLAPSED : SIDE_EXPANDED;
+}
 
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 function layout() {
+  if (!win) return;
   const { width, height } = win.getContentBounds();
-  sidebar.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height });
+  shellView.setBounds({ x: 0, y: 0, width, height });
+  const side = sideWidth();
+  const bounds = {
+    x: side,
+    y: GAP + TOPBAR,
+    width: Math.max(0, width - side - GAP),
+    height: Math.max(0, height - GAP * 2 - TOPBAR),
+  };
   for (const [id, view] of views) {
-    const active = id === activeId;
-    view.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: width - SIDEBAR_WIDTH, height });
-    view.setVisible(active);
-    memoryManager.markBackground(id, !active || !win.isVisible());
+    const current = page === 'account' && id === activeId;
+    view.setBounds(bounds);
+    view.setVisible(current && !problems.has(id));
+    memoryManager.markBackground(id, !current || !win.isVisible());
   }
 }
 
 function pushState() {
-  sidebar.webContents.send('state', {
-    accounts: accounts.map(({ id, name }) => ({ id, name, problem: problems.get(id) || '' })),
+  if (!shellView || shellView.webContents.isDestroyed()) return;
+  shellView.webContents.send('state', {
+    platform: process.platform,
+    page,
     activeId,
+    editorId,
+    editorNonce,
+    editorColor,
+    collapsed: settings.sidebarCollapsed,
+    accounts: accounts.map((acc) => {
+      const problem = problems.get(acc.id);
+      return {
+        id: acc.id,
+        name: acc.name,
+        color: acc.color,
+        muted: acc.muted,
+        unread: notifier.unread.get(acc.id) || 0,
+        memMB: memoryManager.usageMB.get(acc.id) || 0,
+        proxyLabel: proxyLabel(acc),
+        regionLabel: (fingerprint.regions[acc.fingerprint.region] || fingerprint.regions.auto).label,
+        problem: problem ? problem.text : '',
+        problemTitle: problem ? problem.title : '',
+        problemShort: problem ? problem.short : '',
+        retrying: !!(problem && problem.retrying),
+      };
+    }),
+    totalMB: memoryManager.totalMB(),
+    settings,
+    recycleChoices: memory.RECYCLE_CHOICES,
+    canLoginItem,
+    about: {
+      version: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      dataDir: app.getPath('userData'),
+    },
   });
 }
 
-function setProblem(id, text) {
-  if (text) problems.set(id, text); else problems.delete(id);
+function refresh() {
+  layout();
   pushState();
+}
+
+function setProblem(id, problem) {
+  if (problem) problems.set(id, problem); else problems.delete(id);
+  refresh();
+}
+
+// ---------- 连不上时自动重试 ----------
+// 开机自启时 Clash 往往还没起来，所以代理错误不能只提示一次：10 秒后重试，之后逐步拉长到 60 秒。
+
+function clearRetry(id) {
+  const r = retries.get(id);
+  if (r) clearTimeout(r.timer);
+  retries.delete(id);
+}
+
+function reconnect(id) {
+  const view = views.get(id);
+  if (view && !view.webContents.isDestroyed()) view.webContents.loadURL(WA_URL).catch(() => {}); // 失败由 did-fail-load 处理
+}
+
+function scheduleRetry(id) {
+  const r = retries.get(id) || { attempt: 0, timer: null };
+  clearTimeout(r.timer);
+  const delay = Math.min(10000 * 2 ** r.attempt, 60000);
+  r.attempt += 1;
+  r.timer = setTimeout(() => reconnect(id), delay);
+  retries.set(id, r);
+}
+
+// 用户点“重新连接”
+async function retryNow(id) {
+  const acc = accounts.find((a) => a.id === id);
+  if (!acc) return;
+  clearRetry(id);
+  const problem = problems.get(id);
+  if (problem && problem.config) { openEditor(id); return; }
+  if (!views.has(id)) { await createView(acc); refresh(); return; }
+  reconnect(id);
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
-async function createView(acc) {
+async function createView(acc, loadDelay = 0) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   const r = fingerprint.resolve(acc.fingerprint);
   // 网络请求层面的 UA 和语言（包括 Service Worker 发出的请求）
   ses.setUserAgent(r.userAgent, r.acceptLanguage);
+  // 不用拼写检查，也就不会去下载词典
+  ses.setSpellCheckerEnabled(false);
   setupPermissions(ses);
   const applied = await proxy.apply(ses, acc.proxy);
 
   const view = new WebContentsView({
-    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
   });
+  if (typeof view.setBorderRadius === 'function') view.setBorderRadius(14);
   const wc = view.webContents;
   // 禁止 WebRTC 走代理以外的 UDP，防止泄露真实 IP
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
@@ -209,37 +380,62 @@ async function createView(acc) {
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
     const count = m ? Number(m[1]) : 0;
-    sidebar.webContents.send('unread', { id: acc.id, count });
-    notifier.update(acc, count, { isActive: acc.id === activeId });
+    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account' });
+    pushState();
   });
-  wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    if (!isMainFrame) return;
-    if (PROXY_ERRORS.has(code)) setProblem(acc.id, `代理连不上（${desc}），没有改用直连。请检查 Clash 是否开着，或右键编辑代理。`);
-    else if (code !== -3) setProblem(acc.id, `页面打不开（${desc}）`);
+
+  let failed = false;
+  wc.on('did-start-loading', () => { failed = false; });
+  wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
+    failed = true;
+    console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
+    if (PROXY_ERRORS.has(code)) {
+      setProblem(acc.id, {
+        title: '代理连不上，这个账号已暂停联网',
+        short: '代理连不上',
+        text: `${acc.name} 设置的线路 ${acc.proxy} 没有响应（${desc}）。为了不暴露真实 IP，不会改用直连。请检查 Clash 是否在运行、端口是否正确。`,
+        retrying: true,
+      });
+    } else {
+      setProblem(acc.id, { title: 'WhatsApp 页面打不开', short: '连不上', text: `页面加载失败（${desc}），可能是网络不通。`, retrying: true });
+    }
+    scheduleRetry(acc.id);
   });
-  wc.on('did-finish-load', () => { if (!applied.error) setProblem(acc.id, ''); });
+  wc.on('did-finish-load', () => {
+    if (failed || applied.error) return;
+    clearRetry(acc.id);
+    if (problems.has(acc.id)) setProblem(acc.id, null);
+  });
   // 页面进程崩溃后调试连接会断开，直接重建这个账号的视图，保证环境设置重新生效
   wc.on('render-process-gone', (_e, details) => {
     if (details.reason === 'clean-exit') return;
-    console.warn(`账号 ${acc.name} 的页面进程退出（${details.reason}），正在重建`);
+    console.warn(`账号 ${acc.id} 的页面进程退出（${details.reason}），正在重建`);
     setTimeout(async () => {
       if (!accounts.includes(acc)) return;
       destroyView(acc.id);
       await createView(acc);
-      layout();
+      refresh();
     }, 1000);
   });
 
   if (applied.error) {
-    setProblem(acc.id, `代理设置有误：${applied.error}。为避免暴露真实 IP，这个账号暂停联网。`);
+    setProblem(acc.id, {
+      title: '代理设置有误，这个账号已暂停联网',
+      short: '代理设置有误',
+      text: `${applied.error}。为避免暴露真实 IP，这个账号暂时不联网，请修改代理。`,
+      config: true,
+    });
     return view;
   }
   await fingerprint.attach(wc, acc.fingerprint);
-  wc.loadURL(WA_URL);
+  if (loadDelay) setTimeout(() => { if (!wc.isDestroyed()) wc.loadURL(WA_URL).catch(() => {}); }, loadDelay);
+  else wc.loadURL(WA_URL).catch(() => {}); // 失败由 did-fail-load 处理
   return view;
 }
 
 function destroyView(id) {
+  clearRetry(id);
   const view = views.get(id);
   if (!view) return;
   win.contentView.removeChildView(view);
@@ -250,8 +446,23 @@ function destroyView(id) {
 
 function activate(id) {
   activeId = id;
-  layout();
-  pushState();
+  if (!accounts.length) page = 'welcome';
+  refresh();
+}
+
+function showPage(next) {
+  page = next === 'account' && !accounts.length ? 'welcome' : next;
+  refresh();
+}
+
+function openEditor(id) {
+  const acc = accounts.find((a) => a.id === id);
+  editorId = acc ? acc.id : null;
+  editorColor = acc ? acc.color : nextColor();
+  editorNonce += 1;
+  lastTest = null;
+  page = 'editor';
+  refresh();
 }
 
 async function removeAccount(id) {
@@ -264,16 +475,21 @@ async function removeAccount(id) {
     cancelId: 0,
     title: '删除账号',
     message: `删除「${acc.name}」？`,
-    detail: '会清除这个账号在本机的登录数据，之后要重新扫码才能再登录。手机上的聊天记录不受影响。',
+    detail: '会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。手机的“已关联的设备”里还会显示这台电脑，可以在手机上手动退出。',
   });
   if (response !== 1) return;
   destroyView(id);
   problems.delete(id);
+  exitIps.delete(id);
   notifier.forget(id);
   memoryManager.forget(id);
   await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   accounts = accounts.filter((a) => a.id !== id);
   saveAccounts();
+  // 删掉磁盘上的分区文件夹；文件还被占用时删不掉，下次启动会再清理
+  const dir = partitionDir(id);
+  if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉 wa-${id}，下次启动再清理`); });
+  if (page === 'editor' && editorId === id) page = 'account';
   activate(accounts[0]?.id ?? null);
 }
 
@@ -291,12 +507,74 @@ app.on('login', (event, _webContents, _details, authInfo, callback) => {
   }
 });
 
+// ---------- 设置 ----------
+
+function applyLoginItem() {
+  if (!canLoginItem) return;
+  // 开机启动时带 --hidden，直接缩在托盘
+  app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, args: ['--hidden'] });
+}
+
+function setSetting(key, value) {
+  if (key === 'recycleMB') {
+    if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
+  } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed'].includes(key)) {
+    if (typeof value !== 'boolean') return;
+  } else {
+    return;
+  }
+  settings[key] = value;
+  memory.saveSettings(settings);
+  if (key === 'openAtLogin') applyLoginItem();
+  notifier.refresh();
+  refresh();
+}
+
+// ---------- 快捷键和菜单 ----------
+
+// Ctrl/Cmd + 1–9 切换账号。只在 WAswitch 窗口有焦点时生效，不抢其他软件的快捷键。
+app.on('web-contents-created', (_e, wc) => {
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.alt || input.shift) return;
+    const mod = process.platform === 'darwin' ? input.meta : input.control;
+    if (!mod || !/^[1-9]$/.test(input.key)) return;
+    const acc = accounts[Number(input.key) - 1];
+    if (!acc) return;
+    event.preventDefault();
+    page = 'account';
+    activate(acc.id);
+  });
+});
+
+function setupMenu() {
+  if (process.platform === 'darwin') {
+    // macOS 需要“编辑”菜单，Cmd+C / Cmd+V 才能用
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+  } else {
+    // Windows / Linux 不显示菜单栏（默认菜单里有开发者工具），复制粘贴照常可用
+    Menu.setApplicationMenu(null);
+  }
+}
+
+// ---------- 启动 ----------
+
+app.on('second-instance', () => notifier.showWindow());
+
 app.whenReady().then(async () => {
-  // 侧边栏和编辑窗口用的默认会话不需要任何权限
+  if (!isPrimary) return;
+  setupMenu();
+  // 本地界面用的默认会话不需要任何权限
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setSpellCheckerEnabled(false);
 
-  win = new BaseWindow({ width: 1280, height: 820, title: 'WAswitch', icon: path.join(__dirname, '..', 'assets', 'icon.png') });
+  const mac = process.platform === 'darwin';
+  win = new BaseWindow({
+    width: 1280, height: 820, minWidth: 900, minHeight: 600, show: false,
+    title: 'WAswitch', backgroundColor: '#E6E9ED',
+    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
+    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } } : {}),
+  });
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
   win.on('hide', layout);
@@ -307,71 +585,107 @@ app.whenReady().then(async () => {
   win.on('session-end', () => { quitting = true; });
   win.on('close', (event) => {
     if (quitting) return;
+    if (!settings.closeToTray) { quitting = true; app.quit(); return; }
     event.preventDefault();
     win.hide();
-    if (!hintShown && process.platform !== 'darwin') {
+    if (!hintShown && !mac) {
       hintShown = true;
       notifier.tray.displayBalloon?.({ title: 'WAswitch 还在运行', content: '已缩到托盘，继续接收消息。右键托盘图标可以退出。' });
     }
   });
-  sidebar = new WebContentsView({
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+
+  shellView = new WebContentsView({
+    webPreferences: { preload: path.join(__dirname, 'shell', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
   });
-  win.contentView.addChildView(sidebar);
-  lockLocalPage(sidebar.webContents);
-  sidebar.webContents.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  sidebar.webContents.on('did-finish-load', pushState);
+  win.contentView.addChildView(shellView);
+  lockLocalPage(shellView.webContents);
+  shellView.webContents.loadFile(path.join(__dirname, 'shell', 'index.html'));
+  shellView.webContents.on('did-finish-load', pushState);
   win.on('resize', layout);
 
   accounts = loadAccounts();
-  saveAccounts();
+  if (accountsFileOk) saveAccounts();
+  cleanupPartitions();
+  applyLoginItem();
   activeId = accounts[0]?.id ?? null;
-  for (const acc of accounts) await createView(acc);
-  layout();
-  pushState();
+  page = accounts.length ? 'account' : 'welcome';
+  refresh();
+  if (!startHidden) win.show();
+
+  // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
+  powerMonitor.on('resume', () => {
+    setTimeout(() => {
+      for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
+    }, 5000);
+  });
+
+  // 分批启动：先打开当前账号，其他账号每隔 2.5 秒打开一个，避免同时加载卡顿
+  for (const [i, acc] of accounts.entries()) {
+    await createView(acc, i * 2500);
+    refresh();
+  }
   memoryManager.start();
 });
 
-// ---------- 侧边栏操作 ----------
+// ---------- 本地界面发来的操作 ----------
 
-ipcMain.on('switch', (_e, id) => activate(id));
-ipcMain.on('add', () => openEditor(null));
+// 只接受本地界面发来的消息，WhatsApp 页面没有这些接口
+const fromShell = (e) => shellView && e.sender === shellView.webContents;
+const onShell = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromShell(e)) fn(...args); });
+const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
+  if (!fromShell(e)) throw new Error('not allowed');
+  return fn(...args);
+});
+const findAcc = (id) => accounts.find((a) => a.id === id);
 
-// 右键账号：编辑 / 重新加载 / 删除
-ipcMain.on('context', (_e, id) => {
-  const acc = accounts.find((a) => a.id === id);
+onShell('switch', (id) => { if (findAcc(id)) { page = 'account'; activate(id); } });
+onShell('add', () => openEditor(null));
+onShell('edit', (id) => { if (findAcc(id)) openEditor(id); });
+onShell('page', (p) => { if (['account', 'settings'].includes(p)) showPage(p); });
+onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
+onShell('setting', ({ key, value } = {}) => setSetting(key, value));
+onShell('reload', (id) => {
+  if (!findAcc(id)) return;
+  if (problems.has(id)) retryNow(id);
+  else views.get(id)?.webContents.reload();
+});
+onShell('retry', (id) => retryNow(id));
+onShell('mute', ({ id, muted } = {}) => {
+  const acc = findAcc(id);
+  if (!acc || typeof muted !== 'boolean') return;
+  acc.muted = muted;
+  saveAccounts();
+  notifier.refresh();
+  pushState();
+});
+onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
+onShell('open-source', () => shell.openExternal(SOURCE_URL));
+
+// 右键账号或点顶栏“⋯”：编辑 / 刷新 / 通知 / 删除
+onShell('context', (id) => {
+  const acc = findAcc(id);
   if (!acc) return;
   Menu.buildFromTemplate([
-    { label: '编辑（名称、代理、地区）', click: () => openEditor(id) },
-    { label: '重新加载', click: () => views.get(id)?.webContents.reload() },
+    { label: '编辑名称、颜色和代理…', click: () => openEditor(id) },
+    { label: '刷新', click: () => (problems.has(id) ? retryNow(id) : views.get(id)?.webContents.reload()) },
     {
-      label: '静音通知', type: 'checkbox', checked: acc.muted,
-      click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); },
+      label: '不弹通知', type: 'checkbox', checked: acc.muted,
+      click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
     { type: 'separator' },
-    { label: `删除「${acc.name}」并退出登录`, click: () => removeAccount(id) },
-  ]).popup();
+    { label: `删除「${acc.name}」并退出登录…`, click: () => removeAccount(id) },
+  ]).popup({ window: win });
 });
 
-// ---------- 编辑窗口：新建账号和修改账号共用 ----------
+// ---------- 编辑账号（新建和修改共用） ----------
 
-function openEditor(id) {
-  if (editWin && !editWin.isDestroyed()) editWin.close();
-  editWin = new BrowserWindow({
-    width: 480, height: 640, resizable: false, minimizable: false, maximizable: false,
-    title: id ? '编辑账号' : '添加账号',
-    webPreferences: { preload: path.join(__dirname, 'edit', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
-  });
-  editWin.setMenu(null);
-  lockLocalPage(editWin.webContents);
-  editWin.loadFile(path.join(__dirname, 'edit', 'edit.html'), { query: { id: id || '' } });
-}
-
-ipcMain.handle('editor:load', (_e, id) => {
-  const acc = accounts.find((a) => a.id === id);
+handleShell('editor:load', (id) => {
+  const acc = findAcc(id);
   return {
+    id: acc ? acc.id : null,
     isNew: !acc,
     name: acc ? acc.name : nextName(),
+    color: acc ? acc.color : editorColor || nextColor(),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
     region: acc ? acc.fingerprint.region : 'auto',
@@ -379,21 +693,29 @@ ipcMain.handle('editor:load', (_e, id) => {
   };
 });
 
-// 测试代理：返回出口 IP、国家、时区，并给出匹配的地区
-ipcMain.handle('editor:test', async (_e, { id, proxy: proxyText, password }) => {
-  const acc = accounts.find((a) => a.id === id);
+// 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同
+handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
+  const acc = findAcc(id);
   const pass = password || (acc ? proxy.decryptPassword(acc.proxyPassword) : '');
-  const res = await proxy.test(proxyText, pass);
-  if (res.ok) res.region = findByTimezone(res.timezone);
+  const res = await proxy.test(String(proxyText || ''), pass);
+  if (!res.ok) return res;
+  res.region = findByTimezone(res.timezone);
+  res.country = regionName(res.country);
+  const same = accounts.find((a) => a.id !== id && exitIps.get(a.id) === res.ip);
+  if (same) res.sameAs = same.name;
+  lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country };
   return res;
 });
 
-ipcMain.handle('editor:save', async (_e, { id, name, proxy: proxyText, password, region }) => {
-  const parsed = proxy.parse(proxyText);
+handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password, region } = {}) => {
+  name = String(name || '').trim().slice(0, 40);
+  if (!name) return { error: '请填写名称' };
+  if (!COLORS.includes(color)) color = nextColor();
+  const parsed = proxy.parse(String(proxyText || ''));
   if (parsed && parsed.error) return { error: parsed.error };
   if (!fingerprint.regions[region]) region = 'auto';
   const proxyStored = parsed ? parsed.display : '';
-  let acc = accounts.find((a) => a.id === id);
+  let acc = findAcc(id);
 
   // 密码：新填的优先；地址里带的其次；都没有则保留原来的（地址变了用户名也变了就清掉）
   let encPassword = acc ? acc.proxyPassword : '';
@@ -404,33 +726,86 @@ ipcMain.handle('editor:save', async (_e, { id, name, proxy: proxyText, password,
   } catch (e) {
     return { error: e.message };
   }
+  // 测试过的出口所在地显示在侧栏
+  const tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
 
   if (!acc) {
-    acc = { id: String(Date.now()), name, proxy: proxyStored, proxyPassword: encPassword, fingerprint: fingerprint.generate(region) };
+    acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false };
     accounts.push(acc);
+    if (tested) exitIps.set(acc.id, tested.ip);
     saveAccounts();
+    page = 'account';
+    activeId = acc.id;
     await createView(acc);
-    activate(acc.id);
+    refresh();
   } else {
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region;
+    if (acc.proxy !== proxyStored) acc.exitLabel = '';
+    if (tested) { acc.exitLabel = tested.label; exitIps.set(acc.id, tested.ip); }
     acc.name = name;
+    acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
     // 只改地区（时区、语言），浏览器标识保持不变
     acc.fingerprint.region = region;
     saveAccounts();
+    page = 'account';
+    activeId = acc.id;
     if (changed) {
       destroyView(acc.id);
+      problems.delete(acc.id);
       await createView(acc);
     }
-    activate(activeId);
+    refresh();
   }
-  if (editWin && !editWin.isDestroyed()) editWin.close();
+  notifier.refresh();
   return { ok: true };
+});
+
+// ---------- 隔离自检 ----------
+// 逐个测试每个账号的代理出口，找出走真实 IP 的号、共用出口的号、时区和出口对不上的号。
+
+handleShell('check:run', async () => {
+  const items = [];
+  const byPort = new Map();
+  const byIp = new Map();
+  for (const acc of accounts) {
+    const p = proxy.parse(acc.proxy);
+    if (!p) { items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，用的是这台电脑的真实 IP。' }); continue; }
+    if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
+    const key = `${p.host}:${p.port}`;
+    byPort.set(key, [...(byPort.get(key) || []), acc.name]);
+    // 会话里的代理规则不能带“直连”兜底
+    const rule = await session.fromPartition(`persist:wa-${acc.id}`).resolveProxy(WA_URL);
+    if (/DIRECT/i.test(rule)) items.push({ level: 'bad', title: `${acc.name}：代理规则里有直连兜底`, detail: rule });
+    const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
+    if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error }); continue; }
+    exitIps.set(acc.id, res.ip);
+    acc.exitLabel = regionName(res.country);
+    byIp.set(res.ip, [...(byIp.get(res.ip) || []), acc.name]);
+    const tz = fingerprint.resolve(acc.fingerprint).timezone;
+    const place = [acc.exitLabel, res.city].filter(Boolean).join(' · ');
+    items.push(tz && tz !== res.timezone
+      ? { level: 'warn', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: `出口时区是 ${res.timezone}，账号设置的是 ${tz}，建议在编辑里改成一致。` }
+      : { level: 'ok', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: tz ? `时区 ${tz}，和出口一致。` : '时区跟随本机，建议在编辑里选和出口一致的地区。' });
+  }
+  for (const [key, names] of byPort) {
+    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 共用同一个代理端口`, detail: `${key}。这几个号会从同一个 IP 上网，建议每个号一个端口。` });
+  }
+  for (const [ip, names] of byIp) {
+    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 的出口 IP 相同`, detail: `${ip}。在 WhatsApp 看来这几个号在同一个地方。` });
+  }
+  const webrtcOk = [...views.values()].every((v) => v.webContents.getWebRTCIPHandlingPolicy() === 'disable_non_proxied_udp');
+  items.push({ level: webrtcOk ? 'ok' : 'bad', title: 'WebRTC 只走代理，不泄露本机 IP' });
+  const uaOk = accounts.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
+  items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识里没有 Electron 或软件名' });
+  saveAccounts();
+  pushState();
+  return { items, time: new Date().toLocaleString('zh-CN') };
 });
 
 app.on('before-quit', () => { quitting = true; });
 // 窗口只是隐藏，不因为“没有可见窗口”而退出
 app.on('window-all-closed', () => {});
 // macOS 点 Dock 图标时重新显示窗口
-app.on('activate', () => { if (win) { win.show(); win.focus(); } });
+app.on('activate', () => notifier.showWindow());
