@@ -294,6 +294,54 @@ const mcpHooks = {
     return true;
   },
   removeAccount: (id, opts) => removeAccount(id, opts),
+
+  // ---- 第二层：读对话列表 ----
+  // 读之前现查一次是否已登录（只读检测），结果同步到掉线检测的状态里
+  checkLogin: async (id) => {
+    const view = views.get(id);
+    if (!view || problems.has(id)) return 'unknown';
+    const state = await waPage.loginState(view.webContents);
+    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); pushState(); }
+    return state;
+  },
+  readChatList: async (id, opts) => {
+    const view = views.get(id);
+    if (!view) return { ok: false, reason: 'loading' };
+    return waPage.readChatList(view.webContents, opts);
+  },
+  // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
+  confirmRead: async ({ client, account, includePreview, timeoutMs }) => {
+    if (confirmDialogOpen) return 'busy';
+    confirmDialogOpen = true;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    notifier.showWindow();
+    try {
+      const { response } = await dialog.showMessageBox(win, {
+        signal: abort.signal,
+        type: 'question',
+        buttons: ['拒绝', '允许这一次', '10 分钟内允许'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: 'AI 想读取对话列表',
+        message: `允许 AI 读取「${account}」的对话列表吗？`,
+        detail: [
+          `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
+          includePreview
+            ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
+            : '会读取：对话名称、未读数、时间。不含消息内容。',
+          '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+          '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+        ].join('\n'),
+      });
+      if (abort.signal.aborted) return 'deny';
+      return ['deny', 'once', 'ten'][response] || 'deny';
+    } finally {
+      clearTimeout(timer);
+      confirmDialogOpen = false;
+    }
+  },
 };
 
 const regionName = (() => {
@@ -432,6 +480,7 @@ async function checkLogins() {
     if (state === 'unknown') continue;
     const before = loginStates.get(acc.id);
     if (state === before) continue;
+    if (state === 'needs_qr') mcp?.controller.gate.clearAccount(acc.id);
     if (state === 'needs_qr' && before === 'logged_in') {
       console.warn(`账号 ${acc.id} 已退出登录，需要重新扫码`);
       notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
@@ -559,13 +608,14 @@ function openEditor(id, prefill = null) {
 }
 
 // 返回 'removed' | 'cancelled' | 'busy' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
-let removeDialogOpen = false;
+// MCP 引起的确认框同一时间只弹一个（删除账号、读对话列表共用）
+let confirmDialogOpen = false;
 async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
   if (!acc) return 'not_found';
-  // 已经有一个删除确认框在等用户时，不再叠第二个
-  if (removeDialogOpen) return 'busy';
-  removeDialogOpen = true;
+  // 已经有一个确认框在等用户时，不再叠第二个
+  if (confirmDialogOpen) return 'busy';
+  confirmDialogOpen = true;
   const abort = new AbortController();
   const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : null;
   if (timeoutMs) notifier.showWindow();
@@ -583,13 +633,14 @@ async function removeAccount(id, { timeoutMs } = {}) {
     }));
   } finally {
     clearTimeout(timer);
-    removeDialogOpen = false;
+    confirmDialogOpen = false;
   }
   if (response !== 1 || abort.signal.aborted) return 'cancelled';
   destroyView(id);
   problems.delete(id);
   exitIps.delete(id);
   loginStates.delete(id);
+  mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   memoryManager.forget(id);
   await session.fromPartition(`persist:wa-${id}`).clearStorageData();

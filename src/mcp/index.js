@@ -1,6 +1,6 @@
 // 把 MCP 接到 WAswitch：控制器、设置窗口和它的 IPC。
 // main.js 只需要调用 setupMcp(...)，并在托盘菜单里放一个“MCP 接口设置”入口。
-const { app, BrowserWindow, ipcMain, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, dialog } = require('electron');
 const path = require('path');
 const { McpController } = require('./server');
 
@@ -42,6 +42,25 @@ function setupMcp({ hooks, lockLocalPage }) {
   ipcMain.handle('mcp:status', () => view());
   ipcMain.handle('mcp:set-enabled', async (_e, on) => { await controller.setEnabled(on); return view(); });
   ipcMain.handle('mcp:regenerate', async () => { await controller.regenerateToken(); return view(); });
+  // 第二层：第一次打开时先说明隐私影响
+  ipcMain.handle('mcp:set-layer2', async (e, on) => {
+    if (on && !controller.settings.layer2Acknowledged) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
+        type: 'warning',
+        buttons: ['取消', '我知道了，打开'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '打开第二层：读对话列表',
+        message: '打开后，AI 可以在你确认后读取对话列表',
+        detail: '读到的对话名称（以及你另外打开的消息预览）会发给你用的 AI 服务商，例如 Anthropic。聊天对方不会知道。\n\n每次读取都会弹窗让你确认；读取是只读的，不会点开对话、不会标已读，内容不会保存到电脑上。',
+      });
+      if (response !== 1) return view();
+    }
+    controller.setLayer2(on);
+    return view();
+  });
+  ipcMain.handle('mcp:set-preview', (_e, on) => { controller.setPreview(on); return view(); });
+  ipcMain.handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   ipcMain.handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];
     if (text) clipboard.writeText(text);

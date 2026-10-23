@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('mcp', {
   status: () => ipcRenderer.invoke('mcp:status'),
   setEnabled: (on) => ipcRenderer.invoke('mcp:set-enabled', on),
   regenerate: () => ipcRenderer.invoke('mcp:regenerate'),
+  setLayer2: (on) => ipcRenderer.invoke('mcp:set-layer2', on),
+  setPreview: (on) => ipcRenderer.invoke('mcp:set-preview', on),
+  revoke: (key) => ipcRenderer.invoke('mcp:revoke', key),
   copy: (key) => ipcRenderer.invoke('mcp:copy', key),
   onUpdate: (cb) => ipcRenderer.on('mcp:update', (_e, s) => cb(s)),
 });
