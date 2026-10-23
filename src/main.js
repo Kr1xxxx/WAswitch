@@ -14,6 +14,7 @@ const { findByTimezone } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
 const waPage = require('./wa-page');
+const { setupMcp } = require('./mcp');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -250,8 +251,50 @@ const notifier = new Notifier({
       click: () => setSetting('lowMemoryMode', !settings.lowMemoryMode),
     },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
+    ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
 });
+
+// MCP 接口（默认关闭）。在 app ready 之后创建。
+let mcp = null;
+
+function accountStatus(id) {
+  const view = views.get(id);
+  if (problems.has(id)) return 'error';
+  if (!view) return 'not_loaded';
+  return view.webContents.isLoading() ? 'loading' : 'ready';
+}
+
+const mcpHooks = {
+  listAccounts: () => accounts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    active: a.id === activeId,
+    unread: notifier.unread.get(a.id) || 0,
+    muted: a.muted,
+    status: accountStatus(a.id),
+    // 只读掉线检测的结果：logged_in | needs_qr | unknown
+    login: loginStates.get(a.id) || 'unknown',
+    problem: problems.get(a.id)?.text || '',
+  })),
+  regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
+  activate: (id) => { notifier.showWindow(); page = 'account'; activate(id); },
+  // 不直接创建：打开“添加账号”页面并预填，由人确认代理后保存，避免新号先用真实 IP 联网
+  openAddAccount: ({ name, region }) => {
+    notifier.showWindow();
+    openEditor(null, { name, region });
+  },
+  renameAccount: (id, name) => {
+    const acc = accounts.find((a) => a.id === id);
+    if (!acc) return false;
+    acc.name = String(name).slice(0, 40);
+    saveAccounts();
+    pushState();
+    notifier.refresh();
+    return true;
+  },
+  removeAccount: (id, opts) => removeAccount(id, opts),
+};
 
 const regionName = (() => {
   let names = null;
@@ -502,8 +545,11 @@ function showPage(next) {
   refresh();
 }
 
-function openEditor(id) {
+// prefill：新建账号时预填的名称和地区（MCP 的 add_account 用）
+let editorPrefill = null;
+function openEditor(id, prefill = null) {
   const acc = accounts.find((a) => a.id === id);
+  editorPrefill = acc ? null : prefill;
   editorId = acc ? acc.id : null;
   editorColor = acc ? acc.color : nextColor();
   editorNonce += 1;
@@ -512,19 +558,34 @@ function openEditor(id) {
   refresh();
 }
 
-async function removeAccount(id) {
+// 返回 'removed' | 'cancelled' | 'busy' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
+let removeDialogOpen = false;
+async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
-  if (!acc) return;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'warning',
-    buttons: ['取消', '删除'],
-    defaultId: 0,
-    cancelId: 0,
-    title: '删除账号',
-    message: `删除「${acc.name}」？`,
-    detail: '会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。手机的“已关联的设备”里还会显示这台电脑，可以在手机上手动退出。',
-  });
-  if (response !== 1) return;
+  if (!acc) return 'not_found';
+  // 已经有一个删除确认框在等用户时，不再叠第二个
+  if (removeDialogOpen) return 'busy';
+  removeDialogOpen = true;
+  const abort = new AbortController();
+  const timer = timeoutMs ? setTimeout(() => abort.abort(), timeoutMs) : null;
+  if (timeoutMs) notifier.showWindow();
+  let response;
+  try {
+    ({ response } = await dialog.showMessageBox(win, {
+      signal: abort.signal,
+      type: 'warning',
+      buttons: ['取消', '删除'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '删除账号',
+      message: `删除「${acc.name}」？`,
+      detail: `会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。手机的“已关联的设备”里还会显示这台电脑，可以在手机上手动退出。${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
+    }));
+  } finally {
+    clearTimeout(timer);
+    removeDialogOpen = false;
+  }
+  if (response !== 1 || abort.signal.aborted) return 'cancelled';
   destroyView(id);
   problems.delete(id);
   exitIps.delete(id);
@@ -539,6 +600,7 @@ async function removeAccount(id) {
   if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉 wa-${id}，下次启动再清理`); });
   if (page === 'editor' && editorId === id) page = 'account';
   activate(accounts[0]?.id ?? null);
+  return 'removed';
 }
 
 // 带用户名密码的 http 代理：按代理的地址和端口找到对应账号，取它的密码。
@@ -675,6 +737,10 @@ app.whenReady().then(async () => {
   memoryManager.start();
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setTimeout(checkLogins, 60 * 1000);
+
+  mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
+  await mcp.init();
+  notifier.refresh();
 });
 
 // ---------- 本地界面发来的操作 ----------
@@ -734,11 +800,11 @@ handleShell('editor:load', (id) => {
   return {
     id: acc ? acc.id : null,
     isNew: !acc,
-    name: acc ? acc.name : nextName(),
+    name: acc ? acc.name : String(editorPrefill?.name || nextName()).slice(0, 40),
     color: acc ? acc.color : editorColor || nextColor(),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
-    region: acc ? acc.fingerprint.region : 'auto',
+    region: acc ? acc.fingerprint.region : (fingerprint.regions[editorPrefill?.region] ? editorPrefill.region : 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
   };
 });
