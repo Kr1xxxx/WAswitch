@@ -1175,7 +1175,7 @@ function crmBox(accounts) {
       h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
       h('span', { class: 'meta' }, a.name),
       h('span', { class: 'hint', style: { fontSize: '12px' } }, a.crm
-        ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}`
+        ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }
 

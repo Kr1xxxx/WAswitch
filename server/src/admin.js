@@ -234,6 +234,8 @@ async function updateAccount(db, user, id, body) {
   if (a.device_id) stmts.push(await seatStmt(db, a.device_id, id, true)); // 让当前电脑拿到新名称/颜色/备注
   await db.batch(stmts);
   await audit(db, user.id, 'account.update', id, body);
+  // 开 / 关聊天同步单独记一笔，方便以后查是谁、什么时候打开的
+  if (body.crm_sync !== undefined) await audit(db, user.id, body.crm_sync === true ? 'account.crm_on' : 'account.crm_off', id);
   return json({ ok: true });
 }
 

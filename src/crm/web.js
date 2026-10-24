@@ -14,14 +14,16 @@ function timeOf(t, now) {
   return { at: Math.max(...options), approx: true };
 }
 
-// 返回 null（不收）、{ skip: 'nonumber' } 或 { item }
-function webItem(msg, since, now) {
+// 返回 null（不收）、{ skip: 'nonumber' | 'notime' } 或 { item }
+// allowUntimed：读不出时间的消息能不能收（只有在已经读过的对话里新出现的才能收，见 WebReader）
+function webItem(msg, since, now, allowUntimed = false) {
   if (!msg || typeof msg.id !== 'string') return null;
   const m = /^(true|false)_([^_]+)_/.exec(msg.id);
   if (!m) return null;
   const jid = m[2];
   const pn = /^(\d{6,20})@c\.us$/.exec(jid);
   if (!pn && !jid.endsWith('@lid')) return null; // 群、频道、状态等
+  if (!msg.t && !allowUntimed) return { skip: 'notime' };
   const { at, approx } = timeOf(msg.t, now);
   if (at < since) return null;
   if (!pn) return { skip: 'nonumber' }; // @lid：拿不到真实号码
@@ -29,4 +31,38 @@ function webItem(msg, since, now) {
   return { item: { mid: msg.id.slice(0, 300), peer: pn[1], out: m[1] === 'true', at, approx, text } };
 }
 
-module.exports = { webItem, timeOf };
+// 记住这次运行里每个对话读到过哪些消息（只在内存里）。
+// 读不出时间的消息（没有文字的图片、认不出的日期格式）：对话第一次被读到时屏幕上已有的算旧消息，不收；
+// 之后新出现的才收（时间按读到的时刻，标成“大概”）。这样打开一个旧对话不会把旧消息当成新的灌进去。
+const MAX_IDS = 400;
+class WebReader {
+  constructor() { this.chats = new Map(); } // "账号|对话" -> Set(消息编号)
+
+  // 返回 { items, nonumber, notime }；nonumber / notime 只算第一次见到的
+  collect(accId, msgs, since, now) {
+    const out = { items: [], nonumber: 0, notime: 0 };
+    const known = new Set(this.chats.keys()); // 这次读之前已经读过的对话
+    for (const m of msgs) {
+      const jid = /^(?:true|false)_([^_]+)_/.exec(String(m && m.id));
+      if (!jid) continue;
+      const key = `${accId}|${jid[1]}`;
+      const first = !known.has(key);
+      let seen = this.chats.get(key);
+      if (!seen) { seen = new Set(); this.chats.set(key, seen); }
+      const isNew = !seen.has(m.id);
+      seen.add(m.id);
+      if (seen.size > MAX_IDS) this.chats.set(key, new Set([...seen].slice(-MAX_IDS / 2)));
+      const x = webItem(m, since, now, !first && isNew);
+      if (!x) continue;
+      if (x.item) out.items.push(x.item);
+      else if (isNew) out[x.skip] += 1;
+    }
+    return out;
+  }
+
+  forget(accId) {
+    for (const k of this.chats.keys()) if (k.startsWith(`${accId}|`)) this.chats.delete(k);
+  }
+}
+
+module.exports = { webItem, timeOf, WebReader };

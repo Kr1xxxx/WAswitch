@@ -59,6 +59,7 @@ class CrmQueue {
           items: Array.isArray(a.items) ? a.items.filter((x) => x && typeof x.h === 'string' && typeof x.text === 'string') : [],
           seen: Array.isArray(a.seen) ? a.seen.filter((h) => typeof h === 'string').slice(-MAX_SEEN) : [],
           skipped: Number.isInteger(a.skipped) ? a.skipped : 0,
+          notime: Number.isInteger(a.notime) ? a.notime : 0,
         });
       }
     } catch {
@@ -73,7 +74,7 @@ class CrmQueue {
   enable(accId) {
     const accs = this.load();
     if (!accs.has(accId)) {
-      accs.set(accId, { since: this.now(), items: [], seen: [], skipped: 0 });
+      accs.set(accId, { since: this.now(), items: [], seen: [], skipped: 0, notime: 0 });
       this.saveSoon();
     }
     return accs.get(accId).since;
@@ -108,7 +109,7 @@ class CrmQueue {
     return true;
   }
 
-  // 认不出号码（@lid 拿不到真实号码）等：只计数
+  // 认不出号码（@lid 拿不到真实号码）：只计数
   skip(accId, n = 1) {
     const a = this.load().get(accId);
     if (!a || !(n > 0)) return;
@@ -116,10 +117,18 @@ class CrmQueue {
     this.saveSoon();
   }
 
+  // 网页版读不出时间的旧消息：只计数
+  skipNoTime(accId, n = 1) {
+    const a = this.load().get(accId);
+    if (!a || !(n > 0)) return;
+    a.notime = (a.notime || 0) + n;
+    this.saveSoon();
+  }
+
   // 只给条数，不给内容（团队页显示）
   stats(accId) {
     const a = this.load().get(accId);
-    return a ? { on: true, since: a.since, queued: a.items.length, skipped: a.skipped } : { on: false, queued: 0, skipped: 0 };
+    return a ? { on: true, since: a.since, queued: a.items.length, skipped: a.skipped, notime: a.notime || 0 } : { on: false, queued: 0, skipped: 0, notime: 0 };
   }
 
   // 第 2 步上传时用：取出最早的一批（不删，确认上传成功后再 ack）

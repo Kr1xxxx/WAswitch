@@ -1867,7 +1867,7 @@ function crmReconcile() {
   for (const id of crmQueue.enabledIds()) {
     if (crmOn(accounts.find((a) => a.id === id))) continue;
     crmQueue.purge(id);
-    crmSkipSeen.delete(id);
+    crmWebReader.forget(id);
     if (liteHost) liteHost.setCrm(id, 0);
   }
   for (const acc of accounts) {
@@ -1889,30 +1889,13 @@ async function crmReadWeb(id, switching) {
   if (!r.ok || !crmOn(acc)) return;
   const since = crmQueue.since(acc.id);
   const now = Date.now();
-  const lidIds = [];
-  for (const m of r.msgs) {
-    const x = crmWeb.webItem(m, since, now);
-    if (x && x.item) crmQueue.add(acc.id, x.item);
-    else if (x && x.skip) lidIds.push(m.id);
-  }
-  // 认不出号码（@lid）的消息：每 15 秒会重复读到，只按第一次见到的计数
-  const skipped = crmSkipNew(acc.id, lidIds);
-  if (skipped) crmQueue.skip(acc.id, skipped);
+  const got = crmWebReader.collect(acc.id, r.msgs, since, now);
+  for (const item of got.items) crmQueue.add(acc.id, item);
+  if (got.nonumber) crmQueue.skip(acc.id, got.nonumber);
+  if (got.notime) crmQueue.skipNoTime(acc.id, got.notime);
 }
-// 认不出号码的消息只算一次
-const crmSkipSeen = new Map(); // accId -> Set(消息编号)，只在内存里
-function crmSkipNew(accId, ids) {
-  let set = crmSkipSeen.get(accId);
-  if (!set) { set = new Set(); crmSkipSeen.set(accId, set); }
-  let n = 0;
-  for (const id of ids) {
-    if (set.has(id)) continue;
-    set.add(id);
-    n += 1;
-  }
-  if (set.size > 2000) crmSkipSeen.set(accId, new Set([...set].slice(-1000)));
-  return n;
-}
+// 每个对话读到过哪些消息（只在内存里）：读不出时间的旧消息不收、跳过的只算一次
+const crmWebReader = new crmWeb.WebReader();
 
 function setupTeam() {
   team = new TeamSync({

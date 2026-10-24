@@ -9,7 +9,7 @@ import { crmItem, textOf } from '../src/lite/crm.mjs';
 
 const require = createRequire(import.meta.url);
 const { CrmQueue, MAX_SEEN } = require('../src/crm/queue.js');
-const { webItem, timeOf } = require('../src/crm/web.js');
+const { webItem, timeOf, WebReader } = require('../src/crm/web.js');
 const { parsePre } = require('../src/wa-page.js');
 
 let passed = 0;
@@ -40,7 +40,7 @@ await test('队列：只收开关打开之后的、有号码的消息；重复�
   assert.equal(q.add('1', { mid: 'a', peer: '8613800000000', at: T0 + 5, text: '你好' }), true);
   assert.equal(q.add('1', { mid: 'a', peer: '8613800000000', at: T0 + 6, text: '你好' }), false, '重复');
   q.skip('1', 2);
-  assert.deepEqual(q.stats('1'), { on: true, since: T0, queued: 1, skipped: 2 });
+  assert.deepEqual(q.stats('1'), { on: true, since: T0, queued: 1, skipped: 2, notime: 0 });
   assert.ok(!JSON.stringify(q.stats('1')).includes('你好'));
 });
 
@@ -81,7 +81,7 @@ await test('关开关 / 收回 / 删号：purge 删掉队列和去重表，文�
   q.add('1', { mid: 'a', peer: '8613800000000', at: T0 + 1, text: 'hi' });
   q.saveNow();
   q.purge('1');
-  assert.deepEqual(q.stats('1'), { on: false, queued: 0, skipped: 0 });
+  assert.deepEqual(q.stats('1'), { on: false, queued: 0, skipped: 0, notime: 0 });
   assert.ok(!fs.existsSync(path.join(dir, 'crm-queue.bin')));
   q.enable('1');
   assert.equal(q.add('1', { mid: 'a', peer: '8613800000000', at: T0 + 1, text: 'hi' }), true, '去重表也删了');
@@ -158,9 +158,32 @@ await test('网页版：@c.us 收，@lid 跳过计数，群不收，开关之前
   const r = webItem({ id: 'false_8613800000000@c.us_3EB0AAA', out: false, text: '在吗', t }, since, now);
   assert.deepEqual(r.item, { mid: 'false_8613800000000@c.us_3EB0AAA', peer: '8613800000000', out: false, at: new Date(2026, 9, 24, 11, 0).getTime(), approx: false, text: '在吗' });
   assert.equal(webItem({ id: 'true_8613800000000@c.us_3EB0BBB', text: '', t }, since, now).item.text, '[非文字消息]');
+  assert.deepEqual(webItem({ id: 'true_8613800000000@c.us_3EB0BBB', text: '', t: null }, since, now), { skip: 'notime' });
   assert.deepEqual(webItem({ id: 'false_99887766@lid_3EB0CCC', text: 'x', t }, since, now), { skip: 'nonumber' });
   assert.equal(webItem({ id: 'false_120363@g.us_3EB0DDD_861@c.us', text: 'x', t }, since, now), null);
   assert.equal(webItem({ id: 'false_8613800000000@c.us_3EB0EEE', text: 'x', t: { ...t, h: 9 } }, since, now), null);
+});
+
+await test('网页版：打开旧对话时，读不出时间的旧消息不收；之后新出现的才收', async () => {
+  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const since = new Date(2026, 9, 24, 10, 0).getTime();
+  const reader = new WebReader();
+  const old = [1, 2, 3].map((i) => ({ id: `false_8613800000000@c.us_OLD${i}`, text: i === 2 ? '' : `旧消息${i}`, t: null }));
+  const a = reader.collect('5', old, since, now);
+  assert.deepEqual(a, { items: [], nonumber: 0, notime: 3 }, '第一次读到的对话：读不出时间的都算旧的');
+  const b = reader.collect('5', old, since, now + 15000);
+  assert.deepEqual(b, { items: [], nonumber: 0, notime: 0 }, '再读一次不重复计数');
+  const c = reader.collect('5', [...old, { id: 'false_8613800000000@c.us_NEW1', text: '', t: null }], since, now + 30000);
+  assert.equal(c.items.length, 1);
+  assert.deepEqual(c.items[0], { mid: 'false_8613800000000@c.us_NEW1', peer: '8613800000000', out: false, at: now + 30000, approx: true, text: '[非文字消息]' });
+  // 有时间的消息第一次读到也照常按时间判断
+  const t = { y: 2026, mo: 10, d: 24, h: 11, mi: 0, ambig: false };
+  const d = reader.collect('5', [{ id: 'false_8613811112222@c.us_T1', text: '新', t }, { id: 'false_77@lid_L1', text: 'x', t }], since, now);
+  assert.equal(d.items.length, 1);
+  assert.equal(d.nonumber, 1);
+  assert.equal(reader.collect('5', [{ id: 'false_77@lid_L1', text: 'x', t }], since, now).nonumber, 0, '@lid 只算一次');
+  reader.forget('5');
+  assert.equal(reader.chats.size, 0);
 });
 
 await test('代码里不把队列内容写进日志', async () => {

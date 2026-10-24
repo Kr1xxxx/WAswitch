@@ -192,6 +192,8 @@ await test('同步到 CRM 的开关：只有老板能开，随坐席下发', asy
   assert.equal(r.data.seats[0].crm_sync, true);
   assert.equal((await boss.get('overview')).data.accounts.find((a) => a.id === acc1).crm_sync, 1);
   await boss.patch(`accounts/${acc1}`, { crm_sync: false });
+  const actions = db.raw.prepare('SELECT action FROM audit_log WHERE target = ? ORDER BY at').all(acc1).map((r) => r.action);
+  assert.ok(actions.includes('account.crm_on') && actions.includes('account.crm_off'), '开关聊天同步要记操作记录');
   assert.equal((await sync(tokB, { cursor: r.data.cursor })).data.seats[0].crm_sync, false);
 });
 await test('主管看不到别组的号，也不能分配', async () => {

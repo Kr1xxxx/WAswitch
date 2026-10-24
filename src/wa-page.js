@@ -124,7 +124,8 @@ function parsePre(raw) {
   if (!m) return null;
   const inner = m[1];
   const tm = /(上午|下午|凌晨|早上|中午|晚上)?\s*(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s*(AM|PM|am|pm|a\.\s?m\.|p\.\s?m\.)?/.exec(inner);
-  const dm = /(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})/.exec(inner);
+  const cn = /(\d{4})年(\d{1,2})月(\d{1,2})日/.exec(inner);
+  const dm = cn ? [cn[0], cn[1], cn[2], cn[3]] : /(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})/.exec(inner);
   if (!tm || !dm) return null;
   let h = Number(tm[2]);
   const mi = Number(tm[3]);
