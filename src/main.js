@@ -630,9 +630,10 @@ let appReadyAt = Date.now(); // 启动时间（app ready 时再更新一次）
 function idleSeconds() {
   const sys = powerMonitor.getSystemIdleTime();
   // 刚启动时不按系统空闲时间算（开机自启、电脑放了很久再打开软件，不会一打开就锁）
-  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return Math.min(sys, Math.floor((Date.now() - appReadyAt) / 1000)); }
+  const sysSinceReady = Math.min(sys, Math.floor((Date.now() - appReadyAt) / 1000));
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sysSinceReady; }
   if (!unfocusedSince) unfocusedSince = Date.now();
-  return Math.max(sys, (Date.now() - unfocusedSince) / 1000);
+  return Math.max(sysSinceReady, (Date.now() - unfocusedSince) / 1000);
 }
 function checkIdleLock() {
   const mins = settings.lockMinutes;
