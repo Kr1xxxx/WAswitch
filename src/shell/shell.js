@@ -366,7 +366,7 @@ function settingsPage() {
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '关闭显卡加速，整体再省一些内存。代价是滚动和动画没那么顺滑。',
         sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v))),
       setRow('清理缓存',
-        `清掉网页版账号可以重新下载的缓存（图片、程序文件等），释放磁盘空间。不清登录状态和聊天记录，不会退出登录；不包含轻量模式账号。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
+        `清掉网页版账号可以重新下载的缓存，释放磁盘空间。登录状态和聊天记录不会被清，不会退出登录；部分已下载的图片可能需要重新加载；不包含轻量模式账号。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
         h('button', { class: 'btn', disabled: cacheInfo.busy || !s.accounts.length, onclick: async () => {
           cacheInfo.busy = true; cacheInfo.result = ''; render(true);
           const r = await window.wa.clearCache();
