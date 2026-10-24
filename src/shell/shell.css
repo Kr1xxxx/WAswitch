@@ -235,3 +235,14 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .lock-thumb { position: absolute; left: 4px; top: 4px; width: 44px; height: 44px; border-radius: 22px; border: 0; background: var(--text); color: #fff; display: flex; align-items: center; justify-content: center; cursor: grab; transition: transform .2s ease; touch-action: none; }
 .lock-thumb.drag { transition: none; cursor: grabbing; }
 .lock-thumb:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
+
+.icon-btn.bell { position: relative; }
+.icon-btn.bell.on { background: rgba(255,255,255,.7); }
+.icon-btn.bell .dot { top: -2px; right: -4px; border-color: #E6E9ED; }
+.ov-list, .ov-log { gap: 2px; padding: 8px; }
+.ov-row, .ov-logrow { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border: none; border-radius: 8px; background: transparent; font: inherit; text-align: left; width: 100%; }
+button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
+.ov-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-time { width: 92px; flex: none; }
+.ov-h2 { margin: 0; font-size: 16px; }
+.ov-row .sw, .ov-logrow .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
