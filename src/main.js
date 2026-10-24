@@ -885,6 +885,8 @@ async function createView(acc, loadDelay = 0) {
     }
     scheduleRetry(acc.id);
   });
+  // Ctrl + 鼠标滚轮（或触控板缩放手势）：和快捷键走同一条路，记下的比例和顶栏一直对得上
+  wc.on('zoom-changed', (_e, dir) => { if (!locked) stepZoom(acc.id, dir === 'in' ? 1 : -1); });
   wc.on('did-finish-load', () => {
     // 每次加载完都按这个号记下的比例设一次（刷新、崩溃重建后也一样）
     applyZoom(acc);
