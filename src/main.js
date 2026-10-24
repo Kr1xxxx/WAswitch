@@ -950,6 +950,7 @@ function setupDownloads(acc, ses) {
     let target = null;
     try {
       fs.mkdirSync(dir, { recursive: true });
+      if (!fs.statSync(dir).isDirectory()) throw new Error('not a folder');
       fs.accessSync(dir, fs.constants.W_OK);
       const name = safeName(path.basename(item.getFilename() || ''), 'download');
       target = uniquePath(dir, WIN_RESERVED.test(name) ? `_${name}` : name);
@@ -975,6 +976,8 @@ function openDownloadDir(id) {
   if (!acc) return;
   const dir = downloadDirOf(acc);
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  // 只打开文件夹：路径如果指向的是文件（比如 accounts.json 被改过），什么都不做，绝不运行它
+  try { if (!fs.statSync(dir).isDirectory()) return; } catch { return; }
   shell.openPath(dir);
 }
 
