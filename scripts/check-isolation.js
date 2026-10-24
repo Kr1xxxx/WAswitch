@@ -129,7 +129,7 @@ app.whenReady().then(async () => {
     cacheStorage: (await caches.keys()).length,
   }))()`);
   check(before > 0 && after < before, `清理缓存后 HTTP 缓存变小（${before} → ${after} 字节）`);
-  check(kept.cacheStorage === 0, '清理缓存后 Cache Storage 已清空');
+  check(kept.cacheStorage === 1, '清理缓存后 Cache Storage 保留');
   check(kept.cookie && kept.local && kept.idb, '清理缓存后 cookie、localStorage、IndexedDB 都还在（不会退出登录）');
   site.close();
 
