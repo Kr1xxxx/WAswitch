@@ -27,4 +27,28 @@ function findByTimezone(tz) {
   return hit ? hit[0] : null;
 }
 
-module.exports = { presets, findByTimezone };
+// 地区的值：预设的 key（如 JP），或者 "tz:时区名"（如 tz:America/Toronto，预设里没有的出口直接用测到的时区）
+const TZ_PREFIX = 'tz:';
+function validTimezone(tz) {
+  if (typeof tz !== 'string' || !/^[A-Za-z][A-Za-z0-9_+\-/]{1,60}$/.test(tz)) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: tz }); return true; } catch { return false; }
+}
+function isValidRegion(region) {
+  if (typeof region !== 'string') return false;
+  if (region.startsWith(TZ_PREFIX)) return validTimezone(region.slice(TZ_PREFIX.length));
+  return Object.prototype.hasOwnProperty.call(presets, region);
+}
+// 出口时区 -> 地区值：有预设用预设，没有就直接存时区；时区无效返回 null
+function regionForTimezone(tz) {
+  return findByTimezone(tz) || (validTimezone(tz) ? TZ_PREFIX + tz : null);
+}
+function timezoneOf(region) {
+  if (typeof region === 'string' && region.startsWith(TZ_PREFIX)) return region.slice(TZ_PREFIX.length);
+  return (presets[region] || presets.auto).timezone;
+}
+function regionLabel(region) {
+  if (typeof region === 'string' && region.startsWith(TZ_PREFIX)) return `出口时区（${region.slice(TZ_PREFIX.length)}）`;
+  return (presets[region] || presets.auto).label;
+}
+
+module.exports = { presets, findByTimezone, isValidRegion, regionForTimezone, timezoneOf, regionLabel };

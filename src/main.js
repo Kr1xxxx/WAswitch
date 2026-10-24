@@ -13,7 +13,7 @@ const crypto = require('crypto');
 const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
-const { findByTimezone } = require('./regions');
+const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const memory = require('./memory');
 const waPage = require('./wa-page');
@@ -493,7 +493,7 @@ function pushState() {
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
-        regionLabel: (fingerprint.regions[acc.fingerprint.region] || fingerprint.regions.auto).label,
+        regionLabel: regionLabel(acc.fingerprint.region),
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
@@ -1463,6 +1463,7 @@ handleShell('editor:load', (id) => {
     hasPassword: !!(acc && acc.proxyPassword),
     region: acc ? acc.fingerprint.region : (fingerprint.regions[editorPrefill?.region] ? editorPrefill.region : 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
+    regionLabel: acc ? regionLabel(acc.fingerprint.region) : '',
     uiLanguage: fingerprint.UI_LANGUAGE_LABEL,
     mode: acc ? acc.mode : 'web',
     allowCalls: !!(acc && acc.allowCalls),
@@ -1491,7 +1492,8 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   const pass = String(password || '') || (acc ? proxy.decryptPassword(acc.proxyPassword) : '');
   const res = await proxy.test(String(proxyText || ''), pass);
   if (!res.ok) return res;
-  res.region = findByTimezone(res.timezone);
+  res.region = regionForTimezone(res.timezone);
+  if (res.region) res.regionLabel = regionLabel(res.region);
   res.country = regionName(res.country);
   const same = accounts.find((a) => a.id !== id && exitIps.get(a.id) === res.ip);
   const before = same ? null : accounts.find((a) => a.id !== id && a.lastExit && a.lastExit.ip === res.ip);
@@ -1507,7 +1509,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (!COLORS.includes(color)) color = nextColor();
   const parsed = proxy.parse(String(proxyText || ''));
   if (parsed && parsed.error) return { error: parsed.error };
-  if (!fingerprint.regions[region]) region = 'auto';
+  if (!isValidRegion(region)) region = 'auto';
   const proxyStored = parsed ? parsed.display : '';
   // 允许通话只对网页版直连号有意义
   const callsWanted = allowCalls === true && !parsed && mode !== 'lite';
@@ -1547,7 +1549,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (mode === 'web' && parsed && region === 'auto') {
     if (!tested) {
       const res = await proxy.test(String(proxyText || ''), String(password || '') || (parsed.password) || (acc ? proxy.decryptPassword(acc.proxyPassword) : ''));
-      if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: findByTimezone(res.timezone) };
+      if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: regionForTimezone(res.timezone) };
     }
     if (tested && tested.region) region = tested.region;
   }
@@ -1663,15 +1665,15 @@ handleShell('check:run', async () => {
     if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：出口 ${res.ip}（${place}）`, detail: '域名由代理解析，本机不查 DNS。' }); continue; }
     // 跟随本机时，实际时区就是本机时区
     const effTz = tz || localTz;
-    const fixRegion = findByTimezone(res.timezone);
-    const fix = fixRegion ? { id: acc.id, region: fixRegion, label: fingerprint.regions[fixRegion].label } : null;
+    const fixRegion = regionForTimezone(res.timezone);
+    const fix = fixRegion ? { id: acc.id, region: fixRegion, label: regionLabel(fixRegion) } : null;
     if (effTz !== res.timezone) {
       items.push({
         level: 'warn',
         title: `${acc.name}：出口 ${res.ip}（${place}）`,
         detail: tz
-          ? `出口时区是 ${res.timezone}，账号设置的是 ${tz}。${fix ? '' : '没有匹配的地区预设，请在编辑里选最接近的。'}`
-          : `地区是“跟随本机”（${localTz}），但出口在 ${res.timezone}。在 WhatsApp 看来时区和 IP 对不上。${fix ? '' : '没有匹配的地区预设，请在编辑里选最接近的。'}`,
+          ? `出口时区是 ${res.timezone}，账号设置的是 ${tz}。${fix ? '' : '出口时区无法识别，请在编辑里选最接近的。'}`
+          : `地区是“跟随本机”（${localTz}），但出口在 ${res.timezone}。在 WhatsApp 看来时区和 IP 对不上。${fix ? '' : '出口时区无法识别，请在编辑里选最接近的。'}`,
         fix,
       });
     } else {
@@ -1707,7 +1709,7 @@ handleShell('check:run', async () => {
 // 隔离自检里的“改成和出口一致”：只改地区（时区），然后重建页面
 handleShell('check:fix', async ({ id, region } = {}) => {
   const acc = findAcc(id);
-  if (!acc || isLite(acc) || !fingerprint.regions[region] || region === 'auto') return { error: '改不了' };
+  if (!acc || isLite(acc) || !isValidRegion(region) || region === 'auto') return { error: '改不了' };
   if (acc.fingerprint.region === region) return { ok: true };
   acc.fingerprint.region = region;
   saveAccounts();

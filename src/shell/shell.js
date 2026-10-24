@@ -257,6 +257,12 @@ function editorPage(id) {
       h('span', { class: 'hint' }, '打开后这个号能在网页版里打语音、视频电话，通话走这台电脑的真实 IP。Clash 开着“系统代理”时请不要打开（网页和通话会是两个不同的 IP），或者把 Clash 改成 TUN 模式。'));
     const result = h('div', { role: 'status' });
     const region = h('select', { 'aria-label': '地区' }, d.regions.map((r) => h('option', { value: r.key }, r.label)));
+    // 预设里没有的出口时区（tz:...）：加一个选项放在最前面
+    const addTzOption = (key, label) => {
+      if (!key || !key.startsWith('tz:') || [...region.options].some((o) => o.value === key)) return;
+      region.prepend(h('option', { value: key }, label || key));
+    };
+    addTzOption(d.region, d.regionLabel);
     region.value = d.region;
     const tags = h('div', { class: 'tags' });
     const error = h('div', { class: 'hint', role: 'alert', style: { color: '#B42318', minHeight: '18px' } });
@@ -280,7 +286,7 @@ function editorPage(id) {
       },
     }, label)));
     const drawTags = () => {
-      const opt = d.regions.find((r) => r.key === region.value);
+      const opt = d.regions.find((r) => r.key === region.value) || (region.selectedOptions[0] && { label: region.selectedOptions[0].textContent });
       const auto = region.value === 'auto';
       tags.replaceChildren(
         h('span', { class: 'tag' }, auto
@@ -346,7 +352,7 @@ function editorPage(id) {
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
-      if (res.region) { region.value = res.region; text += ' 已按出口所在地选好时区。'; } else text += ' 没有匹配的地区预设，请手动选最接近的。';
+      if (res.region) { addTzOption(res.region, res.regionLabel); region.value = res.region; text += ' 已按出口所在地选好时区。'; } else text += ' 出口时区无法识别，请手动选最接近的。';
       if (res.sameAs) {
         text += res.sameAt
           ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
