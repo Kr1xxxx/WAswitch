@@ -169,7 +169,7 @@ function loadAccounts() {
     acc.id = String(acc.id);
     acc.name = String(acc.name || '未命名').slice(0, 40);
     // 备注：手机号、用途、负责人之类，只在本机显示，不给 MCP
-    acc.note = typeof acc.note === 'string' ? acc.note.slice(0, NOTE_MAX) : '';
+    acc.note = typeof acc.note === 'string' ? cleanNote(acc.note) : '';
     acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
