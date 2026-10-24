@@ -62,6 +62,7 @@ log.init((e) => {
 // 省内存模式要在 app ready 之前生效
 const settings = memory.loadSettings();
 memory.applyStartupSwitches(settings);
+const startupLowMemory = settings.lowMemoryMode; // 省内存模式要重启才生效，记下启动时的值
 
 const WA_URL = 'https://web.whatsapp.com/';
 const SIDE_EXPANDED = 200;
@@ -174,6 +175,10 @@ function loadAccounts() {
     acc.muted = acc.muted === true;
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
+    // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
+    acc.loggedIn = acc.loggedIn === undefined ? true : acc.loggedIn === true;
+    // 直连号是否允许网页版通话（WebRTC 走 UDP），默认不允许
+    acc.allowCalls = acc.allowCalls === true;
     // 主号只能用网页版
     acc.primary = acc.primary === true && acc.mode === 'web';
   });
@@ -292,7 +297,7 @@ const memoryManager = new memory.MemoryManager(settings, {
 const notifier = new Notifier({
   getAccounts: () => accounts,
   getWindow: () => win,
-  activate: (id) => { page = 'account'; activate(id, { focus: true }); },
+  activate: (id) => { userActivate(id); },
   quit: () => { quitting = true; app.quit(); },
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
@@ -307,7 +312,7 @@ const notifier = new Notifier({
       label: '省内存模式（关闭显卡加速，重启后生效）',
       type: 'checkbox',
       checked: settings.lowMemoryMode,
-      click: () => setSetting('lowMemoryMode', !settings.lowMemoryMode),
+      click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
     },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
@@ -376,7 +381,7 @@ const mcpHooks = {
     const view = views.get(id);
     if (!view || problems.has(id)) return 'unknown';
     const state = await waPage.loginState(view.webContents);
-    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); pushState(); }
+    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); noteLoggedIn(id, state); pushState(); }
     return state;
   },
   readChatList: async (id, opts) => {
@@ -486,6 +491,11 @@ function pushState() {
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
+        problemKind: problem ? problem.kind || '' : '',
+        direct: !acc.proxy,
+        allowCalls: !!acc.allowCalls,
+        // 从没登录成功过的号停在二维码页是正常的第一步，不算故障
+        everLoggedIn: !!acc.loggedIn,
         retrying: !!(problem && problem.retrying),
         needsQr: loginStates.get(acc.id) === 'needs_qr',
         mode: acc.mode,
@@ -496,6 +506,7 @@ function pushState() {
     lite: liteStateForShell(),
     totalMB: memoryManager.totalMB(),
     settings,
+    restartNeeded: settings.lowMemoryMode !== startupLowMemory,
     recycleChoices: memory.RECYCLE_CHOICES,
     canLoginItem,
     about: {
@@ -510,6 +521,21 @@ function pushState() {
 function refresh() {
   layout();
   pushState();
+}
+
+// 第一次登录成功时记下来（存进 accounts.json）：之后再要扫码才算掉线，标红
+function noteLoggedIn(id, state) {
+  const acc = findAcc(id);
+  if (state !== 'logged_in' || !acc || acc.loggedIn) return;
+  acc.loggedIn = true;
+  saveAccounts();
+}
+
+// WebRTC：默认禁止走代理以外的 UDP，防止泄露真实 IP。
+// 直连号可以在编辑里打开“允许通话”：只用默认网卡（不暴露内网 IP），允许 UDP，网页版才能打电话。
+// 注意“直连”实际走系统代理设置：Clash 开着系统代理时网页走 Clash，而通话的 UDP 走真实 IP，所以默认关。
+function webrtcPolicy(acc) {
+  return !acc.proxy && acc.allowCalls ? 'default_public_interface_only' : 'disable_non_proxied_udp';
 }
 
 function setProblem(id, problem) {
@@ -571,6 +597,7 @@ async function checkLogins() {
       notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
     }
     loginStates.set(acc.id, state);
+    noteLoggedIn(acc.id, state);
     changed = true;
   }
   if (changed) pushState();
@@ -595,8 +622,7 @@ async function createView(acc, loadDelay = 0) {
   });
   if (typeof view.setBorderRadius === 'function') view.setBorderRadius(14);
   const wc = view.webContents;
-  // 禁止 WebRTC 走代理以外的 UDP，防止泄露真实 IP
-  wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  wc.setWebRTCIPHandlingPolicy(webrtcPolicy(acc));
   setupNavigationGuards(wc);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
@@ -625,13 +651,14 @@ async function createView(acc, loadDelay = 0) {
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
     if (PROXY_ERRORS.has(code)) {
       setProblem(acc.id, {
+        kind: 'proxy',
         title: '代理连不上，这个账号已暂停联网',
         short: '代理连不上',
         text: `${acc.name} 设置的线路 ${acc.proxy} 没有响应（${desc}）。为了不暴露真实 IP，不会改用直连。请检查 Clash 是否在运行、端口是否正确。`,
         retrying: true,
       });
     } else {
-      setProblem(acc.id, { title: 'WhatsApp 页面打不开', short: '连不上', text: `页面加载失败（${desc}），可能是网络不通。`, retrying: true });
+      setProblem(acc.id, { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `页面加载失败（${desc}），可能是网络不通。`, retrying: true });
     }
     scheduleRetry(acc.id);
   });
@@ -660,6 +687,7 @@ async function createView(acc, loadDelay = 0) {
 
   if (applied.error) {
     setProblem(acc.id, {
+      kind: 'config',
       title: '代理设置有误，这个账号已暂停联网',
       short: '代理设置有误',
       text: `${applied.error}。为避免暴露真实 IP，这个账号暂时不联网，请修改代理。`,
@@ -721,6 +749,7 @@ function startLite(acc) {
   const url = liteProxyUrl(acc);
   if (!url) {
     setProblem(acc.id, {
+      kind: 'config',
       title: '轻量模式必须设置代理，这个账号已暂停联网',
       short: '代理设置有误',
       text: '轻量模式只能通过 socks5 或 http 代理联网，不会直连。请在编辑里填写代理并测试。',
@@ -731,6 +760,7 @@ function startLite(acc) {
   let key;
   try { key = liteKeyOf(acc); } catch {
     setProblem(acc.id, {
+      kind: 'authError',
       title: '读不出这个号的本机数据',
       short: '数据读不出',
       text: '这个号的加密密钥解不开，可能换了系统用户，或系统钥匙串被重置。只能删除这个号后重新添加、重新扫码。',
@@ -772,7 +802,7 @@ const LITE_PROBLEMS = {
   outdated: () => ({
     title: 'WhatsApp 拒绝了旧版本',
     short: '需要更新',
-    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。可以先点“重新连接”试一次（会重新查询版本号）；还不行就到 github.com/Kr1xxxx/WAswitch/releases 下载新版 WAswitch。',
+    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。请更新 WAswitch：到 设置 › 关于 检查更新，或到 Releases 页面下载新版。',
   }),
   authError: () => ({
     title: '这个号的本机数据读不出来',
@@ -808,11 +838,11 @@ function bindLiteEvents() {
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null });
-    if (status === 'open') loginStates.set(id, 'logged_in');
+    if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
     const make = LITE_PROBLEMS[status];
-    if (make) problems.set(id, make(acc));
+    if (make) problems.set(id, { kind: status, ...make(acc) });
     else if (status === 'open' || status === 'qr') problems.delete(id);
     // 掉线、被封：不管有没有关通知都提醒
     if (prev !== status && status === 'loggedOut') notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
@@ -912,8 +942,9 @@ function runAiRequest(req, byUser) {
   if (byUser) notifier.showWindow();
   if (req.kind === 'switch') {
     if (!findAcc(req.id)) return;
+    if (byUser) { userActivate(req.id); return; }
     page = 'account';
-    activate(req.id, { focus: byUser });
+    activate(req.id, { focus: false });
   } else {
     openEditor(null, { name: req.name, region: req.region });
   }
@@ -940,6 +971,7 @@ function openEditor(id, prefill = null) {
   editorColor = acc ? acc.color : nextColor();
   editorNonce += 1;
   lastTest = null;
+  editorDirty = false;
   page = 'editor';
   refresh();
 }
@@ -1038,6 +1070,54 @@ function setSetting(key, value) {
   refresh();
 }
 
+// 重启 WAswitch：走正常退出流程（轻量模式后台先写盘），再重新打开
+function relaunchApp() {
+  app.relaunch();
+  quitting = true;
+  app.quit();
+}
+
+// 托盘里切换了省内存模式：问一下要不要现在重启
+async function askRestart() {
+  if (settings.lowMemoryMode === startupLowMemory) return;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['稍后', '现在重启'],
+    defaultId: 1,
+    cancelId: 0,
+    message: '省内存模式要重启 WAswitch 才生效',
+    detail: '重启大约需要十几秒，账号不用重新登录。',
+  });
+  if (response === 1) relaunchApp();
+}
+
+// ---------- 编辑页没保存就离开 ----------
+
+let editorDirty = false; // 编辑页有没有改过（界面告诉主进程）
+
+// 用户要离开编辑页时：有改动先问一句。返回 true 表示可以离开
+async function confirmLeaveEditor() {
+  if (page !== 'editor' || !editorDirty) return true;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['继续编辑', '放弃修改'],
+    defaultId: 0,
+    cancelId: 0,
+    message: '放弃还没保存的修改？',
+    detail: '编辑账号页里的修改还没有保存。',
+  });
+  if (response !== 1) return false;
+  editorDirty = false;
+  return true;
+}
+
+// 用户自己切号（侧栏、Ctrl+数字、托盘、通知）：编辑页有改动先问，再切过去并给焦点
+async function userActivate(id) {
+  if (!findAcc(id) || !(await confirmLeaveEditor())) return;
+  page = 'account';
+  activate(id, { focus: true });
+}
+
 // ---------- 快捷键和菜单 ----------
 
 // Ctrl/Cmd + 1–9 切换账号。只在 WAswitch 窗口有焦点时生效，不抢其他软件的快捷键。
@@ -1050,8 +1130,7 @@ app.on('web-contents-created', (_e, wc) => {
     const acc = accounts[Number(input.key) - 1];
     if (!acc) return;
     event.preventDefault();
-    page = 'account';
-    activate(acc.id, { focus: true });
+    userActivate(acc.id);
   });
 });
 
@@ -1227,16 +1306,25 @@ const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
 });
 const findAcc = (id) => accounts.find((a) => a.id === id);
 
-onShell('switch', (id) => { if (findAcc(id)) { page = 'account'; activate(id, { focus: true }); } });
+onShell('switch', (id) => userActivate(id));
+onShell('editor:dirty', (dirty) => { if (page === 'editor') editorDirty = dirty === true; });
+onShell('remove', (id) => { if (findAcc(id)) removeAccount(id); });
+onShell('app:restart', () => relaunchApp());
 // 用户在顶部横幅里回答 AI 的切换请求
 onShell('ai:answer', (yes) => {
   const req = aiRequest;
   setAiRequest(null);
   if (yes === true && req) runAiRequest(req, true);
 });
-onShell('add', () => openEditor(null));
-onShell('edit', (id) => { if (findAcc(id)) openEditor(id); });
-onShell('page', (p) => { if (['account', 'settings'].includes(p)) showPage(p); });
+onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); });
+onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
+// 编辑页的“取消”是明确放弃，不再问（discard 为 true）
+onShell('page', async (p, discard) => {
+  if (!['account', 'settings'].includes(p)) return;
+  if (discard !== true && !(await confirmLeaveEditor())) return;
+  editorDirty = false;
+  showPage(p);
+});
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
 onShell('reload', (id) => {
@@ -1353,6 +1441,7 @@ handleShell('editor:load', (id) => {
     region: acc ? acc.fingerprint.region : (fingerprint.regions[editorPrefill?.region] ? editorPrefill.region : 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
     mode: acc ? acc.mode : 'web',
+    allowCalls: !!(acc && acc.allowCalls),
     // 新账号：还没有主号时默认就是主号
     primary: acc ? acc.primary : !accounts.some((a) => a.primary),
     primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
@@ -1386,7 +1475,7 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   return res;
 });
 
-handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password, region, mode, primary, liteConfirm } = {}) => {
+handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
   name = String(name || '').trim().slice(0, 40);
   if (!name) return { error: '请填写名称' };
   if (!COLORS.includes(color)) color = nextColor();
@@ -1394,6 +1483,8 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (parsed && parsed.error) return { error: parsed.error };
   if (!fingerprint.regions[region]) region = 'auto';
   const proxyStored = parsed ? parsed.display : '';
+  // 允许通话只对网页版直连号有意义
+  const callsWanted = allowCalls === true && !parsed && mode !== 'lite';
   let acc = findAcc(id);
   // 模式只在添加时选，之后不能改（换模式等于换一台关联设备）
   mode = acc ? acc.mode : (mode === 'lite' ? 'lite' : 'web');
@@ -1447,7 +1538,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (wantPrimary) for (const a of accounts) if (a.id !== id) a.primary = false;
 
   if (!acc) {
-    acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey };
+    acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
     if (tested) exitIps.set(acc.id, tested.ip);
     saveAccounts();
@@ -1470,7 +1561,8 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     refresh();
   } else {
     acc.primary = wantPrimary;
-    const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region;
+    const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region || acc.allowCalls !== callsWanted;
+    acc.allowCalls = callsWanted;
     if (acc.proxy !== proxyStored) acc.exitLabel = '';
     if (tested) { acc.exitLabel = tested.label; exitIps.set(acc.id, tested.ip); }
     acc.name = name;
@@ -1571,8 +1663,14 @@ handleShell('check:run', async () => {
       ? { level: 'bad', title: `轻量模式：网络护栏拦下了 ${liteGuardHits} 次直连`, detail: '这些请求没有发出去，真实 IP 没有暴露。日志里有详细记录，请把日志发给我们排查。' }
       : { level: 'ok', title: '轻量模式：后台进程只连代理，没有出现直连' });
   }
-  const webrtcOk = [...views.values()].every((v) => v.webContents.getWebRTCIPHandlingPolicy() === 'disable_non_proxied_udp');
-  items.push({ level: webrtcOk ? 'ok' : 'bad', title: 'WebRTC 只走代理，不泄露本机 IP' });
+  // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
+  const webrtcBad = accounts.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));
+  const proxied = accounts.filter((a) => !isLite(a) && a.proxy);
+  if (webrtcBad.length) items.push({ level: 'bad', title: `${webrtcBad.map((a) => a.name).join('、')}：WebRTC 设置和账号不一致`, detail: '请重启 WAswitch 后再检查。' });
+  else if (proxied.length) items.push({ level: 'ok', title: '走代理的号：WebRTC 只走代理，不泄露本机 IP' });
+  for (const a of accounts.filter((x) => !isLite(x) && !x.proxy && x.allowCalls)) {
+    items.push({ level: 'warn', title: `${a.name}：允许通话（直连）`, detail: '通话的 UDP 走这台电脑的真实 IP。如果 Clash 开着系统代理（不是 TUN 模式），网页和通话会显示两个不同的 IP。不需要打电话请在编辑里关掉。' });
+  }
   const uaOk = accounts.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
   items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识里没有 Electron 或软件名' });
   saveAccounts();
