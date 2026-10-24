@@ -262,6 +262,41 @@ const exitIps = new Map(); // id -> 这次打开软件后测到的出口 IP（�
 function recordExit(acc, ip) {
   exitIps.set(acc.id, ip);
   acc.lastExit = { ip, at: Date.now() };
+  // 用户自己测到了新 IP，就不再提醒“变了”
+  if (exitChanges.has(acc.id) && exitChanges.get(acc.id).to !== ip) exitChanges.delete(acc.id);
+}
+
+// 出口 IP 巡检：每 30 分钟按顺序测一遍走代理的号，IP 和上次不一样就在顶栏和侧栏标黄。
+// 机场节点会悄悄换 IP，号在 WhatsApp 看来会忽东忽西。只访问 ipinfo.io，一次一个，不占多少资源。
+const EXIT_WATCH_MS = 30 * 60 * 1000;
+const exitChanges = new Map(); // id -> { from, to, fromLabel, toLabel, at }
+let exitWatchRunning = false;
+async function watchExits() {
+  if (exitWatchRunning || quitting) return;
+  exitWatchRunning = true;
+  try {
+    for (const acc of [...accounts]) {
+      if (!acc.proxy || quitting || !findAcc(acc.id)) continue;
+      const prev = exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : '');
+      const prevLabel = acc.exitLabel;
+      const proxyAtStart = acc.proxy;
+      const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
+      // 测的时候代理被改了或者号被删了：结果作废
+      if (!res.ok || !findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
+      const label = regionName(res.country);
+      if (prev && prev !== res.ip) {
+        exitChanges.set(acc.id, { from: prev, to: res.ip, fromLabel: prevLabel, toLabel: label, at: Date.now() });
+        console.warn(`[出口巡检] ${acc.name}：${prev} -> ${res.ip}`);
+      }
+      exitIps.set(acc.id, res.ip);
+      acc.lastExit = { ip: res.ip, at: Date.now() };
+      acc.exitLabel = label;
+    }
+    saveAccounts();
+    refresh();
+  } finally {
+    exitWatchRunning = false;
+  }
 }
 // id -> 'logged_in' | 'needs_qr'。以后 MCP 的账号状态也从这里读
 const loginStates = new Map();
@@ -498,6 +533,7 @@ function pushState() {
         timezone: fingerprint.resolve(acc.fingerprint).timezone || null,
         exitIp: exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : ''),
         exitAt: acc.lastExit ? acc.lastExit.at : 0,
+        exitChange: exitChanges.get(acc.id) || null,
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
@@ -1023,6 +1059,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   if (lite) await liteHost.logout(id); else destroyView(id);
   problems.delete(id);
   exitIps.delete(id);
+  exitChanges.delete(id);
   loginStates.delete(id);
   liteStates.delete(id);
   liteViews.delete(id);
@@ -1315,6 +1352,8 @@ app.whenReady().then(async () => {
   memoryManager.start();
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setTimeout(checkLogins, 60 * 1000);
+  setInterval(watchExits, EXIT_WATCH_MS);
+  setTimeout(watchExits, 3 * 60 * 1000);
 
   mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
   await mcp.init();
@@ -1580,7 +1619,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     refresh();
   } else if (isLite(acc)) {
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword;
-    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); }
+    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.color = color;
@@ -1595,7 +1634,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     acc.primary = wantPrimary;
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region || acc.allowCalls !== callsWanted;
     acc.allowCalls = callsWanted;
-    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); }
+    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.color = color;
@@ -1708,6 +1747,12 @@ handleShell('check:run', async () => {
   saveAccounts();
   pushState();
   return { items, time: new Date().toLocaleString('zh-CN') };
+});
+
+// 用户点了顶栏的“出口 IP 变了”：知道了，不再标黄
+handleShell('exit:ack', ({ id } = {}) => {
+  if (exitChanges.delete(String(id))) refresh();
+  return { ok: true };
 });
 
 // 隔离自检里的“改成和出口一致”：只改地区（时区），然后重建页面
