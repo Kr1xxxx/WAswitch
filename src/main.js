@@ -67,6 +67,8 @@ const SIDE_EXPANDED = 200;
 const SIDE_COLLAPSED = 64;
 const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
+const AIBAR = 44; // “AI 想切换账号”横幅的高度
+const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
@@ -258,6 +260,9 @@ let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
 let quitting = false;
+// MCP 想切号或打开添加页、但用户正在打字时，先挂起，在窗口顶部问用户
+let aiRequest = null; // { kind: 'switch' | 'add', id?, name?, region? }
+let lastTypedAt = 0;
 
 // 轻量模式（在 app ready 之后创建）
 let liteHost = null;
@@ -285,7 +290,7 @@ const memoryManager = new memory.MemoryManager(settings, {
 const notifier = new Notifier({
   getAccounts: () => accounts,
   getWindow: () => win,
-  activate: (id) => { page = 'account'; activate(id); },
+  activate: (id) => { page = 'account'; activate(id, { focus: true }); },
   quit: () => { quitting = true; app.quit(); },
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
@@ -338,12 +343,10 @@ const mcpHooks = {
     problem: problems.get(a.id)?.text || '',
   })),
   regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
-  activate: (id) => { notifier.showWindow(); page = 'account'; activate(id); },
+  // MCP 引起的切换不抢键盘焦点；用户正在打字时不切，改为在窗口顶部问用户。返回 'done' | 'pending' | 'hidden'（添加页开在托盘里的窗口）
+  activate: (id) => aiAsk({ kind: 'switch', id }),
   // 不直接创建：打开“添加账号”页面并预填，由人确认代理后保存，避免新号先用真实 IP 联网
-  openAddAccount: ({ name, region }) => {
-    notifier.showWindow();
-    openEditor(null, { name, region });
-  },
+  openAddAccount: ({ name, region }) => aiAsk({ kind: 'add', name, region }),
   renameAccount: (id, name) => {
     const acc = accounts.find((a) => a.id === id);
     if (!acc) return false;
@@ -431,11 +434,12 @@ function layout() {
   const { width, height } = win.getContentBounds();
   shellView.setBounds({ x: 0, y: 0, width, height });
   const side = sideWidth();
+  const top = TOPBAR + (aiRequest ? AIBAR : 0);
   const bounds = {
     x: side,
-    y: GAP + TOPBAR,
+    y: GAP + top,
     width: Math.max(0, width - side - GAP),
-    height: Math.max(0, height - GAP * 2 - TOPBAR),
+    height: Math.max(0, height - GAP * 2 - top),
   };
   for (const [id, view] of views) {
     const current = page === 'account' && id === activeId;
@@ -455,6 +459,7 @@ function pushState() {
     editorId,
     editorNonce,
     editorColor,
+    aiRequest: aiRequestForShell(),
     collapsed: settings.sidebarCollapsed,
     accounts: accounts.map((acc) => {
       const problem = problems.get(acc.id);
@@ -835,10 +840,70 @@ function liteStateForShell() {
   };
 }
 
-function activate(id) {
+// focus：用户自己切的号（点侧栏、Ctrl+数字、托盘或通知）才把键盘焦点交给新账号，切完就能直接打字。
+// MCP 引起的切换不给焦点，免得用户打的字落到别的号里。
+function activate(id, { focus = false } = {}) {
   activeId = id;
   if (!accounts.length) page = 'welcome';
   refresh();
+  if (focus) focusActive();
+}
+
+function focusActive() {
+  const acc = findAcc(activeId);
+  const view = views.get(activeId);
+  if (page === 'account' && acc && !isLite(acc) && view && !problems.has(acc.id) && !view.webContents.isDestroyed()) view.webContents.focus();
+  else if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
+}
+
+// ---------- MCP 的切换请求 ----------
+
+// 窗口在前台、30 秒内按过键，或者正在编辑账号（可能有没保存的修改），都算用户正在用
+function userBusy() {
+  if (!win || !win.isVisible() || win.isMinimized()) return false;
+  if (page === 'editor') return true;
+  return win.isFocused() && Date.now() - lastTypedAt < TYPING_MS;
+}
+
+// 横幅 30 秒没人点就自动消失，算忽略。MCP 工具不等用户回答，立刻返回“已询问”
+const AI_ASK_MS = 30 * 1000;
+let aiTimer = null;
+function setAiRequest(req) {
+  clearTimeout(aiTimer);
+  aiRequest = req;
+  if (req) aiTimer = setTimeout(() => { aiRequest = null; refresh(); }, AI_ASK_MS);
+  refresh();
+}
+
+function aiAsk(req) {
+  if (req.kind === 'switch' && !findAcc(req.id)) return 'done';
+  if (userBusy()) {
+    setAiRequest(req);
+    return 'pending';
+  }
+  runAiRequest(req, false);
+  // 窗口在托盘里：添加页已经开好，但用户看不见，告诉 AI 让用户打开窗口
+  return req.kind === 'add' && win && (!win.isVisible() || win.isMinimized()) ? 'hidden' : 'done';
+}
+
+// byUser：用户在横幅里点了“切换”，可以把窗口拿到前台并给焦点。
+// MCP 直接切的时候窗口保持原样：在后台就留在后台，不 show、不抢焦点
+function runAiRequest(req, byUser) {
+  if (byUser) notifier.showWindow();
+  if (req.kind === 'switch') {
+    if (!findAcc(req.id)) return;
+    page = 'account';
+    activate(req.id, { focus: byUser });
+  } else {
+    openEditor(null, { name: req.name, region: req.region });
+  }
+}
+
+function aiRequestForShell() {
+  if (!aiRequest) return null;
+  if (aiRequest.kind === 'add') return { kind: 'add', name: aiRequest.name || '' };
+  const acc = findAcc(aiRequest.id);
+  return acc ? { kind: 'switch', name: acc.name } : null;
 }
 
 function showPage(next) {
@@ -911,6 +976,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   const dir = lite ? liteDir(id) : partitionDir(id);
   if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉账号 ${id} 的数据，下次启动再清理`); });
   if (page === 'editor' && editorId === id) page = 'account';
+  if (aiRequest && aiRequest.id === id) setAiRequest(null);
   activate(accounts[0]?.id ?? null);
   return 'removed';
 }
@@ -957,6 +1023,7 @@ function setSetting(key, value) {
 // Ctrl/Cmd + 1–9 切换账号。只在 WAswitch 窗口有焦点时生效，不抢其他软件的快捷键。
 app.on('web-contents-created', (_e, wc) => {
   wc.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown') lastTypedAt = Date.now();
     if (input.type !== 'keyDown' || input.alt || input.shift) return;
     const mod = process.platform === 'darwin' ? input.meta : input.control;
     if (!mod || !/^[1-9]$/.test(input.key)) return;
@@ -964,7 +1031,7 @@ app.on('web-contents-created', (_e, wc) => {
     if (!acc) return;
     event.preventDefault();
     page = 'account';
-    activate(acc.id);
+    activate(acc.id, { focus: true });
   });
 });
 
@@ -1077,7 +1144,13 @@ const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
 });
 const findAcc = (id) => accounts.find((a) => a.id === id);
 
-onShell('switch', (id) => { if (findAcc(id)) { page = 'account'; activate(id); } });
+onShell('switch', (id) => { if (findAcc(id)) { page = 'account'; activate(id, { focus: true }); } });
+// 用户在顶部横幅里回答 AI 的切换请求
+onShell('ai:answer', (yes) => {
+  const req = aiRequest;
+  setAiRequest(null);
+  if (yes === true && req) runAiRequest(req, true);
+});
 onShell('add', () => openEditor(null));
 onShell('edit', (id) => { if (findAcc(id)) openEditor(id); });
 onShell('page', (p) => { if (['account', 'settings'].includes(p)) showPage(p); });
@@ -1226,7 +1299,7 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   res.country = regionName(res.country);
   const same = accounts.find((a) => a.id !== id && exitIps.get(a.id) === res.ip);
   if (same) res.sameAs = same.name;
-  lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country };
+  lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
   return res;
 });
 
@@ -1268,7 +1341,16 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     return { error: e.message };
   }
   // 测试过的出口所在地显示在侧栏
-  const tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
+  let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
+  // 网页版选了“跟随本机”又设了代理：没测过就先测一次，按出口所在地填好时区和语言。
+  // 测不通也照样保存；用户自己选了地区的不改
+  if (mode === 'web' && parsed && region === 'auto') {
+    if (!tested) {
+      const res = await proxy.test(String(proxyText || ''), String(password || '') || (parsed.password) || (acc ? proxy.decryptPassword(acc.proxyPassword) : ''));
+      if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: findByTimezone(res.timezone) };
+    }
+    if (tested && tested.region) region = tested.region;
+  }
 
   let liteKey = '';
   if (mode === 'lite' && !acc) {
@@ -1325,6 +1407,16 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     refresh();
   }
   notifier.refresh();
+  // 第二个直连号：提醒，不拦。几个直连号在 WhatsApp 看来是同一个 IP、同一个地方
+  const otherDirect = !parsed && accounts.filter((a) => a.id !== acc.id && !a.proxy).map((a) => `「${a.name}」`);
+  if (otherDirect && otherDirect.length) {
+    dialog.showMessageBox(win, {
+      type: 'warning',
+      title: '这个号和别的号共用本机真实 IP',
+      message: `「${name}」和${otherDirect.join('、')}都是直连`,
+      detail: '直连的号都用这台电脑的真实 IP 上网，在 WhatsApp 看来它们在同一个地方，容易被关联。建议在 Clash 里给每个号开一个端口，在编辑里填上代理。',
+    }).catch(() => {});
+  }
   if (remindCheck) {
     dialog.showMessageBox(win, {
       type: 'info',
@@ -1343,9 +1435,12 @@ handleShell('check:run', async () => {
   const items = [];
   const byPort = new Map();
   const byIp = new Map();
+  const direct = accounts.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
+  if (direct.length > 1) items.push({ level: 'bad', title: `${direct.join('、')} 共用本机真实 IP`, detail: '这几个号都是直连，在 WhatsApp 看来在同一个地方。建议每个号在 Clash 里开一个端口，填上代理。' });
+  const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   for (const acc of accounts) {
     const p = proxy.parse(acc.proxy);
-    if (!p) { items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，用的是这台电脑的真实 IP。' }); continue; }
+    if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，用的是这台电脑的真实 IP。' }); continue; }
     if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
     const key = `${p.host}:${p.port}`;
     byPort.set(key, [...(byPort.get(key) || []), acc.name]);
@@ -1365,9 +1460,22 @@ handleShell('check:run', async () => {
     const place = [acc.exitLabel, res.city].filter(Boolean).join(' · ');
     // 轻量模式没有浏览器环境，不涉及时区
     if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：出口 ${res.ip}（${place}）`, detail: '域名由代理解析，本机不查 DNS。' }); continue; }
-    items.push(tz && tz !== res.timezone
-      ? { level: 'warn', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: `出口时区是 ${res.timezone}，账号设置的是 ${tz}，建议在编辑里改成一致。` }
-      : { level: 'ok', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: tz ? `时区 ${tz}，和出口一致。` : '时区跟随本机，建议在编辑里选和出口一致的地区。' });
+    // 跟随本机时，实际时区就是本机时区
+    const effTz = tz || localTz;
+    const fixRegion = findByTimezone(res.timezone);
+    const fix = fixRegion ? { id: acc.id, region: fixRegion, label: fingerprint.regions[fixRegion].label } : null;
+    if (effTz !== res.timezone) {
+      items.push({
+        level: 'warn',
+        title: `${acc.name}：出口 ${res.ip}（${place}）`,
+        detail: tz
+          ? `出口时区是 ${res.timezone}，账号设置的是 ${tz}。${fix ? '' : '没有匹配的地区预设，请在编辑里选最接近的。'}`
+          : `地区是“跟随本机”（${localTz}），但出口在 ${res.timezone}。在 WhatsApp 看来时区和 IP 对不上。${fix ? '' : '没有匹配的地区预设，请在编辑里选最接近的。'}`,
+        fix,
+      });
+    } else {
+      items.push({ level: 'ok', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: tz ? `时区 ${tz}，和出口一致。` : `时区跟随本机（${localTz}），和出口一致。` });
+    }
   }
   for (const [key, names] of byPort) {
     if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 共用同一个代理端口`, detail: `${key}。这几个号会从同一个 IP 上网，建议每个号一个端口。` });
@@ -1387,6 +1495,20 @@ handleShell('check:run', async () => {
   saveAccounts();
   pushState();
   return { items, time: new Date().toLocaleString('zh-CN') };
+});
+
+// 隔离自检里的“改成和出口一致”：只改地区（时区、语言），然后重建页面
+handleShell('check:fix', async ({ id, region } = {}) => {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc) || !fingerprint.regions[region] || region === 'auto') return { error: '改不了' };
+  if (acc.fingerprint.region === region) return { ok: true };
+  acc.fingerprint.region = region;
+  saveAccounts();
+  destroyView(acc.id);
+  problems.delete(acc.id);
+  await createView(acc);
+  refresh();
+  return { ok: true };
 });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）

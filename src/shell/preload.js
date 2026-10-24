@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('wa', {
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
   switchTo: (id) => ipcRenderer.send('switch', id),
+  aiAnswer: (yes) => ipcRenderer.send('ai:answer', yes === true),
   add: () => ipcRenderer.send('add'),
   edit: (id) => ipcRenderer.send('edit', id),
   context: (id) => ipcRenderer.send('context', id),
@@ -14,6 +15,7 @@ contextBridge.exposeInMainWorld('wa', {
   setSetting: (key, value) => ipcRenderer.send('setting', { key, value }),
   setMuted: (id, muted) => ipcRenderer.send('mute', { id, muted }),
   runCheck: () => ipcRenderer.invoke('check:run'),
+  checkFix: (id, region) => ipcRenderer.invoke('check:fix', { id, region }),
   openLogs: () => ipcRenderer.send('open-logs'),
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
