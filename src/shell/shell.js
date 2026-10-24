@@ -198,6 +198,8 @@ function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
   if ($top.hidden) return;
+  // 锁着时顶栏只留一句“已锁定”：账号名、出口 IP、内存这些都不露出来
+  if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
