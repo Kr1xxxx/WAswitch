@@ -1346,6 +1346,8 @@ app.whenReady().then(async () => {
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
   win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {
+    // 锁着时切回窗口：焦点放回锁屏卡片，也不把轻量号的消息标成已读
+    if (locked) { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus(); return; }
     const jid = liteOpen.get(activeId);
     if (jid && page === 'account' && isLite(findAcc(activeId))) liteHost.read(activeId, jid);
   });
