@@ -99,7 +99,8 @@ class Records {
   }
 
   // 新建或修改；返回保存后的记录，内容不合格返回 null
-  upsert(data, { save = true } = {}) {
+  // imported：导入的记录，跟进时间已经过了的当作已提醒，避免导入后一下子弹出一堆通知
+  upsert(data, { save = true, imported = false } = {}) {
     this.load();
     const clean = this.def.clean(data || {});
     if (!this.def.valid(clean)) return null;
@@ -112,7 +113,7 @@ class Records {
       Object.assign(old, clean, { updatedAt: Date.now() });
       rec = old;
     } else {
-      if (this.kind === 'customers') clean.reminded = false;
+      if (this.kind === 'customers') clean.reminded = imported && !!clean.followUpAt && clean.followUpAt <= Date.now();
       rec = { id: crypto.randomUUID(), ...clean, updatedAt: Date.now(), deleted: false };
       this.items.push(rec);
     }

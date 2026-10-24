@@ -664,19 +664,22 @@ function panelData() {
     })),
   };
 }
-// 跟进提醒：每分钟看一次，到时间的弹一条通知，只写名字（通知会显示在锁屏上，不写电话和备注）
+// 跟进提醒：每分钟看一次，到时间的弹通知，只写名字（通知会显示在锁屏上，不写电话和备注）
+// 一次最多弹 3 条，其余合成一条“还有 N 条跟进提醒”
 function checkFollowUps() {
   if (!customerStore) return;
   const now = Date.now();
-  for (const c of customerStore.list()) {
-    if (!c.followUpAt || c.reminded || c.followUpAt > now) continue;
-    customerStore.patch(c.id, { reminded: true });
+  const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now);
+  if (!due.length) return;
+  for (const c of due) customerStore.patch(c.id, { reminded: true });
+  for (const c of due.slice(0, 3)) {
     const accId = c.accountId;
-    notifier.notifyApp('WAswitch', `跟进提醒：${c.name || c.phone}`, () => {
+    notifier.notifyApp('WAswitch', `跟进提醒：${c.name || '一位客户'}`, () => {
       notifier.showWindow();
       if (findAcc(accId)) userActivate(accId); // 只切换账号，不自动打开面板
     });
   }
+  if (due.length > 3) notifier.notifyApp('WAswitch', `还有 ${due.length - 3} 条跟进提醒`, () => notifier.showWindow());
 }
 
 function layout() {
@@ -1926,7 +1929,7 @@ handleShell('panel:import', async ({ kind } = {}) => {
     const data = { ...row, id: undefined };
     // 客户：文件里的账号编号对得上就用它，否则记到当前账号
     if (kind === 'customers') data.accountId = typeof row.accountId === 'string' && findAcc(row.accountId) ? row.accountId : activeId || '';
-    if (store.upsert(data, { save: false })) added += 1;
+    if (store.upsert(data, { save: false, imported: true })) added += 1;
   }
   store.save();
   return { added, skipped: res.rows.length - added, data: panelData() };
