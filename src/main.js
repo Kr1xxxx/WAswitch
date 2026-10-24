@@ -2104,7 +2104,8 @@ handleShell('tr:network', async (net) => {
   if (net && net.mode === 'proxy') {
     let u = null;
     try { u = new URL(String(net.proxyUrl || '').trim()); } catch {}
-    const same = u && accounts.some((a) => { const p = proxy.parse(a.proxy); return p && !p.error && String(p.host).toLowerCase() === u.hostname.toLowerCase() && String(p.port) === String(u.port); });
+    const norm = (h) => { const x = String(h || '').replace(/^\[|\]$/g, '').toLowerCase(); return ['localhost', '127.0.0.1', '::1'].includes(x) ? 'loopback' : x; };
+    const same = u && accounts.some((a) => { const p = proxy.parse(a.proxy); return p && !p.error && norm(p.host) === norm(u.hostname) && String(p.port) === String(u.port); });
     if (same) return { error: '这个代理端口已经给某个账号用了，翻译请用别的端口（或选“跟随系统代理”）', ...trState() };
   }
   const r = translator.setNetwork(net && typeof net === 'object' ? net : {});

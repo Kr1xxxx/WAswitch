@@ -95,13 +95,15 @@ function statusError(status) {
   return { kind: 'other', text: `服务商返回 ${status}` };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
-function providerDetail(body) {
+function providerDetail(body, key = '') {
   let msg = '';
   try {
     const j = JSON.parse(body);
     msg = (j && j.error && (j.error.message || j.error.code)) || (j && j.message) || '';
   } catch { msg = ''; }
-  return String(msg || '').replace(/(sk|Bearer)[-_\w.]{6,}/gi, '***').slice(0, 200);
+  let t = String(msg || '').slice(0, 2000);
+  if (key) t = t.split(key).join('***'); // 先遮密钥再截断，免得密钥被截成半截漏出来
+  return t.replace(/(sk|Bearer)[-_\w.]{6,}/gi, '***').slice(0, 200);
 }
 
 async function readCapped(res) {
@@ -313,7 +315,7 @@ class Translator {
     }
     if (!res.ok) {
       const err = statusError(res.status);
-      const detail = key ? providerDetail(text).split(key).join('***') : providerDetail(text);
+      const detail = providerDetail(text, key);
       throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
     }
     let out = '';
