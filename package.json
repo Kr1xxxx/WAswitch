@@ -11,7 +11,8 @@
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:view-race": "node scripts/check-view-race.js",
     "dist": "electron-builder",
-    "check:updater": "node scripts/check-updater.js"
+    "check:updater": "node scripts/check-updater.js",
+    "check:team": "node scripts/check-team.mjs && node server/test/run.mjs"
   },
   "license": "MIT",
   "dependencies": {

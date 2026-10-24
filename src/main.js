@@ -24,6 +24,7 @@ const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater } = require('./updater');
+const { TeamSync } = require('./team');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -178,7 +179,8 @@ const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId)
 const isMuted = (acc) => acc.muted || !!groupOf(acc)?.muted;
 // 侧栏的显示顺序：先是没分组的号，再按分组顺序；同一段里按 accounts.json 的顺序。Ctrl+数字、托盘也按这个顺序
 function displayOrder() {
-  return [...accounts.filter((a) => !groupOf(a)), ...groups.flatMap((g) => accounts.filter((a) => a.groupId === g.id))];
+  const list = visibleAccounts();
+  return [...list.filter((a) => !groupOf(a)), ...groups.flatMap((g) => list.filter((a) => a.groupId === g.id))];
 }
 // 把账号挪到某个分组（'' 表示未分组）里，放在 beforeId 那个号前面；beforeId 为空就放到这一段的最后
 function moveAccount(id, groupId, beforeId) {
@@ -287,6 +289,12 @@ function loadAccounts() {
     acc.lastExit = acc.lastExit && typeof acc.lastExit.ip === 'string' && Number.isFinite(acc.lastExit.at) ? { ip: acc.lastExit.ip, at: acc.lastExit.at } : null;
     // 主号只能用网页版
     acc.primary = acc.primary === true && acc.mode === 'web';
+    // 团队模式（src/team）：团队账号 id、是否被后台收回、是否还没填代理、后台下发的备注
+    acc.teamId = typeof acc.teamId === 'string' && /^[0-9a-f-]{36}$/.test(acc.teamId) ? acc.teamId : '';
+    acc.teamHidden = !!acc.teamId && acc.teamHidden === true;
+    acc.teamNeedsProxy = !!acc.teamId && acc.teamNeedsProxy === true;
+    acc.teamNote = typeof acc.teamNote === 'string' ? acc.teamNote.slice(0, 500) : '';
+    acc.teamExpected = typeof acc.teamExpected === 'string' && /^[A-Z]{2}$/.test(acc.teamExpected) ? acc.teamExpected : '';
   });
   // 只能有一个主号；没有时把第一个网页版账号设为主号
   const primaries = list.filter((a) => a.primary);
@@ -392,6 +400,7 @@ async function watchExits() {
       const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
       // 测的时候代理被改了或者号被删了：结果作废
       if (!findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
+      noteProxyHealth(acc, res);
       // 记延迟：成功记往返毫秒数；失败只记“失败”，不记错误原文（里面可能有代理地址）
       if (res.ok) {
         lastLatency.set(acc.id, { ms: res.ms, at: Date.now() });
@@ -402,6 +411,7 @@ async function watchExits() {
       if (!res.ok) continue;
       const label = regionName(res.country);
       if (prev && prev !== res.ip) {
+        team?.recordEvent(acc, 'exit_changed', res.country);
         exitChanges.set(acc.id, { from: prev, to: res.ip, fromLabel: prevLabel, toLabel: label, at: Date.now() });
         console.warn(`[出口巡检] ${acc.name}：${prev} -> ${res.ip}`);
       }
@@ -436,6 +446,12 @@ const liteViews = new Map(); // id -> 后台进程推来的对话列表和当前
 const liteOpen = new Map(); // id -> 正在看的对话
 let liteGuardHits = 0; // 网络护栏拦下的次数（隔离自检里显示）
 const isLite = (acc) => acc && acc.mode === 'lite';
+
+// 团队模式（在 app ready 之后创建）。被后台收回、电脑被停用、或后台不允许的私人号都“停着”：不运行、不显示，数据保留
+let team = null;
+const isParked = (acc) => !!(team && acc && team.isParked(acc));
+const visibleAccounts = () => accounts.filter((a) => !isParked(a));
+const isParkedId = (id) => accounts.some((a) => a.id === String(id) && isParked(a));
 
 const memoryManager = new memory.MemoryManager(settings, {
   views,
@@ -474,7 +490,7 @@ const notifier = new Notifier({
       checked: settings.lowMemoryMode,
       click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
     },
-    ...(accounts.length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
+    ...(visibleAccounts().length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
     { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
@@ -507,7 +523,7 @@ function accountStatus(id) {
 }
 
 const mcpHooks = {
-  listAccounts: () => accounts.map((a) => ({
+  listAccounts: () => visibleAccounts().map((a) => ({
     id: a.id,
     name: a.name,
     active: a.id === activeId,
@@ -533,7 +549,7 @@ const mcpHooks = {
     notifier.refresh();
     return true;
   },
-  removeAccount: (id, opts) => removeAccount(id, opts),
+  removeAccount: (id, opts) => (findAcc(id) ? removeAccount(id, opts) : 'not_found'),
 
   // ---- 第二层：读对话列表 ----
   // 读之前现查一次是否已登录（只读检测），结果同步到掉线检测的状态里
@@ -639,7 +655,7 @@ function idleSeconds() {
 }
 function checkIdleLock() {
   const mins = settings.lockMinutes;
-  if (!mins || locked || !accounts.length) return;
+  if (!mins || locked || !visibleAccounts().length) return;
   if (idleSeconds() >= mins * 60) setLocked(true);
 }
 
@@ -649,16 +665,18 @@ function checkIdleLock() {
 let panelOpen = false;
 let replyStore = null;
 let customerStore = null;
-const panelShown = () => panelOpen && page === 'account' && !locked && accounts.length > 0;
+const panelShown = () => panelOpen && page === 'account' && !locked && visibleAccounts().length > 0;
 function togglePanel(on = !panelOpen) {
   panelOpen = !!on;
   refresh();
 }
+// 停着的号（团队收回等）名下的客户也不显示、不提醒，数据保留
+const parkedCustomer = (c) => !!c.accountId && accounts.some((a) => a.id === c.accountId && isParked(a));
 function panelData() {
-  const names = new Map(accounts.map((a) => [a.id, a.name]));
+  const names = new Map(visibleAccounts().map((a) => [a.id, a.name]));
   return {
     replies: replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })),
-    customers: customerStore.list().map((c) => ({
+    customers: customerStore.list().filter((c) => !parkedCustomer(c)).map((c) => ({
       id: c.id, accountId: c.accountId, accountName: names.get(c.accountId) || '', name: c.name, phone: c.phone,
       note: c.note, tags: c.tags, followUpAt: c.followUpAt, updatedAt: c.updatedAt,
     })),
@@ -669,7 +687,7 @@ function panelData() {
 function checkFollowUps() {
   if (!customerStore) return;
   const now = Date.now();
-  const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now);
+  const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now && !parkedCustomer(c));
   if (!due.length) return;
   for (const c of due) customerStore.patch(c.id, { reminded: true }, { save: false });
   customerStore.save();
@@ -717,7 +735,7 @@ function netEvent(id, kind, extra = {}) {
 // 每次推状态前对比一下，状态变了就记一条（所有出问题的路径都会走到 pushState）
 function trackNet() {
   if (!netLog) return;
-  for (const acc of accounts) {
+  for (const acc of visibleAccounts()) {
     const prev = netLastSeen.get(acc.id) || { problem: '', login: '', downAt: 0 };
     const p = problems.get(acc.id);
     const problem = p ? String(p.kind || 'unknown').slice(0, 20) : '';
@@ -737,6 +755,7 @@ function trackNet() {
 }
 
 function pushState() {
+  team?.noteChange();
   trackNet();
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
@@ -749,6 +768,7 @@ function pushState() {
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
+    team: team ? team.snapshot() : null,
     locked,
     panelOpen: panelShown(),
     lockChoices: memory.LOCK_CHOICES,
@@ -758,8 +778,8 @@ function pushState() {
       name: g.name,
       collapsed: g.collapsed,
       muted: g.muted,
-      count: accounts.filter((a) => a.groupId === g.id).length,
-      unread: accounts.filter((a) => a.groupId === g.id).reduce((n, a) => n + (notifier.unread.get(a.id) || 0), 0),
+      count: visibleAccounts().filter((a) => a.groupId === g.id).length,
+      unread: visibleAccounts().filter((a) => a.groupId === g.id).reduce((n, a) => n + (notifier.unread.get(a.id) || 0), 0),
     })),
     editGroupId,
     accounts: displayOrder().map((acc) => {
@@ -796,6 +816,8 @@ function pushState() {
         mode: acc.mode,
         primary: acc.primary,
         liteStatus: isLite(acc) ? (liteStates.get(acc.id)?.status || 'connecting') : '',
+        team: !!acc.teamId,
+        teamNote: acc.teamNote || '',
       };
     }),
     lite: liteStateForShell(),
@@ -829,6 +851,86 @@ function noteLoggedIn(id, state) {
 // WebRTC：默认禁止走代理以外的 UDP，防止泄露真实 IP。
 // 直连号可以在编辑里打开“允许通话”：只用默认网卡（不暴露内网 IP），允许 UDP，网页版才能打电话。
 // 注意“直连”实际走系统代理设置：Clash 开着系统代理时网页走 Clash，而通话的 UDP 走真实 IP，所以默认关。
+// 团队状态用：每个号最近一次巡检的代理结果（只在内存里）
+const proxyHealth = new Map(); // id -> { ok, ms, country }
+function noteProxyHealth(acc, res) {
+  const before = proxyHealth.get(acc.id);
+  proxyHealth.set(acc.id, { ok: !!res.ok, ms: res.ok && Number.isFinite(res.ms) ? Math.round(res.ms) : null, country: res.ok ? String(res.country || '') : '' });
+  if (before && before.ok && !res.ok) team?.recordEvent(acc, 'proxy_down');
+  if (before && !before.ok && res.ok) team?.recordEvent(acc, 'proxy_up');
+}
+
+// 上报给团队后台的状态：只有白名单字段（见 src/team）。不含聊天、代理地址和员工活动
+function teamStatusOf(acc) {
+  const problem = problems.get(acc.id);
+  const health = proxyHealth.get(acc.id);
+  let state;
+  if (acc.teamNeedsProxy) state = 'needs_proxy';
+  else if (problem) state = problem.kind === 'proxy' || problem.kind === 'proxyDown' ? 'proxy_down' : problem.kind === 'banned' ? 'banned' : 'error';
+  else if (loginStates.get(acc.id) === 'needs_qr') state = 'needs_qr';
+  else state = accountStatus(acc.id) === 'ready' ? 'ready' : accountStatus(acc.id) === 'not_loaded' ? 'stopped' : 'loading';
+  return {
+    state,
+    unread: notifier.unread.get(acc.id) || 0,
+    proxy_ok: acc.proxy ? (problem && (problem.kind === 'proxy' || problem.kind === 'proxyDown') ? false : health ? health.ok : null) : null,
+    proxy_ms: acc.proxy && health ? health.ms : null,
+    exit_ip: acc.proxy ? exitIps.get(acc.id) || '' : '',
+    exit_country: acc.proxy && health ? health.country : '',
+    exit_changed: exitChanges.has(acc.id),
+  };
+}
+
+// 后台分来、还没填代理的号：不联网，卡片上提示去填代理
+const TEAM_PROXY_PROBLEM = {
+  kind: 'teamProxy',
+  title: '这个号是管理员分给你的，请先设置代理',
+  short: '待填代理',
+  text: '填好代理并测试通过后才会联网扫码。代理只保存在这台电脑上，不会上传到后台。',
+  config: true,
+};
+
+// 停掉并隐藏一个号（被后台收回、电脑被停用、或不允许私人号）。数据全部保留
+function parkAccount(acc) {
+  if (isLite(acc)) liteHost.stop(acc.id); else destroyView(acc.id);
+  clearRetry(acc.id);
+  problems.delete(acc.id);
+  loginStates.delete(acc.id);
+  liteStates.delete(acc.id);
+  liteViews.delete(acc.id);
+  liteOpen.delete(acc.id);
+  mcp?.controller.gate.clearAccount(acc.id);
+  notifier.forget(acc.id);
+  memoryManager.forget(acc.id);
+  if (page === 'editor' && editorId === acc.id) page = 'account';
+  if (aiRequest && aiRequest.id === acc.id) setAiRequest(null);
+  if (activeId === acc.id) activeId = visibleAccounts()[0]?.id ?? null;
+}
+
+// 重新显示并启动（还没填代理的只显示，不联网）
+async function unparkAccount(acc) {
+  if (isParked(acc)) return;
+  if (acc.teamNeedsProxy) { problems.set(acc.id, { ...TEAM_PROXY_PROBLEM }); return; }
+  if (isLite(acc) ? liteStates.has(acc.id) : views.has(acc.id)) return;
+  await startAccount(acc);
+}
+
+// 后台新分来的号：建一个本地账号，先不联网，等员工填代理
+function createTeamSeat(seat) {
+  let id = Date.now();
+  while (accounts.some((a) => a.id === String(id))) id += 1;
+  const acc = {
+    id: String(id), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
+    fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
+    liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
+    teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected,
+  };
+  accounts.push(acc);
+  problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
+  if (!activeId) activeId = acc.id;
+  if (page === 'welcome') page = 'account';
+  return acc;
+}
+
 function webrtcPolicy(acc) {
   return !acc.proxy && acc.allowCalls ? 'default_public_interface_only' : 'disable_non_proxied_udp';
 }
@@ -863,7 +965,7 @@ function scheduleRetry(id) {
 
 // 用户点“重新连接”
 async function retryNow(id) {
-  const acc = accounts.find((a) => a.id === id);
+  const acc = findAcc(id);
   if (!acc) return;
   clearRetry(id);
   const problem = problems.get(id);
@@ -887,6 +989,8 @@ async function checkLogins() {
     const before = loginStates.get(acc.id);
     if (state === before) continue;
     if (state === 'needs_qr') mcp?.controller.gate.clearAccount(acc.id);
+    if (state === 'needs_qr' && before === 'logged_in') team?.recordEvent(acc, 'dropped');
+    if (state === 'logged_in' && before === 'needs_qr') team?.recordEvent(acc, 'recovered');
     if (state === 'needs_qr' && before === 'logged_in') {
       console.warn(`账号 ${acc.id} 已退出登录，需要重新扫码`);
       notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
@@ -1244,6 +1348,8 @@ function startLite(acc) {
 }
 
 function startAccount(acc, loadDelay = 0) {
+  if (isParked(acc)) return Promise.resolve();
+  if (acc.teamNeedsProxy) { problems.set(acc.id, { ...TEAM_PROXY_PROBLEM }); return Promise.resolve(); }
   if (isLite(acc)) { startLite(acc); return Promise.resolve(); }
   return createView(acc, loadDelay);
 }
@@ -1319,6 +1425,7 @@ function bindLiteEvents() {
     // 掉线、被封：不管有没有关通知都提醒
     if (prev !== status && status === 'loggedOut') notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
     if (prev !== status && status === 'banned') notifier.notify(acc, 'WhatsApp 拒绝了这个号的连接，可能被封了。');
+    if (prev !== status && status === 'banned') team?.recordEvent(acc, 'banned');
     if (prev !== status && status === 'stuck') notifier.notify(acc, '连接反复出错，已停止重连。点这里打开这个号重试。');
     refresh();
   });
@@ -1368,7 +1475,7 @@ function activate(id, { focus = false } = {}) {
   activeId = id;
   // 记住在看哪个号，下次启动直接打开它
   if (id && settings.lastAccountId !== id) { settings.lastAccountId = id; memory.saveSettings(settings); }
-  if (!accounts.length) page = 'welcome';
+  if (!visibleAccounts().length) page = 'welcome';
   refresh();
   if (focus) focusActive();
 }
@@ -1433,7 +1540,7 @@ function aiRequestForShell() {
 }
 
 function showPage(next) {
-  page = next === 'account' && !accounts.length ? 'welcome' : next;
+  page = next === 'account' && !visibleAccounts().length ? 'welcome' : next;
   refresh();
 }
 
@@ -1515,7 +1622,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉账号 ${id} 的数据，下次启动再清理`); });
   if (page === 'editor' && editorId === id) page = 'account';
   if (aiRequest && aiRequest.id === id) setAiRequest(null);
-  activate(accounts[0]?.id ?? null);
+  activate(visibleAccounts()[0]?.id ?? null);
   return 'removed';
 }
 
@@ -1711,7 +1818,7 @@ function setupUpdater() {
       fs.rmSync(updateMarker(), { force: true });
       if (liteHost) {
         liteHost.resume();
-        for (const acc of accounts.filter(isLite)) startLite(acc);
+        for (const acc of visibleAccounts().filter(isLite)) startAccount(acc); // 停着的号不重连，待填代理的号也不联网
       }
       refresh();
     },
@@ -1723,6 +1830,28 @@ function setupUpdater() {
 // ---------- 启动 ----------
 
 app.on('second-instance', () => notifier.showWindow());
+
+// ---------- 团队模式 ----------
+function setupTeam() {
+  team = new TeamSync({
+    dir: app.getPath('userData'),
+    safeStorage,
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    hooks: {
+      accounts: () => accounts,
+      save: () => saveAccounts(),
+      statusOf: (acc) => teamStatusOf(acc),
+      deviceInfo: () => ({ mem_mb: Math.round(memoryManager.totalMB() || 0), low_mem: settings.lowMemoryMode === true }),
+      park: (acc) => parkAccount(acc),
+      unpark: (acc) => { unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
+      createSeat: (seat) => createTeamSeat(seat),
+      refresh: () => refresh(),
+    },
+  });
+  // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
+  for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
+}
 
 app.whenReady().then(async () => {
   appReadyAt = Date.now();
@@ -1788,8 +1917,9 @@ app.whenReady().then(async () => {
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
   applyLoginItem();
-  activeId = (findAcc(settings.lastAccountId) || accounts[0])?.id ?? null;
-  page = accounts.length ? 'account' : 'welcome';
+  setupTeam();
+  activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
+  page = visibleAccounts().length ? 'account' : 'welcome';
   refresh();
   if (!shouldStartHidden()) win.show();
 
@@ -1802,14 +1932,14 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
       // 轻量账号：代理断开、正在重连或停止重连的，马上重试一次
-      for (const acc of accounts.filter(isLite)) {
+      for (const acc of visibleAccounts().filter(isLite)) {
         if (['proxyDown', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
       }
     }, 5000);
   });
 
   // 分批启动：先打开当前账号，其他账号每隔 2.5 秒打开一个，避免同时加载卡顿
-  const order = [...accounts].sort((a, b) => (b.id === activeId) - (a.id === activeId)); // 正在看的号先开
+  const order = visibleAccounts().sort((a, b) => (b.id === activeId) - (a.id === activeId)); // 正在看的号先开
   for (const [i, acc] of order.entries()) {
     await startAccount(acc, i * 2500);
     refresh();
@@ -1823,6 +1953,7 @@ app.whenReady().then(async () => {
   mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
   await mcp.init();
   setupUpdater();
+  team.start();
   notifier.refresh();
 });
 
@@ -1835,7 +1966,8 @@ const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
   if (!fromShell(e)) throw new Error('not allowed');
   return fn(...args);
 });
-const findAcc = (id) => accounts.find((a) => a.id === id);
+// 停着的号（见 isParked）对界面、MCP 和所有操作都当作不存在
+const findAcc = (id) => accounts.find((a) => a.id === id && !isParked(a));
 
 onShell('switch', (id) => userActivate(id));
 onShell('editor:dirty', (dirty) => { if (page === 'editor') editorDirty = dirty === true; });
@@ -1859,7 +1991,7 @@ onShell('page', async (p, discard) => {
 // 未读总览页要的通知记录（最新的在前）；清空只清记录，不动未读数
 handleShell('notif:log', () => {
   if (!notifLog) notifLog = loadNotifLog();
-  return notifLog.slice().reverse();
+  return notifLog.filter((e) => !isParkedId(e.id)).reverse();
 });
 handleShell('notif:clear', () => {
   notifLog = [];
@@ -1868,7 +2000,7 @@ handleShell('notif:clear', () => {
   return true;
 });
 // 连接记录：最新的在前；清空只清记录
-handleShell('netlog:get', () => (netLog ? netLog.load().slice().reverse() : []));
+handleShell('netlog:get', () => (netLog ? netLog.load().filter((e) => !isParkedId(e.id)).reverse() : []));
 handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 // ---- 面板 ----
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
@@ -1877,10 +2009,15 @@ handleShell('reply:save', (data) => (data && typeof data === 'object' && replySt
 handleShell('reply:delete', (id) => { if (typeof id === 'string') replyStore.remove(id); return panelData(); });
 handleShell('cust:save', (data) => {
   if (!data || typeof data !== 'object') return null;
+  const existing = typeof data.id === 'string' ? customerStore.get(data.id) : null;
+  if (existing && parkedCustomer(existing)) return null;
   const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
   return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt }) ? panelData() : null;
 });
-handleShell('cust:delete', (id) => { if (typeof id === 'string') customerStore.remove(id); return panelData(); });
+handleShell('cust:delete', (id) => {
+  if (typeof id === 'string' && customerStore.get(id) && !parkedCustomer(customerStore.get(id))) customerStore.remove(id);
+  return panelData();
+});
 handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 // 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
 // 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
@@ -1943,7 +2080,11 @@ onShell('reload', (id) => {
   if (problems.has(id) || isLite(findAcc(id))) retryNow(id);
   else views.get(id)?.webContents.reload();
 });
-onShell('retry', (id) => retryNow(id));
+onShell('retry', (id) => { if (findAcc(id)) retryNow(id); });
+// 团队模式（设置 › 团队）
+handleShell('team:enroll', async ({ server, code, deviceName, localIds, consent } = {}) => team.enroll({ server, code, deviceName, localIds, consent }));
+handleShell('team:join', async ({ localIds } = {}) => team.join(localIds));
+handleShell('team:sync', async () => team.syncNow());
 onShell('mute', ({ id, muted } = {}) => {
   const acc = findAcc(id);
   if (!acc || typeof muted !== 'boolean') return;
@@ -2212,6 +2353,24 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
     }
   }
 
+  // 后台分来的号第一次保存：填了代理必须测试通过；不填代理要员工明确同意直连
+  if (acc && acc.teamNeedsProxy && mode === 'web') {
+    if (parsed) {
+      if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
+    } else {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['取消', '确定直连'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '不用代理？',
+        message: '这个号是管理员分给你的，确定不用代理、直接用这台电脑的网络连 WhatsApp 吗？',
+        detail: '直连会让 WhatsApp 看到这台电脑的真实 IP。几个号都直连，在 WhatsApp 看来就是同一个地方。一般应该填管理员给你的代理。',
+      });
+      if (response !== 1) return { error: '没有保存。请填好代理并测试通过后再保存。' };
+    }
+  }
+
   // 密码：新填的优先；地址里带的其次；都没有则保留原来的（地址变了用户名也变了就清掉）
   let encPassword = acc ? acc.proxyPassword : '';
   try {
@@ -2244,6 +2403,8 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
   const remindCheck = (primaryMoved || primaryProxyChanged) && accounts.some(isLite);
   if (wantPrimary) for (const a of accounts) if (a.id !== id) a.primary = false;
 
+  const teamFirstSave = !!(acc && acc.teamNeedsProxy);
+  if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
   if (!acc) {
     acc = { id: String(Date.now()), name, note, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
@@ -2265,7 +2426,7 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
     saveAccounts();
     page = 'account';
     activeId = acc.id;
-    if (changed) { problems.delete(acc.id); startLite(acc); }
+    if (changed || teamFirstSave) { problems.delete(acc.id); startLite(acc); }
     refresh();
   } else {
     acc.primary = wantPrimary;
@@ -2283,7 +2444,7 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
     saveAccounts();
     page = 'account';
     activeId = acc.id;
-    if (changed) {
+    if (changed || teamFirstSave) {
       destroyView(acc.id);
       problems.delete(acc.id);
       await createView(acc);
