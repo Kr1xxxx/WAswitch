@@ -3,9 +3,13 @@
 const fs = require('fs');
 
 class EventLog {
-  constructor(file, { max = 2000, maxAgeMs = 7 * 24 * 3600 * 1000, delayMs = 2000 } = {}) {
+  // routine：例行记录的类型（比如每 30 分钟一次的巡检），每个号只留最近 routinePerId 条，
+  // 不占其他记录（掉线、恢复）的名额，免得例行记录把 7 天的掉线历史挤掉
+  constructor(file, { max = 2000, maxAgeMs = 7 * 24 * 3600 * 1000, delayMs = 2000, routine = [], routinePerId = 50 } = {}) {
     this.file = file;
     this.max = max;
+    this.routine = new Set(routine);
+    this.routinePerId = routinePerId;
     this.maxAgeMs = maxAgeMs;
     this.delayMs = delayMs;
     this.items = null;
@@ -29,7 +33,22 @@ class EventLog {
     let i = 0;
     while (i < this.items.length && this.items[i].at < cutoff) i += 1;
     if (i) this.items.splice(0, i);
-    if (this.items.length > this.max) this.items.splice(0, this.items.length - this.max);
+    // 从新到旧数：例行记录每个号留 routinePerId 条，其他记录一共留 max 条
+    const perId = new Map();
+    let others = 0;
+    const keep = new Array(this.items.length);
+    for (let j = this.items.length - 1; j >= 0; j -= 1) {
+      const e = this.items[j];
+      if (this.routine.has(e.kind)) {
+        const n = (perId.get(e.id) || 0) + 1;
+        perId.set(e.id, n);
+        keep[j] = n <= this.routinePerId;
+      } else {
+        others += 1;
+        keep[j] = others <= this.max;
+      }
+    }
+    if (keep.includes(false)) this.items = this.items.filter((_e, j) => keep[j]);
   }
 
   add(entry) {

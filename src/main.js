@@ -626,9 +626,11 @@ function setLocked(on) {
 // 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
 // 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
 let unfocusedSince = 0;
+let appReadyAt = Date.now(); // 启动时间（app ready 时再更新一次）
 function idleSeconds() {
   const sys = powerMonitor.getSystemIdleTime();
-  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sys; }
+  // 刚启动时不按系统空闲时间算（开机自启、电脑放了很久再打开软件，不会一打开就锁）
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return Math.min(sys, Math.floor((Date.now() - appReadyAt) / 1000)); }
   if (!unfocusedSince) unfocusedSince = Date.now();
   return Math.max(sys, (Date.now() - unfocusedSince) / 1000);
 }
@@ -1675,6 +1677,7 @@ function setupUpdater() {
 app.on('second-instance', () => notifier.showWindow());
 
 app.whenReady().then(async () => {
+  appReadyAt = Date.now();
   if (!isPrimary) return;
   setupMenu();
   // 本地界面用的默认会话不需要任何权限
@@ -1728,7 +1731,7 @@ app.whenReady().then(async () => {
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
   groups = loadGroups();
-  netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 2000, maxAgeMs: 7 * 24 * 3600 * 1000 });
+  netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 1500, maxAgeMs: 7 * 24 * 3600 * 1000, routine: ['exit', 'exit_fail'], routinePerId: 50 });
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
