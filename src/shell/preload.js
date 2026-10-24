@@ -22,4 +22,6 @@ contextBridge.exposeInMainWorld('wa', {
   liteOpen: (id, jid) => ipcRenderer.send('lite:open', { id, jid }),
   liteSend: (id, jid, text) => ipcRenderer.invoke('lite:send', { id, jid, text }),
   openLink: (url) => ipcRenderer.send('open-link', url),
+  cacheSize: () => ipcRenderer.invoke('cache:size'),
+  clearCache: () => ipcRenderer.invoke('cache:clear'),
 });

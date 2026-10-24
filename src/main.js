@@ -20,6 +20,7 @@ const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
+const { clearSessionCache } = require('./cache');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -1091,6 +1092,51 @@ handleShell('lite:send', async ({ id, jid, text } = {}) => {
     return { error: e.message };
   }
 });
+// ---------- 一键清理缓存 ----------
+// 只清网页版账号可以重新下载的缓存（见 cache.js），不清登录状态和本地聊天记录。
+// 分区只从账号列表里枚举，不接受外部传入；不开放给 MCP。轻量模式账号没有网页缓存，不动。
+
+const webSessions = () => accounts.filter((a) => a.mode === 'web').map((acc) => ({ acc, ses: session.fromPartition(`persist:wa-${acc.id}`) }));
+
+async function cacheBytes() {
+  let n = await session.defaultSession.getCacheSize();
+  for (const { ses } of webSessions()) n += await ses.getCacheSize();
+  return n;
+}
+
+let clearingCache = false;
+handleShell('cache:size', async () => ({ bytes: await cacheBytes() }));
+handleShell('cache:clear', async () => {
+  if (clearingCache) return { error: '正在清理，请稍等' };
+  clearingCache = true;
+  try {
+    const before = await cacheBytes();
+    const later = [];
+    for (const { acc, ses } of webSessions()) {
+      const view = views.get(acc.id);
+      // 正在加载的账号等加载完再清；出错的账号跳过
+      if (problems.has(acc.id) || (view && view.webContents.isLoading())) { later.push({ acc, ses }); continue; }
+      await clearSessionCache(ses);
+    }
+    let skipped = 0;
+    for (const { acc, ses } of later) {
+      const view = views.get(acc.id);
+      const end = Date.now() + 15000;
+      while (view && !view.webContents.isDestroyed() && view.webContents.isLoading() && Date.now() < end) {
+        await new Promise((resolve) => { setTimeout(resolve, 500); });
+      }
+      if (problems.has(acc.id) || (view && !view.webContents.isDestroyed() && view.webContents.isLoading())) { skipped += 1; continue; }
+      await clearSessionCache(ses);
+    }
+    await session.defaultSession.clearCache(); // 软件界面自己的
+    const after = await cacheBytes();
+    console.log(`清理缓存：${before} → ${after} 字节，跳过 ${skipped} 个账号`);
+    return { ok: true, freedMB: Math.max(0, Math.round((before - after) / 1048576)), afterMB: Math.round(after / 1048576), skipped };
+  } finally {
+    clearingCache = false;
+  }
+});
+
 // 聊天里的链接：只放行 http、https、mailto、tel，用系统程序打开
 onShell('open-link', (url) => { if (isSafeLink(url)) shell.openExternal(url); });
 onShell('open-source', () => shell.openExternal(SOURCE_URL));
