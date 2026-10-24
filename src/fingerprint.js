@@ -3,13 +3,19 @@
 //
 // 原则：
 // - 浏览器版本跟随 Electron 实际内核版本，平台跟随本机系统，避免“声称的”和“实际的”对不上。
-// - 时区和语言跟随账号的地区，地区应与代理出口所在地一致（代理测试时可自动识别）。
+// - 时区跟随账号的地区，地区应与代理出口所在地一致（代理测试时可自动识别）。
+// - 语言所有网页版账号统一用中文（shen 的决定，2026-10-24：团队要看得懂界面），不跟地区走。
 // - 每个账号创建时生成一次，之后保持不变。
 // - seed 字段为以后切换到独立指纹内核（fingerprint-chromium）预留，目前不使用。
 //
 // 已知局限：调试协议的覆盖只作用于页面本身，不作用于 Web Worker / Service Worker。
 // Worker 里读到的时区仍是本机时区（UA 和语言请求头不受影响，因为会话层也设置了）。
 const { presets: regions } = require('./regions');
+
+// 所有网页版账号统一的界面语言
+const UI_LOCALE = 'zh-CN';
+const UI_LANGUAGES = ['zh-CN', 'zh', 'en'];
+const UI_LANGUAGE_LABEL = '中文';
 
 function hostOs() {
   if (process.platform === 'win32') return 'win';
@@ -49,14 +55,13 @@ function resolve(fp) {
     mac: { ua: 'Macintosh; Intel Mac OS X 10_15_7', platform: 'MacIntel', chPlatform: 'macOS', chVersion: '14.5.0', arch: process.arch === 'arm64' ? 'arm' : 'x86' },
     linux: { ua: 'X11; Linux x86_64', platform: 'Linux x86_64', chPlatform: 'Linux', chVersion: '6.5.0', arch: 'x86' },
   }[hostOs()];
-  const languages = region.languages;
   return {
     userAgent: `Mozilla/5.0 (${osInfo.ua}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
     platform: osInfo.platform,
     // Chromium 会自己给请求头加上 q 权重，这里只给语言列表
-    acceptLanguage: languages ? languages.join(',') : undefined,
+    acceptLanguage: UI_LANGUAGES.join(','),
     timezone: region.timezone,
-    locale: region.locale,
+    locale: UI_LOCALE,
     metadata: {
       brands: [
         { brand: 'Google Chrome', version: major },
@@ -100,4 +105,4 @@ async function attach(wc, fp) {
   return r;
 }
 
-module.exports = { generate, normalize, resolve, attach, regions };
+module.exports = { generate, normalize, resolve, attach, regions, UI_LANGUAGE_LABEL };

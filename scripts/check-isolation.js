@@ -70,7 +70,7 @@ app.whenReady().then(async () => {
   }
 
   check(results.A.timezone === 'Asia/Singapore' && results.B.timezone === 'America/New_York', '两个账号的时区各自生效');
-  check(results.A.languages[0] === 'en-SG' && results.B.languages[0] === 'en-US', '两个账号的语言各自生效');
+  check(['A', 'B'].every((n) => results[n].languages[0] === 'zh-CN'), '两个账号的界面语言都是中文（不跟地区走）');
   check(!/Electron|waswitch/i.test(results.A.ua), 'UA 里没有 Electron 或应用名');
   check(['A', 'B'].every((n) => {
     const a = results[n].afterReload;
