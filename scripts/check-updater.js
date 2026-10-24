@@ -35,6 +35,7 @@ const fakeNet = {
       requested.push(url);
       const r = routes.get(url);
       if (!r) { req.emit('error', new Error(`net::ERR_NAME_NOT_RESOLVED ${url}`)); return; }
+      if (r.hang) return; // 连上了但一直没有回应
       if (r.location) { req.emit('redirect', 302, 'GET', r.location); return; }
       const res = new EventEmitter();
       res.statusCode = r.status || 200;
@@ -42,6 +43,7 @@ const fakeNet = {
       res.resume = () => {};
       req.emit('response', res);
       setImmediate(() => {
+        if (r.stall) { res.emit('data', r.body.subarray(0, 1024)); return; } // 发了一点就不动了
         if (r.body) for (let i = 0; i < r.body.length; i += 64 * 1024) res.emit('data', r.body.subarray(i, i + 64 * 1024));
         res.emit('end');
       });
@@ -107,7 +109,11 @@ function serve({ ymlSha = sha, dmgLocation = asset, tag = 'v0.3.0' } = {}) {
   routes.set('https://evil.example/dmg', { body: dmg });
 }
 const notes = [];
-const make = () => new Updater({ onChange() {}, idleReason: () => null, beforeInstall: async () => {}, notify: (t, b, click) => notes.push({ t, click }) });
+let installFailedCalls = 0;
+const make = () => new Updater({
+  onChange() {}, idleReason: () => null, beforeInstall: async () => {}, installFailed: async () => { installFailedCalls += 1; },
+  notify: (t, b, click) => notes.push({ t, click }), idleMs: 200,
+});
 const updatesDir = path.join(home, 'updates');
 
 (async () => {
@@ -152,6 +158,44 @@ const updatesDir = path.join(home, 'updates');
   u = make();
   await u.check();
   check(u.state.status === 'none' && u.state.failures === 0, `已是最新版时不下载（${u.state.lastResult}）`);
+
+  // 请求挂住：超时算失败，状态不会一直停在“检查中”
+  serve();
+  routes.set(`${base}/releases.atom`, { hang: true });
+  u = make();
+  let t0 = Date.now();
+  await u.check();
+  check(u.state.status === 'error' && /超时/.test(u.state.lastResult) && Date.now() - t0 < 5000, `请求挂住时超时失败（${u.state.lastResult}）`);
+  serve();
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+  routes.set(asset, { body: dmg, stall: true });
+  u = make();
+  t0 = Date.now();
+  await u.check();
+  check(u.state.status === 'error' && /超时/.test(u.state.lastResult) && !fs.existsSync(`${file}.part`), `下载中途停住时超时失败并删掉半截文件（${u.state.lastResult}）`);
+
+  // 卡住守卫：checking 超过 5 分钟、downloading 30 分钟没进度，按失败处理，之后能再检查
+  u = make();
+  u.set({ status: 'checking' });
+  u.watchdog(Date.now() + 4 * 60 * 1000);
+  check(u.state.status === 'checking', '检查 4 分钟还不算卡住');
+  u.watchdog(Date.now() + 6 * 60 * 1000);
+  check(u.state.status === 'error' && /卡住/.test(u.state.lastResult), '检查超过 5 分钟按失败处理');
+  u.set({ status: 'downloading', percent: 10 });
+  u.watchdog(Date.now() + 31 * 60 * 1000);
+  check(u.state.status === 'error', '下载 30 分钟没进度按失败处理');
+  serve({ tag: 'v0.2.0' });
+  await u.check();
+  check(u.state.status === 'none', '卡住复位后下次检查照常进行');
+
+  // Windows：安装没启动（quitAndInstall 出错）时恢复软件正常运行
+  u = make();
+  u.mac = false;
+  u.updater = { quitAndInstall() { throw new Error('安装包被删了'); } };
+  u.set({ status: 'downloaded', version: '0.3.0' });
+  installFailedCalls = 0;
+  await u.install();
+  check(installFailedCalls === 1 && u.state.status === 'error' && !u.installing, `安装出错时调用恢复并记为失败（${u.state.lastResult}）`);
 
   fs.rmSync(home, { recursive: true, force: true });
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');

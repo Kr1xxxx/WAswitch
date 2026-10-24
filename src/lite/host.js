@@ -183,6 +183,11 @@ class LiteHost extends EventEmitter {
     this.shuttingDown = true;
     await this.shutdownProc();
   }
+
+  // 关掉之后又不退出了（比如自动更新没装成）：允许重新启动后台进程
+  resume() {
+    this.shuttingDown = false;
+  }
 }
 
 module.exports = { LiteHost };

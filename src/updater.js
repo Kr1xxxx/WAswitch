@@ -22,6 +22,9 @@ const FIRST_CHECK_MS = 60 * 1000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const IDLE_POLL_MS = 60 * 1000;
 const FAIL_WARN_AT = 3; // 连续失败这么多次，关于页标黄
+const IDLE_TIMEOUT_MS = 60 * 1000; // Mac 下载：这么久没收到数据就算失败
+const STUCK_CHECKING_MS = 5 * 60 * 1000; // 检查超过 5 分钟没结果
+const STUCK_DOWNLOAD_MS = 30 * 60 * 1000; // 下载 30 分钟没有进度
 
 function allowedUrl(raw) {
   try {
@@ -73,30 +76,44 @@ function parseLatestYml(text) {
 }
 
 // 从 GitHub 下载：只用默认会话，手动跟重定向，每一跳都检查主机
-function request(url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5 } = {}) {
+function request(url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     if (!allowedUrl(url)) { reject(new Error(`不允许的下载地址：${safeHost(url)}`)); return; }
     const req = net.request({ url, session: session.defaultSession, redirect: 'manual', useSessionCookies: false });
+    // 连接或下载中途挂住：idleMs 内没有任何数据就放弃
+    let timer = null;
+    let settled = false;
+    const ok = (v) => { if (settled) return; settled = true; clearTimeout(timer); resolve(v); };
+    const bad = (e) => { if (settled) return; settled = true; clearTimeout(timer); reject(e); };
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { req.abort(); bad(new Error('连接 GitHub 超时')); }, idleMs);
+    };
+    arm();
     req.setHeader('User-Agent', `WAswitch/${app.getVersion()}`);
     req.on('redirect', (_status, _method, next) => {
+      clearTimeout(timer); // 下一跳有自己的超时
       req.abort();
-      if (redirects <= 0) { reject(new Error('重定向次数太多')); return; }
-      request(next, { onData, maxBytes, redirects: redirects - 1 }).then(resolve, reject);
+      if (redirects <= 0) { bad(new Error('重定向次数太多')); return; }
+      request(next, { onData, maxBytes, redirects: redirects - 1, idleMs }).then(ok, bad);
     });
     req.on('response', (res) => {
-      if (res.statusCode !== 200) { res.resume?.(); reject(new Error(`GitHub 返回 ${res.statusCode}`)); return; }
+      if (res.statusCode !== 200) { res.resume?.(); bad(new Error(`GitHub 返回 ${res.statusCode}`)); return; }
+      arm();
       const total = Number(res.headers['content-length']) || 0;
       const chunks = [];
       let got = 0;
       res.on('data', (c) => {
+        if (settled) return;
+        arm();
         got += c.length;
-        if (got > maxBytes) { req.abort(); reject(new Error('文件太大')); return; }
+        if (got > maxBytes) { req.abort(); bad(new Error('文件太大')); return; }
         if (onData) onData(c, got, total); else chunks.push(c);
       });
-      res.on('end', () => resolve(onData ? got : Buffer.concat(chunks)));
-      res.on('error', reject);
+      res.on('end', () => ok(onData ? got : Buffer.concat(chunks)));
+      res.on('error', bad);
     });
-    req.on('error', reject);
+    req.on('error', bad);
     req.end();
   });
 }
@@ -110,6 +127,7 @@ class Updater {
   //   onChange(),                       状态变了（刷新关于页和托盘）
   //   idleReason() -> string | null,    现在不能自动安装的原因；null 表示可以装
   //   beforeInstall() -> Promise,       安装前（轻量模式写盘、记下要不要回托盘）
+  //   installFailed() -> Promise,       安装没成功（恢复轻量模式、取消退出状态）
   //   notify(title, body, onClick),     系统通知
   // }
   constructor(hooks) {
@@ -128,6 +146,8 @@ class Updater {
     this.macFile = '';
     this.timers = [];
     this.installing = false;
+    this.idleMs = hooks.idleMs || IDLE_TIMEOUT_MS; // 测试时调小
+    this.busySince = 0; // 进入 checking / downloading，或下载进度最近一次变化的时间
   }
 
   start() {
@@ -138,12 +158,22 @@ class Updater {
     if (!this.mac) this.setupElectronUpdater();
     this.timers.push(setTimeout(() => this.check(), FIRST_CHECK_MS));
     this.timers.push(setInterval(() => this.check(), CHECK_EVERY_MS));
-    this.timers.push(setInterval(() => this.maybeAutoInstall(), IDLE_POLL_MS));
+    this.timers.push(setInterval(() => { this.watchdog(); this.maybeAutoInstall(); }, IDLE_POLL_MS));
   }
 
   set(patch) {
+    const before = this.state.status;
+    const prevPercent = this.state.percent;
     Object.assign(this.state, patch);
+    if (this.state.status !== before || this.state.percent !== prevPercent) this.busySince = Date.now();
     this.hooks.onChange();
+  }
+
+  // 卡住守卫：检查 5 分钟没结果、下载 30 分钟没进度，就按一次失败处理，下次照常检查
+  watchdog(now = Date.now()) {
+    const s = this.state.status;
+    if (s === 'checking' && now - this.busySince > STUCK_CHECKING_MS) this.fail(new Error('检查更新卡住了，已放弃这一次'));
+    else if (s === 'downloading' && now - this.busySince > STUCK_DOWNLOAD_MS) this.fail(new Error('下载 30 分钟没有进度，已放弃这一次'));
   }
 
   snapshot() {
@@ -231,8 +261,17 @@ class Updater {
       await this.hooks.beforeInstall();
       // isSilent: 不弹安装界面；isForceRunAfter: 装完自动重新打开
       this.updater.quitAndInstall(true, true);
+      // 正常情况下软件马上就会退出；30 秒后还在，说明安装没启动（会另有 error 事件），恢复正常运行
+      setTimeout(() => {
+        if (!this.installing) return;
+        this.installing = false;
+        Promise.resolve(this.hooks.installFailed()).catch(() => {});
+        if (this.state.status === 'downloaded') this.fail(new Error('安装没有启动'));
+      }, 30 * 1000).unref?.();
     } catch (e) {
+      // 没装成：把安装前关掉的东西恢复，软件继续正常收消息
       this.installing = false;
+      try { await this.hooks.installFailed(); } catch { /* 尽量恢复 */ }
       this.fail(e);
     }
   }
@@ -240,11 +279,12 @@ class Updater {
   // ---------- macOS：自己下载 dmg 并校验 ----------
 
   async checkMac() {
-    const atom = (await request(`https://github.com/${OWNER}/${REPO}/releases.atom`, { maxBytes: 2 * 1024 * 1024 })).toString('utf8');
+    const idleMs = this.idleMs;
+    const atom = (await request(`https://github.com/${OWNER}/${REPO}/releases.atom`, { maxBytes: 2 * 1024 * 1024, idleMs })).toString('utf8');
     const tag = latestTagFromAtom(atom);
     if (!tag) throw new Error('没找到任何版本');
     if (compareVersions(tag, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
-    const yml = (await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/latest-mac.yml`, { maxBytes: 256 * 1024 })).toString('utf8');
+    const yml = (await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/latest-mac.yml`, { maxBytes: 256 * 1024, idleMs })).toString('utf8');
     const info = parseLatestYml(yml);
     if (!info.version || compareVersions(info.version, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
     const file = info.files.find((f) => /\.dmg$/i.test(f.url) && /arm64/i.test(f.url)) || info.files.find((f) => /\.dmg$/i.test(f.url));
@@ -265,6 +305,7 @@ class Updater {
     const hash = crypto.createHash('sha512');
     try {
       await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, {
+        idleMs,
         onData: (c, got, total) => {
           hash.update(c);
           out.write(c);

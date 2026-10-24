@@ -613,6 +613,7 @@ async function createView(acc, loadDelay = 0) {
   });
 
   let failed = false;
+  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
   wc.on('did-start-loading', () => {
     failed = false;
     if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
@@ -1078,6 +1079,7 @@ function takeUpdateMarker() {
 
 const QUIET_MS = 10 * 60 * 1000; // 10 分钟内有新消息就不自动装
 const rebuilding = new Set(); // 页面进程崩溃后正在重建的账号
+const webLoadedAt = new Map(); // 网页版账号最近一次页面加载完的时间
 let updater = null;
 
 // 现在能不能自动装更新；不能时返回原因（只记日志用）
@@ -1088,6 +1090,8 @@ function updateIdleReason() {
   if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
   if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
   if (pendingLoad.size || [...views.values()].some((v) => !v.webContents.isDestroyed() && v.webContents.isLoading())) return '有页面在加载';
+  // 网页版停在二维码页、且 10 分钟内刚加载过：可能有人正要扫码。长期掉线的号不挡更新
+  if (accounts.some((a) => !isLite(a) && loginStates.get(a.id) === 'needs_qr' && Date.now() - (webLoadedAt.get(a.id) || 0) < QUIET_MS)) return '有网页版账号在等扫码';
   if (rebuilding.size) return '有页面在重建';
   if (liteHost && liteHost.busy()) return '有消息在发';
   if (clearingCache || confirmDialogOpen) return '正在操作';
@@ -1106,6 +1110,17 @@ function setupUpdater() {
         await liteHost.shutdown().catch(() => {});
         liteFlushed = true;
       }
+    },
+    // 没装成：取消退出状态、删掉回托盘记号、重新连上轻量账号，软件继续正常收消息
+    installFailed: async () => {
+      quitting = false;
+      liteFlushed = false;
+      fs.rmSync(updateMarker(), { force: true });
+      if (liteHost) {
+        liteHost.resume();
+        for (const acc of accounts.filter(isLite)) startLite(acc);
+      }
+      refresh();
     },
     notify: (title, body, onClick) => notifier.notifyApp(title, body, onClick),
   });
