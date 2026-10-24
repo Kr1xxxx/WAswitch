@@ -37,6 +37,8 @@ function crashHistory() {
 }
 log.init((e) => {
   try {
+    // 先让轻量模式后台进程存好密钥再退出（它自己保存、退出；下面的提示框给它留出时间）
+    try { liteHost?.shutdown(); } catch { /* 后台进程可能已经不在了 */ }
     if (app.isReady()) {
       const history = crashHistory();
       const relaunch = process.uptime() > 60 && history.length < 3;
@@ -770,6 +772,7 @@ function bindLiteEvents() {
     // 掉线、被封：不管有没有关通知都提醒
     if (prev !== status && status === 'loggedOut') notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
     if (prev !== status && status === 'banned') notifier.notify(acc, 'WhatsApp 拒绝了这个号的连接，可能被封了。');
+    if (prev !== status && status === 'stuck') notifier.notify(acc, '连接反复出错，已停止重连。点这里打开这个号重试。');
     refresh();
   });
   liteHost.on('unread', ({ id, count }) => {
@@ -1019,9 +1022,9 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', () => {
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
-      // 轻量账号：代理断开或正在重连的，马上重试一次
+      // 轻量账号：代理断开、正在重连或停止重连的，马上重试一次
       for (const acc of accounts.filter(isLite)) {
-        if (['proxyDown', 'reconnecting', 'crashed'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
+        if (['proxyDown', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
       }
     }, 5000);
   });

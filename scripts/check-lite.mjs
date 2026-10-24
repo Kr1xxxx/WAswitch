@@ -257,6 +257,10 @@ try {
   sock4.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 401 } } } });
   await sleep(20);
   check('被退出登录（401）后不再重连，并删掉本机凭据', statusOf('4') === 'loggedOut' && !s4.retryTimer && !fs.existsSync(path.join(tmp, '4', 'auth.enc')));
+  let outMsg = '';
+  try { await s4.send(jid, 'hi'); } catch (e) { outMsg = e.message; }
+  check('退出登录后发消息提示重新扫码（不是报错）', /重新扫码/.test(outMsg), outMsg);
+  await s4.read(jid);
   await s4.start();
   const sock5 = last;
   sock5.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 403 } } } });
@@ -266,14 +270,26 @@ try {
   last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
   await sleep(20);
   check('普通断线会自动重连', statusOf('4') === 'reconnecting' && !!s4.retryTimer);
-  // 同一个错误码连续 5 次：停止重连
-  for (let i = 0; i < 4; i++) {
+  // 网络类断开连续很多次：一直重连，不放弃
+  for (let i = 0; i < 9; i++) {
     clearTimeout(s4.retryTimer);
     await s4.start();
-    last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+    last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: i % 2 ? 408 : 428 } } } });
     await sleep(10);
   }
-  check('同一个错误连续 5 次后停止重连', statusOf('4') === 'stuck', statusOf('4'));
+  check('网络类断开（408、428）连续 10 次仍然继续重连', statusOf('4') === 'reconnecting' && !!s4.retryTimer, statusOf('4'));
+  s4.attempt = 30;
+  s4.scheduleRetry();
+  const retryMs = s4.retryTimer._idleTimeout;
+  check('重连间隔最长 5 分钟', retryMs === 5 * 60 * 1000, String(retryMs));
+  // 会话坏了（500）连续 5 次：停止重连
+  for (let i = 0; i < 5; i++) {
+    clearTimeout(s4.retryTimer);
+    await s4.start();
+    last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 500 } } } });
+    await sleep(10);
+  }
+  check('会话错误（500）连续 5 次后停止重连', statusOf('4') === 'stuck', statusOf('4'));
   s4.stop();
   socks2.server.close();
 

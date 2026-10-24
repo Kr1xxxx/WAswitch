@@ -16,7 +16,10 @@ import { ChatStore } from './store.mjs';
 export const SEND_LIMIT = 10;
 const SEND_WINDOW_MS = 60 * 1000;
 const MAX_TEXT = 4000;
-const MAX_SAME_ERROR = 5; // 同一个错误码连续断开这么多次就不再重连
+const MAX_SAME_ERROR = 5; // 这些错误连续出现这么多次就不再重连
+// 只有这些断开原因重连没用（会话坏了、设备不匹配）；网络类断开（408、428、503 等）一直退避重连
+const HOPELESS_CODES = new Set([500, 411]);
+const MAX_RETRY_MS = 5 * 60 * 1000;
 
 // 只记录错误的简短说明，长数字（可能是号码）换掉
 const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 300);
@@ -188,17 +191,19 @@ export class Session {
     if (code === 405) { this.setStatus('outdated'); return; }
     if (code === DisconnectReason.restartRequired) { this.start(); return; } // 扫码成功后的正常重启
     if (this.qrShown && !this.auth.state.creds.me) { this.setStatus('qrExpired'); return; }
-    // 同一个错误（例如 500 badSession、411）连续出现，重连也没用，停下来让用户处理
-    this.sameCode = code && code === this.lastCode ? this.sameCode + 1 : 1;
-    this.lastCode = code;
-    if (code && this.sameCode >= MAX_SAME_ERROR) { this.setStatus('stuck', { code }); return; }
+    // 500 badSession、411 这类错误连续出现，重连也没用，停下来让用户处理；网络类断开不计数
+    if (HOPELESS_CODES.has(code)) {
+      this.sameCode = code === this.lastCode ? this.sameCode + 1 : 1;
+      this.lastCode = code;
+      if (this.sameCode >= MAX_SAME_ERROR) { this.setStatus('stuck', { code }); return; }
+    }
     this.setStatus('reconnecting', { code: code || 0 });
     this.scheduleRetry();
   }
 
   scheduleRetry() {
     clearTimeout(this.retryTimer);
-    const delay = Math.min(10000 * 2 ** this.attempt, 60000);
+    const delay = Math.min(10000 * 2 ** Math.min(this.attempt, 10), MAX_RETRY_MS);
     this.attempt += 1;
     this.retryTimer = setTimeout(() => this.start(), delay);
   }
@@ -249,6 +254,7 @@ export class Session {
 
   async send(jid, text) {
     text = String(text || '').trim();
+    if (this.status === 'loggedOut') throw new Error('这个号已退出登录，请重新扫码');
     if (!text) throw new Error('消息是空的');
     if (text.length > MAX_TEXT) throw new Error(`一条消息最多 ${MAX_TEXT} 个字`);
     if (!this.sock || this.status !== 'open') throw new Error('还没连上，暂时不能发送');
