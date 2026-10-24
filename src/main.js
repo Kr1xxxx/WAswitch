@@ -269,8 +269,8 @@ function loadAccounts() {
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
     acc.muted = acc.muted === true;
-    // 分组：指向不存在的分组就当未分组（分组在 groups.json 里，老版本不认识这个字段也没关系）
-    acc.groupId = typeof acc.groupId === 'string' && groups.some((g) => g.id === acc.groupId) ? acc.groupId : '';
+    // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
+    acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -601,7 +601,12 @@ function setLocked(on) {
   if (on && shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
   layout();
   refresh();
-  if (!on) focusActive();
+  if (!on) {
+    focusActive();
+    // 解锁后正在看的轻量号聊天马上标已读（锁着时不标）
+    const jid = liteOpen.get(activeId);
+    if (jid && page === 'account' && isLite(findAcc(activeId)) && win && win.isFocused()) liteHost.read(activeId, jid);
+  }
 }
 // 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
 // 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
@@ -673,7 +678,7 @@ function pushState() {
         note: acc.note,
         color: acc.color,
         muted: acc.muted,
-        groupId: acc.groupId || '',
+        groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
