@@ -89,6 +89,11 @@ class LiteHost extends EventEmitter {
     this.emit(m.type, m);
   }
 
+  // 有请求（比如发消息）还没回来
+  busy() {
+    return this.pending.size > 0 || this.queue.length > 0;
+  }
+
   send(msg) {
     this.ensure();
     if (this.ready) this.proc.postMessage(msg); else this.queue.push(msg);

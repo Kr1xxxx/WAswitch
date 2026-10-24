@@ -15,7 +15,12 @@ contextBridge.exposeInMainWorld('wa', {
   setSetting: (key, value) => ipcRenderer.send('setting', { key, value }),
   setMuted: (id, muted) => ipcRenderer.send('mute', { id, muted }),
   runCheck: () => ipcRenderer.invoke('check:run'),
+<<<<<<< HEAD
   checkFix: (id, region) => ipcRenderer.invoke('check:fix', { id, region }),
+=======
+  updateCheck: () => ipcRenderer.send('update:check'),
+  updateInstall: () => ipcRenderer.send('update:install'),
+>>>>>>> ae4b097 (自动更新：进度条、自动下载、空闲时自动安装)
   openLogs: () => ipcRenderer.send('open-logs'),
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),

@@ -17,6 +17,7 @@ class Notifier {
     this.unread = new Map(); // id -> 未读对话数
     this.tray = null;
     this.active = new Set(); // 正在显示的通知，防止被回收后点击失效
+    this.lastNewAt = 0; // 最近一次有新消息的时间（含静音账号），自动装更新用
   }
 
   init() {
@@ -46,6 +47,7 @@ class Notifier {
   update(acc, count, { isActive, baseline = 0 }) {
     const before = Math.max(this.unread.get(acc.id) || 0, baseline);
     this.unread.set(acc.id, count);
+    if (count > before) this.lastNewAt = Date.now();
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
     if (count > before && !acc.muted && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
@@ -77,6 +79,17 @@ class Notifier {
     n.show();
   }
 
+  // 软件自己的通知（比如新版本已下载）
+  notifyApp(title, body, onClick) {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title, body, icon: asset('icon.png') });
+    this.active.add(n);
+    const done = () => this.active.delete(n);
+    n.on('click', () => { if (onClick) onClick(); done(); });
+    n.on('close', done);
+    n.show();
+  }
+
   // 刷新任务栏角标、托盘提示和托盘菜单
   refresh() {
     const total = this.total();
@@ -93,7 +106,8 @@ class Notifier {
     if (!this.tray) return;
     const mem = this.hooks.totalMemory ? this.hooks.totalMemory() : 0;
     const memText = mem ? ` · 共占用 ${mem} MB` : '';
-    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}`);
+    const upd = this.hooks.trayText ? this.hooks.trayText() : '';
+    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}${upd ? `\n${upd}` : ''}`);
     const accounts = this.hooks.getAccounts();
     const items = accounts.map((acc) => {
       const n = this.unread.get(acc.id) || 0;
@@ -105,6 +119,7 @@ class Notifier {
     });
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示窗口', click: () => this.showWindow() },
+      ...(this.hooks.updateMenu ? this.hooks.updateMenu() : []),
       { type: 'separator' },
       ...items,
       { type: 'separator' },

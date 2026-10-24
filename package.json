@@ -10,12 +10,14 @@
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:view-race": "node scripts/check-view-race.js",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "check:updater": "node scripts/check-updater.js"
   },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "baileys": "7.0.0-rc14",
+    "electron-updater": "6.8.10",
     "https-proxy-agent": "9.1.0",
     "qrcode": "1.5.4",
     "socks-proxy-agent": "10.1.0",
@@ -36,19 +38,40 @@
     ],
     "icon": "assets/icon.png",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "mac": {
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
         }
       ]
     },
     "linux": {
       "target": "AppImage"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Kr1xxxx",
+        "repo": "WAswitch"
+      }
+    ],
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true
     }
   }
 }
