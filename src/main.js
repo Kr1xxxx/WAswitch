@@ -1463,6 +1463,7 @@ handleShell('editor:load', (id) => {
     hasPassword: !!(acc && acc.proxyPassword),
     region: acc ? acc.fingerprint.region : (fingerprint.regions[editorPrefill?.region] ? editorPrefill.region : 'auto'),
     regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
+    uiLanguage: fingerprint.UI_LANGUAGE_LABEL,
     mode: acc ? acc.mode : 'web',
     allowCalls: !!(acc && acc.allowCalls),
     // 新账号：还没有主号时默认就是主号
@@ -1541,7 +1542,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   }
   // 测试过的出口所在地显示在侧栏
   let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
-  // 网页版选了“跟随本机”又设了代理：没测过就先测一次，按出口所在地填好时区和语言。
+  // 网页版选了“跟随本机”又设了代理：没测过就先测一次，按出口所在地填好时区。
   // 测不通也照样保存；用户自己选了地区的不改
   if (mode === 'web' && parsed && region === 'auto') {
     if (!tested) {
@@ -1594,7 +1595,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
-    // 只改地区（时区、语言），浏览器标识保持不变
+    // 只改地区（时区），浏览器标识保持不变
     acc.fingerprint.region = region;
     saveAccounts();
     page = 'account';
@@ -1703,7 +1704,7 @@ handleShell('check:run', async () => {
   return { items, time: new Date().toLocaleString('zh-CN') };
 });
 
-// 隔离自检里的“改成和出口一致”：只改地区（时区、语言），然后重建页面
+// 隔离自检里的“改成和出口一致”：只改地区（时区），然后重建页面
 handleShell('check:fix', async ({ id, region } = {}) => {
   const acc = findAcc(id);
   if (!acc || isLite(acc) || !fingerprint.regions[region] || region === 'auto') return { error: '改不了' };

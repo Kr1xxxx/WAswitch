@@ -146,7 +146,7 @@ function renderTop() {
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
     h('span', { class: 'grow' }),
     h('span', { class: `chip${acc.problem ? ' bad' : ''}`, title: '网络线路' }, icon('globe', 12), acc.problem ? acc.problemShort : acc.proxyLabel),
-    lite ? null : h('span', { class: 'chip', title: '时区和语言' }, icon('clock', 12), acc.regionLabel),
+    lite ? null : h('span', { class: 'chip', title: '时区' }, icon('clock', 12), acc.regionLabel),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
@@ -202,7 +202,7 @@ function welcomePage() {
   return h('div', { class: 'center', style: { background: '#fff' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
     h('div', { class: 'col', style: { gap: '10px' } },
       h('h1', { style: { fontSize: '30px' } }, '一个窗口，同时登录多个 WhatsApp'),
-      h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区和语言跟着线路走。')),
+      h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区跟着线路走，WhatsApp 界面统一中文。')),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色', '比如“客服号”“店铺号”。颜色会铺满窗口背景，一眼认出在用哪个号。'),
       step(2, '选网络线路', ['第一个号可以直连；从第二个号起，在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
@@ -284,8 +284,9 @@ function editorPage(id) {
       const auto = region.value === 'auto';
       tags.replaceChildren(
         h('span', { class: 'tag' }, auto
-          ? (proxyInput.value.trim() ? '时区和语言：还没识别，点“测试”自动选好' : '时区和语言：跟本机一致')
-          : `时区和语言：${opt ? opt.label : ''}`),
+          ? (proxyInput.value.trim() ? '时区：还没识别，点“测试”自动选好' : '时区：跟本机一致')
+          : `时区：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
         h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：用本机真实 IP'));
     };
@@ -297,7 +298,7 @@ function editorPage(id) {
       drawPresets();
       drawTags();
     };
-    const regionRow = h('label', { class: 'field' }, '时区和语言', region, tags, h('span', { class: 'hint' }, '应该和代理出口所在地一致，点“测试”会自动选好。'));
+    const regionRow = h('label', { class: 'field' }, '时区', region, tags, h('span', { class: 'hint' }, `应该和代理出口所在地一致，点“测试”会自动选好。WhatsApp 界面语言：${d.uiLanguage || '中文'}（所有账号统一）。`));
     const proxyHint = h('span', { class: 'hint' });
     const onModeChange = () => {
       const lite = mode === 'lite';
@@ -345,7 +346,7 @@ function editorPage(id) {
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
-      if (res.region) { region.value = res.region; text += ' 已按出口所在地选好时区和语言。'; } else text += ' 没有匹配的地区预设，请手动选最接近的。';
+      if (res.region) { region.value = res.region; text += ' 已按出口所在地选好时区。'; } else text += ' 没有匹配的地区预设，请手动选最接近的。';
       if (res.sameAs) {
         text += res.sameAt
           ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
@@ -378,7 +379,7 @@ function editorPage(id) {
       h('div', { class: 'col' },
         h('div', { class: 'col', style: { gap: '6px' } },
           h('h1', null, d.isNew ? '添加账号' : '编辑账号'),
-          h('p', { class: 'lead' }, '每个账号的登录、缓存、网络线路和时区语言都互相独立。')),
+          h('p', { class: 'lead' }, '每个账号的登录、缓存、网络线路和时区都互相独立。')),
         h('div', { class: 'hstack', style: { alignItems: 'flex-end', gap: '14px' } },
           h('label', { class: 'field', style: { flex: '1' } }, '名称', name),
           h('div', { class: 'field' }, '颜色', swatches)),

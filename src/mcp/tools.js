@@ -62,7 +62,7 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
     inputSchema: {
       name: z.string().trim().min(1).max(40).optional().describe('预填的账号名称，不填则自动命名'),
       region: z.enum(hooks.regions().map((r) => r.key)).optional()
-        .describe(`预填的地区（决定时区和语言），默认 auto。可选：${hooks.regions().map((r) => `${r.key}=${r.label}`).join('，')}`),
+        .describe(`预填的地区（决定时区；界面语言所有账号统一中文），默认 auto。可选：${hooks.regions().map((r) => `${r.key}=${r.label}`).join('，')}`),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ name, region }) => {
