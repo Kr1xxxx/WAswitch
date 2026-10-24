@@ -42,12 +42,13 @@ class Notifier {
   }
 
   // 页面标题变化时调用
-  update(acc, count, { isActive }) {
+  // quiet：页面刚刷新，未读数只是在恢复，不弹通知
+  update(acc, count, { isActive, quiet = false }) {
     const before = this.unread.get(acc.id) || 0;
     this.unread.set(acc.id, count);
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
-    if (count > before && !acc.muted && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
+    if (count > before && !acc.muted && !quiet && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
     this.refresh();
   }
 

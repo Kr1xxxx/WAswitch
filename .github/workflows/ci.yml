@@ -29,6 +29,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
       - name: 读取对话列表自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
+      - name: 页面崩溃重建和保存设置同时发生
+        run: xvfb-run -a node scripts/check-view-race.js
       - name: 打包（Linux 目录版）
         run: npx electron-builder --linux dir --publish never
       - name: 打包后启动冒烟

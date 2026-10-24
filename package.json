@@ -9,6 +9,7 @@
     "check:mcp": "node scripts/check-mcp.js",
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
+    "check:view-race": "node scripts/check-view-race.js",
     "dist": "electron-builder"
   },
   "license": "MIT",

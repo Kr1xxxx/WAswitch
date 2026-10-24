@@ -136,6 +136,7 @@ function registerChatTools(server, hooks, { gate, previewAllowed, confirmTimeout
   }, async ({ id, unread_only: unreadOnly, limit }, extra) => {
     const account = hooks.listAccounts().find((a) => a.id === id);
     if (!account) return fail(`没有 id 为 ${id} 的账号`);
+    if (account.mode === 'lite') return fail('这是轻量模式账号，暂不支持读取对话列表。');
     const login = await hooks.checkLogin(id);
     if (login !== 'logged_in') {
       gate.clearAccount(id);

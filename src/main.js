@@ -310,6 +310,9 @@ const notifier = new Notifier({
 // MCP 接口（默认关闭）。在 app ready 之后创建。
 let mcp = null;
 
+// 分批启动时还没开始加载的账号（页面停在 about:blank，不能算 ready）
+const pendingLoad = new Set();
+
 function accountStatus(id) {
   const view = views.get(id);
   if (problems.has(id)) return 'error';
@@ -318,7 +321,7 @@ function accountStatus(id) {
     return st === 'open' || st === 'qr' ? 'ready' : 'loading';
   }
   if (!view) return 'not_loaded';
-  return view.webContents.isLoading() ? 'loading' : 'ready';
+  return pendingLoad.has(id) || view.webContents.isLoading() ? 'loading' : 'ready';
 }
 
 const mcpHooks = {
@@ -355,6 +358,8 @@ const mcpHooks = {
   // ---- 第二层：读对话列表 ----
   // 读之前现查一次是否已登录（只读检测），结果同步到掉线检测的状态里
   checkLogin: async (id) => {
+    // 轻量模式没有网页，登录状态来自后台进程
+    if (isLite(findAcc(id))) return problems.has(id) ? 'unknown' : (loginStates.get(id) || 'unknown');
     const view = views.get(id);
     if (!view || problems.has(id)) return 'unknown';
     const state = await waPage.loginState(view.webContents);
@@ -362,8 +367,9 @@ const mcpHooks = {
     return state;
   },
   readChatList: async (id, opts) => {
+    if (isLite(findAcc(id))) return { ok: false, reason: 'lite' };
     const view = views.get(id);
-    if (!view) return { ok: false, reason: 'loading' };
+    if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
     return waPage.readChatList(view.webContents, opts);
   },
   // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
@@ -555,6 +561,7 @@ async function checkLogins() {
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
+const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
 async function createView(acc, loadDelay = 0) {
@@ -579,15 +586,17 @@ async function createView(acc, loadDelay = 0) {
   views.set(acc.id, view);
 
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
+  // 页面刚开始加载的 15 秒里标题会从 0 涨回原来的数，只更新数字、不弹通知，免得刷新后误报
+  let quietUntil = 0;
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
     const count = m ? Number(m[1]) : 0;
-    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account' });
+    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account', quiet: Date.now() < quietUntil });
     pushState();
   });
 
   let failed = false;
-  wc.on('did-start-loading', () => { failed = false; });
+  wc.on('did-start-loading', () => { failed = false; quietUntil = Date.now() + RELOAD_QUIET_MS; });
   wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
@@ -614,7 +623,8 @@ async function createView(acc, loadDelay = 0) {
     if (details.reason === 'clean-exit') return;
     console.warn(`账号 ${acc.id} 的页面进程退出（${details.reason}），正在重建`);
     setTimeout(async () => {
-      if (!accounts.includes(acc)) return;
+      // 这 1 秒里账号被删了，或视图已经被别处重建（比如保存了设置），就不再动它
+      if (!accounts.includes(acc) || views.get(acc.id) !== view) return;
       destroyView(acc.id);
       await createView(acc);
       refresh();
@@ -631,13 +641,21 @@ async function createView(acc, loadDelay = 0) {
     return view;
   }
   await fingerprint.attach(wc, acc.fingerprint);
-  if (loadDelay) setTimeout(() => { if (!wc.isDestroyed()) wc.loadURL(WA_URL).catch(() => {}); }, loadDelay);
-  else wc.loadURL(WA_URL).catch(() => {}); // 失败由 did-fail-load 处理
+  if (loadDelay) {
+    pendingLoad.add(acc.id);
+    setTimeout(() => {
+      if (views.get(acc.id) === view) pendingLoad.delete(acc.id);
+      if (!wc.isDestroyed()) wc.loadURL(WA_URL).catch(() => {});
+    }, loadDelay);
+  } else {
+    wc.loadURL(WA_URL).catch(() => {}); // 失败由 did-fail-load 处理
+  }
   return view;
 }
 
 function destroyView(id) {
   clearRetry(id);
+  pendingLoad.delete(id);
   const view = views.get(id);
   if (!view) return;
   win.contentView.removeChildView(view);

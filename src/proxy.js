@@ -87,7 +87,15 @@ function queryExit(ses, onLogin) {
 
 // 测试代理：通过它访问一个查询出口 IP 的网址，返回出口 IP、国家、时区。
 // 用一个临时的内存会话，不影响任何账号。
-async function test(raw, password) {
+// 所有测试共用一个临时分区，一次只跑一个，免得两个测试互相改代理、结果串号
+let testQueue = Promise.resolve();
+function test(raw, password) {
+  const run = testQueue.then(() => testOnce(raw, password));
+  testQueue = run.catch(() => {});
+  return run;
+}
+
+async function testOnce(raw, password) {
   const p = parse(raw);
   if (!p) return { error: '没有填代理地址（直连无需测试）' };
   if (p.error) return { error: p.error };
