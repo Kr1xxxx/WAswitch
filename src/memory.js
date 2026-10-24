@@ -17,6 +17,8 @@ const DEFAULTS = {
   closeToTray: true, // 关闭窗口时缩到托盘
   openAtLogin: false, // 开机自动启动（启动后缩在托盘）
   sidebarCollapsed: false, // 侧栏只显示图标
+  recycleLastMB: 800, // 关掉自动回收后再打开时，用上次选的值
+  lastAccountId: '', // 上次在看的账号，启动时打开它
 };
 const RECYCLE_CHOICES = [600, 800, 1000, 1500];
 const CHECK_EVERY_MS = 60 * 1000;
@@ -42,6 +44,8 @@ function loadSettings() {
       closeToTray: bool('closeToTray'),
       openAtLogin: bool('openAtLogin'),
       sidebarCollapsed: bool('sidebarCollapsed'),
+      recycleLastMB: nearestRecycle(raw.recycleLastMB) || DEFAULTS.recycleLastMB,
+      lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
     };
   } catch {
     return { ...DEFAULTS };

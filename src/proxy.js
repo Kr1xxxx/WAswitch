@@ -14,8 +14,10 @@ const BLACKHOLE = 'socks5://127.0.0.1:9';
 function parse(raw) {
   const text = (raw || '').trim();
   if (!text) return null;
+  // 没写协议时不猜：Clash 说明里开的是 socks 端口，按 http 去连会一直失败，报错又看不出原因
+  if (!text.includes('://')) return { error: `请写上代理类型，例如 socks5://${text}（Clash 的端口一般用 socks5://）` };
   let url;
-  try { url = new URL(text.includes('://') ? text : `http://${text}`); } catch { return { error: '代理地址格式不对' }; }
+  try { url = new URL(text); } catch { return { error: '代理地址格式不对' }; }
   const scheme = url.protocol.replace(':', '');
   if (!['http', 'https', 'socks4', 'socks5'].includes(scheme)) return { error: `不支持的代理类型：${scheme}` };
   if (!url.hostname || !url.port) return { error: '代理地址需要包含 IP 和端口，例如 socks5://127.0.0.1:7891' };

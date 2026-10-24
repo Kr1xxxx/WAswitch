@@ -179,6 +179,7 @@ function loadAccounts() {
     acc.loggedIn = acc.loggedIn === undefined ? true : acc.loggedIn === true;
     // 直连号是否允许网页版通话（WebRTC 走 UDP），默认不允许
     acc.allowCalls = acc.allowCalls === true;
+    acc.lastExit = acc.lastExit && typeof acc.lastExit.ip === 'string' && Number.isFinite(acc.lastExit.at) ? { ip: acc.lastExit.ip, at: acc.lastExit.at } : null;
     // 主号只能用网页版
     acc.primary = acc.primary === true && acc.mode === 'web';
   });
@@ -256,7 +257,12 @@ let win, shellView;
 const views = new Map(); // id -> WebContentsView
 const problems = new Map(); // id -> { title, text, retrying, config }
 const retries = new Map(); // id -> { attempt, timer }
-const exitIps = new Map(); // id -> 最近一次测到的出口 IP
+const exitIps = new Map(); // id -> 这次打开软件后测到的出口 IP（当作当前值用）
+// 测到出口时同时存进 accounts.json（带时间）。重启后只用来提醒“上次测到相同”，不当作当前值
+function recordExit(acc, ip) {
+  exitIps.set(acc.id, ip);
+  acc.lastExit = { ip, at: Date.now() };
+}
 // id -> 'logged_in' | 'needs_qr'。以后 MCP 的账号状态也从这里读
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
@@ -303,10 +309,10 @@ const notifier = new Notifier({
   totalMemory: () => memoryManager.totalMB(),
   settingsMenu: () => [
     {
-      label: `后台账号超过 ${settings.recycleMB || memory.DEFAULTS.recycleMB} MB 时自动刷新回收内存`,
+      label: `后台账号超过 ${settings.recycleMB || settings.recycleLastMB} MB 时自动刷新回收内存`,
       type: 'checkbox',
       checked: settings.recycleMB > 0,
-      click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : memory.DEFAULTS.recycleMB),
+      click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : settings.recycleLastMB),
     },
     {
       label: '省内存模式（关闭显卡加速，重启后生效）',
@@ -894,6 +900,8 @@ function liteStateForShell() {
 // MCP 引起的切换不给焦点，免得用户打的字落到别的号里。
 function activate(id, { focus = false } = {}) {
   activeId = id;
+  // 记住在看哪个号，下次启动直接打开它
+  if (id && settings.lastAccountId !== id) { settings.lastAccountId = id; memory.saveSettings(settings); }
   if (!accounts.length) page = 'welcome';
   refresh();
   if (focus) focusActive();
@@ -1022,8 +1030,18 @@ async function removeAccount(id, { timeoutMs } = {}) {
   const wasPrimary = acc.primary;
   accounts = accounts.filter((a) => a.id !== id);
   // 删掉主号后，第一个网页版账号自动成为主号
-  if (wasPrimary) { const next = accounts.find((a) => a.mode === 'web'); if (next) next.primary = true; }
+  const newPrimary = wasPrimary ? accounts.find((a) => a.mode === 'web') : null;
+  if (newPrimary) newPrimary.primary = true;
   saveAccounts();
+  // 主号换了：轻量小号只在保存时和主号比过出口，提醒跑一次隔离自检（和在编辑里换主号一样）
+  if (newPrimary && accounts.some(isLite)) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: '请跑一次隔离自检',
+      message: `主号已改为「${newPrimary.name}」`,
+      detail: '轻量小号只在保存时和主号比较过出口 IP。请到 设置 › 隔离自检 跑一次，确认小号和新主号不在同一个 IP。',
+    }).catch(() => {});
+  }
   // 删掉磁盘上的数据文件夹；文件还被占用时删不掉，下次启动会再清理
   const dir = lite ? liteDir(id) : partitionDir(id);
   if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉账号 ${id} 的数据，下次启动再清理`); });
@@ -1064,6 +1082,7 @@ function setSetting(key, value) {
     return;
   }
   settings[key] = value;
+  if (key === 'recycleMB' && value > 0) settings.recycleLastMB = value; // 关掉再打开时沿用
   memory.saveSettings(settings);
   if (key === 'openAtLogin') applyLoginItem();
   notifier.refresh();
@@ -1123,6 +1142,9 @@ async function userActivate(id) {
 // Ctrl/Cmd + 1–9 切换账号。只在 WAswitch 窗口有焦点时生效，不抢其他软件的快捷键。
 app.on('web-contents-created', (_e, wc) => {
   wc.on('before-input-event', (event, input) => {
+    // 只管主窗口（软件界面和各账号页面）；MCP 设置窗口里按 Ctrl+数字不切号
+    const inMain = (shellView && wc === shellView.webContents) || [...views.values()].some((v) => v.webContents === wc);
+    if (!inMain) return;
     if (input.type === 'keyDown') lastTypedAt = Date.now();
     if (input.type !== 'keyDown' || input.alt || input.shift) return;
     const mod = process.platform === 'darwin' ? input.meta : input.control;
@@ -1264,7 +1286,7 @@ app.whenReady().then(async () => {
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
   applyLoginItem();
-  activeId = accounts[0]?.id ?? null;
+  activeId = (findAcc(settings.lastAccountId) || accounts[0])?.id ?? null;
   page = accounts.length ? 'account' : 'welcome';
   refresh();
   if (!shouldStartHidden()) win.show();
@@ -1281,7 +1303,8 @@ app.whenReady().then(async () => {
   });
 
   // 分批启动：先打开当前账号，其他账号每隔 2.5 秒打开一个，避免同时加载卡顿
-  for (const [i, acc] of accounts.entries()) {
+  const order = [...accounts].sort((a, b) => (b.id === activeId) - (a.id === activeId)); // 正在看的号先开
+  for (const [i, acc] of order.entries()) {
     await startAccount(acc, i * 2500);
     refresh();
   }
@@ -1457,7 +1480,7 @@ async function primaryExit(exceptId) {
   if (primary.proxy && exitIps.has(primary.id)) return { ip: exitIps.get(primary.id), name: primary.name };
   const res = primary.proxy ? await proxy.test(primary.proxy, proxy.decryptPassword(primary.proxyPassword)) : await proxy.testDirect();
   if (!res.ok) return { error: `查不到主号「${primary.name}」的出口 IP（${res.error}），没法确认这个号和主号不在同一个 IP，暂时不能保存。请确认主号的网络正常后再试。` };
-  if (primary.proxy) exitIps.set(primary.id, res.ip);
+  if (primary.proxy) recordExit(primary, res.ip);
   return { ip: res.ip, name: primary.name };
 }
 
@@ -1470,7 +1493,9 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   res.region = findByTimezone(res.timezone);
   res.country = regionName(res.country);
   const same = accounts.find((a) => a.id !== id && exitIps.get(a.id) === res.ip);
+  const before = same ? null : accounts.find((a) => a.id !== id && a.lastExit && a.lastExit.ip === res.ip);
   if (same) res.sameAs = same.name;
+  else if (before) { res.sameAs = before.name; res.sameAt = before.lastExit.at; }
   lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
   return res;
 });
@@ -1540,7 +1565,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (!acc) {
     acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
-    if (tested) exitIps.set(acc.id, tested.ip);
+    if (tested) recordExit(acc, tested.ip);
     saveAccounts();
     page = 'account';
     activeId = acc.id;
@@ -1548,8 +1573,8 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     refresh();
   } else if (isLite(acc)) {
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword;
-    if (acc.proxy !== proxyStored) acc.exitLabel = '';
-    if (tested) { acc.exitLabel = tested.label; exitIps.set(acc.id, tested.ip); }
+    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); }
+    if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.color = color;
     acc.proxy = proxyStored;
@@ -1563,8 +1588,8 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     acc.primary = wantPrimary;
     const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region || acc.allowCalls !== callsWanted;
     acc.allowCalls = callsWanted;
-    if (acc.proxy !== proxyStored) acc.exitLabel = '';
-    if (tested) { acc.exitLabel = tested.label; exitIps.set(acc.id, tested.ip); }
+    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); }
+    if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.color = color;
     acc.proxy = proxyStored;
@@ -1628,7 +1653,7 @@ handleShell('check:run', async () => {
     }
     const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
     if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error }); continue; }
-    exitIps.set(acc.id, res.ip);
+    recordExit(acc, res.ip);
     acc.exitLabel = regionName(res.country);
     byIp.set(res.ip, [...(byIp.get(res.ip) || []), acc.name]);
     const tz = fingerprint.resolve(acc.fingerprint).timezone;
