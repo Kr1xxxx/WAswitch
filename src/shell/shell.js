@@ -56,6 +56,7 @@ const $side = document.getElementById('side');
 const $top = document.getElementById('topbar');
 const $ai = document.getElementById('aibar');
 const $content = document.getElementById('content');
+const $lock = document.getElementById('lock');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
 let settingsTab = 'memory';
@@ -645,6 +646,19 @@ function lockPage() {
   return lockEl;
 }
 
+// 锁着时盖住整个内容区（网页版、轻量模式、编辑页、设置页都盖），下面的内容原样保留，编辑页没保存的不会丢
+function renderLock() {
+  const on = !!s.locked;
+  const was = !$lock.hidden;
+  $lock.hidden = !on;
+  $content.hidden = on;
+  if (on && !was) {
+    const el = lockPage();
+    if ($lock.firstChild !== el) $lock.replaceChildren(el);
+    el.reset();
+  }
+}
+
 function render(forceContent = false) {
   document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
   document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
@@ -654,6 +668,7 @@ function render(forceContent = false) {
   renderSide();
   renderAi();
   renderTop();
+  renderLock();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;
@@ -664,10 +679,6 @@ function render(forceContent = false) {
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || document.activeElement.tagName !== 'SELECT') $content.replaceChildren(settingsPage());
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
-  } else if (s.locked && s.page === 'account') {
-    // 聊天锁：同一个元素反复用，拖到一半时状态刷新也不会打断
-    const el = lockPage();
-    if ($content.firstChild !== el || $content.childNodes.length !== 1) { $content.replaceChildren(el); el.reset(); }
   } else if (acc && !acc.problem && acc.mode === 'lite') {
     // 轻量模式聊天页：同一个元素反复更新，不重建
     const el = litePage(acc, s.lite);

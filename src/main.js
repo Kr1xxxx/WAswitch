@@ -507,10 +507,19 @@ function setLocked(on) {
   refresh();
   if (!on) focusActive();
 }
+// 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
+// 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
+let unfocusedSince = 0;
+function idleSeconds() {
+  const sys = powerMonitor.getSystemIdleTime();
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sys; }
+  if (!unfocusedSince) unfocusedSince = Date.now();
+  return Math.max(sys, (Date.now() - unfocusedSince) / 1000);
+}
 function checkIdleLock() {
   const mins = settings.lockMinutes;
   if (!mins || locked || !accounts.length) return;
-  if (powerMonitor.getSystemIdleTime() >= mins * 60) setLocked(true);
+  if (idleSeconds() >= mins * 60) setLocked(true);
 }
 
 function layout() {
@@ -1332,6 +1341,7 @@ app.whenReady().then(async () => {
   win.on('hide', layout);
   win.on('show', layout);
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
+  win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {
     const jid = liteOpen.get(activeId);
     if (jid && page === 'account' && isLite(findAcc(activeId))) liteHost.read(activeId, jid);
