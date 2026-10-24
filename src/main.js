@@ -71,6 +71,7 @@ const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
+const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
@@ -167,6 +168,8 @@ function loadAccounts() {
   list.forEach((acc, i) => {
     acc.id = String(acc.id);
     acc.name = String(acc.name || '未命名').slice(0, 40);
+    // 备注：手机号、用途、负责人之类，只在本机显示，不给 MCP
+    acc.note = typeof acc.note === 'string' ? acc.note.slice(0, NOTE_MAX) : '';
     acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
@@ -191,6 +194,10 @@ function loadAccounts() {
     if (first) first.primary = true;
   }
   return list;
+}
+
+function cleanNote(note) {
+  return String(note || '').replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX);
 }
 
 function nextName() {
@@ -523,6 +530,7 @@ function pushState() {
       return {
         id: acc.id,
         name: acc.name,
+        note: acc.note,
         color: acc.color,
         muted: acc.muted,
         unread: notifier.unread.get(acc.id) || 0,
@@ -1501,6 +1509,7 @@ handleShell('editor:load', (id) => {
     id: acc ? acc.id : null,
     isNew: !acc,
     name: acc ? acc.name : String(editorPrefill?.name || nextName()).slice(0, 40),
+    note: acc ? acc.note : '',
     color: acc ? acc.color : editorColor || nextColor(),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
@@ -1546,8 +1555,9 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   return res;
 });
 
-handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
+handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
   name = String(name || '').trim().slice(0, 40);
+  note = cleanNote(note);
   if (!name) return { error: '请填写名称' };
   if (!COLORS.includes(color)) color = nextColor();
   const parsed = proxy.parse(String(proxyText || ''));
@@ -1609,7 +1619,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   if (wantPrimary) for (const a of accounts) if (a.id !== id) a.primary = false;
 
   if (!acc) {
-    acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+    acc = { id: String(Date.now()), name, note, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
     if (tested) recordExit(acc, tested.ip);
     saveAccounts();
@@ -1622,6 +1632,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
+    acc.note = note;
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
@@ -1637,6 +1648,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
+    acc.note = note;
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
