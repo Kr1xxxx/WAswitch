@@ -69,6 +69,10 @@ body.collapsed .foot { justify-content: center; }
 #card { flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: #fff; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08); overflow: hidden; display: flex; flex-direction: column; }
 #topbar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--soft); }
 #topbar[hidden] { display: none; }
+#aibar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; background: #FEF9C3; border-bottom: 1px solid var(--line); font-size: 13px; color: #713F12; }
+#aibar[hidden] { display: none; }
+#aibar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#aibar .btn { height: 30px; padding: 0 14px; }
 #topbar .who { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #f2f4f6; font-size: 12px; color: var(--soft); white-space: nowrap; }
 .chip.bad { background: #fdecee; color: var(--danger); }

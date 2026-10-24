@@ -39,8 +39,9 @@ function fakeHooks() {
     state,
     listAccounts: () => accounts.map((a) => ({ ...a, active: a.id === active })),
     regions: () => [{ key: 'auto', label: '自动' }, { key: 'us', label: '美国' }],
-    activate: (id) => { active = id; },
-    openAddAccount: ({ name, region }) => { state.editorOpened = { name, region }; },
+    // busy：模拟用户正在打字，main.js 这时只在窗口顶部问用户，返回 'pending'
+    activate: (id) => { if (state.busy) return 'pending'; active = id; return 'done'; },
+    openAddAccount: ({ name, region }) => { if (state.busy) return 'pending'; state.editorOpened = { name, region }; return 'done'; },
     renameAccount: (id, name) => {
       const a = accounts.find((x) => x.id === id);
       if (!a) return false;
@@ -135,6 +136,12 @@ async function main() {
   check(hooks.listAccounts().find((a) => a.id === 'a2').active, 'switch_account 切换成功');
   const bad = await client.callTool({ name: 'switch_account', arguments: { id: 'nope' } });
   check(bad.isError, '不存在的账号返回错误');
+  hooks.state.busy = true;
+  const asked = json(await client.callTool({ name: 'switch_account', arguments: { id: 'a1' } }));
+  check(asked.ok && asked.pending === true && !asked.active && hooks.listAccounts().find((a) => a.id === 'a2').active, '用户正在打字时 switch_account 立刻返回 pending，不切换');
+  const askedAdd = json(await client.callTool({ name: 'add_account', arguments: { name: '等一下' } }));
+  check(askedAdd.pending === true && !hooks.state.editorOpened, '用户正在打字时 add_account 立刻返回 pending，不打开');
+  hooks.state.busy = false;
   const added = json(await client.callTool({ name: 'add_account', arguments: { name: '新号', region: 'us' } }));
   check(added.ok && added.created === false && hooks.listAccounts().length === 2, 'add_account 不直接创建账号');
   check(hooks.state.editorOpened && hooks.state.editorOpened.name === '新号' && hooks.state.editorOpened.region === 'us', 'add_account 打开预填名称和地区的添加窗口');

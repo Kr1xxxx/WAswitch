@@ -47,18 +47,18 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
 
   server.registerTool('switch_account', {
     title: '切换账号',
-    description: '在 WAswitch 窗口里切换到指定账号，并把窗口显示到前台。',
+    description: '在 WAswitch 窗口里切换到指定账号（不抢键盘焦点，窗口在托盘里时会显示出来但不激活）。如果用户正在 WAswitch 里打字或编辑账号，不会直接切，而是在窗口顶部问用户，这时返回 pending: true，切不切由用户决定。',
     inputSchema: { id: idArg },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ id }) => {
     if (!find(id)) return fail(`没有 id 为 ${id} 的账号`);
-    hooks.activate(id);
+    if (hooks.activate(id) === 'pending') return text({ ok: true, pending: true, next: '用户正在使用 WAswitch，已在窗口顶部询问是否切换。不要重复调用。' });
     return text({ ok: true, active: id });
   });
 
   server.registerTool('add_account', {
     title: '添加账号',
-    description: '在 WAswitch 里打开“添加账号”窗口，并预填名称和地区。不会直接创建账号：用户要在窗口里确认代理并点保存，之后用手机扫码登录。这样新号不会在没设代理的情况下先联网。保存后可以用 list_accounts 查到新账号。',
+    description: '在 WAswitch 里打开“添加账号”窗口，并预填名称和地区（用户正在打字或编辑时，先在窗口顶部询问，返回 pending: true）。不会直接创建账号：用户要在窗口里确认代理并点保存，之后用手机扫码登录。这样新号不会在没设代理的情况下先联网。保存后可以用 list_accounts 查到新账号。',
     inputSchema: {
       name: z.string().trim().min(1).max(40).optional().describe('预填的账号名称，不填则自动命名'),
       region: z.enum(hooks.regions().map((r) => r.key)).optional()
@@ -66,7 +66,9 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ name, region }) => {
-    hooks.openAddAccount({ name, region: region || 'auto' });
+    if (hooks.openAddAccount({ name, region: region || 'auto' }) === 'pending') {
+      return text({ ok: true, created: false, pending: true, next: '用户正在使用 WAswitch，已在窗口顶部询问是否打开“添加账号”窗口。不要重复调用。' });
+    }
     return text({ ok: true, created: false, next: '已在 WAswitch 里打开“添加账号”窗口。请用户确认名称、代理和地区后点保存，再用手机 WhatsApp 扫码登录。' });
   });
 

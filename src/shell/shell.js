@@ -52,6 +52,7 @@ const kids = (...xs) => xs.flat().filter((x) => x !== null && x !== undefined &&
 
 const $side = document.getElementById('side');
 const $top = document.getElementById('topbar');
+const $ai = document.getElementById('aibar');
 const $content = document.getElementById('content');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
@@ -145,6 +146,20 @@ function renderTop() {
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
+}
+
+// AI（MCP 客户端）想切换账号或打开添加页，但用户正在打字：问一下，不直接切
+function renderAi() {
+  const r = s.aiRequest;
+  $ai.hidden = !r;
+  if (!r) return;
+  const what = r.kind === 'add'
+    ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
+    : `AI 想切到「${r.name}」`;
+  $ai.replaceChildren(
+    h('span', { class: 'grow' }, what),
+    h('button', { class: 'btn', onclick: () => window.wa.aiAnswer(false) }, '忽略'),
+    h('button', { class: 'btn primary', onclick: () => window.wa.aiAnswer(true) }, r.kind === 'add' ? '打开' : '切换'));
 }
 
 // ---------- 卡片里的页面 ----------
@@ -417,7 +432,13 @@ function settingsPage() {
     if (checkResult) {
       page.append(h('div', { class: 'checks' }, checkResult.items.map((c) => h('div', { class: 'check' },
         h('span', { class: `mark${c.level === 'bad' ? ' bad' : c.level === 'warn' ? ' warn' : ''}` }, c.level === 'ok' ? '✓' : '!'),
-        h('span', { class: 'meta' }, h('span', null, c.title), c.detail ? h('span', { class: 'hint' }, c.detail) : null)))),
+        h('span', { class: 'meta' }, h('span', null, c.title), c.detail ? h('span', { class: 'hint' }, c.detail) : null,
+          c.fix ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            const r = await window.wa.checkFix(c.fix.id, c.fix.region);
+            if (r && r.ok) { c.level = 'ok'; c.detail = `已改成「${c.fix.label}」，页面已重新加载。`; c.fix = null; }
+            render(true);
+          } }, `改成和出口一致（${c.fix.label}）`)) : null)))),
       h('span', { class: 'hint' }, `检查时间：${checkResult.time}`));
     }
   } else {
@@ -444,6 +465,7 @@ function render(forceContent = false) {
   const acc = active();
   document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(s.editorColor) : '#E6E9ED';
   renderSide();
+  renderAi();
   renderTop();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
