@@ -24,6 +24,17 @@ const SELECTORS = {
   // 列表上方的搜索框和“全部 / 未读 / 群组”筛选
   searchBox: ['#side div[contenteditable="true"]', '#side input[type="text"]'],
   filterTab: '#side [role="tab"], #side [role="tablist"] button',
+  // 悬浮翻译：当前打开的对话（右侧 #main）
+  chatMain: '#main',
+  chatTitle: '#main header span[title]',
+  // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
+  message: '[data-id]',
+  // 消息正文：带 data-pre-plain-text 的 copyable-text 里的 selectable-text。
+  // data-pre-plain-text 本身含时间和群发送人，不读它
+  messageBody: '.copyable-text[data-pre-plain-text]',
+  messageText: 'span.selectable-text',
+  // 引用的消息、链接预览是可点的块，跳过里面的文字
+  messageSkip: '[role="button"], .quoted-mention',
 };
 
 // 返回 'logged_in' | 'needs_qr' | 'unknown'（页面还在加载或认不出来）
@@ -105,4 +116,58 @@ async function readChatList(wc, { includePreview = false } = {}) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList };
+// 悬浮翻译：只读当前打开的对话的最后 20 条消息。
+// 只用 querySelector / getAttribute / textContent（不用 innerText，不触发排版），不滚动、不聚焦、不改页面。
+// 不读时间、群里的发送人、引用的消息和链接预览。每条最多 4000 字，总共最多 20000 字。
+const MAX_MSGS = 20;
+const READ_CHAT_CODE = `(() => {
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip })};
+  const main = document.querySelector(S.main);
+  if (!main) return { ok: false, why: 'nochat' };
+  const t = main.querySelector(S.title);
+  const title = t ? String(t.getAttribute('title') || '').slice(0, 100) : '';
+  const all = main.querySelectorAll(S.msg);
+  const top = [];
+  for (const n of all) {
+    const id = n.getAttribute('data-id') || '';
+    if (!/^(true|false)_/.test(id)) continue;
+    if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
+    top.push(n);
+  }
+  const msgs = [];
+  let size = 0;
+  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
+  for (const n of top.slice(-${MAX_MSGS}).reverse()) {
+    const id = n.getAttribute('data-id').slice(0, 300);
+    let text = '';
+    const body = n.querySelector(S.body);
+    if (body) {
+      for (const sp of body.querySelectorAll(S.text)) {
+        if (sp.closest(S.skip)) continue;
+        text = String(sp.textContent || '');
+        break;
+      }
+    }
+    text = text.slice(0, 4000);
+    if (size + text.length > 20000) break;
+    size += text.length;
+    msgs.push({ id, out: id.startsWith('true_'), text });
+  }
+  msgs.reverse();
+  return { ok: true, title, msgs };
+})()`;
+
+async function readOpenChat(wc) {
+  if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: READ_CHAT_CODE }]);
+    if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
+    const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-MAX_MSGS)
+      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000) }));
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', msgs };
+  } catch {
+    return { ok: false, why: 'error' };
+  }
+}
+
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, READ_CHAT_CODE };

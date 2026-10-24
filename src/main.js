@@ -18,6 +18,7 @@ const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES } = require('./translate');
+const { FloatCore } = require('./floatcore');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
@@ -722,6 +723,7 @@ function layout() {
     view.setVisible(current && !problems.has(id) && !locked);
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
+  layoutFloat(bounds);
   syncLiteWatch();
 }
 
@@ -774,6 +776,7 @@ function pushState() {
     team: team ? team.snapshot() : null,
     locked,
     panelOpen: panelShown(),
+    floatOpen,
     lockChoices: memory.LOCK_CHOICES,
     // 分组：每组带上未读总数，折叠后组头上也能看到
     groups: groups.map((g) => ({
@@ -1604,6 +1607,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
+  if (floatCore) floatCore.forget(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   const wasPrimary = acc.primary;
@@ -1919,6 +1923,7 @@ app.whenReady().then(async () => {
   try { modeStore.seed(DEFAULT_MODES); } catch (e) { console.warn(`翻译模式初始化失败：${e.message}`); }
   translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: translateSession });
   applyTranslateNet().catch(() => {});
+  setupFloatCore();
   setInterval(checkFollowUps, 60 * 1000);
   setTimeout(checkFollowUps, 15 * 1000);
   accounts = loadAccounts();
@@ -2029,7 +2034,7 @@ handleShell('cust:delete', (id) => {
 handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 // 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
 // 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
-handleShell('panel:insert', ({ accountId, text } = {}) => {
+function insertText(accountId, text) {
   if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
   const acc = findAcc(accountId);
   if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
@@ -2040,9 +2045,8 @@ handleShell('panel:insert', ({ accountId, text } = {}) => {
   view.webContents.focus();
   view.webContents.paste();
   return 'ok';
-});
-const STORE_LABEL = { replies: ['话术', '导出话术', '导入话术'], customers: ['客户', '导出客户名单', '导入客户名单'], tmodes: ['翻译模式', '导出翻译模式', '导入翻译模式'] };
-const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmodes: modeStore })[kind];
+}
+handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleShell('panel:export', async ({ kind, format } = {}) => {
   if (!STORE_LABEL[kind]) return null;
   const store = storeOf(kind);
@@ -2130,6 +2134,238 @@ handleShell('tmode:save', (data) => {
   return rec ? { ok: true, id: rec.id, ...trState() } : { error: modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
 });
 handleShell('tmode:delete', (id) => { if (typeof id === 'string') modeStore.remove(id); return trState(); });
+
+// ---- 悬浮翻译窗（shen 2026-10-24 选的方案 B） ----
+// 只读当前打开的对话（隔离环境，见 wa-page.js 的 readOpenChat），不改页面、不碰输入框。
+// 悬浮窗是软件自己的小视图，叠在 WhatsApp 视图上面；关掉就销毁。读到的消息和译文只在内存里。
+const FLOAT_W = 340;
+const FLOAT_MIN_H = 260;
+const FLOAT_MAX_H = 480;
+const FLOAT_PILL = { width: 130, height: 34 };
+const FLOAT_COMPOSE_GAP = 76; // 底部留给 WhatsApp 输入框，不盖住
+let floatView = null;
+let floatOpen = false;
+let floatTimer = null;
+let floatFails = 0;
+let floatReadable = 'loading'; // ok | nochat | unreadable | loading
+let floatArea = null; // 账号视图的位置（layout 算出来的）
+let floatCore = null;
+const floatAuto = (id) => !!translator.load().accountAuto[id];
+function floatInMode() {
+  const cfg = translator.load();
+  const list = modeStore.list().filter((m) => m.direction === 'in' || m.direction === 'both');
+  return list.find((m) => m.id === cfg.floatInMode) || list[0] || null;
+}
+function setupFloatCore() {
+  floatCore = new FloatCore({
+    translate: (text) => {
+      const mode = floatInMode();
+      if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+      return translator.translate({ text, mode, target: '中文' });
+    },
+  });
+  floatCore.onChange = (accId) => { if (accId === activeId) pushFloat(); };
+}
+// 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
+function floatCanRead() {
+  if (!floatOpen || !floatView || page !== 'account' || locked || !win || !win.isVisible() || win.isMinimized()) return null;
+  const acc = findAcc(activeId);
+  if (!acc || isLite(acc) || problems.has(acc.id)) return null;
+  const view = views.get(acc.id);
+  if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return null;
+  return { acc, wc: view.webContents };
+}
+async function floatTick() {
+  floatTimer = null;
+  if (!floatOpen) return;
+  const target = floatCanRead();
+  let delay = 2000;
+  if (target) {
+    const r = await waPage.readOpenChat(target.wc);
+    if (!floatOpen || target.acc.id !== activeId) { scheduleFloat(500); return; }
+    if (r.ok && r.msgs.length) {
+      floatFails = 0;
+      const was = floatReadable;
+      floatReadable = 'ok';
+      const cfg = translator.load();
+      const changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id) && !!cfg.autoConsent[target.acc.id], dailyCap: cfg.dailyCap });
+      if (changed || was !== 'ok') pushFloat();
+    } else if (r.why === 'nochat') {
+      // 没打开对话：不算失败，3 秒后再看
+      floatFails = 0;
+      delay = 3000;
+      if (floatReadable !== 'nochat') { floatReadable = 'nochat'; pushFloat(); }
+    } else {
+      // 读不到或打开的对话里一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
+      floatFails += 1;
+      if (floatFails >= 3) {
+        delay = 30000;
+        if (floatReadable !== 'unreadable') { floatReadable = 'unreadable'; pushFloat(); }
+      }
+    }
+  }
+  scheduleFloat(delay);
+}
+function scheduleFloat(ms) {
+  if (floatTimer) clearTimeout(floatTimer);
+  floatTimer = floatOpen ? setTimeout(floatTick, ms) : null;
+}
+function floatState() {
+  const cfg = translator.load();
+  const acc = findAcc(activeId);
+  const modes = modeStore.list();
+  const v = acc ? floatCore.viewOf(acc.id) : { title: '', items: [], paused: '' };
+  const primary = translator.provider(cfg.primaryId);
+  const inMode = floatInMode();
+  return {
+    accountId: acc ? acc.id : '',
+    accountName: acc ? acc.name : '',
+    lite: !!(acc && isLite(acc)),
+    readable: floatReadable,
+    title: v.title,
+    items: v.items,
+    paused: floatAuto(acc && acc.id) ? v.paused : '',
+    today: v.today || 0,
+    auto: !!(acc && floatAuto(acc.id) && cfg.autoConsent[acc.id]),
+    autoConsented: !!(acc && cfg.autoConsent[acc.id]),
+    dailyCap: cfg.dailyCap,
+    hasProvider: !!primary,
+    providerName: primary ? primary.name : '',
+    collapsed: cfg.float.collapsed,
+    modes: {
+      out: modes.filter((m) => m.direction !== 'in').map(({ id, name }) => ({ id, name })),
+      in: modes.filter((m) => m.direction !== 'out').map(({ id, name }) => ({ id, name })),
+    },
+    inModeId: inMode ? inMode.id : '',
+    langs: translator.publicConfig().langs,
+    target: (acc && cfg.accountLang[acc.id]) || '英语',
+  };
+}
+function pushFloat() {
+  if (floatView && !floatView.webContents.isDestroyed()) floatView.webContents.send('float:state', floatState());
+}
+let floatLastAcc = null;
+function layoutFloat(area) {
+  floatArea = area;
+  if (!floatView) return;
+  // 换了号：重新开始读，悬浮窗只显示新号的内容
+  if (activeId !== floatLastAcc) {
+    floatLastAcc = activeId;
+    floatFails = 0;
+    floatReadable = 'loading';
+    pushFloat();
+    scheduleFloat(200);
+  }
+  const acc = findAcc(activeId);
+  const show = floatOpen && page === 'account' && !locked && !!acc && !problems.has(acc.id) && area.width > FLOAT_W + 40;
+  floatView.setVisible(show);
+  if (!show) return;
+  const pos = translator.load().float;
+  const pill = pos.collapsed;
+  const w = pill ? FLOAT_PILL.width : FLOAT_W;
+  const h = pill ? FLOAT_PILL.height : Math.max(FLOAT_MIN_H, Math.min(FLOAT_MAX_H, area.height - 64 - FLOAT_COMPOSE_GAP));
+  const maxX = area.x + area.width - w - 8;
+  const maxY = area.y + area.height - h - FLOAT_COMPOSE_GAP;
+  const x = Math.max(area.x + 8, Math.min(maxX, area.x + area.width - w - pos.dx));
+  const y = Math.max(area.y + 8, Math.min(Math.max(area.y + 8, maxY), area.y + pos.dy));
+  floatView.setBounds({ x, y, width: w, height: h });
+  // 账号视图重建时会被加到最上面：保证悬浮窗始终在最上层
+  const kids = win.contentView.children;
+  if (kids[kids.length - 1] !== floatView) win.contentView.addChildView(floatView);
+}
+function openFloat() {
+  if (floatView) { floatOpen = true; layout(); scheduleFloat(0); pushState(); return; }
+  floatOpen = true;
+  floatView = new WebContentsView({
+    webPreferences: { preload: path.join(__dirname, 'float', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
+  });
+  floatView.setBackgroundColor('#00000000');
+  lockLocalPage(floatView.webContents);
+  floatView.webContents.loadFile(path.join(__dirname, 'float', 'index.html'));
+  win.contentView.addChildView(floatView);
+  floatReadable = 'loading';
+  floatFails = 0;
+  layout();
+  scheduleFloat(300);
+  pushState();
+}
+function closeFloat() {
+  floatOpen = false;
+  floatLastAcc = null;
+  if (floatTimer) { clearTimeout(floatTimer); floatTimer = null; }
+  if (floatView) {
+    const v = floatView;
+    floatView = null;
+    try { win.contentView.removeChildView(v); } catch {}
+    if (!v.webContents.isDestroyed()) v.webContents.close();
+  }
+  focusActive();
+  pushState();
+}
+// 只接受悬浮窗自己发来的
+const fromFloat = (e) => !!floatView && !floatView.webContents.isDestroyed() && e.sender === floatView.webContents;
+const handleFloat = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
+  if (!fromFloat(e)) throw new Error('not allowed');
+  return fn(...args);
+});
+const onFloat = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromFloat(e)) fn(...args); });
+onShell('float:toggle', (on) => { if (typeof on === 'boolean' ? on : !floatOpen) openFloat(); else closeFloat(); });
+onFloat('float:ready', () => pushFloat());
+onFloat('float:close', () => closeFloat());
+onFloat('float:collapse', (on) => { translator.setFloat({ pos: { collapsed: on === true } }); layout(); pushFloat(); });
+let floatDrag = null;
+onFloat('float:move', ({ dx, dy } = {}) => {
+  if (!floatView || !floatArea || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+  const b = floatView.getBounds();
+  floatDrag = floatDrag || { x: b.x, y: b.y };
+  floatDrag.x += Math.max(-500, Math.min(500, dx));
+  floatDrag.y += Math.max(-500, Math.min(500, dy));
+  const a = floatArea;
+  const x = Math.max(a.x + 8, Math.min(a.x + a.width - b.width - 8, floatDrag.x));
+  const y = Math.max(a.y + 8, Math.min(Math.max(a.y + 8, a.y + a.height - b.height - FLOAT_COMPOSE_GAP), floatDrag.y));
+  floatView.setBounds({ ...b, x, y });
+});
+onFloat('float:moveend', () => {
+  floatDrag = null;
+  if (!floatView || !floatArea) return;
+  const b = floatView.getBounds();
+  translator.setFloat({ pos: { dx: floatArea.x + floatArea.width - b.width - b.x, dy: b.y - floatArea.y } });
+});
+handleFloat('float:item', (h) => {
+  if (typeof h !== 'string' || !activeId) return null;
+  const need = translator.needConsent();
+  if (need.length) return { consent: need };
+  floatCore.manual(activeId, h);
+  pushFloat();
+  return { ok: true };
+});
+handleFloat('float:auto', (on) => {
+  const acc = findAcc(activeId);
+  if (!acc) return null;
+  const cfg = translator.load();
+  if (on && !cfg.autoConsent[acc.id]) return { error: '需要先确认' };
+  translator.setFloat({ accId: acc.id, auto: on === true });
+  if (on) floatCore.backfill(acc.id, { dailyCap: cfg.dailyCap });
+  pushFloat();
+  return { ok: true };
+});
+handleFloat('float:consent', ({ kind, ids } = {}) => {
+  if (kind === 'auto' && activeId) translator.setFloat({ accId: activeId, autoConsent: true });
+  if (kind === 'provider' && Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id);
+  pushFloat();
+  return true;
+});
+handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
+  if (accountId !== activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
+  const mode = typeof modeId === 'string' ? modeStore.get(modeId) : null;
+  return translator.translate({ text, mode, target });
+});
+handleFloat('float:cancel', () => translator.cancel());
+handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
+handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
+handleFloat('float:inmode', (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; });
+handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
+handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));

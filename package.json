@@ -13,6 +13,7 @@
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
     "check:translate": "node scripts/check-translate.js",
+    "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs"
   },
   "license": "MIT",
