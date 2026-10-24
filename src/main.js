@@ -138,6 +138,99 @@ const storeFile = () => path.join(app.getPath('userData'), 'accounts.json');
 let accounts = [];
 let accountsFileOk = false; // 账号文件读取正常时才清理残留的分区文件夹
 
+// ---------- 分组 ----------
+// 分组单独存在 groups.json（accounts.json 仍是账号数组，老版本照样能读）。账号上记 groupId。
+// 分组只影响侧栏怎么显示：折叠只是不显示这几行，页面照常运行；整组静音和账号自己的静音是“或”的关系。
+const groupsFile = () => path.join(app.getPath('userData'), 'groups.json');
+const GROUP_MAX = 30;
+let groups = [];
+function loadGroups() {
+  const file = groupsFile();
+  if (!fs.existsSync(file)) return [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(raw)) throw new Error('not an array');
+    const seen = new Set();
+    return raw.filter((g) => g && typeof g.id === 'string' && g.id && !seen.has(g.id) && seen.add(g.id)).slice(0, GROUP_MAX).map((g) => ({
+      ...g,
+      name: String(g.name || '分组').replace(/\s+/g, ' ').trim().slice(0, 20) || '分组',
+      collapsed: g.collapsed === true,
+      muted: g.muted === true,
+    }));
+  } catch (e) {
+    // 和 accounts.json 一样：坏了先备份，不覆盖。分组丢了只是账号都回到“未分组”，账号本身不受影响
+    const backup = `${file}.broken-${Date.now()}`;
+    try { fs.copyFileSync(file, backup); } catch {}
+    console.warn(`groups.json 无法读取（${e.message}），已备份到 ${backup}`);
+    return [];
+  }
+}
+function saveGroups() {
+  const file = groupsFile();
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(groups, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
+}
+const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
+// 是否不弹通知：账号自己关了，或者所在分组整组关了
+const isMuted = (acc) => acc.muted || !!groupOf(acc)?.muted;
+// 侧栏的显示顺序：先是没分组的号，再按分组顺序；同一段里按 accounts.json 的顺序。Ctrl+数字、托盘也按这个顺序
+function displayOrder() {
+  return [...accounts.filter((a) => !groupOf(a)), ...groups.flatMap((g) => accounts.filter((a) => a.groupId === g.id))];
+}
+// 把账号挪到某个分组（'' 表示未分组）里，放在 beforeId 那个号前面；beforeId 为空就放到这一段的最后
+function moveAccount(id, groupId, beforeId) {
+  const acc = findAcc(id);
+  if (!acc) return false;
+  if (groupId && !groups.some((g) => g.id === groupId)) return false;
+  const target = groupId || '';
+  const before = beforeId ? findAcc(beforeId) : null;
+  accounts.splice(accounts.indexOf(acc), 1);
+  acc.groupId = target;
+  if (before && before.id !== id && (before.groupId || '') === target) {
+    accounts.splice(accounts.indexOf(before), 0, acc);
+  } else {
+    // 放到同一段最后一个号后面；这一段还没有号就放到最后
+    const last = [...accounts].reverse().find((a) => (groupOf(a) ? a.groupId : '') === target);
+    accounts.splice(last ? accounts.indexOf(last) + 1 : accounts.length, 0, acc);
+  }
+  saveAccounts();
+  notifier.refresh();
+  refresh();
+  return true;
+}
+// 上移、下移：只在同一段里挪
+function stepAccount(id, dir) {
+  const acc = findAcc(id);
+  if (!acc) return;
+  const key = groupOf(acc) ? acc.groupId : '';
+  const section = displayOrder().filter((a) => (groupOf(a) ? a.groupId : '') === key);
+  const i = section.indexOf(acc);
+  const j = i + dir;
+  if (j < 0 || j >= section.length) return;
+  const other = section[j];
+  const ai = accounts.indexOf(acc);
+  const oi = accounts.indexOf(other);
+  accounts[ai] = other;
+  accounts[oi] = acc;
+  saveAccounts();
+  notifier.refresh();
+  refresh();
+}
+let editGroupId = ''; // 新建的分组：侧栏直接进入改名
+function createGroup(moveId) {
+  if (groups.length >= GROUP_MAX) return null;
+  const used = new Set(groups.map((g) => g.name));
+  let n = groups.length + 1;
+  while (used.has(`分组 ${n}`)) n += 1;
+  const g = { id: `g${Date.now().toString(36)}`, name: `分组 ${n}`, collapsed: false, muted: false };
+  groups.push(g);
+  saveGroups();
+  editGroupId = g.id;
+  if (moveId) moveAccount(moveId, g.id, null);
+  else refresh();
+  return g.id;
+}
+
 function saveAccounts() {
   const file = storeFile();
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(accounts, null, 2));
@@ -176,6 +269,8 @@ function loadAccounts() {
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
     acc.muted = acc.muted === true;
+    // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
+    acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -343,7 +438,8 @@ const memoryManager = new memory.MemoryManager(settings, {
 });
 
 const notifier = new Notifier({
-  getAccounts: () => accounts,
+  getAccounts: () => displayOrder(),
+  isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
   quit: () => { quitting = true; app.quit(); },
@@ -505,7 +601,12 @@ function setLocked(on) {
   if (on && shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
   layout();
   refresh();
-  if (!on) focusActive();
+  if (!on) {
+    focusActive();
+    // 解锁后正在看的轻量号聊天马上标已读（锁着时不标）
+    const jid = liteOpen.get(activeId);
+    if (jid && page === 'account' && isLite(findAcc(activeId)) && win && win.isFocused()) liteHost.read(activeId, jid);
+  }
 }
 // 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
 // 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
@@ -559,7 +660,17 @@ function pushState() {
     collapsed: settings.sidebarCollapsed,
     locked,
     lockChoices: memory.LOCK_CHOICES,
-    accounts: accounts.map((acc) => {
+    // 分组：每组带上未读总数，折叠后组头上也能看到
+    groups: groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      collapsed: g.collapsed,
+      muted: g.muted,
+      count: accounts.filter((a) => a.groupId === g.id).length,
+      unread: accounts.filter((a) => a.groupId === g.id).reduce((n, a) => n + (notifier.unread.get(a.id) || 0), 0),
+    })),
+    editGroupId,
+    accounts: displayOrder().map((acc) => {
       const problem = problems.get(acc.id);
       return {
         id: acc.id,
@@ -567,6 +678,8 @@ function pushState() {
         note: acc.note,
         color: acc.color,
         muted: acc.muted,
+        groupId: groupOf(acc) ? acc.groupId : '',
+        groupMuted: !!groupOf(acc)?.muted,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
@@ -1241,7 +1354,7 @@ app.on('web-contents-created', (_e, wc) => {
       return;
     }
     if (!mod || !/^[1-9]$/.test(input.key)) return;
-    const acc = accounts[Number(input.key) - 1];
+    const acc = displayOrder()[Number(input.key) - 1];
     if (!acc) return;
     event.preventDefault();
     userActivate(acc.id);
@@ -1377,6 +1490,7 @@ app.whenReady().then(async () => {
 
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
+  groups = loadGroups();
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
@@ -1548,7 +1662,71 @@ onShell('context', (id) => {
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
     { type: 'separator' },
+    // 不用拖也能排：上移、下移、移到分组
+    { label: '上移', click: () => stepAccount(id, -1) },
+    { label: '下移', click: () => stepAccount(id, 1) },
+    {
+      label: '移到分组',
+      submenu: [
+        { label: '未分组', type: 'radio', checked: !groupOf(acc), click: () => moveAccount(id, '', null) },
+        ...groups.map((g) => ({ label: g.name, type: 'radio', checked: acc.groupId === g.id, click: () => moveAccount(id, g.id, null) })),
+        { type: 'separator' },
+        { label: '新建分组…', enabled: groups.length < GROUP_MAX, click: () => createGroup(id) },
+      ],
+    },
+    { type: 'separator' },
     { label: isLite(acc) ? `删除「${acc.name}」并退出登录…` : `删除「${acc.name}」…`, click: () => removeAccount(id) },
+  ]).popup({ window: win });
+});
+
+// ---------- 分组 ----------
+// 分组只影响侧栏怎么摆，不卸载页面、不停收消息。解散分组只是把号放回“未分组”，绝不删号
+const findGroup = (gid) => groups.find((g) => g.id === gid);
+function setGroup(gid, patch) {
+  const g = findGroup(gid);
+  if (!g) return;
+  Object.assign(g, patch);
+  saveGroups();
+  notifier.refresh();
+  refresh();
+}
+function deleteGroup(gid) {
+  if (!findGroup(gid)) return;
+  // 组里的号挪到“未分组”最后，保持原来的先后
+  const members = accounts.filter((a) => a.groupId === gid);
+  accounts = [...accounts.filter((a) => a.groupId !== gid), ...members.map((a) => Object.assign(a, { groupId: '' }))];
+  groups = groups.filter((g) => g.id !== gid);
+  if (editGroupId === gid) editGroupId = '';
+  saveAccounts();
+  saveGroups();
+  notifier.refresh();
+  refresh();
+}
+onShell('acc:move', ({ id, groupId, beforeId } = {}) => {
+  if (typeof id !== 'string' || typeof (groupId ?? '') !== 'string') return;
+  moveAccount(id, groupId || '', typeof beforeId === 'string' ? beforeId : null);
+});
+onShell('group:create', () => createGroup(null));
+onShell('group:rename', ({ id, name } = {}) => {
+  if (editGroupId === id) editGroupId = '';
+  const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 20);
+  if (clean) setGroup(id, { name: clean });
+  else refresh();
+});
+onShell('group:toggle', (id) => { const g = findGroup(id); if (g) setGroup(id, { collapsed: !g.collapsed }); });
+onShell('group:context', (id) => {
+  const g = findGroup(id);
+  if (!g) return;
+  Menu.buildFromTemplate([
+    { label: '改名', click: () => { editGroupId = id; refresh(); } },
+    { label: g.collapsed ? '展开' : '折叠', click: () => setGroup(id, { collapsed: !g.collapsed }) },
+    {
+      label: '整组不弹通知', type: 'checkbox', checked: g.muted,
+      // 整组静音不改组里每个号自己的设置；取消后各号恢复原来的设置
+      click: () => setGroup(id, { muted: !g.muted }),
+    },
+    { type: 'separator' },
+    { label: `解散「${g.name}」（号不会删）`, click: () => deleteGroup(id) },
   ]).popup({ window: win });
 });
 

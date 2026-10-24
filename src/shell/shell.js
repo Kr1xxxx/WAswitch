@@ -20,6 +20,8 @@ const ICONS = {
   mute: '<path d="M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h13M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
   next: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
 };
 
@@ -80,16 +82,52 @@ function tint(color) {
 
 // ---------- 侧栏 ----------
 
+// 拖动排序：拖的过程中不重画侧栏（重画会打断拖动），松手后再画
+let dragId = null;
+let sideStale = false;
+function dropOn(el, groupId, beforeId) {
+  el.addEventListener('dragover', (e) => {
+    if (!dragId || dragId === beforeId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop'));
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drop');
+    const id = dragId;
+    dragId = null;
+    if (id && id !== beforeId) window.wa.moveAccount(id, groupId, beforeId || '');
+  });
+}
+function draggable(el, id) {
+  el.draggable = true;
+  el.addEventListener('dragstart', (e) => {
+    dragId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+    el.classList.add('dragging');
+  });
+  el.addEventListener('dragend', () => {
+    dragId = null;
+    el.classList.remove('dragging');
+    if (sideStale) { sideStale = false; renderSide(); }
+  });
+}
+
 function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
+  // 自己关了通知，或者所在分组整组关了，都显示成灰色
+  const quiet = acc.muted || acc.groupMuted;
   const avatar = h('span', { class: 'avatar', style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
-  else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${acc.muted ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
+  else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
   const tip = [acc.name, acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
-  return h('button', {
+  const row = h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
     oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
@@ -98,11 +136,62 @@ function accountRow(acc) {
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
     h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
-  acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
-  acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
+  quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
+  acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
+  draggable(row, acc.id);
+  dropOn(row, acc.groupId || '', acc.id);
+  return row;
+}
+
+// 分组的组头：点一下折叠/展开，右键改名、整组静音、解散；把号拖到组头上就放进这个组的最后
+function groupHead(g) {
+  const name = g ? g.name : '未分组';
+  const gid = g ? g.id : '';
+  if (g && s.editGroupId === g.id && !s.collapsed) {
+    let done = false;
+    const commit = (name) => { if (done) return; done = true; window.wa.groupRename(g.id, name); };
+    const input = h('input', {
+      class: 'group-name', value: g.name, maxlength: '20', 'aria-label': '分组名称',
+      onkeydown: (e) => { if (e.key === 'Enter') commit(input.value); if (e.key === 'Escape') commit(g.name); },
+      onblur: () => commit(input.value),
+    });
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+    return h('div', { class: 'group-head editing' }, icon('down', 12), input);
+  }
+  const quiet = g && g.muted;
+  const head = h('button', {
+    class: `group-head${g && g.collapsed ? ' closed' : ''}`,
+    title: g ? `${name} · ${g.count} 个号${g.muted ? ' · 整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
+    'aria-expanded': g ? String(!g.collapsed) : null,
+    onclick: () => { if (g) window.wa.groupToggle(g.id); },
+    oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
+  },
+  g ? icon(g.collapsed ? 'right' : 'down', 12) : null,
+  h('span', { class: 'gname' }, g && g.collapsed ? `${name} · ${g.count}` : name),
+  quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
+  g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
+  dropOn(head, gid, null);
+  return head;
+}
+
+// 账号列表：没有分组时和以前一样；有分组时先是“未分组”，再按组排
+function accountList() {
+  const groups = s.groups || [];
+  if (!groups.length) return s.accounts.map(accountRow);
+  const out = [groupHead(null), ...s.accounts.filter((a) => !a.groupId).map(accountRow)];
+  for (const g of groups) {
+    out.push(groupHead(g));
+    // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
+    out.push(...s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow));
+  }
+  return out;
 }
 
 function renderSide() {
+  if (dragId) { sideStale = true; return; }
+  // 正在给分组改名：不重画，免得输入框被换掉
+  const editing = document.activeElement && document.activeElement.classList.contains('group-name');
+  if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
   $side.replaceChildren();
   $side.append(h('div', { class: 'drag' }));
@@ -119,9 +208,10 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    s.collapsed ? null : h('div', { class: 'label' }, `账号 · ${s.accounts.length}`),
+    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, `账号 · ${s.accounts.length}`),
+      s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
     h('div', { class: 'list' },
-      s.accounts.map(accountRow),
+      accountList(),
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ' on' : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
     h('div', { class: 'grow' })));
