@@ -9,6 +9,7 @@ const { app, BrowserWindow, session } = require('electron');
 const http = require('http');
 const fingerprint = require('../src/fingerprint');
 const proxy = require('../src/proxy');
+const { clearSessionCache } = require('../src/cache');
 
 const PROBE = `(async () => {
   const uad = navigator.userAgentData
@@ -92,6 +93,45 @@ app.whenReady().then(async () => {
   // 地址写错：应该被拒绝并进入黑洞
   const bad = await proxy.apply(session.fromPartition('check-bad'), 'socks5://user:pw@127.0.0.1:1080');
   check(!!bad.error, `带密码的 socks5 被拒绝：${bad.error}`);
+
+  // 一键清理缓存：缓存变小，但 cookie、localStorage、IndexedDB 都还在（不会退出登录）
+  const site = http.createServer((req, res) => {
+    if (req.url.startsWith('/big')) {
+      res.writeHead(200, { 'content-type': 'application/javascript', 'cache-control': 'max-age=3600' });
+      res.end(`// ${'x'.repeat(200000)}`);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'max-age=3600' });
+    res.end('<title>c</title><script src="/big.js"></script>');
+  });
+  await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
+  const cses = session.fromPartition('check-cache');
+  const cw = new BrowserWindow({ show: false, webPreferences: { session: cses } });
+  await cw.loadURL(`http://127.0.0.1:${site.address().port}/`);
+  await cw.webContents.executeJavaScript(`(async () => {
+    document.cookie = 'login=yes; max-age=3600';
+    localStorage.setItem('login', 'yes');
+    await new Promise((resolve, reject) => {
+      const req = indexedDB.open('wa', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('s');
+      req.onsuccess = () => { const tx = req.result.transaction('s', 'readwrite'); tx.objectStore('s').put('yes', 'login'); tx.oncomplete = resolve; tx.onerror = reject; };
+      req.onerror = reject;
+    });
+    const c = await caches.open('app'); await c.put('/app.js', new Response('x'.repeat(100000)));
+  })()`);
+  const before = await cses.getCacheSize();
+  await clearSessionCache(cses);
+  const after = await cses.getCacheSize();
+  const kept = await cw.webContents.executeJavaScript(`(async () => ({
+    cookie: document.cookie.includes('login=yes'),
+    local: localStorage.getItem('login') === 'yes',
+    idb: await new Promise((resolve) => { const req = indexedDB.open('wa', 1); req.onsuccess = () => { const g = req.result.transaction('s').objectStore('s').get('login'); g.onsuccess = () => resolve(g.result === 'yes'); g.onerror = () => resolve(false); }; req.onerror = () => resolve(false); }),
+    cacheStorage: (await caches.keys()).length,
+  }))()`);
+  check(before > 0 && after < before, `清理缓存后 HTTP 缓存变小（${before} → ${after} 字节）`);
+  check(kept.cacheStorage === 0, '清理缓存后 Cache Storage 已清空');
+  check(kept.cookie && kept.local && kept.idb, '清理缓存后 cookie、localStorage、IndexedDB 都还在（不会退出登录）');
+  site.close();
 
   fake.server.close();
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');

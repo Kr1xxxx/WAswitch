@@ -58,6 +58,13 @@ let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重�
 let settingsTab = 'memory';
 let checkResult = null;
 let checkRunning = false;
+// 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
+let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
+function refreshCacheSize() {
+  if (cacheInfo.busy || Date.now() - cacheInfo.at < 30000) return;
+  cacheInfo.at = Date.now();
+  window.wa.cacheSize().then((r) => { cacheInfo.mb = Math.round(r.bytes / 1048576); render(true); }, () => {});
+}
 
 const active = () => (s.accounts || []).find((a) => a.id === s.activeId);
 const mb = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${n} MB`);
@@ -353,7 +360,23 @@ function settingsPage() {
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '关闭显卡加速，整体再省一些内存。代价是滚动和动画没那么顺滑。',
-        sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v))));
+        sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v))),
+      setRow('清理缓存',
+        `清掉网页版账号可以重新下载的缓存（图片、程序文件等），释放磁盘空间。不清登录状态和聊天记录，不会退出登录；不包含轻量模式账号。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
+        h('button', { class: 'btn', disabled: cacheInfo.busy || !s.accounts.length, onclick: async () => {
+          cacheInfo.busy = true; cacheInfo.result = ''; render(true);
+          const r = await window.wa.clearCache();
+          cacheInfo.busy = false;
+          if (r.error) cacheInfo.result = r.error;
+          else {
+            cacheInfo.mb = r.afterMB;
+            cacheInfo.at = Date.now();
+            cacheInfo.result = `至少释放了 ${mb(r.freedMB)}${r.skipped ? `，${r.skipped} 个正在出错或加载的账号这次跳过了` : ''}。`;
+          }
+          render(true);
+        } }, cacheInfo.busy ? '清理中…' : '清理'),
+        cacheInfo.result ? h('span', { class: 'hint', role: 'status' }, cacheInfo.result) : null));
+    refreshCacheSize();
   } else if (settingsTab === 'notify') {
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '通知'),
