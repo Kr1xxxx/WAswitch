@@ -19,6 +19,11 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   mute: '<path d="M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h13M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  next: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
 };
 
@@ -55,6 +60,8 @@ const $side = document.getElementById('side');
 const $top = document.getElementById('topbar');
 const $ai = document.getElementById('aibar');
 const $content = document.getElementById('content');
+const $lock = document.getElementById('lock');
+const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
 let settingsTab = 'memory';
@@ -80,16 +87,52 @@ function tint(color) {
 
 // ---------- 侧栏 ----------
 
+// 拖动排序：拖的过程中不重画侧栏（重画会打断拖动），松手后再画
+let dragId = null;
+let sideStale = false;
+function dropOn(el, groupId, beforeId) {
+  el.addEventListener('dragover', (e) => {
+    if (!dragId || dragId === beforeId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    el.classList.add('drop');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop'));
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drop');
+    const id = dragId;
+    dragId = null;
+    if (id && id !== beforeId) window.wa.moveAccount(id, groupId, beforeId || '');
+  });
+}
+function draggable(el, id) {
+  el.draggable = true;
+  el.addEventListener('dragstart', (e) => {
+    dragId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+    el.classList.add('dragging');
+  });
+  el.addEventListener('dragend', () => {
+    dragId = null;
+    el.classList.remove('dragging');
+    if (sideStale) { sideStale = false; renderSide(); }
+  });
+}
+
 function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
+  // 自己关了通知，或者所在分组整组关了，都显示成灰色
+  const quiet = acc.muted || acc.groupMuted;
   const avatar = h('span', { class: 'avatar', style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
-  else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${acc.muted ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
-  const tip = [acc.name, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
-  return h('button', {
+  else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
+  const tip = [acc.name, acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const row = h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
     oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
@@ -98,11 +141,62 @@ function accountRow(acc) {
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
     h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
-  acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
-  acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
+  quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
+  acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
+  draggable(row, acc.id);
+  dropOn(row, acc.groupId || '', acc.id);
+  return row;
+}
+
+// 分组的组头：点一下折叠/展开，右键改名、整组静音、解散；把号拖到组头上就放进这个组的最后
+function groupHead(g) {
+  const name = g ? g.name : '未分组';
+  const gid = g ? g.id : '';
+  if (g && s.editGroupId === g.id && !s.collapsed) {
+    let done = false;
+    const commit = (name) => { if (done) return; done = true; window.wa.groupRename(g.id, name); };
+    const input = h('input', {
+      class: 'group-name', value: g.name, maxlength: '20', 'aria-label': '分组名称',
+      onkeydown: (e) => { if (e.key === 'Enter') commit(input.value); if (e.key === 'Escape') commit(g.name); },
+      onblur: () => commit(input.value),
+    });
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+    return h('div', { class: 'group-head editing' }, icon('down', 12), input);
+  }
+  const quiet = g && g.muted;
+  const head = h('button', {
+    class: `group-head${g && g.collapsed ? ' closed' : ''}`,
+    title: g ? `${name} · ${g.count} 个号${g.muted ? ' · 整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
+    'aria-expanded': g ? String(!g.collapsed) : null,
+    onclick: () => { if (g) window.wa.groupToggle(g.id); },
+    oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
+  },
+  g ? icon(g.collapsed ? 'right' : 'down', 12) : null,
+  h('span', { class: 'gname' }, g && g.collapsed ? `${name} · ${g.count}` : name),
+  quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
+  g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
+  dropOn(head, gid, null);
+  return head;
+}
+
+// 账号列表：没有分组时和以前一样；有分组时先是“未分组”，再按组排
+function accountList() {
+  const groups = s.groups || [];
+  if (!groups.length) return s.accounts.map(accountRow);
+  const out = [groupHead(null), ...s.accounts.filter((a) => !a.groupId).map(accountRow)];
+  for (const g of groups) {
+    out.push(groupHead(g));
+    // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
+    out.push(...s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow));
+  }
+  return out;
 }
 
 function renderSide() {
+  if (dragId) { sideStale = true; return; }
+  // 正在给分组改名：不重画，免得输入框被换掉
+  const editing = document.activeElement && document.activeElement.classList.contains('group-name');
+  if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
   $side.replaceChildren();
   $side.append(h('div', { class: 'drag' }));
@@ -110,7 +204,7 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
+      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
         h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label))));
     return;
   }
@@ -119,9 +213,10 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    s.collapsed ? null : h('div', { class: 'label' }, `账号 · ${s.accounts.length}`),
+    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, `账号 · ${s.accounts.length}`),
+      s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
     h('div', { class: 'list' },
-      s.accounts.map(accountRow),
+      accountList(),
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ' on' : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
     h('div', { class: 'grow' })));
@@ -132,8 +227,12 @@ function renderSide() {
       h('div', { class: 'bars' }, s.accounts.map((a) => h('span', { style: { width: `${((a.memMB || 0) / total) * 100}%`, background: a.color } }))),
       h('small', null, '后台账号已降速，消息照常收')));
   }
+  const totalUnread = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
+  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
+  if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17))));
+    h('button', { class: 'icon-btn', title: '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17)),
+    bell));
   document.body.classList.toggle('mac', mac);
 }
 
@@ -144,7 +243,8 @@ function exitTitle(acc) {
   if (acc.direct) return '网络线路：直连（这台电脑的真实 IP）';
   if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
-  return `网络线路 · 出口 IP ${acc.exitIp}${at}`;
+  const lat = acc.latency ? `\n最近一次巡检用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
+  return `网络线路 · 出口 IP ${acc.exitIp}${at}${lat}`;
 }
 
 // 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
@@ -198,13 +298,18 @@ function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
   if ($top.hidden) return;
+  // 锁着时顶栏只留一句“已锁定”：账号名、出口 IP、内存这些都不露出来
+  if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
+    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
     h('span', { class: 'grow' }),
     exitChip(acc),
+    // 缩放过的号显示比例，点一下还原到 100%
+    !lite && acc.zoom && acc.zoom !== 1 ? h('button', { class: 'chip', type: 'button', title: `这个号的页面缩放到了 ${Math.round(acc.zoom * 100)}%。点一下还原到 100%（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + = / - / 0 也能调）`, onclick: () => window.wa.zoom(acc.id, 0) }, `${Math.round(acc.zoom * 100)}%`) : null,
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
+    h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `话术和客户（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '话术和客户', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
 }
@@ -254,6 +359,189 @@ function problemPage(acc) {
 // Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
 const CLASH_DOC = 'https://github.com/Kr1xxxx/WAswitch/blob/main/docs/clash.md';
 const clashLink = () => h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, 'Clash 设置说明');
+
+// ---------- 未读总览 ----------
+// 上半：哪些号有未读（多的在前），点一下切过去；下半：最近的通知记录（只有号、时间、未读数）
+let notifLogCache = [];
+let overviewTotal = 0;
+let overviewSig = '';
+async function loadNotifLog() {
+  try { notifLogCache = await window.wa.notifLog(); } catch { notifLogCache = []; }
+  if (s.page === 'overview') render(true);
+}
+function overviewPage() {
+  const page = h('div', { class: 'page narrow' });
+  const byId = new Map(s.accounts.map((a) => [a.id, a]));
+  const unread = s.accounts.filter((a) => a.unread).sort((a, b) => b.unread - a.unread);
+  const total = unread.reduce((n, a) => n + a.unread, 0);
+  const groupName = (a) => (s.groups || []).find((g) => g.id === a.groupId)?.name || '';
+  page.append(
+    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '未读总览'),
+      h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。点一下切过去。` : '所有号都没有未读对话。')),
+    unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
+      h('span', { class: 'sw', style: { background: a.color } }),
+      h('span', { class: 'ov-name' }, a.name, groupName(a) ? h('span', { class: 'hint' }, ` · ${groupName(a)}`) : null),
+      a.muted || a.groupMuted ? h('span', { class: 'hint' }, '不弹通知') : null,
+      h('span', { class: `pill${a.muted || a.groupMuted ? ' quiet' : ''}` }, a.unread)))) : null,
+    h('div', { class: 'hstack', style: { justifyContent: 'space-between', marginTop: '8px' } },
+      h('h2', { class: 'ov-h2' }, '通知记录'),
+      notifLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.notifClear(); loadNotifLog(); } }, '清空记录') : null),
+    h('p', { class: 'hint', style: { margin: 0 } }, '每次有号的未读变多都记一条（最多 300 条），只记哪个号、什么时候、几个未读，不记消息内容。“没弹”表示当时这个号或分组不弹通知，或者你正看着它。'),
+    notifLogCache.length
+      ? h('div', { class: 'box ov-log' }, notifLogCache.map((e) => {
+        const a = byId.get(e.id);
+        const t = new Date(e.at);
+        const today = t.toDateString() === new Date().toDateString();
+        return h(a ? 'button' : 'div', { class: 'ov-logrow', onclick: a ? () => window.wa.switchTo(a.id) : null },
+          h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', today ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
+          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
+          h('span', { class: 'hint' }, `${e.count} 个未读${e.popped ? '' : ' · 没弹'}`));
+      }))
+      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
+  return page;
+}
+
+// ---------- 右侧面板：话术库和客户名单 ----------
+// 只存本机。点“复制”放进剪贴板；点“插入”等于帮你按一次 Ctrl+V 贴进当前聊天框（会覆盖剪贴板），不会自动发送
+const pn = { tab: 'replies', q: '', all: false, edit: null, msg: '', bad: false, data: { replies: [], customers: [] }, loaded: false, accountId: null, sig: '' };
+async function panelLoad() {
+  try { pn.data = await window.wa.panelData(); pn.loaded = true; } catch {}
+  renderPanel(true);
+}
+function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }
+async function panelInsert(text) {
+  const acc = active();
+  if (!acc || acc.id !== pn.accountId) return panelSay('当前账号变了，请再点一次', true);
+  if (acc.mode === 'lite') {
+    // 轻量模式的输入框就在软件界面里：直接填进去，不碰剪贴板
+    const box = $content.querySelector('.lite-compose textarea');
+    if (!box) return panelSay('先在左边打开一个对话', true);
+    const at = box.selectionStart ?? box.value.length;
+    box.value = box.value.slice(0, at) + text + box.value.slice(box.selectionEnd ?? at);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.focus();
+    return panelSay('已填进输入框，检查后自己按发送');
+  }
+  const r = await window.wa.panelInsert(pn.accountId, text);
+  if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
+  else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
+}
+const fmtDue = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const toLocalInput = (t) => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+function replyForm() {
+  const r = pn.edit;
+  const title = h('input', { value: r.title || '', maxlength: '60', placeholder: '标题（可不填）', 'aria-label': '标题' });
+  const text = h('textarea', { maxlength: '2000', placeholder: '话术内容', 'aria-label': '话术内容' }, r.text || '');
+  requestAnimationFrame(() => (r.title ? text : title).focus());
+  return h('div', { class: 'pn-form' }, title, text,
+    h('div', { class: 'pn-item acts', style: { border: 'none', padding: 0, background: 'none', flexDirection: 'row' } },
+      h('button', { class: 'pn-btn primary', onclick: async () => {
+        const d = await window.wa.replySave({ id: r.id, title: title.value, text: text.value });
+        if (!d) return panelSay('内容不能是空的', true);
+        pn.data = d; pn.edit = null; panelSay('已保存');
+      } }, '保存'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
+}
+function customerForm() {
+  const c = pn.edit;
+  const name = h('input', { value: c.name || '', maxlength: '60', placeholder: '名字', 'aria-label': '名字' });
+  const phone = h('input', { value: c.phone || '', maxlength: '40', placeholder: '电话（例如 +81 90 1234 5678）', 'aria-label': '电话' });
+  const tags = h('input', { value: (c.tags || []).join('，'), maxlength: '220', placeholder: '标签，用逗号隔开', 'aria-label': '标签' });
+  const note = h('textarea', { maxlength: '500', placeholder: '备注', 'aria-label': '备注' }, c.note || '');
+  const due = h('input', { type: 'datetime-local', value: toLocalInput(c.followUpAt), 'aria-label': '下次跟进时间' });
+  const acc = h('select', { 'aria-label': '属于哪个号' }, s.accounts.map((a) => h('option', { value: a.id }, a.name)));
+  acc.value = s.accounts.some((a) => a.id === c.accountId) ? c.accountId : (s.activeId || '');
+  requestAnimationFrame(() => name.focus());
+  return h('div', { class: 'pn-form' }, name, phone, tags, note,
+    h('label', { class: 'hint' }, '下次跟进（到时间弹一条只写名字的提醒）'), due,
+    h('label', { class: 'hint' }, '属于哪个号'), acc,
+    h('div', { class: 'acts', style: { display: 'flex', gap: '4px' } },
+      h('button', { class: 'pn-btn primary', onclick: async () => {
+        const t = due.value ? new Date(due.value).getTime() : 0;
+        const d = await window.wa.custSave({ id: c.id, accountId: acc.value, name: name.value, phone: phone.value, tags: tags.value, note: note.value, followUpAt: Number.isFinite(t) ? t : 0 });
+        if (!d) return panelSay('名字和电话至少填一个', true);
+        pn.data = d; pn.edit = null; panelSay('已保存');
+      } }, '保存'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
+}
+function replyItems() {
+  const q = pn.q.toLowerCase();
+  const list = pn.data.replies.filter((r) => !q || `${r.title}\n${r.text}`.toLowerCase().includes(q)).sort((a, b) => b.updatedAt - a.updatedAt);
+  if (!list.length) return [h('div', { class: 'hint', style: { padding: '8px 2px' } }, pn.data.replies.length ? '没有找到。' : '还没有话术。点“新建”加一条常用回复。')];
+  return list.map((r) => h('div', { class: 'pn-item' },
+    r.title ? h('span', { class: 't' }, r.title) : null,
+    h('span', { class: 'x' }, r.text),
+    h('span', { class: 'acts' },
+      h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
+      h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(r.text); panelSay('已复制'); } }, '复制'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.replyDelete(r.id); panelSay('已删除'); } }, '删除'))));
+}
+function customerItems() {
+  const q = pn.q.toLowerCase();
+  const list = pn.data.customers
+    .filter((c) => pn.all || c.accountId === pn.accountId)
+    .filter((c) => !q || `${c.name}\n${c.phone}\n${c.tags.join(',')}\n${c.note}`.toLowerCase().includes(q))
+    .sort((a, b) => (a.followUpAt || Infinity) - (b.followUpAt || Infinity) || b.updatedAt - a.updatedAt);
+  if (!list.length) return [h('div', { class: 'hint', style: { padding: '8px 2px' } }, pn.data.customers.length ? '没有找到。' : '还没有客户。点“新建”记一个。')];
+  const now = Date.now();
+  return list.map((c) => h('div', { class: 'pn-item' },
+    h('span', { class: 't' }, c.name || c.phone),
+    c.name && c.phone ? h('span', { class: 'x' }, c.phone) : null,
+    pn.all ? h('span', { class: 'hint' }, c.accountName || '已删除的账号') : null,
+    c.tags.length ? h('span', null, c.tags.map((t) => h('span', { class: 'pn-tag' }, t))) : null,
+    c.note ? h('span', { class: 'x' }, c.note) : null,
+    c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
+    h('span', { class: 'acts' },
+      c.phone ? h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(c.phone); panelSay('电话已复制'); } }, '复制电话') : null,
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
+}
+// force：用户在面板里操作了；不 force 时，面板里正在输入就不重画
+function renderPanel(force = false) {
+  const show = !!s.panelOpen && !s.locked && s.page === 'account';
+  $panel.hidden = !show;
+  if (!show) return;
+  if (!pn.loaded) { pn.loaded = true; panelLoad(); }
+  const sig = `${s.activeId}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
+  if (!force && sig === pn.sig && $panel.firstChild) return;
+  if (!force && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  pn.sig = sig;
+  pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
+  const replies = pn.tab === 'replies';
+  const search = h('input', { type: 'search', value: pn.q, placeholder: replies ? '搜索话术' : '搜索名字、电话、标签', 'aria-label': '搜索' });
+  search.addEventListener('input', () => { pn.q = search.value; const list = $panel.querySelector('.pn-list'); if (list) list.replaceChildren(...(pn.tab === 'replies' ? replyItems() : customerItems())); });
+  const io = async (what) => {
+    const kind = replies ? 'replies' : 'customers';
+    if (what === 'import') {
+      const r = await window.wa.panelImport(kind);
+      if (!r) return;
+      if (r.error) return panelSay(`导入失败：${r.error}`, true);
+      pn.data = r.data;
+      return panelSay(`导入了 ${r.added} 条${r.skipped ? `，跳过 ${r.skipped} 条空的` : ''}`);
+    }
+    const r = await window.wa.panelExport(kind, what);
+    if (r) panelSay(`导出了 ${r.count} 条`);
+  };
+  $panel.replaceChildren(...kids(
+    h('div', { class: 'pn-tabs' },
+      h('button', { class: `pn-tab${replies ? ' on' : ''}`, onclick: () => { pn.tab = 'replies'; pn.edit = null; pn.q = ''; pn.msg = ''; renderPanel(true); } }, '话术'),
+      h('button', { class: `pn-tab${replies ? '' : ' on'}`, onclick: () => { pn.tab = 'customers'; pn.edit = null; pn.q = ''; pn.msg = ''; renderPanel(true); } }, '客户'),
+      h('span', { class: 'grow' }),
+      h('button', { class: 'icon-btn', title: '收起', 'aria-label': '收起面板', onclick: () => window.wa.panelToggle(false) }, icon('back', 14))),
+    pn.edit ? null : h('div', { class: 'pn-tools' }, search,
+      h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
+    !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },
+      h('input', { type: 'checkbox', checked: pn.all, onchange: (e) => { pn.all = e.target.checked; renderPanel(true); } }), '显示所有号的客户') : null,
+    pn.msg ? h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg) : null,
+    pn.edit ? (replies ? replyForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
+    pn.edit ? null : h('div', { class: 'pn-foot' },
+      h('button', { class: 'pn-btn', onclick: () => io('import') }, '导入'),
+      h('button', { class: 'pn-btn', onclick: () => io('csv') }, '导出 CSV'),
+      h('button', { class: 'pn-btn', onclick: () => io('json') }, '导出 JSON'),
+      h('span', { class: 'hint', style: { width: '100%' } }, '只存在这台电脑上，不上传。“插入”会占用剪贴板，不会自动发送。'))));
+}
 
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), h('small', null, text)));
@@ -305,6 +593,7 @@ function editorPage(id) {
           : '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
+    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：+81 90-xxxx · 日本客户群 · 小王负责' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
     const passwordRow = h('label', { class: 'field' }, '代理密码', password, h('span', { class: 'hint' }, '用系统钥匙串加密后保存在本机。'));
@@ -426,7 +715,7 @@ function editorPage(id) {
       saveBtn.disabled = true;
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       if (mode === 'lite' && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
-      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked });
+      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
     };
@@ -447,6 +736,7 @@ function editorPage(id) {
         h('div', { class: 'hstack', style: { alignItems: 'flex-end', gap: '14px' } },
           h('label', { class: 'field', style: { flex: '1' } }, '名称', name),
           h('div', { class: 'field' }, '颜色', swatches)),
+        h('label', { class: 'field' }, '备注', note, h('span', { class: 'hint' }, '只给自己看：显示在顶栏和侧栏（鼠标停在账号上）。')),
         modeRow,
         primaryRow,
         h('div', { class: 'field' },
@@ -472,6 +762,65 @@ function sw(on, label, onchange) {
 }
 function setRow(title, desc, control, extra) {
   return h('div', { class: 'setrow' }, h('div', { class: 'meta' }, h('span', { class: 'title' }, title), h('span', { class: 'desc' }, desc), extra), control);
+}
+
+// ---------- 连接记录 ----------
+let netLogCache = [];
+let netLogAt = 0;
+let netFilter = '';
+async function loadNetLog() {
+  netLogAt = Date.now();
+  try { netLogCache = await window.wa.netLog(); } catch { netLogCache = []; }
+  if (s.page === 'settings' && settingsTab === 'net') render(true);
+}
+const NET_TEXT = {
+  down: (e) => `连不上（${{ proxy: '代理', network: '网络' }[e.detail] || e.detail || '未知'}）`,
+  up: (e) => `恢复了${e.ms ? `，断了 ${fmtDur(e.ms)}` : ''}`,
+  qr: () => '掉线，需要重新扫码',
+  login: () => '重新登录成功',
+  crash: (e) => `页面进程退出（${e.detail || '未知'}），已自动重建`,
+  exit: (e) => `出口巡检正常，用时 ${e.ms} ms`,
+  exit_fail: () => '出口巡检失败（代理没响应）',
+};
+function fmtDur(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return `${Math.max(1, Math.round(ms / 1000))} 秒`;
+  if (m < 60) return `${m} 分钟`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分钟`;
+}
+function netPage(page) {
+  if (Date.now() - netLogAt > 10000) loadNetLog();
+  const byId = new Map(s.accounts.map((a) => [a.id, a]));
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  const filterSel = h('select', { 'aria-label': '只看某个号', onchange: (e) => { netFilter = e.target.value; render(true); } },
+    h('option', { value: '' }, '全部账号'), s.accounts.map((a) => h('option', { value: a.id }, a.name)));
+  filterSel.value = byId.has(netFilter) ? netFilter : '';
+  const rows = netLogCache.filter((e) => !netFilter || e.id === netFilter).slice(0, 300);
+  page.append(
+    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '连接记录'),
+      h('p', { class: 'lead' }, '最近 7 天每个号的掉线、恢复和出口巡检。不会为此多发任何网络请求；“用时”是每 30 分钟测一次出口 IP 的往返时间，可以当延迟参考。')),
+    h('div', { class: 'box' }, s.accounts.map((a) => {
+      const drops = netLogCache.filter((e) => e.id === a.id && e.at >= dayAgo && (e.kind === 'down' || e.kind === 'qr')).length;
+      return h('div', { class: 'memrow netrow' },
+        h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        h('span', { class: 'hint' }, a.direct ? '直连 · 不巡检' : a.latency ? `最近用时 ${a.latency.ms} ms` : '还没测过'),
+        h('b', { style: { textAlign: 'right', color: drops ? 'var(--danger)' : null } }, `24 小时掉线 ${drops} 次`),
+        h('span', { class: 'hint' }, a.problem ? a.problemShort : '正常'));
+    })),
+    h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, filterSel,
+      netLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.netLogClear(); loadNetLog(); } }, '清空记录') : null),
+    rows.length
+      ? h('div', { class: 'box ov-log' }, rows.map((e) => {
+        const a = byId.get(e.id);
+        const t = new Date(e.at);
+        return h('div', { class: 'ov-logrow' },
+          h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
+          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          h('span', { class: 'ov-name', style: { flex: 'none', width: '110px' } }, a ? a.name : '已删除的号'),
+          h('span', { class: `ov-name${['down', 'qr', 'crash', 'exit_fail'].includes(e.kind) ? ' bad-text' : ''}` }, (NET_TEXT[e.kind] || (() => e.kind))(e)));
+      }))
+      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
+  return page;
 }
 
 function settingsPage() {
@@ -535,7 +884,12 @@ function settingsPage() {
           sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null,
         setRow('侧栏只显示图标', '给聊天留更多空间。随时可以用左上角按钮切换。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
-        setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号。`, h('span'))));
+        setRow('聊天锁', '电脑这么久没有键盘鼠标操作，就遮住聊天区，右滑解锁。只防路过的人看到，消息和通知照常。',
+          h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
+            (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
+        setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
+  } else if (settingsTab === 'net') {
+    netPage(page);
   } else if (settingsTab === 'team') {
     page.append(teamPage(s.team));
   } else if (settingsTab === 'check') {
@@ -685,6 +1039,54 @@ function updateBox(u) {
 
 // ---------- 总渲染 ----------
 
+// ---------- 聊天锁 ----------
+
+let lockEl = null;
+function lockPage() {
+  if (lockEl) return lockEl;
+  const thumb = h('button', { class: 'lock-thumb', type: 'button', 'aria-label': '向右拖动解锁（也可以按回车）' }, icon('next', 16));
+  const track = h('div', { class: 'lock-track' }, h('span', { class: 'lock-text' }, '向右滑动解锁'), thumb);
+  let startX = null;
+  let dx = 0;
+  const max = () => track.clientWidth - thumb.offsetWidth - 8;
+  const place = (x) => { dx = Math.max(0, Math.min(max(), x)); thumb.style.transform = `translateX(${dx}px)`; track.style.setProperty('--p', String(dx / Math.max(1, max()))); };
+  const unlock = () => window.wa.lock(false);
+  thumb.addEventListener('pointerdown', (e) => { startX = e.clientX - dx; thumb.setPointerCapture(e.pointerId); thumb.classList.add('drag'); });
+  thumb.addEventListener('pointermove', (e) => { if (startX !== null) place(e.clientX - startX); });
+  const end = () => {
+    if (startX === null) return;
+    startX = null;
+    thumb.classList.remove('drag');
+    if (dx >= max() * 0.85) { place(max()); unlock(); } else place(0);
+  };
+  thumb.addEventListener('pointerup', end);
+  thumb.addEventListener('pointercancel', end);
+  thumb.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); unlock(); } });
+  lockEl = h('div', { class: 'lockpage' },
+    h('div', { class: 'lock-card' },
+      h('span', { class: 'lock-icon' }, icon('lock', 22)),
+      h('h1', null, '聊天已锁定'),
+      h('p', { class: 'lead' }, '离开一会儿后自动遮住聊天内容。消息照常接收，通知和未读数不受影响。'),
+      track,
+      h('span', { class: 'hint' }, `在 设置 › 通用 里可以改等待时间或关闭。${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`)));
+  // 每次重新锁上时：滑块回到最左，焦点放到滑块上（按回车也能解锁）
+  lockEl.reset = () => { startX = null; place(0); requestAnimationFrame(() => thumb.focus()); };
+  return lockEl;
+}
+
+// 锁着时盖住整个内容区（网页版、轻量模式、编辑页、设置页都盖），下面的内容原样保留，编辑页没保存的不会丢
+function renderLock() {
+  const on = !!s.locked;
+  const was = !$lock.hidden;
+  $lock.hidden = !on;
+  $content.hidden = on;
+  if (on && !was) {
+    const el = lockPage();
+    if ($lock.firstChild !== el) $lock.replaceChildren(el);
+    el.reset();
+  }
+}
+
 function render(forceContent = false) {
   document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
   document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
@@ -694,6 +1096,8 @@ function render(forceContent = false) {
   renderSide();
   renderAi();
   renderTop();
+  renderLock();
+  renderPanel();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;
@@ -703,6 +1107,14 @@ function render(forceContent = false) {
     // 设置页里的下拉框打开时不重画，免得被关掉
     // 输入框正在输入时也不重画（团队页的登记表单）
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || !['SELECT', 'INPUT'].includes(document.activeElement.tagName)) $content.replaceChildren(settingsPage());
+  } else if (s.page === 'overview') {
+    // 只有内容变了才重画，免得滚动位置被打回顶部
+    const sig = JSON.stringify([s.accounts.map((a) => [a.id, a.name, a.color, a.unread, a.muted, a.groupMuted, a.groupId]), s.groups, notifLogCache.length, notifLogCache[0]?.at]);
+    if (key !== shown) loadNotifLog();
+    if (forceContent || key !== shown || sig !== overviewSig) { overviewSig = sig; $content.replaceChildren(overviewPage()); }
+    // 有新的未读时顺便刷新记录
+    else if (s.accounts.reduce((n, a) => n + (a.unread || 0), 0) !== overviewTotal) loadNotifLog();
+    overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
   } else if (acc && !acc.problem && acc.mode === 'lite') {

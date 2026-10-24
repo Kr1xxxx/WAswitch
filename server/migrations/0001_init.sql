@@ -54,7 +54,8 @@ CREATE TABLE wa_accounts (
   expected_country TEXT NOT NULL DEFAULT '',  -- 两位国家代码，空 = 不检查
   note TEXT NOT NULL DEFAULT '',              -- 只从后台发给客户端
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER                          -- 软删除：保留行，离线的电脑以后还能收到 visible=0
 );
 CREATE INDEX wa_accounts_device ON wa_accounts(device_id);
 CREATE INDEX wa_accounts_group ON wa_accounts(group_id);

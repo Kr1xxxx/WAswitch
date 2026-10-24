@@ -209,11 +209,17 @@ await test('停用员工等于停用他的所有电脑', async () => {
   assert.equal((await sync(tokB, {})).data.revoked, true);
   await boss.patch(`users/${agentA}`, { disabled: false });
 });
-await test('收回后才能删除记录；只有老板能删', async () => {
+await test('收回后才能删除记录；只有老板能删；删除是软删除，离线的电脑之后仍收到隐藏', async () => {
+  const offlineCursor = (await sync(tokB, {})).data.cursor; // 电脑 B 之后一直离线
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 400);
   await boss.post(`accounts/${acc1}/unassign`);
   assert.equal((await admin('sup@example.com').del(`accounts/${acc1}`)).status, 403);
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 200);
+  assert.ok(!(await boss.get('overview')).data.accounts.some((a) => a.id === acc1));
+  assert.equal((await boss.del(`accounts/${acc1}`)).status, 404);
+  const r = await sync(tokB, { cursor: offlineCursor });
+  assert.deepEqual(r.data.seats.map((x) => [x.team_id, x.visible]), [[acc1, false]]);
+  assert.equal(r.data.seats[0].note, '');
 });
 await test('客户端暂停的收回：上报后台，管理员确认后下发，执行完清掉', async () => {
   await sync(tokA, { device: { held_hides: 3 } });

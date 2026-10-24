@@ -11,7 +11,7 @@ const path = require('path');
 const asset = (name) => path.join(__dirname, '..', 'assets', name);
 
 class Notifier {
-  // hooks: { getAccounts(), getWindow(), activate(id), quit() }
+  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit() }
   constructor(hooks) {
     this.hooks = hooks;
     this.unread = new Map(); // id -> 未读对话数
@@ -34,6 +34,11 @@ class Notifier {
     return sum;
   }
 
+  // 这个号是否不弹通知：账号自己关了，或者所在分组整组关了
+  muted(acc) {
+    return this.hooks.isMuted ? this.hooks.isMuted(acc) : !!acc.muted;
+  }
+
   showWindow() {
     const win = this.hooks.getWindow();
     if (!win) return;
@@ -50,7 +55,10 @@ class Notifier {
     if (count > before) this.lastNewAt = Date.now();
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
-    if (count > before && !acc.muted && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
+    const popped = count > before && !this.muted(acc) && !userIsLooking;
+    if (popped) this.notify(acc, `有 ${count} 个未读对话`);
+    // 通知记录：只记哪个号、什么时候、几个未读，以及有没有弹出来；不记消息内容
+    if (count > before && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count, popped });
     this.refresh();
   }
 
@@ -113,7 +121,7 @@ class Notifier {
       const n = this.unread.get(acc.id) || 0;
       const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
-        label: `${acc.name}${n ? `（${n}）` : ''}${acc.muted ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
+        label: `${acc.name}${n ? `（${n}）` : ''}${this.muted(acc) ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });

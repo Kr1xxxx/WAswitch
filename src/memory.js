@@ -19,8 +19,10 @@ const DEFAULTS = {
   sidebarCollapsed: false, // 侧栏只显示图标
   recycleLastMB: 800, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
+  lockMinutes: 5, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
 };
 const RECYCLE_CHOICES = [600, 800, 1000, 1500];
+const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
 const CHECK_EVERY_MS = 60 * 1000;
 const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
 const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回收
@@ -46,6 +48,7 @@ function loadSettings() {
       sidebarCollapsed: bool('sidebarCollapsed'),
       recycleLastMB: nearestRecycle(raw.recycleLastMB) || DEFAULTS.recycleLastMB,
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
+      lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
     };
   } catch {
     return { ...DEFAULTS };
@@ -131,4 +134,4 @@ class MemoryManager {
   }
 }
 
-module.exports = { DEFAULTS, RECYCLE_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches };
+module.exports = { DEFAULTS, RECYCLE_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };

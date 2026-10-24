@@ -13,6 +13,7 @@ const path = require('path');
 const PROTOCOL = 1;
 const FILE = 'team.json';
 const DEBOUNCE_MS = 10 * 1000;
+const EARLY_GAP_MS = 60 * 1000; // 提前同步离上一次同步至少隔 60 秒（免费额度）
 const BACKOFF_MIN = [2, 4, 8, 16, 30];
 const TIMEOUT_MS = 15 * 1000;
 const MAX_EVENTS = 500;
@@ -228,7 +229,7 @@ class TeamSync {
         state: STATES.includes(s.state) ? s.state : 'error',
         unread: Number.isInteger(s.unread) && s.unread >= 0 ? s.unread : 0,
         proxy_ok: typeof s.proxy_ok === 'boolean' ? s.proxy_ok : null,
-        proxy_ms: Number.isInteger(s.proxy_ms) ? s.proxy_ms : null,
+        proxy_ms: Number.isInteger(s.proxy_ms) && s.proxy_ms >= 0 ? Math.round(s.proxy_ms / 50) * 50 : null,
         exit_ip: typeof s.exit_ip === 'string' ? s.exit_ip : '',
         exit_country: typeof s.exit_country === 'string' && /^[A-Z]{2}$/.test(s.exit_country) ? s.exit_country : '',
         exit_changed: s.exit_changed === true,
@@ -245,13 +246,17 @@ class TeamSync {
     this.noteChange(true);
   }
 
-  // 主进程每次刷新界面时调用：团队号状态变了，10 秒后提前同步一次（10 秒内的变化合并）
+  // 主进程每次刷新界面时调用。只有团队号的状态（在线、要扫码、代理断了等）变了或有新事件，才提前同步：
+  // 至少等 10 秒合并变化，而且离上一次同步至少 60 秒。未读数、延迟这些等正常的 2 分钟同步带上。
+  // 离线退避期间不提前（免得断网时反复重试）。
   noteChange(force = false) {
-    if (!this.enrolled()) return;
-    const sig = force ? `${Math.random()}` : JSON.stringify(this.statusList());
-    if (sig === this.lastSig) return;
+    if (!this.enrolled() || this.state.revoked) return;
+    const sig = JSON.stringify(this.statusList().map((x) => [x.team_id, x.state]));
+    if (!force && sig === this.lastSig) return;
     this.lastSig = sig;
-    if (!this.dueAt || this.dueAt - this.now() > DEBOUNCE_MS) this.schedule(DEBOUNCE_MS);
+    if (this.failures > 0) return;
+    const at = Math.max(this.now() + DEBOUNCE_MS, (this.lastSyncAt || 0) + EARLY_GAP_MS);
+    if (!this.dueAt || this.dueAt > at) this.schedule(at - this.now());
   }
 
   // ---------- 同步 ----------
@@ -274,6 +279,7 @@ class TeamSync {
   async doSync() {
     const token = this.tokenPlain();
     if (!token) { this.offline('本机保存的令牌读不出来，请重新登记'); return { error: 'token' }; }
+    this.lastSyncAt = this.now();
     const events = this.state.events.slice(0, 100);
     const info = this.hooks.deviceInfo() || {};
     const body = {

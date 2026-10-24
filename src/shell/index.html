@@ -12,7 +12,12 @@
     <div id="aibar" hidden></div>
     <div id="topbar"></div>
     <!-- 账号页面时，WhatsApp 页面盖在这块区域上面 -->
-    <div id="content"></div>
+    <div id="body">
+      <div id="content"></div>
+      <div id="lock" hidden></div>
+      <!-- 右侧面板：话术库和客户名单（账号页面时 WhatsApp 页面会让出这块宽度） -->
+      <aside id="panel" hidden aria-label="话术和客户"></aside>
+    </div>
   </main>
   <script src="lite.js"></script>
   <script src="shell.js"></script>

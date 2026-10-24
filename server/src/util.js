@@ -38,6 +38,9 @@ export async function sha256hex(text) {
 
 // 读 JSON 请求体：必须是 application/json，最多 maxBytes
 export async function readJson(request, maxBytes = 64 * 1024) {
+  // 先看声明的长度，太大的请求不读进内存
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new HttpError(413, '请求太大');
   const text = await request.text();
   if (text.length > maxBytes) throw new HttpError(413, '请求太大');
   if (!text) return {}; // 没有请求体的 POST（比如“生成登记码”）

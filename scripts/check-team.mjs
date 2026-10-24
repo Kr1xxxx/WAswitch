@@ -187,6 +187,33 @@ await test('后台不允许私人号：私人号停着；再允许就恢复', as
   assert.equal(A.team.isParked(A.accounts[3]), false);
   assert.ok(A.log.includes('unpark:104'));
 });
+await test('提前同步只看状态变化，未读数不触发；离上一次同步至少 60 秒', async () => {
+  let clock = Date.now();
+  const t0 = clock;
+  const waits = [];
+  let st = 'ready';
+  const T = new TeamSync({
+    dir: A.dir, safeStorage: fakeSafe, appVersion: '0.4.0', platform: 'win32', fetchImpl, now: () => clock,
+    timers: { setTimeout: (_f, ms) => { waits.push(ms); return {}; }, clearTimeout: () => {} },
+    hooks: { ...A.team.hooks, statusOf: (a) => ({ state: st, unread: a.unread || 0, proxy_ms: 83 }) },
+  });
+  const mine = A.accounts.find((a) => a.teamId && !a.teamHidden);
+  T.noteChange();
+  assert.deepEqual(await T.syncNow(), { ok: true }); // 同步完排上正常的下一次（2 分钟后）
+  assert.equal(T.statusList()[0].proxy_ms, 100); // 延迟取整到 50 毫秒
+  waits.length = 0;
+  for (let i = 0; i < 20; i += 1) { mine.unread = 10 + i; clock += 1000; T.noteChange(); }
+  assert.deepEqual(waits, [], '未读数变化不该提前同步');
+  st = 'needs_qr';
+  T.noteChange();
+  assert.equal(waits.length, 1);
+  assert.equal(clock + waits[0], t0 + 60_000, '离上一次同步至少 60 秒');
+  T.recordEvent(mine, 'dropped');
+  assert.equal(waits.length, 1, '已经排了同一时间的同步，不再重排');
+  mine.unread = 0;
+  T.state.events.length = 0;
+  T.persist();
+});
 await test('停用电脑：团队号全部停着，私人号照常；重新登记后团队号仍然隐藏，等后台分配', async () => {
   const devA = (await boss('GET', 'users')).devices.find((d) => d.name === '前台');
   await boss('POST', `devices/${devA.id}/revoke`);

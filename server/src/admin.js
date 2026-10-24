@@ -41,7 +41,7 @@ async function me(db, user) {
 }
 
 async function overview(db, user) {
-  const where = isOwner(user) ? '' : 'WHERE a.group_id = ?';
+  const where = isOwner(user) ? 'WHERE a.deleted_at IS NULL' : 'WHERE a.deleted_at IS NULL AND a.group_id = ?';
   const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.user_id, a.device_id,
       u.name AS user_name, d.name AS device_name, d.last_seen_at, d.revoked_at, d.app_version,
       st.state, st.unread, st.proxy_ok, st.proxy_ms, st.exit_ip, st.exit_country, st.exit_changed, st.reported_at
@@ -56,7 +56,7 @@ async function overview(db, user) {
 }
 
 async function events(db, user, accountId) {
-  const a = found(await db.prepare('SELECT group_id FROM wa_accounts WHERE id = ?').bind(accountId).first());
+  const a = found(await db.prepare('SELECT group_id FROM wa_accounts WHERE id = ? AND deleted_at IS NULL').bind(accountId).first());
   need(inScope(user, a.group_id));
   const rows = await db.prepare('SELECT at, kind, detail FROM status_events WHERE account_id = ? ORDER BY at DESC LIMIT 100').bind(accountId).all();
   return json({ events: rows.results });
@@ -151,6 +151,11 @@ async function updateUser(db, user, id, body) {
     return fail(400, '老板和主管要有邮箱');
   }
   await audit(db, user.id, 'user.update', id, body);
+  // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
+  if (body.group_id !== undefined && isOwner(user)) {
+    const left = await db.prepare('SELECT COUNT(*) AS n FROM wa_accounts WHERE user_id = ? AND deleted_at IS NULL AND group_id IS NOT ?').bind(id, after.group_id).first();
+    if (left && left.n) return json({ ok: true, warning: `他名下还有 ${left.n} 个号在原来的组。需要的话，到“账号与坐席”里逐个改组。` });
+  }
   return json({ ok: true });
 }
 
@@ -199,7 +204,7 @@ async function renameDevice(db, user, id, body) {
 // ---------- 账号（坐席） ----------
 
 async function targetAccount(db, user, id) {
-  const a = found(await db.prepare('SELECT id, group_id, user_id, device_id FROM wa_accounts WHERE id = ?').bind(id).first(), '没有这个账号');
+  const a = found(await db.prepare('SELECT id, group_id, user_id, device_id FROM wa_accounts WHERE id = ? AND deleted_at IS NULL').bind(id).first(), '没有这个账号');
   need(inScope(user, a.group_id));
   return a;
 }
@@ -259,12 +264,12 @@ async function deleteAccount(db, user, id) {
   need(isOwner(user), '只有老板能删除账号记录');
   const a = await targetAccount(db, user, id);
   if (a.device_id) return fail(400, '先收回这个号，再删除记录');
-  // 历史上显示过它的电脑都已经收到 visible=0，这里只删后台记录
+  // 软删除：保留账号行和 visible=0 的显示记录。收回时离线的电脑，下次同步还能收到隐藏。
+  // 名称、备注清空，后台列表里不再显示
   await db.batch([
     db.prepare('DELETE FROM account_status WHERE account_id = ?').bind(id),
     db.prepare('DELETE FROM status_events WHERE account_id = ?').bind(id),
-    db.prepare('DELETE FROM device_seats WHERE account_id = ? AND visible = 0').bind(id),
-    db.prepare('DELETE FROM wa_accounts WHERE id = ?').bind(id),
+    db.prepare("UPDATE wa_accounts SET deleted_at = ?, label = '已删除', number_label = '', note = '', expected_country = '', updated_at = ? WHERE id = ?").bind(now(), now(), id),
   ]);
   await audit(db, user.id, 'account.delete', id);
   return json({ ok: true });

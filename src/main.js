@@ -6,7 +6,7 @@
 //   3. 环境：独立的浏览器标识、语言、时区（fingerprint.js），只用官方接口设置
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
 // 主号只能用网页版。轻量模式必须走代理，后台进程里有网络护栏，任何直连都会被拦下。
-const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -15,6 +15,8 @@ const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
+const { EventLog } = require('./eventlog');
+const records = require('./records');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
@@ -71,7 +73,9 @@ const SIDE_COLLAPSED = 64;
 const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
+const PANEL_W = 300; // 右侧话术/客户面板的宽度
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
+const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
@@ -138,6 +142,100 @@ const storeFile = () => path.join(app.getPath('userData'), 'accounts.json');
 let accounts = [];
 let accountsFileOk = false; // 账号文件读取正常时才清理残留的分区文件夹
 
+// ---------- 分组 ----------
+// 分组单独存在 groups.json（accounts.json 仍是账号数组，老版本照样能读）。账号上记 groupId。
+// 分组只影响侧栏怎么显示：折叠只是不显示这几行，页面照常运行；整组静音和账号自己的静音是“或”的关系。
+const groupsFile = () => path.join(app.getPath('userData'), 'groups.json');
+const GROUP_MAX = 30;
+let groups = [];
+function loadGroups() {
+  const file = groupsFile();
+  if (!fs.existsSync(file)) return [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(raw)) throw new Error('not an array');
+    const seen = new Set();
+    return raw.filter((g) => g && typeof g.id === 'string' && g.id && !seen.has(g.id) && seen.add(g.id)).slice(0, GROUP_MAX).map((g) => ({
+      ...g,
+      name: String(g.name || '分组').replace(/\s+/g, ' ').trim().slice(0, 20) || '分组',
+      collapsed: g.collapsed === true,
+      muted: g.muted === true,
+    }));
+  } catch (e) {
+    // 和 accounts.json 一样：坏了先备份，不覆盖。分组丢了只是账号都回到“未分组”，账号本身不受影响
+    const backup = `${file}.broken-${Date.now()}`;
+    try { fs.copyFileSync(file, backup); } catch {}
+    console.warn(`groups.json 无法读取（${e.message}），已备份到 ${backup}`);
+    return [];
+  }
+}
+function saveGroups() {
+  const file = groupsFile();
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(groups, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
+}
+const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
+// 是否不弹通知：账号自己关了，或者所在分组整组关了
+const isMuted = (acc) => acc.muted || !!groupOf(acc)?.muted;
+// 侧栏的显示顺序：先是没分组的号，再按分组顺序；同一段里按 accounts.json 的顺序。Ctrl+数字、托盘也按这个顺序
+function displayOrder() {
+  const list = visibleAccounts();
+  return [...list.filter((a) => !groupOf(a)), ...groups.flatMap((g) => list.filter((a) => a.groupId === g.id))];
+}
+// 把账号挪到某个分组（'' 表示未分组）里，放在 beforeId 那个号前面；beforeId 为空就放到这一段的最后
+function moveAccount(id, groupId, beforeId) {
+  const acc = findAcc(id);
+  if (!acc) return false;
+  if (groupId && !groups.some((g) => g.id === groupId)) return false;
+  const target = groupId || '';
+  const before = beforeId ? findAcc(beforeId) : null;
+  accounts.splice(accounts.indexOf(acc), 1);
+  acc.groupId = target;
+  if (before && before.id !== id && (before.groupId || '') === target) {
+    accounts.splice(accounts.indexOf(before), 0, acc);
+  } else {
+    // 放到同一段最后一个号后面；这一段还没有号就放到最后
+    const last = [...accounts].reverse().find((a) => (groupOf(a) ? a.groupId : '') === target);
+    accounts.splice(last ? accounts.indexOf(last) + 1 : accounts.length, 0, acc);
+  }
+  saveAccounts();
+  notifier.refresh();
+  refresh();
+  return true;
+}
+// 上移、下移：只在同一段里挪
+function stepAccount(id, dir) {
+  const acc = findAcc(id);
+  if (!acc) return;
+  const key = groupOf(acc) ? acc.groupId : '';
+  const section = displayOrder().filter((a) => (groupOf(a) ? a.groupId : '') === key);
+  const i = section.indexOf(acc);
+  const j = i + dir;
+  if (j < 0 || j >= section.length) return;
+  const other = section[j];
+  const ai = accounts.indexOf(acc);
+  const oi = accounts.indexOf(other);
+  accounts[ai] = other;
+  accounts[oi] = acc;
+  saveAccounts();
+  notifier.refresh();
+  refresh();
+}
+let editGroupId = ''; // 新建的分组：侧栏直接进入改名
+function createGroup(moveId) {
+  if (groups.length >= GROUP_MAX) return null;
+  const used = new Set(groups.map((g) => g.name));
+  let n = groups.length + 1;
+  while (used.has(`分组 ${n}`)) n += 1;
+  const g = { id: `g${Date.now().toString(36)}`, name: `分组 ${n}`, collapsed: false, muted: false };
+  groups.push(g);
+  saveGroups();
+  editGroupId = g.id;
+  if (moveId) moveAccount(moveId, g.id, null);
+  else refresh();
+  return g.id;
+}
+
 function saveAccounts() {
   const file = storeFile();
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(accounts, null, 2));
@@ -168,12 +266,20 @@ function loadAccounts() {
   list.forEach((acc, i) => {
     acc.id = String(acc.id);
     acc.name = String(acc.name || '未命名').slice(0, 40);
+    // 备注：手机号、用途、负责人之类，只在本机显示，不给 MCP
+    acc.note = typeof acc.note === 'string' ? cleanNote(acc.note) : '';
     acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
     acc.muted = acc.muted === true;
+    // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
+    acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
+    acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
+    acc.spellcheck = acc.spellcheck === true;
+    // 自定义下载文件夹：只能是用户在对话框里选的绝对路径，其他一律当没设
+    acc.downloadDir = typeof acc.downloadDir === 'string' && path.isAbsolute(acc.downloadDir) ? acc.downloadDir : '';
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -198,6 +304,10 @@ function loadAccounts() {
     if (first) first.primary = true;
   }
   return list;
+}
+
+function cleanNote(note) {
+  return String(note || '').replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX);
 }
 
 function nextName() {
@@ -291,6 +401,13 @@ async function watchExits() {
       // 测的时候代理被改了或者号被删了：结果作废
       if (!findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
       noteProxyHealth(acc, res);
+      // 记延迟：成功记往返毫秒数；失败只记“失败”，不记错误原文（里面可能有代理地址）
+      if (res.ok) {
+        lastLatency.set(acc.id, { ms: res.ms, at: Date.now() });
+        netEvent(acc.id, 'exit', { ms: res.ms });
+      } else {
+        netEvent(acc.id, 'exit_fail');
+      }
       if (!res.ok) continue;
       const label = regionName(res.country);
       if (prev && prev !== res.ip) {
@@ -334,6 +451,7 @@ const isLite = (acc) => acc && acc.mode === 'lite';
 let team = null;
 const isParked = (acc) => !!(team && acc && team.isParked(acc));
 const visibleAccounts = () => accounts.filter((a) => !isParked(a));
+const isParkedId = (id) => accounts.some((a) => a.id === String(id) && isParked(a));
 
 const memoryManager = new memory.MemoryManager(settings, {
   views,
@@ -351,7 +469,9 @@ const memoryManager = new memory.MemoryManager(settings, {
 });
 
 const notifier = new Notifier({
-  getAccounts: () => visibleAccounts(),
+  getAccounts: () => displayOrder(),
+  onNew: (e) => addNotifLog(e),
+  isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
   quit: () => { quitting = true; app.quit(); },
@@ -370,6 +490,8 @@ const notifier = new Notifier({
       checked: settings.lowMemoryMode,
       click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
     },
+    ...(visibleAccounts().length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
+    { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
@@ -498,8 +620,87 @@ function sideWidth() {
   return page !== 'settings' && settings.sidebarCollapsed ? SIDE_COLLAPSED : SIDE_EXPANDED;
 }
 
+// ---------- 聊天锁 ----------
+// 电脑一段时间没有键盘鼠标操作，就把聊天区遮住（藏起账号页面，界面上显示锁屏卡片），右滑解锁，不设密码。
+// 只是防路过的人看到聊天内容：页面照常在后台运行，消息、未读数、通知都不受影响。不往 WhatsApp 页面注入任何东西。
+let locked = false;
+const LOCK_POLL_MS = 10 * 1000;
+function setLocked(on) {
+  on = !!on;
+  if (locked === on) return;
+  if (on && !accounts.length) return;
+  locked = on;
+  // 先把键盘焦点从账号页面挪走，锁住后打字不会进到聊天里
+  if (on && shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
+  layout();
+  refresh();
+  if (!on) {
+    focusActive();
+    // 解锁后正在看的轻量号聊天马上标已读（锁着时不标）
+    const jid = liteOpen.get(activeId);
+    if (jid && page === 'account' && isLite(findAcc(activeId)) && win && win.isFocused()) liteHost.read(activeId, jid);
+  }
+}
+// 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
+// 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
+let unfocusedSince = 0;
+let appReadyAt = Date.now(); // 启动时间（app ready 时再更新一次）
+function idleSeconds() {
+  const sys = powerMonitor.getSystemIdleTime();
+  // 刚启动时不按系统空闲时间算（开机自启、电脑放了很久再打开软件，不会一打开就锁）
+  const sysSinceReady = Math.min(sys, Math.floor((Date.now() - appReadyAt) / 1000));
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sysSinceReady; }
+  if (!unfocusedSince) unfocusedSince = Date.now();
+  return Math.max(sysSinceReady, (Date.now() - unfocusedSince) / 1000);
+}
+function checkIdleLock() {
+  const mins = settings.lockMinutes;
+  if (!mins || locked || !visibleAccounts().length) return;
+  if (idleSeconds() >= mins * 60) setLocked(true);
+}
+
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
+// ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
+let panelOpen = false;
+let replyStore = null;
+let customerStore = null;
+const panelShown = () => panelOpen && page === 'account' && !locked && visibleAccounts().length > 0;
+function togglePanel(on = !panelOpen) {
+  panelOpen = !!on;
+  refresh();
+}
+// 停着的号（团队收回等）名下的客户也不显示、不提醒，数据保留
+const parkedCustomer = (c) => !!c.accountId && accounts.some((a) => a.id === c.accountId && isParked(a));
+function panelData() {
+  const names = new Map(visibleAccounts().map((a) => [a.id, a.name]));
+  return {
+    replies: replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })),
+    customers: customerStore.list().filter((c) => !parkedCustomer(c)).map((c) => ({
+      id: c.id, accountId: c.accountId, accountName: names.get(c.accountId) || '', name: c.name, phone: c.phone,
+      note: c.note, tags: c.tags, followUpAt: c.followUpAt, updatedAt: c.updatedAt,
+    })),
+  };
+}
+// 跟进提醒：每分钟看一次，到时间的弹通知，只写名字（通知会显示在锁屏上，不写电话和备注）
+// 一次最多弹 3 条，其余合成一条“还有 N 条跟进提醒”
+function checkFollowUps() {
+  if (!customerStore) return;
+  const now = Date.now();
+  const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now && !parkedCustomer(c));
+  if (!due.length) return;
+  for (const c of due) customerStore.patch(c.id, { reminded: true }, { save: false });
+  customerStore.save();
+  for (const c of due.slice(0, 3)) {
+    const accId = c.accountId;
+    notifier.notifyApp('WAswitch', `跟进提醒：${c.name || '一位客户'}`, () => {
+      notifier.showWindow();
+      if (findAcc(accId)) userActivate(accId); // 只切换账号，不自动打开面板
+    });
+  }
+  if (due.length > 3) notifier.notifyApp('WAswitch', `还有 ${due.length - 3} 条跟进提醒`, () => notifier.showWindow());
+}
+
 function layout() {
   if (!win) return;
   const { width, height } = win.getContentBounds();
@@ -509,20 +710,53 @@ function layout() {
   const bounds = {
     x: side,
     y: GAP + top,
-    width: Math.max(0, width - side - GAP),
+    width: Math.max(0, width - side - GAP - (panelShown() ? PANEL_W : 0)),
     height: Math.max(0, height - GAP * 2 - top),
   };
   for (const [id, view] of views) {
     const current = page === 'account' && id === activeId;
     view.setBounds(bounds);
-    view.setVisible(current && !problems.has(id));
+    view.setVisible(current && !problems.has(id) && !locked);
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
   syncLiteWatch();
 }
 
+// ---------- 连接记录（延迟和掉线） ----------
+// 不额外发网络请求，只记已经看到的事：页面/代理连不上和恢复、掉线要扫码和重新登录、页面崩溃、
+// 30 分钟一次的出口巡检（用它的往返时间当延迟）。detail 只放错误类型，不放代理地址和账号密码。
+let netLog = null;
+const netLastSeen = new Map(); // id -> { problem, login, downAt }
+const lastLatency = new Map(); // id -> { ms, at }
+function netEvent(id, kind, extra = {}) {
+  if (!netLog) return;
+  netLog.add({ id: String(id), kind, ...extra });
+}
+// 每次推状态前对比一下，状态变了就记一条（所有出问题的路径都会走到 pushState）
+function trackNet() {
+  if (!netLog) return;
+  for (const acc of visibleAccounts()) {
+    const prev = netLastSeen.get(acc.id) || { problem: '', login: '', downAt: 0 };
+    const p = problems.get(acc.id);
+    const problem = p ? String(p.kind || 'unknown').slice(0, 20) : '';
+    const login = loginStates.get(acc.id) || '';
+    const next = { ...prev, problem, login };
+    if (problem && problem !== prev.problem) {
+      netEvent(acc.id, 'down', { detail: problem });
+      if (!prev.problem) next.downAt = Date.now();
+    } else if (!problem && prev.problem) {
+      netEvent(acc.id, 'up', { ms: prev.downAt ? Date.now() - prev.downAt : undefined, detail: prev.problem });
+      next.downAt = 0;
+    }
+    if (login === 'needs_qr' && prev.login === 'logged_in') netEvent(acc.id, 'qr');
+    if (login === 'logged_in' && prev.login === 'needs_qr') netEvent(acc.id, 'login');
+    netLastSeen.set(acc.id, next);
+  }
+}
+
 function pushState() {
   team?.noteChange();
+  trackNet();
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
     platform: process.platform,
@@ -535,13 +769,30 @@ function pushState() {
     update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
     team: team ? team.snapshot() : null,
-    accounts: visibleAccounts().map((acc) => {
+    locked,
+    panelOpen: panelShown(),
+    lockChoices: memory.LOCK_CHOICES,
+    // 分组：每组带上未读总数，折叠后组头上也能看到
+    groups: groups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      collapsed: g.collapsed,
+      muted: g.muted,
+      count: visibleAccounts().filter((a) => a.groupId === g.id).length,
+      unread: visibleAccounts().filter((a) => a.groupId === g.id).reduce((n, a) => n + (notifier.unread.get(a.id) || 0), 0),
+    })),
+    editGroupId,
+    accounts: displayOrder().map((acc) => {
       const problem = problems.get(acc.id);
       return {
         id: acc.id,
         name: acc.name,
+        note: acc.note,
         color: acc.color,
         muted: acc.muted,
+        groupId: groupOf(acc) ? acc.groupId : '',
+        groupMuted: !!groupOf(acc)?.muted,
+        zoom: acc.zoom || 1,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
@@ -551,6 +802,7 @@ function pushState() {
         exitIp: exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : ''),
         exitAt: acc.lastExit ? acc.lastExit.at : 0,
         exitChange: exitChanges.get(acc.id) || null,
+        latency: lastLatency.get(acc.id) || null,
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
@@ -753,23 +1005,195 @@ async function checkLogins() {
 const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
+// ---------- 缩放（每个号单独记） ----------
+// 和 Chrome 一样的几档；只对网页版号生效（轻量模式的界面跟着软件走）
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+function applyZoom(acc) {
+  const view = views.get(acc.id);
+  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || 1);
+}
+// dir: 1 放大，-1 缩小，0 还原
+function stepZoom(id, dir) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  const i = ZOOM_STEPS.indexOf(acc.zoom || 1);
+  const next = dir === 0 ? 1 : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
+  if (next === acc.zoom) return;
+  acc.zoom = next;
+  saveAccounts();
+  applyZoom(acc);
+  pushState();
+}
+
+// ---------- 通知记录 ----------
+// 只记 {at, id, count, popped}：哪个号、什么时候、涨到几个未读、有没有弹通知。不记消息内容、不记联系人。最多 300 条
+const NOTIF_LOG_MAX = 300;
+const notifLogFile = () => path.join(app.getPath('userData'), 'notif-log.json');
+let notifLog = null;
+let notifLogTimer = null;
+function loadNotifLog() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(notifLogFile(), 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((e) => e && Number.isFinite(e.at) && typeof e.id === 'string' && Number.isFinite(e.count))
+      .slice(-NOTIF_LOG_MAX).map((e) => ({ at: e.at, id: e.id, count: e.count, popped: e.popped === true }));
+  } catch {
+    return []; // 文件不存在或坏了：从空的开始（只是记录，丢了不影响使用）
+  }
+}
+function saveNotifLogSoon() {
+  clearTimeout(notifLogTimer);
+  notifLogTimer = setTimeout(() => {
+    notifLogTimer = null;
+    try {
+      const file = notifLogFile();
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(notifLog));
+      fs.renameSync(`${file}.tmp`, file);
+    } catch (e) { console.warn('通知记录保存失败', e.message); }
+  }, 2000);
+}
+function addNotifLog({ id, count, popped }) {
+  if (!notifLog) notifLog = loadNotifLog();
+  notifLog.push({ at: Date.now(), id: String(id), count, popped: !!popped });
+  if (notifLog.length > NOTIF_LOG_MAX) notifLog.splice(0, notifLog.length - NOTIF_LOG_MAX);
+  saveNotifLogSoon();
+}
+
+// ---------- 拼写检查（每个号单独开关） ----------
+// macOS 用系统自带的拼写检查，不下载东西；Windows、Linux 第一次开可能会下载英文词典，
+// 走的是这个号自己的 session，也就是这个号的代理（代理没设好时不打开）
+const proxyReady = new Map(); // id -> 这个号的代理是否已经设好（没设好时绝不打开拼写检查）
+function applySpellcheck(acc, ses = session.fromPartition(`persist:wa-${acc.id}`)) {
+  const on = acc.spellcheck && proxyReady.get(acc.id) === true;
+  if (on && process.platform !== 'darwin') ses.setSpellCheckerLanguages(['en-US']);
+  ses.setSpellCheckerEnabled(on);
+}
+function setSpellcheck(id, on) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  acc.spellcheck = !!on;
+  saveAccounts();
+  applySpellcheck(acc);
+  pushState();
+}
+// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴。不提供“检查元素”
+function setupPageMenu(wc, ses) {
+  wc.on('context-menu', (_e, p) => {
+    const items = [];
+    if (p.misspelledWord) {
+      for (const word of (p.dictionarySuggestions || []).slice(0, 5)) items.push({ label: word, click: () => wc.replaceMisspelling(word) });
+      if (!items.length) items.push({ label: '没有拼写建议', enabled: false });
+      items.push({ label: `把“${p.misspelledWord.slice(0, 30)}”加入词典`, click: () => ses.addWordToSpellCheckerDictionary(p.misspelledWord) });
+      items.push({ type: 'separator' });
+    }
+    if (p.isEditable) {
+      items.push(
+        { label: '剪切', role: 'cut', enabled: p.editFlags.canCut },
+        { label: '复制', role: 'copy', enabled: p.editFlags.canCopy },
+        { label: '粘贴', role: 'paste', enabled: p.editFlags.canPaste },
+        { label: '全选', role: 'selectAll', enabled: p.editFlags.canSelectAll },
+      );
+    } else if (p.selectionText) {
+      items.push({ label: '复制', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  });
+}
+
+// ---------- 下载：每个号存到自己的文件夹 ----------
+// 默认：系统“下载”文件夹/WAswitch/<账号名>。可以在右键菜单里改成别的文件夹（只能从对话框里选）。
+// 文件夹写不进去时，退回系统的“另存为”对话框。下载完不会自动打开文件。
+const WIN_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+function safeName(name, fallback) {
+  let n = String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_').replace(/\s+/g, ' ').trim();
+  n = n.replace(/[. ]+$/, ''); // Windows 不允许结尾是点或空格
+  if (WIN_RESERVED.test(n)) n = `_${n}`;
+  n = n.slice(0, 80).replace(/[. ]+$/, '');
+  return n || fallback;
+}
+function downloadDirOf(acc) {
+  if (acc.downloadDir) return acc.downloadDir;
+  // 两个号同名时，文件夹名后面加上账号编号，免得混在一起
+  const base = safeName(acc.name, `account-${safeName(acc.id, 'x')}`);
+  const dup = accounts.some((a) => a !== acc && !a.downloadDir && safeName(a.name, '') === base);
+  return path.join(app.getPath('downloads'), 'WAswitch', dup ? `${base}-${safeName(acc.id, 'x')}` : base);
+}
+const reservedDownloads = new Set(); // 正在下载的目标路径，同时下两个同名文件不会撞
+function uniquePath(dir, filename) {
+  const ext = path.extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length) || 'file';
+  for (let i = 0; i < 1000; i += 1) {
+    const p = path.join(dir, i ? `${stem} (${i})${ext}` : `${stem}${ext}`);
+    if (!reservedDownloads.has(p) && !fs.existsSync(p)) return p;
+  }
+  return null;
+}
+const downloadSessions = new WeakSet(); // 每个 session 只挂一次（视图重建时 session 不变）
+function setupDownloads(acc, ses) {
+  if (downloadSessions.has(ses)) return;
+  downloadSessions.add(ses);
+  const id = acc.id;
+  ses.on('will-download', (_e, item) => {
+    const cur = findAcc(id);
+    if (!cur) return;
+    const dir = downloadDirOf(cur);
+    let target = null;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      if (!fs.statSync(dir).isDirectory()) throw new Error('not a folder');
+      fs.accessSync(dir, fs.constants.W_OK);
+      const name = safeName(path.basename(item.getFilename() || ''), 'download');
+      target = uniquePath(dir, WIN_RESERVED.test(name) ? `_${name}` : name);
+    } catch (e) {
+      console.warn(`账号 ${id} 的下载文件夹不可写（${e.code || e.message}），改用另存为对话框`);
+    }
+    if (!target) return; // 不设路径：Electron 会弹系统的“另存为”对话框
+    reservedDownloads.add(target);
+    item.setSavePath(target);
+    item.once('done', () => reservedDownloads.delete(target));
+  });
+}
+async function pickDownloadDir(id) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  const r = await dialog.showOpenDialog(win, { title: `「${acc.name}」的下载文件夹`, defaultPath: downloadDirOf(acc), properties: ['openDirectory', 'createDirectory'] });
+  if (r.canceled || !r.filePaths[0] || !findAcc(id)) return;
+  acc.downloadDir = r.filePaths[0];
+  saveAccounts();
+}
+function openDownloadDir(id) {
+  const acc = findAcc(id);
+  if (!acc) return;
+  const dir = downloadDirOf(acc);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  // 只打开文件夹：路径如果指向的是文件（比如 accounts.json 被改过），什么都不做，绝不运行它
+  try { if (!fs.statSync(dir).isDirectory()) return; } catch { return; }
+  shell.openPath(dir);
+}
+
 async function createView(acc, loadDelay = 0) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   const r = fingerprint.resolve(acc.fingerprint);
   // 网络请求层面的 UA 和语言（包括 Service Worker 发出的请求）
   ses.setUserAgent(r.userAgent, r.acceptLanguage);
-  // 不用拼写检查，也就不会去下载词典
-  ses.setSpellCheckerEnabled(false);
   setupPermissions(ses);
+  // 代理没设好之前先关掉拼写检查，免得词典下载走真实 IP
+  ses.setSpellCheckerEnabled(false);
+  setupDownloads(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
+  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
+  proxyReady.set(acc.id, !applied.error);
+  if (!applied.error) applySpellcheck(acc, ses);
 
   const view = new WebContentsView({
-    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
+    // spellcheck 在这里打开，真正开不开由 session 的开关决定（applySpellcheck），切换时不用重开页面
+    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: true },
   });
   if (typeof view.setBorderRadius === 'function') view.setBorderRadius(14);
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy(webrtcPolicy(acc));
   setupNavigationGuards(wc);
+  setupPageMenu(wc, ses);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
 
@@ -808,7 +1232,11 @@ async function createView(acc, loadDelay = 0) {
     }
     scheduleRetry(acc.id);
   });
+  // Ctrl + 鼠标滚轮（或触控板缩放手势）：和快捷键走同一条路，记下的比例和顶栏一直对得上
+  wc.on('zoom-changed', (_e, dir) => { if (!locked) stepZoom(acc.id, dir === 'in' ? 1 : -1); });
   wc.on('did-finish-load', () => {
+    // 每次加载完都按这个号记下的比例设一次（刷新、崩溃重建后也一样）
+    applyZoom(acc);
     if (failed || applied.error) return;
     clearRetry(acc.id);
     if (problems.has(acc.id)) setProblem(acc.id, null);
@@ -816,6 +1244,7 @@ async function createView(acc, loadDelay = 0) {
   // 页面进程崩溃后调试连接会断开，直接重建这个账号的视图，保证环境设置重新生效
   wc.on('render-process-gone', (_e, details) => {
     if (details.reason === 'clean-exit') return;
+    netEvent(acc.id, 'crash', { detail: String(details.reason).slice(0, 20) });
     console.warn(`账号 ${acc.id} 的页面进程退出（${details.reason}），正在重建`);
     rebuilding.add(acc.id);
     setTimeout(async () => {
@@ -1053,7 +1482,8 @@ function activate(id, { focus = false } = {}) {
 function focusActive() {
   const acc = findAcc(activeId);
   const view = views.get(activeId);
-  if (page === 'account' && acc && !isLite(acc) && view && !problems.has(acc.id) && !view.webContents.isDestroyed()) view.webContents.focus();
+  // 锁着时只把焦点给界面（锁屏卡片），绝不给藏起来的账号页面
+  if (!locked && page === 'account' && acc && !isLite(acc) && view && !problems.has(acc.id) && !view.webContents.isDestroyed()) view.webContents.focus();
   else if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
 }
 
@@ -1222,6 +1652,8 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed'].includes(key)) {
     if (typeof value !== 'boolean') return;
+  } else if (key === 'lockMinutes') {
+    if (!memory.LOCK_CHOICES.includes(value)) return;
   } else {
     return;
   }
@@ -1290,10 +1722,32 @@ app.on('web-contents-created', (_e, wc) => {
     const inMain = (shellView && wc === shellView.webContents) || [...views.values()].some((v) => v.webContents === wc);
     if (!inMain) return;
     if (input.type === 'keyDown') lastTypedAt = Date.now();
-    if (input.type !== 'keyDown' || input.alt || input.shift) return;
+    if (input.type !== 'keyDown' || input.alt) return;
     const mod = process.platform === 'darwin' ? input.meta : input.control;
+    // Ctrl + = / - / 0（Mac 用 Cmd）：缩放当前网页版号，只在账号页面里按才算
+    if (mod && page === 'account' && !locked && ['=', '+', '-', '_', '0'].includes(input.key)) {
+      const acc = findAcc(activeId);
+      if (acc && !isLite(acc)) {
+        event.preventDefault();
+        stepZoom(acc.id, input.key === '0' ? 0 : input.key === '-' || input.key === '_' ? -1 : 1);
+      }
+      return;
+    }
+    // Ctrl+Shift+K（Mac 是 Cmd+Shift+K）：打开/收起右侧的话术和客户面板
+    if (mod && input.shift && input.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      togglePanel();
+      return;
+    }
+    if (input.shift) return;
+    // Ctrl+L（Mac 是 Cmd+L）：立即锁定聊天
+    if (mod && input.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      setLocked(true);
+      return;
+    }
     if (!mod || !/^[1-9]$/.test(input.key)) return;
-    const acc = accounts[Number(input.key) - 1];
+    const acc = displayOrder()[Number(input.key) - 1];
     if (!acc) return;
     event.preventDefault();
     userActivate(acc.id);
@@ -1399,6 +1853,7 @@ function setupTeam() {
 }
 
 app.whenReady().then(async () => {
+  appReadyAt = Date.now();
   if (!isPrimary) return;
   setupMenu();
   // 本地界面用的默认会话不需要任何权限
@@ -1418,7 +1873,10 @@ app.whenReady().then(async () => {
   win.on('hide', layout);
   win.on('show', layout);
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
+  win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {
+    // 锁着时切回窗口：焦点放回锁屏卡片，也不把轻量号的消息标成已读
+    if (locked) { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus(); return; }
     const jid = liteOpen.get(activeId);
     if (jid && page === 'account' && isLite(findAcc(activeId))) liteHost.read(activeId, jid);
   });
@@ -1448,6 +1906,12 @@ app.whenReady().then(async () => {
 
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
+  groups = loadGroups();
+  netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 1500, maxAgeMs: 7 * 24 * 3600 * 1000, routine: ['exit', 'exit_fail'], routinePerId: 50 });
+  replyStore = new records.Records(app.getPath('userData'), 'replies');
+  customerStore = new records.Records(app.getPath('userData'), 'customers');
+  setInterval(checkFollowUps, 60 * 1000);
+  setTimeout(checkFollowUps, 15 * 1000);
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
@@ -1459,6 +1923,10 @@ app.whenReady().then(async () => {
   if (!shouldStartHidden()) win.show();
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
+  setInterval(checkIdleLock, LOCK_POLL_MS);
+  // 系统锁屏时直接锁上，回来解开系统锁屏后还要右滑一次
+  powerMonitor.on('lock-screen', () => { if (settings.lockMinutes) setLocked(true); });
+  powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
@@ -1514,12 +1982,97 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings'].includes(p)) return;
+  if (!['account', 'settings', 'overview'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
 });
+// 未读总览页要的通知记录（最新的在前）；清空只清记录，不动未读数
+handleShell('notif:log', () => {
+  if (!notifLog) notifLog = loadNotifLog();
+  return notifLog.filter((e) => !isParkedId(e.id)).reverse();
+});
+handleShell('notif:clear', () => {
+  notifLog = [];
+  clearTimeout(notifLogTimer);
+  try { fs.rmSync(notifLogFile(), { force: true }); } catch {}
+  return true;
+});
+// 连接记录：最新的在前；清空只清记录
+handleShell('netlog:get', () => (netLog ? netLog.load().filter((e) => !isParkedId(e.id)).reverse() : []));
+handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
+// ---- 面板 ----
+onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
+handleShell('panel:data', () => panelData());
+handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
+handleShell('reply:delete', (id) => { if (typeof id === 'string') replyStore.remove(id); return panelData(); });
+handleShell('cust:save', (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const existing = typeof data.id === 'string' ? customerStore.get(data.id) : null;
+  if (existing && parkedCustomer(existing)) return null;
+  const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
+  return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt }) ? panelData() : null;
+});
+handleShell('cust:delete', (id) => {
+  if (typeof id === 'string' && customerStore.get(id) && !parkedCustomer(customerStore.get(id))) customerStore.remove(id);
+  return panelData();
+});
+handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
+// 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
+handleShell('panel:insert', ({ accountId, text } = {}) => {
+  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+  const acc = findAcc(accountId);
+  if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
+  if (isLite(acc)) return 'lite'; // 轻量模式的输入框在软件界面里，由界面自己填
+  const view = views.get(accountId);
+  if (!view || view.webContents.isDestroyed()) return 'changed';
+  clipboard.writeText(text.slice(0, 4000));
+  view.webContents.focus();
+  view.webContents.paste();
+  return 'ok';
+});
+handleShell('panel:export', async ({ kind, format } = {}) => {
+  if (!['replies', 'customers'].includes(kind)) return null;
+  const store = kind === 'replies' ? replyStore : customerStore;
+  const rows = kind === 'replies' ? store.list() : panelData().customers;
+  const json = format === 'json';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const r = await dialog.showSaveDialog(win, {
+    title: kind === 'replies' ? '导出话术' : '导出客户名单',
+    defaultPath: path.join(app.getPath('documents'), `${kind === 'replies' ? '话术' : '客户'}-${stamp}.${json ? 'json' : 'csv'}`),
+    filters: [json ? { name: 'JSON', extensions: ['json'] } : { name: 'CSV（Excel 可以打开）', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+  const out = json
+    ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
+    : records.toCsv(kind, rows);
+  fs.writeFileSync(r.filePath, out);
+  return { count: rows.length };
+});
+handleShell('panel:import', async ({ kind } = {}) => {
+  if (!['replies', 'customers'].includes(kind)) return null;
+  const r = await dialog.showOpenDialog(win, {
+    title: kind === 'replies' ? '导入话术' : '导入客户名单',
+    properties: ['openFile'],
+    filters: [{ name: 'CSV 或 JSON', extensions: ['csv', 'json'] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const res = records.readImport(kind, r.filePaths[0]);
+  if (res.error) return { error: res.error };
+  const store = kind === 'replies' ? replyStore : customerStore;
+  let added = 0;
+  for (const row of res.rows) {
+    const data = { ...row, id: undefined };
+    // 客户：文件里的账号编号对得上就用它，否则记到当前账号
+    if (kind === 'customers') data.accountId = typeof row.accountId === 'string' && findAcc(row.accountId) ? row.accountId : activeId || '';
+    if (store.upsert(data, { save: false, imported: true })) added += 1;
+  }
+  store.save();
+  return { added, skipped: res.rows.length - added, data: panelData() };
+});
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
+onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
 onShell('reload', (id) => {
   if (!findAcc(id)) return;
@@ -1620,8 +2173,97 @@ onShell('context', (id) => {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
+    {
+      label: isLite(acc) ? '拼写检查（轻量模式不支持）'
+        : process.platform === 'darwin' ? '拼写检查（英文）'
+          : `拼写检查（英文，第一次会${acc.proxy ? '通过本号代理' : '直连'}下载词典）`, type: 'checkbox', checked: acc.spellcheck, enabled: !isLite(acc),
+      click: () => setSpellcheck(id, !acc.spellcheck),
+    },
+    {
+      label: isLite(acc) ? '下载文件夹（轻量模式不支持）' : '下载文件夹',
+      enabled: !isLite(acc),
+      submenu: isLite(acc) ? [] : [
+        { label: downloadDirOf(acc).length > 60 ? `…${downloadDirOf(acc).slice(-58)}` : downloadDirOf(acc), enabled: false },
+        { label: '打开文件夹', click: () => openDownloadDir(id) },
+        { label: '更改…', click: () => pickDownloadDir(id) },
+        { label: '恢复默认', enabled: !!acc.downloadDir, click: () => { acc.downloadDir = ''; saveAccounts(); } },
+      ],
+    },
+    {
+      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
+      enabled: !isLite(acc),
+      submenu: [
+        { label: '放大', accelerator: 'CmdOrCtrl+=', registerAccelerator: false, click: () => stepZoom(id, 1) },
+        { label: '缩小', accelerator: 'CmdOrCtrl+-', registerAccelerator: false, click: () => stepZoom(id, -1) },
+        { label: '还原到 100%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || 1) !== 1, click: () => stepZoom(id, 0) },
+      ],
+    },
+    { type: 'separator' },
+    // 不用拖也能排：上移、下移、移到分组
+    { label: '上移', click: () => stepAccount(id, -1) },
+    { label: '下移', click: () => stepAccount(id, 1) },
+    {
+      label: '移到分组',
+      submenu: [
+        { label: '未分组', type: 'radio', checked: !groupOf(acc), click: () => moveAccount(id, '', null) },
+        ...groups.map((g) => ({ label: g.name, type: 'radio', checked: acc.groupId === g.id, click: () => moveAccount(id, g.id, null) })),
+        { type: 'separator' },
+        { label: '新建分组…', enabled: groups.length < GROUP_MAX, click: () => createGroup(id) },
+      ],
+    },
     { type: 'separator' },
     { label: isLite(acc) ? `删除「${acc.name}」并退出登录…` : `删除「${acc.name}」…`, click: () => removeAccount(id) },
+  ]).popup({ window: win });
+});
+
+// ---------- 分组 ----------
+// 分组只影响侧栏怎么摆，不卸载页面、不停收消息。解散分组只是把号放回“未分组”，绝不删号
+const findGroup = (gid) => groups.find((g) => g.id === gid);
+function setGroup(gid, patch) {
+  const g = findGroup(gid);
+  if (!g) return;
+  Object.assign(g, patch);
+  saveGroups();
+  notifier.refresh();
+  refresh();
+}
+function deleteGroup(gid) {
+  if (!findGroup(gid)) return;
+  // 组里的号挪到“未分组”最后，保持原来的先后
+  const members = accounts.filter((a) => a.groupId === gid);
+  accounts = [...accounts.filter((a) => a.groupId !== gid), ...members.map((a) => Object.assign(a, { groupId: '' }))];
+  groups = groups.filter((g) => g.id !== gid);
+  if (editGroupId === gid) editGroupId = '';
+  saveAccounts();
+  saveGroups();
+  notifier.refresh();
+  refresh();
+}
+onShell('acc:move', ({ id, groupId, beforeId } = {}) => {
+  if (typeof id !== 'string' || typeof (groupId ?? '') !== 'string') return;
+  moveAccount(id, groupId || '', typeof beforeId === 'string' ? beforeId : null);
+});
+onShell('group:create', () => createGroup(null));
+onShell('group:rename', ({ id, name } = {}) => {
+  if (editGroupId === id) editGroupId = '';
+  const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 20);
+  if (clean) setGroup(id, { name: clean });
+  else refresh();
+});
+onShell('group:toggle', (id) => { const g = findGroup(id); if (g) setGroup(id, { collapsed: !g.collapsed }); });
+onShell('group:context', (id) => {
+  const g = findGroup(id);
+  if (!g) return;
+  Menu.buildFromTemplate([
+    { label: '改名', click: () => { editGroupId = id; refresh(); } },
+    { label: g.collapsed ? '展开' : '折叠', click: () => setGroup(id, { collapsed: !g.collapsed }) },
+    {
+      label: '整组不弹通知', type: 'checkbox', checked: g.muted,
+      // 整组静音不改组里每个号自己的设置；取消后各号恢复原来的设置
+      click: () => setGroup(id, { muted: !g.muted }),
+    },
+    { type: 'separator' },
+    { label: `解散「${g.name}」（号不会删）`, click: () => deleteGroup(id) },
   ]).popup({ window: win });
 });
 
@@ -1633,6 +2275,7 @@ handleShell('editor:load', (id) => {
     id: acc ? acc.id : null,
     isNew: !acc,
     name: acc ? acc.name : String(editorPrefill?.name || nextName()).slice(0, 40),
+    note: acc ? acc.note : '',
     color: acc ? acc.color : editorColor || nextColor(),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
@@ -1678,8 +2321,9 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   return res;
 });
 
-handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
+handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
   name = String(name || '').trim().slice(0, 40);
+  note = cleanNote(note);
   if (!name) return { error: '请填写名称' };
   if (!COLORS.includes(color)) color = nextColor();
   const parsed = proxy.parse(String(proxyText || ''));
@@ -1761,7 +2405,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
   const teamFirstSave = !!(acc && acc.teamNeedsProxy);
   if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
   if (!acc) {
-    acc = { id: String(Date.now()), name, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+    acc = { id: String(Date.now()), name, note, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
     if (tested) recordExit(acc, tested.ip);
     saveAccounts();
@@ -1774,6 +2418,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
+    acc.note = note;
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
@@ -1789,6 +2434,7 @@ handleShell('editor:save', async ({ id, name, color, proxy: proxyText, password,
     if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
+    acc.note = note;
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
@@ -1902,6 +2548,7 @@ handleShell('check:run', async () => {
 });
 
 // 用户点了顶栏的“出口 IP 变了”：知道了，不再标黄
+onShell('zoom', ({ id, dir } = {}) => { if (typeof id === 'string' && [1, -1, 0].includes(dir)) stepZoom(id, dir); });
 handleShell('exit:ack', ({ id } = {}) => {
   if (exitChanges.delete(String(id))) refresh();
   return { ok: true };
@@ -1929,6 +2576,13 @@ onShell('update:install', () => { if (!updater) return; if (updater.mac) updater
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  if (netLog) netLog.flush();
+  // 还没写盘的通知记录马上写
+  if (notifLogTimer) {
+    clearTimeout(notifLogTimer);
+    notifLogTimer = null;
+    try { fs.writeFileSync(notifLogFile(), JSON.stringify(notifLog || [])); } catch {}
+  }
   if (liteHost && liteHost.running() && !liteFlushed) {
     event.preventDefault();
     liteHost.shutdown().finally(() => { liteFlushed = true; app.quit(); });
