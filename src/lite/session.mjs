@@ -1,7 +1,7 @@
 // 一个轻量模式账号的连接：扫码登录、收发文字、断线重连。
 // 规则（审计要求）：
 //   - 只走账号自己的代理，没有直连兜底；连不上代理就等着重试
-//   - 不调用 fetchLatestBaileysVersion / fetchLatestWaWebVersion（会直连 GitHub 和 WhatsApp）
+//   - 不向 GitHub 查 Baileys 版本；版本号只经账号自己的代理向 web.whatsapp.com 查（version.mjs）
 //   - 上线时不发“在线”状态；已读回执只在用户打开对话时发
 //   - 每个号每分钟最多发 10 条
 //   - 被退出登录（401）或拒绝连接（403）后不再重连，交给用户处理
@@ -12,6 +12,7 @@ import QRCode from 'qrcode';
 import { makeTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
 import { ChatStore } from './store.mjs';
+import { waVersion, resetVersionCache } from './version.mjs';
 
 export const SEND_LIMIT = 10;
 const SEND_WINDOW_MS = 60 * 1000;
@@ -61,6 +62,7 @@ export class Session {
     this.key = Buffer.from(cfg.key, 'hex');
     if (this.key.length !== 32) throw new Error('密钥长度不对');
     this.makeSocket = opts.makeSocket || makeWASocket; // 自检时替换
+    this.fetchVersion = opts.fetchVersion; // 自检时替换
     this.status = 'idle';
     this.attempt = 0;
     this.sends = [];
@@ -100,6 +102,8 @@ export class Session {
       }
       if (this.stopped) return;
       if (!this.transport) this.transport = makeTransport(this.cfg.proxy);
+      this.version = await waVersion(this.transport.dispatcher, (m) => this.log(m), this.fetchVersion);
+      if (this.stopped || this.sock) return;
       this.connect();
     } finally {
       this.starting = false;
@@ -112,6 +116,7 @@ export class Session {
       auth: this.auth.state,
       logger: makeLogger((m) => this.log(m)),
       browser: browserFor(this.cfg.os),
+      ...(this.version ? { version: this.version } : {}), // 查不到时用 Baileys 内置版本
       agent, // WebSocket
       fetchAgent: agent, // 上传（第一步不发媒体，留着保证万一用到也走代理）
       options: { dispatcher }, // 历史同步、聊天记录等下载
@@ -188,7 +193,7 @@ export class Session {
     }
     if (code === DisconnectReason.forbidden) { this.setStatus('banned'); return; }
     if (code === DisconnectReason.connectionReplaced) { this.setStatus('replaced'); return; }
-    if (code === 405) { this.setStatus('outdated'); return; }
+    if (code === 405) { resetVersionCache(); this.setStatus('outdated'); return; } // 版本被拒：下次连接重新查
     if (code === DisconnectReason.restartRequired) { this.start(); return; } // 扫码成功后的正常重启
     if (this.qrShown && !this.auth.state.creds.me) { this.setStatus('qrExpired'); return; }
     // 500 badSession、411 这类错误连续出现，重连也没用，停下来让用户处理；网络类断开不计数
