@@ -1201,6 +1201,7 @@ handleShell('editor:load', (id) => {
     primary: acc ? acc.primary : !accounts.some((a) => a.primary),
     primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
     liteAvailable: safeStorage.isEncryptionAvailable(),
+    platform: process.platform,
   };
 });
 

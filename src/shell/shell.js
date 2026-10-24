@@ -206,7 +206,9 @@ function editorPage(id) {
     const modeBtnDisabled = (value) => value === 'lite' && (primary.checked || !d.liteAvailable);
     const modeRow = d.isNew
       ? h('div', { class: 'field' }, '账号类型', modeCards,
-        !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
+        !d.liteAvailable ? h('span', { class: 'hint' }, d.platform === 'linux'
+          ? '这台电脑没有系统钥匙串，不能加密保存，所以不能使用轻量模式。安装 gnome-keyring 或 KWallet 后重启 WAswitch 即可。'
+          : '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });

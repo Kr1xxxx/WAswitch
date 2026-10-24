@@ -118,14 +118,14 @@ export class Session {
       browser: browserFor(this.cfg.os),
       ...(this.version ? { version: this.version } : {}), // 查不到时用 Baileys 内置版本
       agent, // WebSocket
-      fetchAgent: agent, // 上传（第一步不发媒体，留着保证万一用到也走代理）
+      fetchAgent: agent, // 上传：Baileys 在 Node 里用 http 模块上传，要的是 https.Agent（不是 undici dispatcher）
       options: { dispatcher }, // 历史同步、聊天记录等下载
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
       emitOwnEvents: true,
       shouldIgnoreJid: (jid) => !!jid && (jid.endsWith('@broadcast') || jid.endsWith('@newsletter')),
-      getMessage: async () => undefined,
+      getMessage: async (key) => this.store?.sentMessage(key.id), // 对方请求重发自己发过的消息
     });
     this.sock = sock;
     this.qrShown = false;
@@ -268,7 +268,8 @@ export class Session {
     this.sends = this.sends.filter((t) => now - t < SEND_WINDOW_MS);
     if (this.sends.length >= SEND_LIMIT) throw new Error(`发送太快：每个号每分钟最多 ${SEND_LIMIT} 条，请稍后再发`);
     this.sends.push(now);
-    await this.sock.sendMessage(jid, { text });
+    const sent = await this.sock.sendMessage(jid, { text });
+    if (sent?.key?.id && sent.message) this.store?.rememberSent(sent.key.id, sent.message);
   }
 
   flush() {
