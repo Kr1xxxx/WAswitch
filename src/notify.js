@@ -3,8 +3,9 @@
 // 未读数来自每个账号页面的标题（WhatsApp 会把标题改成 "(3) WhatsApp"），
 // 这个数字是“有未读消息的对话数”。不读取页面内容，也不往页面注入脚本。
 //
-// WhatsApp 自己的网页通知被关掉（看不出是哪个号），改由这里发：
+// WhatsApp 自己的网页通知默认关掉（看不出是哪个号），改由这里发：
 // 某个账号的未读数增加时，弹出“账号名：有 N 个未读对话”，点一下就切到这个账号。
+// 用户给某个号选了“用 WhatsApp 自带通知”时，这里不再为它弹。
 const { app, Tray, Menu, Notification, nativeImage } = require('electron');
 const path = require('path');
 
@@ -47,7 +48,8 @@ class Notifier {
     this.unread.set(acc.id, count);
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
-    if (count > before && !acc.muted && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
+    // 用 WhatsApp 自带通知的号由页面自己弹，这里不再弹，免得一条消息弹两次
+    if (count > before && !acc.muted && !acc.nativeNotify && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
     this.refresh();
   }
 

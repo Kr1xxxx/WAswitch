@@ -384,13 +384,20 @@ function settingsPage() {
   } else if (settingsTab === 'notify') {
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '通知'),
-        h('p', { class: 'lead' }, '通知标题是账号名，一眼看出是哪个号，点通知直接切到那个号。通知里不显示消息内容。')),
-      h('div', null, s.accounts.length ? s.accounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center' } },
-        h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
-        h('span', { class: 'meta' }, a.name),
-        h('span', { class: 'hint' }, a.muted ? '不弹通知' : '弹通知'),
-        sw(!a.muted, `${a.name}的通知`, (v) => window.wa.setMuted(a.id, !v)))) : h('p', { class: 'lead' }, '还没有账号。')),
-      h('span', { class: 'hint' }, '关掉通知的账号仍然计入托盘和任务栏的总未读数。'));
+        h('p', { class: 'lead' }, '默认按账号通知：标题是账号名，一眼看出是哪个号，点通知直接切到那个号，但不显示消息内容。')),
+      h('div', null, s.accounts.length ? s.accounts.map((a) => {
+        const native = a.mode === 'web' && a.nativeNotify;
+        const desc = a.muted ? '不弹通知' : native ? 'WhatsApp 自带通知：显示发件人和内容' : '按账号通知';
+        return h('div', { class: 'setrow', style: { alignItems: 'center' } },
+          h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+          h('span', { class: 'meta' }, h('span', null, a.name), h('span', { class: 'hint' }, desc)),
+          a.mode === 'web' ? h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } }, 'WhatsApp 自带',
+            sw(native, `${a.name}用 WhatsApp 自带通知`, (v) => window.wa.setNativeNotify(a.id, v))) : null,
+          h('label', { class: 'hint', style: { display: 'flex', gap: '8px', alignItems: 'center' } }, '弹通知',
+            sw(!a.muted, `${a.name}的通知`, (v) => window.wa.setMuted(a.id, !v))));
+      }) : h('p', { class: 'lead' }, '还没有账号。')),
+      h('span', { class: 'hint' }, '关掉通知的账号仍然计入托盘和任务栏的总未读数。'),
+      h('span', { class: 'hint' }, '“WhatsApp 自带”通知能看到发件人和内容，但看不出是哪个号，点了也不会自动切到那个号，需要自己切。建议只给一两个常用号开。打开后如果 WhatsApp 页面顶部提示开启桌面通知，点一下即可；关掉或静音后，页面可能提示“通知已被阻止”，这是正常的。窗口缩到托盘时，点这种通知可能没有反应。'));
   } else if (settingsTab === 'general') {
     page.append(h('h1', null, '通用'),
       h('div', null,

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('wa', {
   showPage: (page) => ipcRenderer.send('page', page),
   setSetting: (key, value) => ipcRenderer.send('setting', { key, value }),
   setMuted: (id, muted) => ipcRenderer.send('mute', { id, muted }),
+  setNativeNotify: (id, native) => ipcRenderer.send('notify-mode', { id, native }),
   runCheck: () => ipcRenderer.invoke('check:run'),
   openLogs: () => ipcRenderer.send('open-logs'),
   openSource: () => ipcRenderer.send('open-source'),

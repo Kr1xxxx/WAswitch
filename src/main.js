@@ -91,15 +91,26 @@ function isWhatsAppUrl(raw) {
 }
 
 // 只有 WhatsApp 页面能拿到这些权限（语音消息的麦克风、视频、剪贴板），其他一律拒绝。
-// 网页通知也关掉：WhatsApp 自己的通知看不出是哪个号，改由 notify.js 按账号发。
+// 网页通知默认关掉：WhatsApp 自己的通知看不出是哪个号，改由 notify.js 按账号发。
+// 用户给某个号选了“用 WhatsApp 自带通知”（且没静音）时才放开，每次都按当前设置判断，改了立即生效。
 const ALLOWED_PERMISSIONS = new Set(['media', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
-function setupPermissions(ses) {
+function permissionAllowed(id, permission, origin) {
+  if (!isWhatsAppUrl(origin)) {
+    // 自带通知打开时却被拒（例如 Service Worker 发起、来源为空），记下来方便真机排查
+    if (permission === 'notifications' && findAcc(id)?.nativeNotify) console.warn(`通知权限请求来源不明，已拒绝：${origin || '（空）'}`);
+    return false;
+  }
+  if (permission === 'notifications') {
+    const acc = findAcc(id);
+    return !!(acc && acc.nativeNotify && !acc.muted);
+  }
+  return ALLOWED_PERMISSIONS.has(permission);
+}
+function setupPermissions(ses, id) {
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const origin = details.requestingUrl || wc.getURL();
-    callback(ALLOWED_PERMISSIONS.has(permission) && isWhatsAppUrl(origin));
+    callback(permissionAllowed(id, permission, details.requestingUrl || wc.getURL()));
   });
-  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
-    ALLOWED_PERMISSIONS.has(permission) && isWhatsAppUrl(requestingOrigin));
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => permissionAllowed(id, permission, requestingOrigin));
 }
 
 // 外链（聊天里别人发的网址等）用系统浏览器打开；页面本身不允许跳转到 WhatsApp 以外的地方。
@@ -167,6 +178,8 @@ function loadAccounts() {
     acc.fingerprint = fingerprint.normalize(acc.fingerprint);
     acc.muted = acc.muted === true;
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
+    // 用 WhatsApp 自带通知（只对网页版有效）
+    acc.nativeNotify = acc.nativeNotify === true && acc.mode === 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 主号只能用网页版
     acc.primary = acc.primary === true && acc.mode === 'web';
@@ -455,6 +468,8 @@ function pushState() {
         name: acc.name,
         color: acc.color,
         muted: acc.muted,
+        nativeNotify: acc.nativeNotify,
+        mode: acc.mode,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
@@ -562,7 +577,7 @@ async function createView(acc, loadDelay = 0) {
   ses.setUserAgent(r.userAgent, r.acceptLanguage);
   // 不用拼写检查，也就不会去下载词典
   ses.setSpellCheckerEnabled(false);
-  setupPermissions(ses);
+  setupPermissions(ses, acc.id);
   const applied = await proxy.apply(ses, acc.proxy);
 
   const view = new WebContentsView({
@@ -1069,6 +1084,13 @@ onShell('mute', ({ id, muted } = {}) => {
   acc.muted = muted;
   saveAccounts();
   notifier.refresh();
+  pushState();
+});
+onShell('notify-mode', ({ id, native } = {}) => {
+  const acc = findAcc(id);
+  if (!acc || typeof native !== 'boolean' || acc.mode !== 'web') return;
+  acc.nativeNotify = native;
+  saveAccounts();
   pushState();
 });
 onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
