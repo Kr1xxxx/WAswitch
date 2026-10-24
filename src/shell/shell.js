@@ -727,6 +727,8 @@ function renderPanel(force = false) {
   if (!force && sig === pn.sig && $panel.firstChild) return;
   if (!force && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
   pn.sig = sig;
+  // 换了号：清掉上一个号的翻译内容，免得把给 A 客户的译文贴给 B
+  if (pn.accountId && pn.accountId !== s.activeId) { tr.text = ''; tr.out = ''; tr.back = ''; tr.warn = []; tr.forLang = ''; }
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
   const replies = pn.tab === 'replies';
   const tabBtn = (id, label) => h('button', { class: `pn-tab${pn.tab === id ? ' on' : ''}`, onclick: () => { pn.tab = id; pn.edit = null; pn.q = ''; pn.msg = ''; if (id !== 'translate') tr.forLang = ''; renderPanel(true); } }, label);

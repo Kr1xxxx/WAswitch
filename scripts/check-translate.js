@@ -55,6 +55,9 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   behave=[{status:401,body:'{"error":{"message":"invalid"}}'}]; calls=[];
   q=await tr.translate({text:'你好',mode});
   assert.equal(q.kind,'auth'); assert.equal(calls.length,1);
+  // 服务商把密钥原样写进错误里（智谱的密钥不是 sk- 开头）：要被遮住
+  behave=[{status:401,body:'{"error":{"message":"key sk-secret1234 is invalid"}}'}];
+  q=await tr.translate({text:'你好',mode}); assert(!q.error.includes('secret1234'), q.error);
   behave=[{status:503},{status:200}]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert(q.fallback);
   // cancel

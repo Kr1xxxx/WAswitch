@@ -123,6 +123,13 @@ async function readCapped(res) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// Linux 上没有钥匙环时 Electron 会退回 basic_text（只是混淆，不算加密），这种情况当作不能加密
+function canEncrypt(ss) {
+  if (!ss.isEncryptionAvailable()) return false;
+  try { if (process.platform === 'linux' && ss.getSelectedStorageBackend && ss.getSelectedStorageBackend() === 'basic_text') return false; } catch {}
+  return true;
+}
+
 class Translator {
   // deps: { dir, safeStorage, sessionFor(local) -> Electron session, now? }
   constructor(deps) {
@@ -178,7 +185,7 @@ class Translator {
       accountLang: { ...c.accountLang },
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
-      canEncrypt: this.deps.safeStorage.isEncryptionAvailable(),
+      canEncrypt: canEncrypt(this.deps.safeStorage),
       busy: !!this.busy,
     };
   }
@@ -192,7 +199,7 @@ class Translator {
     const model = line(data.model, 120);
     if (!model) return { error: '请填模型名' };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
-    if (newKey && !this.deps.safeStorage.isEncryptionAvailable()) return { error: '这台电脑不支持加密保存，不能保存密钥' };
+    if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
     let p = typeof data.id === 'string' ? c.providers.find((x) => x.id === data.id) : null;
     if (!p) {
       if (c.providers.length >= MAX_PROVIDERS) return { error: `最多 ${MAX_PROVIDERS} 个服务商` };
@@ -288,7 +295,6 @@ class Translator {
     if (key) headers.Authorization = `Bearer ${key}`;
     if (p.preset === 'openrouter') {
       body.provider = { data_collection: 'deny' }; // 只用不拿数据训练的上游
-      headers['HTTP-Referer'] = 'https://github.com/Kr1xxxx/WAswitch';
       headers['X-Title'] = 'WAswitch';
     }
     const ses = this.deps.sessionFor(chk.local);
@@ -307,7 +313,7 @@ class Translator {
     }
     if (!res.ok) {
       const err = statusError(res.status);
-      const detail = providerDetail(text);
+      const detail = key ? providerDetail(text).split(key).join('***') : providerDetail(text);
       throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
     }
     let out = '';

@@ -2100,6 +2100,13 @@ handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), .
 handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
 handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
 handleShell('tr:network', async (net) => {
+  // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
+  if (net && net.mode === 'proxy') {
+    let u = null;
+    try { u = new URL(String(net.proxyUrl || '').trim()); } catch {}
+    const same = u && accounts.some((a) => { const p = proxy.parse(a.proxy); return p && !p.error && String(p.host).toLowerCase() === u.hostname.toLowerCase() && String(p.port) === String(u.port); });
+    if (same) return { error: '这个代理端口已经给某个账号用了，翻译请用别的端口（或选“跟随系统代理”）', ...trState() };
+  }
   const r = translator.setNetwork(net && typeof net === 'object' ? net : {});
   if (r.ok) { try { await applyTranslateNet(); } catch { return { error: '代理设置没生效', ...trState() }; } }
   return { ...r, ...trState() };
