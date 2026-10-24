@@ -1,0 +1,27 @@
+{
+  // WAswitch 团队后台。部署：Cloudflare Workers Builds 连 GitHub，只从 main 分支部署，根目录 server。
+  // 必须在控制台设置的环境变量（不放进公开仓库）：OWNER_EMAIL、ACCESS_TEAM_DOMAIN、ACCESS_AUD。
+  "name": "waswitch-team",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  // 审计要求：关掉 workers.dev 和预览网址（预览版本连同一个 D1，又不在 Access 保护的域名下）
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // 先跑 Worker 验 Access，再给静态文件
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "waswitch-team",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": { "crons": ["17 19 * * *"] },
+  "vars": { "SYNC_INTERVAL_S": "120" },
+  "observability": { "enabled": true }
+}

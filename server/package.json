@@ -1,0 +1,9 @@
+{
+  "name": "waswitch-team",
+  "private": true,
+  "type": "module",
+  "description": "WAswitch 团队后台（Cloudflare Worker + D1）",
+  "scripts": {
+    "test": "node test/run.mjs"
+  }
+}
