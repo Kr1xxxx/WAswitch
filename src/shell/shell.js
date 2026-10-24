@@ -95,7 +95,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
-    h('span', { class: `sub${acc.problem || lost ? ' bad' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
   acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
 }
@@ -145,6 +145,22 @@ function exitTitle(acc) {
   return `网络线路 · 出口 IP ${acc.exitIp}${at}`;
 }
 
+// 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
+function exitChip(acc) {
+  if (acc.problem) return h('span', { class: 'chip bad', title: exitTitle(acc) }, icon('globe', 12), acc.problemShort);
+  const ch = acc.exitChange;
+  if (ch) {
+    const when = new Date(ch.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const moved = ch.fromLabel && ch.toLabel && ch.fromLabel !== ch.toLabel;
+    return h('button', {
+      class: 'chip night', type: 'button',
+      title: `${when} 巡检发现出口 IP 变了：${ch.from} → ${ch.to}${moved ? `（${ch.fromLabel} → ${ch.toLabel}，国家也变了，时区可能对不上，建议跑一次隔离自检）` : ''}。机场节点常会自动换 IP，频繁变化容易被 WhatsApp 当成异常。点一下表示知道了。`,
+      onclick: () => window.wa.exitAck(acc.id),
+    }, icon('globe', 12), `出口 IP 变了${moved ? `（${ch.toLabel}）` : ''} · ${ch.to}`);
+  }
+  return h('span', { class: 'chip', title: exitTitle(acc) }, icon('globe', 12), acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel);
+}
+
 // 当地时间：按账号的时区显示，深夜（22:00–8:00）变黄，提醒这时候发消息不像真人
 const clockFormats = new Map();
 function clockParts(tz) {
@@ -184,7 +200,7 @@ function renderTop() {
   $top.replaceChildren(...kids(
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
     h('span', { class: 'grow' }),
-    h('span', { class: `chip${acc.problem ? ' bad' : ''}`, title: exitTitle(acc) }, icon('globe', 12), acc.problem ? acc.problemShort : acc.proxyLabel),
+    exitChip(acc),
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),

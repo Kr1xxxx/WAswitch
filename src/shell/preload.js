@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('wa', {
   setMuted: (id, muted) => ipcRenderer.send('mute', { id, muted }),
   runCheck: () => ipcRenderer.invoke('check:run'),
   checkFix: (id, region) => ipcRenderer.invoke('check:fix', { id, region }),
+  exitAck: (id) => ipcRenderer.invoke('exit:ack', { id }),
   updateCheck: () => ipcRenderer.send('update:check'),
   updateInstall: () => ipcRenderer.send('update:install'),
   openLogs: () => ipcRenderer.send('open-logs'),
