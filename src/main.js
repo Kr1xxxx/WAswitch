@@ -586,17 +586,22 @@ async function createView(acc, loadDelay = 0) {
   views.set(acc.id, view);
 
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
-  // 页面刚开始加载的 15 秒里标题会从 0 涨回原来的数，只更新数字、不弹通知，免得刷新后误报
+  // 页面刚开始加载的 15 秒里标题会从 0 涨回刷新前的数：涨回原数不弹，超过原数（真有新消息）照常弹
   let quietUntil = 0;
+  let baseline = 0;
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
     const count = m ? Number(m[1]) : 0;
-    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account', quiet: Date.now() < quietUntil });
+    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account', baseline: Date.now() < quietUntil ? baseline : 0 });
     pushState();
   });
 
   let failed = false;
-  wc.on('did-start-loading', () => { failed = false; quietUntil = Date.now() + RELOAD_QUIET_MS; });
+  wc.on('did-start-loading', () => {
+    failed = false;
+    if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
+    quietUntil = Date.now() + RELOAD_QUIET_MS;
+  });
   wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
