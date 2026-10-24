@@ -38,7 +38,13 @@
       "target": "nsis"
     },
     "mac": {
-      "target": "dmg"
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ]
     },
     "linux": {
       "target": "AppImage"
