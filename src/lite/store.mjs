@@ -1,11 +1,13 @@
 // 轻量模式的聊天缓存：只存文字和类型说明（图片、语音等显示成“[图片]”），不下载媒体。
 // 每个对话最多保留 500 条，加密后写盘（见 vault.mjs）。
 import path from 'node:path';
-import { getContentType, normalizeMessageContent, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser } from 'baileys';
+import { getContentType, normalizeMessageContent, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, proto } from 'baileys';
 import { readSealed, writeSealed, debounced } from './vault.mjs';
 
 export const MAX_PER_CHAT = 500;
 const MAX_UNREAD_KEYS = 50;
+export const MAX_NAMES = 2000; // 联系人名称最多记这么多（通讯录很大时不会整个写盘）
+export const MAX_SENT = 50; // 自己发出的消息保留原文，对方没收到、请求重发时用
 
 // 不显示的对话：状态、广播、频道
 export const ignoredJid = (jid) => !jid || isJidBroadcast(jid) || isJidNewsletter(jid);
@@ -58,6 +60,7 @@ export class ChatStore {
     this.msgs = new Map(); // jid -> [{ id, me, ts, text, from }]
     this.names = new Map(); // jid -> 联系人名称
     this.unreadKeys = new Map(); // jid -> 未读消息的 key（发已读回执用，不写盘）
+    this.sent = new Map(); // 消息 id -> 自己发出的消息原文（protobuf，base64），最近 MAX_SENT 条
     this.save = debounced(() => {
       try { writeSealed(this.file, this.key, this.toJSON()); } catch (e) { onError(e); }
     }, 10000);
@@ -65,12 +68,13 @@ export class ChatStore {
     if (data) {
       for (const c of data.chats || []) this.chats.set(c.jid, c);
       for (const [jid, list] of data.msgs || []) this.msgs.set(jid, list);
-      for (const [jid, name] of data.names || []) this.names.set(jid, name);
+      for (const [jid, name] of (data.names || []).slice(-MAX_NAMES)) this.names.set(jid, name);
+      for (const [id, b64] of data.sent || []) this.sent.set(id, b64);
     }
   }
 
   toJSON() {
-    return { chats: [...this.chats.values()], msgs: [...this.msgs.entries()], names: [...this.names.entries()] };
+    return { chats: [...this.chats.values()], msgs: [...this.msgs.entries()], names: [...this.names.entries()], sent: [...this.sent.entries()] };
   }
 
   chat(jid) {
@@ -86,7 +90,11 @@ export class ChatStore {
 
   setName(jid, name) {
     if (!jid || !name) return;
-    this.names.set(jid, String(name).slice(0, 80));
+    const value = String(name).slice(0, 80);
+    if (this.names.get(jid) === value) return;
+    this.names.delete(jid); // 重新放到最后，超出上限时先删最久没更新的
+    this.names.set(jid, value);
+    if (this.names.size > MAX_NAMES) this.names.delete(this.names.keys().next().value);
     this.save.schedule();
   }
 
@@ -140,6 +148,19 @@ export class ChatStore {
     if (key.fromMe) { chat.unread = 0; this.unreadKeys.delete(jid); }
     this.save.schedule();
     return { jid, added: true, incoming };
+  }
+
+  // 记下自己发出的消息原文（对方解密失败、请求重发时，Baileys 通过 getMessage 取）
+  rememberSent(id, message) {
+    if (!id || !message) return;
+    this.sent.set(id, Buffer.from(proto.Message.encode(message).finish()).toString('base64'));
+    if (this.sent.size > MAX_SENT) this.sent.delete(this.sent.keys().next().value);
+    this.save.schedule();
+  }
+
+  sentMessage(id) {
+    const b64 = this.sent.get(id);
+    return b64 ? proto.Message.decode(Buffer.from(b64, 'base64')) : undefined;
   }
 
   // 标记已读，返回要发已读回执的消息 key

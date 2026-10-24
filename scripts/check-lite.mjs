@@ -91,7 +91,7 @@ const { Session, SEND_LIMIT } = await import('../src/lite/session.mjs');
 const { makeTransport } = await import('../src/lite/transport.mjs');
 const { waVersion, resetVersionCache } = await import('../src/lite/version.mjs');
 const { readSealed, writeSealed, makeAuthState } = await import('../src/lite/vault.mjs');
-const { textOf } = await import('../src/lite/store.mjs');
+const { textOf, ChatStore, MAX_NAMES } = await import('../src/lite/store.mjs');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-lite-'));
 const newKey = () => crypto.randomBytes(32).toString('hex');
@@ -115,6 +115,14 @@ try {
   const before = socks.seen.length;
   const r1 = await fetch('https://mmg.whatsapp.net/v/t62/test', { dispatcher: t.dispatcher }).then(() => 'ok', (e) => String(e.cause?.message || e.message));
   check('HTTP 下载经 socks5 代理（mmg.whatsapp.net）', socks.seen.slice(before).some((x) => x.host === 'mmg.whatsapp.net' && x.type === 'domain'), r1);
+
+  // 2a. 上传（发图片等用）：Baileys 在 Node 里用 http 模块上传，走的是 fetchAgent（https.Agent），要经代理
+  const { uploadWithNodeHttp } = await import('baileys');
+  const upFile = path.join(tmp, 'upload.bin');
+  fs.writeFileSync(upFile, 'x');
+  const upBefore = socks.seen.length;
+  const r0 = await uploadWithNodeHttp({ url: 'https://mmg.whatsapp.net/mms/image/test', filePath: upFile, headers: {}, timeoutMs: 5000, agent: t.agent }).then(() => 'ok', (e) => String(e.message));
+  check('上传经 socks5 代理（Node 里用 fetchAgent 这个 https.Agent）', socks.seen.slice(upBefore).some((x) => x.host === 'mmg.whatsapp.net' && x.type === 'domain'), r0);
 
   // 2b. 查 WhatsApp 版本号：经账号自己的代理到 web.whatsapp.com，失败回退内置版本
   resetVersionCache();
@@ -233,7 +241,7 @@ try {
   // 7. 用假的 WhatsApp 连接测试发送限速、已读回执、断线处理
   const fake = () => {
     const sock = { ev: new EventEmitter(), sent: [], reads: [], ended: false };
-    sock.sendMessage = async (jid, content) => { sock.sent.push({ jid, content }); };
+    sock.sendMessage = async (jid, content) => { sock.sent.push({ jid, content }); return { key: { remoteJid: jid, id: `S${sock.sent.length}`, fromMe: true }, message: { conversation: content.text } }; };
     sock.readMessages = async (keys) => { sock.reads.push(keys); };
     sock.groupFetchAllParticipating = async () => ({});
     sock.end = () => { sock.ended = true; };
@@ -267,6 +275,9 @@ try {
   for (let i = 0; i < SEND_LIMIT + 1; i++) {
     try { await s4.send(jid, `第 ${i + 1} 条`); sentOk++; } catch (e) { limited = e.message; }
   }
+  const resent = await cfg.getMessage({ remoteJid: jid, id: 'S1' });
+  check('对方请求重发时能取到自己发过的消息原文', resent?.conversation === '第 1 条', JSON.stringify(resent));
+  check('自己发出的消息原文最多保留 50 条', s4.store.sent.size <= 50);
   check(`每分钟最多发 ${SEND_LIMIT} 条`, sentOk === SEND_LIMIT && /太快/.test(limited), `${sentOk} 条，${limited}`);
   let unknown = '';
   try { await s4.send('20000000002@s.whatsapp.net', 'hi'); } catch (e) { unknown = e.message; }
@@ -317,6 +328,10 @@ try {
   check('文字消息原样显示', textOf({ conversation: 'hi' }) === 'hi');
   check('图片显示成 [图片] 加说明', textOf({ imageMessage: { caption: 'c' } }) === '[图片] c');
   check('表情回应不算一条消息', textOf({ reactionMessage: { text: '👍' } }) === null);
+  const ns = new ChatStore(path.join(tmp, 'names'), crypto.randomBytes(32), () => {});
+  for (let i = 0; i < MAX_NAMES + 500; i++) ns.setName(`${i}@s.whatsapp.net`, `n${i}`);
+  ns.save.cancel();
+  check(`联系人名称最多记 ${MAX_NAMES} 条，超出时删最早的`, ns.names.size === MAX_NAMES && !ns.names.has('0@s.whatsapp.net') && ns.names.has(`${MAX_NAMES + 499}@s.whatsapp.net`), String(ns.names.size));
 
   // 9. 链接白名单
   const { isSafeLink } = require(path.join(root, 'src', 'links.js'));
