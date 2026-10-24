@@ -727,7 +727,7 @@ const LITE_PROBLEMS = {
   outdated: () => ({
     title: 'WhatsApp 拒绝了旧版本',
     short: '需要更新',
-    text: '轻量模式内置的协议版本太旧，被 WhatsApp 拒绝，已停止自动重连。需要更新 WAswitch。',
+    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。可以先点“重新连接”试一次（会重新查询版本号）；还不行就到 github.com/Kr1xxxx/WAswitch/releases 下载新版 WAswitch。',
   }),
   authError: () => ({
     title: '这个号的本机数据读不出来',

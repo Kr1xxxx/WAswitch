@@ -89,6 +89,7 @@ function fakeHttpProxy() {
 
 const { Session, SEND_LIMIT } = await import('../src/lite/session.mjs');
 const { makeTransport } = await import('../src/lite/transport.mjs');
+const { waVersion, resetVersionCache } = await import('../src/lite/version.mjs');
 const { readSealed, writeSealed, makeAuthState } = await import('../src/lite/vault.mjs');
 const { textOf } = await import('../src/lite/store.mjs');
 
@@ -114,6 +115,23 @@ try {
   const before = socks.seen.length;
   const r1 = await fetch('https://mmg.whatsapp.net/v/t62/test', { dispatcher: t.dispatcher }).then(() => 'ok', (e) => String(e.cause?.message || e.message));
   check('HTTP 下载经 socks5 代理（mmg.whatsapp.net）', socks.seen.slice(before).some((x) => x.host === 'mmg.whatsapp.net' && x.type === 'domain'), r1);
+
+  // 2b. 查 WhatsApp 版本号：经账号自己的代理到 web.whatsapp.com，失败回退内置版本
+  resetVersionCache();
+  const vBefore = socks.seen.length;
+  const vLogs = [];
+  const v = await waVersion(t.dispatcher, (m) => vLogs.push(m));
+  check('查版本号经 socks5 代理访问 web.whatsapp.com（域名交给代理解析）', socks.seen.slice(vBefore).some((x) => x.host === 'web.whatsapp.com' && x.type === 'domain'), JSON.stringify(socks.seen.slice(vBefore)));
+  check('查不到版本号时用内置版本并记日志', v === undefined && vLogs.length === 1, vLogs.join(' / '));
+  const vAgain = socks.seen.length;
+  await waVersion(t.dispatcher, () => {});
+  check('查失败后 10 分钟内不反复查', socks.seen.length === vAgain);
+  resetVersionCache();
+  let calls = 0;
+  const okFetch = async () => { calls++; return { isLatest: true, version: [2, 3000, 123456] }; };
+  const [va, vb] = await Promise.all([waVersion(t.dispatcher, () => {}, okFetch), waVersion(t.dispatcher, () => {}, okFetch)]);
+  await waVersion(t.dispatcher, () => {}, okFetch);
+  check('查到的版本号所有账号共用，6 小时内只查一次', calls === 1 && va[2] === 123456 && vb[2] === 123456, String(calls));
 
   // 3. 不带代理的请求被护栏拦下（这一步的请求都是故意发起的）
   deliberate = true;
@@ -224,15 +242,17 @@ try {
   };
   const socks2 = await fakeSocks(); // 只用来让启动前的端口探测通过
   let last;
+  resetVersionCache();
   const s4 = new Session({ id: '4', proxy: `socks5h://127.0.0.1:${socks2.port}`, dir: path.join(tmp, '4'), key: newKey(), os: 'win32' }, post, {
     makeSocket: (config) => { last = fake(); last.config = config; return last; },
+    fetchVersion: async () => ({ isLatest: true, version: [2, 3000, 123456] }),
   });
   await s4.start();
   const cfg = last.config;
   check('不在上线时发“在线”状态', cfg.markOnlineOnConnect === false);
   check('不请求全部历史记录', cfg.syncFullHistory === false);
   check('WebSocket 和 HTTP 都设置了代理', !!cfg.agent && !!cfg.fetchAgent && !!cfg.options?.dispatcher);
-  check('没有指定 version（用 Baileys 内置版本，不联网查询）', cfg.version === undefined);
+  check('连接时用查到的 WhatsApp 版本号', Array.isArray(cfg.version) && cfg.version[2] === 123456, JSON.stringify(cfg.version));
   check('设备标识跟随本机系统（Windows → Windows）', Array.isArray(cfg.browser) && cfg.browser[0] === 'Windows');
   const sock4 = last;
   sock4.ev.emit('connection.update', { connection: 'open' });
@@ -305,7 +325,7 @@ try {
 
   // 10. 代码里没有联网查询版本号
   const liteSrc = fs.readdirSync(path.join(root, 'src', 'lite')).map((f) => fs.readFileSync(path.join(root, 'src', 'lite', f), 'utf8')).join('\n');
-  check('轻量模式代码没有调用 fetchLatest…Version', !/fetchLatest\w*Version\s*\(/.test(liteSrc));
+  check('轻量模式代码没有调用 fetchLatestBaileysVersion（会连 GitHub）', !/fetchLatestBaileysVersion/.test(liteSrc));
   const socketSrc = fs.readdirSync(path.join(root, 'node_modules', 'baileys', 'lib', 'Socket')).filter((f) => f.endsWith('.js'))
     .map((f) => fs.readFileSync(path.join(root, 'node_modules', 'baileys', 'lib', 'Socket', f), 'utf8')).join('\n');
   check('Baileys 建立连接时不会自己查询版本号', !/fetchLatest\w*Version/.test(socketSrc));
