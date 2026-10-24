@@ -80,6 +80,8 @@ body.collapsed .foot { justify-content: center; }
 .chip.night { background: #fff4d6; color: #8a5a00; }
 button.chip { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #content { flex: 1; min-height: 0; overflow-y: auto; user-select: text; }
+#content[hidden], #lock[hidden] { display: none; }
+#lock { flex: 1; min-height: 0; }
 
 /* 代理断开、页面打不开 */
 .center { height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; background: #fbfbfc; }
@@ -210,3 +212,13 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .field-head .help { font-size: 12px; font-weight: 400; }
 .sticky-btns { position: sticky; bottom: 0; background: #fff; padding: 12px 0 4px; margin-top: -4px; z-index: 1; }
+
+/* 聊天锁 */
+.lockpage { height: 100%; display: flex; align-items: center; justify-content: center; }
+.lock-card { width: min(420px, 90%); display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.lock-icon { width: 48px; height: 48px; border-radius: 14px; background: #f2f4f6; color: var(--text); display: flex; align-items: center; justify-content: center; }
+.lock-track { --p: 0; position: relative; width: 100%; height: 52px; border-radius: 26px; background: color-mix(in srgb, #16A34A calc(var(--p) * 30%), #eef0f3); margin-top: 8px; touch-action: none; }
+.lock-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--muted); opacity: calc(1 - var(--p)); pointer-events: none; }
+.lock-thumb { position: absolute; left: 4px; top: 4px; width: 44px; height: 44px; border-radius: 22px; border: 0; background: var(--text); color: #fff; display: flex; align-items: center; justify-content: center; cursor: grab; transition: transform .2s ease; touch-action: none; }
+.lock-thumb.drag { transition: none; cursor: grabbing; }
+.lock-thumb:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }

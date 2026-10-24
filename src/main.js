@@ -362,6 +362,7 @@ const notifier = new Notifier({
       checked: settings.lowMemoryMode,
       click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
     },
+    ...(accounts.length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
@@ -490,6 +491,37 @@ function sideWidth() {
   return page !== 'settings' && settings.sidebarCollapsed ? SIDE_COLLAPSED : SIDE_EXPANDED;
 }
 
+// ---------- 聊天锁 ----------
+// 电脑一段时间没有键盘鼠标操作，就把聊天区遮住（藏起账号页面，界面上显示锁屏卡片），右滑解锁，不设密码。
+// 只是防路过的人看到聊天内容：页面照常在后台运行，消息、未读数、通知都不受影响。不往 WhatsApp 页面注入任何东西。
+let locked = false;
+const LOCK_POLL_MS = 10 * 1000;
+function setLocked(on) {
+  on = !!on;
+  if (locked === on) return;
+  if (on && !accounts.length) return;
+  locked = on;
+  // 先把键盘焦点从账号页面挪走，锁住后打字不会进到聊天里
+  if (on && shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
+  layout();
+  refresh();
+  if (!on) focusActive();
+}
+// 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
+// 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
+let unfocusedSince = 0;
+function idleSeconds() {
+  const sys = powerMonitor.getSystemIdleTime();
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sys; }
+  if (!unfocusedSince) unfocusedSince = Date.now();
+  return Math.max(sys, (Date.now() - unfocusedSince) / 1000);
+}
+function checkIdleLock() {
+  const mins = settings.lockMinutes;
+  if (!mins || locked || !accounts.length) return;
+  if (idleSeconds() >= mins * 60) setLocked(true);
+}
+
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 function layout() {
@@ -507,7 +539,7 @@ function layout() {
   for (const [id, view] of views) {
     const current = page === 'account' && id === activeId;
     view.setBounds(bounds);
-    view.setVisible(current && !problems.has(id));
+    view.setVisible(current && !problems.has(id) && !locked);
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
   syncLiteWatch();
@@ -525,6 +557,8 @@ function pushState() {
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
+    locked,
+    lockChoices: memory.LOCK_CHOICES,
     accounts: accounts.map((acc) => {
       const problem = problems.get(acc.id);
       return {
@@ -958,7 +992,8 @@ function activate(id, { focus = false } = {}) {
 function focusActive() {
   const acc = findAcc(activeId);
   const view = views.get(activeId);
-  if (page === 'account' && acc && !isLite(acc) && view && !problems.has(acc.id) && !view.webContents.isDestroyed()) view.webContents.focus();
+  // 锁着时只把焦点给界面（锁屏卡片），绝不给藏起来的账号页面
+  if (!locked && page === 'account' && acc && !isLite(acc) && view && !problems.has(acc.id) && !view.webContents.isDestroyed()) view.webContents.focus();
   else if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
 }
 
@@ -1127,6 +1162,8 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed'].includes(key)) {
     if (typeof value !== 'boolean') return;
+  } else if (key === 'lockMinutes') {
+    if (!memory.LOCK_CHOICES.includes(value)) return;
   } else {
     return;
   }
@@ -1197,6 +1234,12 @@ app.on('web-contents-created', (_e, wc) => {
     if (input.type === 'keyDown') lastTypedAt = Date.now();
     if (input.type !== 'keyDown' || input.alt || input.shift) return;
     const mod = process.platform === 'darwin' ? input.meta : input.control;
+    // Ctrl+L（Mac 是 Cmd+L）：立即锁定聊天
+    if (mod && input.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      setLocked(true);
+      return;
+    }
     if (!mod || !/^[1-9]$/.test(input.key)) return;
     const acc = accounts[Number(input.key) - 1];
     if (!acc) return;
@@ -1301,7 +1344,10 @@ app.whenReady().then(async () => {
   win.on('hide', layout);
   win.on('show', layout);
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
+  win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {
+    // 锁着时切回窗口：焦点放回锁屏卡片，也不把轻量号的消息标成已读
+    if (locked) { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus(); return; }
     const jid = liteOpen.get(activeId);
     if (jid && page === 'account' && isLite(findAcc(activeId))) liteHost.read(activeId, jid);
   });
@@ -1341,6 +1387,10 @@ app.whenReady().then(async () => {
   if (!shouldStartHidden()) win.show();
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
+  setInterval(checkIdleLock, LOCK_POLL_MS);
+  // 系统锁屏时直接锁上，回来解开系统锁屏后还要右滑一次
+  powerMonitor.on('lock-screen', () => { if (settings.lockMinutes) setLocked(true); });
+  powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
@@ -1400,6 +1450,7 @@ onShell('page', async (p, discard) => {
   showPage(p);
 });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
+onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
 onShell('reload', (id) => {
   if (!findAcc(id)) return;

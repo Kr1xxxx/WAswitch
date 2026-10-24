@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('wa', {
   reload: (id) => ipcRenderer.send('reload', id),
   retry: (id) => ipcRenderer.send('retry', id),
   toggleCollapse: () => ipcRenderer.send('collapse'),
+  lock: (on) => ipcRenderer.send('lock', on === true),
   showPage: (page, discard) => ipcRenderer.send('page', page, discard === true),
   remove: (id) => ipcRenderer.send('remove', id),
   editorDirty: (dirty) => ipcRenderer.send('editor:dirty', dirty === true),
