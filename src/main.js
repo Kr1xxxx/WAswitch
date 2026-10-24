@@ -271,6 +271,7 @@ function loadAccounts() {
     acc.muted = acc.muted === true;
     // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
     acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
+    acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -680,6 +681,7 @@ function pushState() {
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
+        zoom: acc.zoom || 1,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
@@ -808,6 +810,26 @@ async function checkLogins() {
 const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
+// ---------- 缩放（每个号单独记） ----------
+// 和 Chrome 一样的几档；只对网页版号生效（轻量模式的界面跟着软件走）
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+function applyZoom(acc) {
+  const view = views.get(acc.id);
+  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || 1);
+}
+// dir: 1 放大，-1 缩小，0 还原
+function stepZoom(id, dir) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  const i = ZOOM_STEPS.indexOf(acc.zoom || 1);
+  const next = dir === 0 ? 1 : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
+  if (next === acc.zoom) return;
+  acc.zoom = next;
+  saveAccounts();
+  applyZoom(acc);
+  pushState();
+}
+
 async function createView(acc, loadDelay = 0) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   const r = fingerprint.resolve(acc.fingerprint);
@@ -864,6 +886,8 @@ async function createView(acc, loadDelay = 0) {
     scheduleRetry(acc.id);
   });
   wc.on('did-finish-load', () => {
+    // 每次加载完都按这个号记下的比例设一次（刷新、崩溃重建后也一样）
+    applyZoom(acc);
     if (failed || applied.error) return;
     clearRetry(acc.id);
     if (problems.has(acc.id)) setProblem(acc.id, null);
@@ -1345,8 +1369,18 @@ app.on('web-contents-created', (_e, wc) => {
     const inMain = (shellView && wc === shellView.webContents) || [...views.values()].some((v) => v.webContents === wc);
     if (!inMain) return;
     if (input.type === 'keyDown') lastTypedAt = Date.now();
-    if (input.type !== 'keyDown' || input.alt || input.shift) return;
+    if (input.type !== 'keyDown' || input.alt) return;
     const mod = process.platform === 'darwin' ? input.meta : input.control;
+    // Ctrl + = / - / 0（Mac 用 Cmd）：缩放当前网页版号，只在账号页面里按才算
+    if (mod && page === 'account' && !locked && ['=', '+', '-', '_', '0'].includes(input.key)) {
+      const acc = findAcc(activeId);
+      if (acc && !isLite(acc)) {
+        event.preventDefault();
+        stepZoom(acc.id, input.key === '0' ? 0 : input.key === '-' || input.key === '_' ? -1 : 1);
+      }
+      return;
+    }
+    if (input.shift) return;
     // Ctrl+L（Mac 是 Cmd+L）：立即锁定聊天
     if (mod && input.key.toLowerCase() === 'l') {
       event.preventDefault();
@@ -1660,6 +1694,15 @@ onShell('context', (id) => {
     {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
+    },
+    {
+      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
+      enabled: !isLite(acc),
+      submenu: [
+        { label: '放大', accelerator: 'CmdOrCtrl+=', registerAccelerator: false, click: () => stepZoom(id, 1) },
+        { label: '缩小', accelerator: 'CmdOrCtrl+-', registerAccelerator: false, click: () => stepZoom(id, -1) },
+        { label: '还原到 100%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || 1) !== 1, click: () => stepZoom(id, 0) },
+      ],
     },
     { type: 'separator' },
     // 不用拖也能排：上移、下移、移到分组
@@ -1991,6 +2034,7 @@ handleShell('check:run', async () => {
 });
 
 // 用户点了顶栏的“出口 IP 变了”：知道了，不再标黄
+onShell('zoom', ({ id, dir } = {}) => { if (typeof id === 'string' && [1, -1, 0].includes(dir)) stepZoom(id, dir); });
 handleShell('exit:ack', ({ id } = {}) => {
   if (exitChanges.delete(String(id))) refresh();
   return { ok: true };

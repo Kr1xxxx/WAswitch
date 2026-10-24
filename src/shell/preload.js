@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('wa', {
   groupRename: (id, name) => ipcRenderer.send('group:rename', { id, name }),
   groupToggle: (id) => ipcRenderer.send('group:toggle', id),
   groupContext: (id) => ipcRenderer.send('group:context', id),
+  zoom: (id, dir) => ipcRenderer.send('zoom', { id, dir }),
   runCheck: () => ipcRenderer.invoke('check:run'),
   checkFix: (id, region) => ipcRenderer.invoke('check:fix', { id, region }),
   exitAck: (id) => ipcRenderer.invoke('exit:ack', { id }),

@@ -295,6 +295,8 @@ function renderTop() {
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
     h('span', { class: 'grow' }),
     exitChip(acc),
+    // 缩放过的号显示比例，点一下还原到 100%
+    !lite && acc.zoom && acc.zoom !== 1 ? h('button', { class: 'chip', type: 'button', title: `这个号的页面缩放到了 ${Math.round(acc.zoom * 100)}%。点一下还原到 100%（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + = / - / 0 也能调）`, onclick: () => window.wa.zoom(acc.id, 0) }, `${Math.round(acc.zoom * 100)}%`) : null,
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
