@@ -131,11 +131,11 @@ class Records {
     return true;
   }
 
-  patch(id, fields) {
+  patch(id, fields, { save = true } = {}) {
     const r = this.get(id);
     if (!r) return;
     Object.assign(r, fields);
-    this.save();
+    if (save) this.save();
   }
 }
 

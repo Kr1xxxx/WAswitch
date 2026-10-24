@@ -671,7 +671,8 @@ function checkFollowUps() {
   const now = Date.now();
   const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now);
   if (!due.length) return;
-  for (const c of due) customerStore.patch(c.id, { reminded: true });
+  for (const c of due) customerStore.patch(c.id, { reminded: true }, { save: false });
+  customerStore.save();
   for (const c of due.slice(0, 3)) {
     const accId = c.accountId;
     notifier.notifyApp('WAswitch', `跟进提醒：${c.name || '一位客户'}`, () => {
