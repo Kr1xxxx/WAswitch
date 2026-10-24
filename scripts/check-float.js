@@ -90,11 +90,21 @@ core().then(() => {
     assert(!JSON.stringify(r).includes('Pedro'), '不读群发送人');
     assert(!JSON.stringify(r).includes('quoted text'), '不读引用');
     assert.strictEqual(after.split('|')[0], String(before), '页面没有被改');
+    // 字数超了要丢掉旧的长消息，留下最新的
+    await w.webContents.executeJavaScript(`(() => {
+      const app = document.querySelector('[role=application]');
+      const add = (id, t) => { const r = document.createElement('div'); r.setAttribute('role', 'row'); r.innerHTML = '<div data-id="' + id + '"><div class="copyable-text" data-pre-plain-text="x"><span class="selectable-text"><span></span></span></div></div>'; r.querySelector('span span').textContent = t; app.append(r); };
+      for (let i = 0; i < 6; i++) add('false_111@c.us_L' + i, 'x'.repeat(4000));
+      add('false_111@c.us_NEW', 'newest');
+      return 1; })()`);
+    const r3 = await waPage.readOpenChat(w.webContents);
+    assert.strictEqual(r3.msgs[r3.msgs.length - 1].text, 'newest', '最新消息不能被字数上限挤掉');
+    assert(r3.msgs.reduce((n, m) => n + m.text.length, 0) <= 20000);
     const empty = await w.webContents.executeJavaScript('document.querySelector("#main").remove(); 1');
     assert(empty);
     const r2 = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r2.why, 'nochat');
     console.log('悬浮翻译只读脚本自检通过');
     app.exit(0);
-  });
+  }).catch((e) => { console.error(e); app.exit(1); });
 }).catch((e) => { console.error(e); process.exit(1); });

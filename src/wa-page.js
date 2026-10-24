@@ -136,7 +136,8 @@ const READ_CHAT_CODE = `(() => {
   }
   const msgs = [];
   let size = 0;
-  for (const n of top.slice(-${MAX_MSGS})) {
+  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
+  for (const n of top.slice(-${MAX_MSGS}).reverse()) {
     const id = n.getAttribute('data-id').slice(0, 300);
     let text = '';
     const body = n.querySelector(S.body);
@@ -152,6 +153,7 @@ const READ_CHAT_CODE = `(() => {
     size += text.length;
     msgs.push({ id, out: id.startsWith('true_'), text });
   }
+  msgs.reverse();
   return { ok: true, title, msgs };
 })()`;
 

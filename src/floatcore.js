@@ -11,7 +11,8 @@ const AUTO_MAX_CHARS = 1000;
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
 const chatOf = (dataId) => String(dataId).split('_')[1] || '';
-const today = (now) => new Date(now).toISOString().slice(0, 10);
+// 按本机日期算“今天”（北京时间 0 点换天，不是 UTC）
+const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 
 class FloatCore {
   // deps: { translate(text, modeId) -> Promise<result>, now?() }
