@@ -2118,13 +2118,42 @@ handleShell('tr:network', async (net) => {
 });
 handleShell('tr:test', (id) => (typeof id === 'string' ? translator.test(id) : { error: '找不到这个服务商' }));
 handleShell('tr:consent', (ids) => { if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id); return trState(); });
+// 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
+// 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
+const userTr = { waiting: 0, running: false, gen: 0 };
+async function userTranslate(args) {
+  const gen = userTr.gen;
+  const until = Date.now() + 35000;
+  userTr.waiting += 1;
+  try {
+    for (;;) {
+      if (userTr.gen !== gen) return { error: '已取消', kind: 'cancel' };
+      if (!translator.busy) {
+        userTr.running = true;
+        let r;
+        try { r = await translator.translate(args); } finally { userTr.running = false; }
+        // 面板和悬浮窗同时点：后一个继续等
+        if (!(r && r.kind === 'busy')) return r;
+      }
+      if (Date.now() > until) return { error: '上一段还在翻译', kind: 'busy' };
+      await new Promise((res) => setTimeout(res, 250));
+    }
+  } finally {
+    userTr.waiting -= 1;
+  }
+}
+function userCancel() {
+  if (userTr.running) return translator.cancel();
+  userTr.gen += 1;
+  return true;
+}
 handleShell('tr:run', async ({ text, modeId, target, source } = {}) => {
   // __back：回译成中文核对，用固定的忠实翻译提示词
   const mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
     : typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return translator.translate({ text, mode, target, source });
+  return userTranslate({ text, mode, target, source });
 });
-handleShell('tr:cancel', () => translator.cancel());
+handleShell('tr:cancel', () => userCancel());
 // 只在用户点“翻译剪贴板”时读一次，从不轮询
 handleShell('tr:clipboard', async () => { const t = await clipboard.readText(); return typeof t === 'string' ? t.slice(0, 4000) : ''; });
 handleShell('tr:lang', ({ accountId, lang } = {}) => { if (findAcc(accountId)) translator.setAccountLang(accountId, lang); return trState(); });
@@ -2161,6 +2190,8 @@ function setupFloatCore() {
     translate: (text) => {
       const mode = floatInMode();
       if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+      // 用户点的翻译在等：先让它
+      if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
       return translator.translate({ text, mode, target: '中文' });
     },
   });
@@ -2358,9 +2389,9 @@ handleFloat('float:consent', ({ kind, ids } = {}) => {
 handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
   if (accountId !== activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
   const mode = typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return translator.translate({ text, mode, target });
+  return userTranslate({ text, mode, target });
 });
-handleFloat('float:cancel', () => translator.cancel());
+handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 handleFloat('float:inmode', (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; });
