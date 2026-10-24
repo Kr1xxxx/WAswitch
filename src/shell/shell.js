@@ -19,6 +19,7 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   mute: '<path d="M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h13M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  next: '<path d="m9 18 6-6-6-6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
 };
 
@@ -534,7 +535,10 @@ function settingsPage() {
           sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null,
         setRow('侧栏只显示图标', '给聊天留更多空间。随时可以用左上角按钮切换。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
-        setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号。`, h('span'))));
+        setRow('聊天锁', '电脑这么久没有键盘鼠标操作，就遮住聊天区，右滑解锁。只防路过的人看到，消息和通知照常。',
+          h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
+            (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
+        setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
   } else if (settingsTab === 'check') {
     const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
       checkRunning = true; render(true);
@@ -606,6 +610,41 @@ function updateBox(u) {
 
 // ---------- 总渲染 ----------
 
+// ---------- 聊天锁 ----------
+
+let lockEl = null;
+function lockPage() {
+  if (lockEl) return lockEl;
+  const thumb = h('button', { class: 'lock-thumb', type: 'button', 'aria-label': '向右拖动解锁（也可以按回车）' }, icon('next', 16));
+  const track = h('div', { class: 'lock-track' }, h('span', { class: 'lock-text' }, '向右滑动解锁'), thumb);
+  let startX = null;
+  let dx = 0;
+  const max = () => track.clientWidth - thumb.offsetWidth - 8;
+  const place = (x) => { dx = Math.max(0, Math.min(max(), x)); thumb.style.transform = `translateX(${dx}px)`; track.style.setProperty('--p', String(dx / Math.max(1, max()))); };
+  const unlock = () => window.wa.lock(false);
+  thumb.addEventListener('pointerdown', (e) => { startX = e.clientX - dx; thumb.setPointerCapture(e.pointerId); thumb.classList.add('drag'); });
+  thumb.addEventListener('pointermove', (e) => { if (startX !== null) place(e.clientX - startX); });
+  const end = () => {
+    if (startX === null) return;
+    startX = null;
+    thumb.classList.remove('drag');
+    if (dx >= max() * 0.85) { place(max()); unlock(); } else place(0);
+  };
+  thumb.addEventListener('pointerup', end);
+  thumb.addEventListener('pointercancel', end);
+  thumb.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); unlock(); } });
+  lockEl = h('div', { class: 'lockpage' },
+    h('div', { class: 'lock-card' },
+      h('span', { class: 'lock-icon' }, icon('lock', 22)),
+      h('h1', null, '聊天已锁定'),
+      h('p', { class: 'lead' }, '离开一会儿后自动遮住聊天内容。消息照常接收，通知和未读数不受影响。'),
+      track,
+      h('span', { class: 'hint' }, `在 设置 › 通用 里可以改等待时间或关闭。${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`)));
+  // 每次重新锁上时：滑块回到最左，焦点放到滑块上（按回车也能解锁）
+  lockEl.reset = () => { startX = null; place(0); requestAnimationFrame(() => thumb.focus()); };
+  return lockEl;
+}
+
 function render(forceContent = false) {
   document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
   document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
@@ -625,6 +664,10 @@ function render(forceContent = false) {
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || document.activeElement.tagName !== 'SELECT') $content.replaceChildren(settingsPage());
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
+  } else if (s.locked && s.page === 'account') {
+    // 聊天锁：同一个元素反复用，拖到一半时状态刷新也不会打断
+    const el = lockPage();
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) { $content.replaceChildren(el); el.reset(); }
   } else if (acc && !acc.problem && acc.mode === 'lite') {
     // 轻量模式聊天页：同一个元素反复更新，不重建
     const el = litePage(acc, s.lite);
