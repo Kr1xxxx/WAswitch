@@ -440,6 +440,7 @@ const memoryManager = new memory.MemoryManager(settings, {
 
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
@@ -460,6 +461,7 @@ const notifier = new Notifier({
       click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
     },
     ...(accounts.length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
+    { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
@@ -828,6 +830,40 @@ function stepZoom(id, dir) {
   saveAccounts();
   applyZoom(acc);
   pushState();
+}
+
+// ---------- 通知记录 ----------
+// 只记 {at, id, count, popped}：哪个号、什么时候、涨到几个未读、有没有弹通知。不记消息内容、不记联系人。最多 300 条
+const NOTIF_LOG_MAX = 300;
+const notifLogFile = () => path.join(app.getPath('userData'), 'notif-log.json');
+let notifLog = null;
+let notifLogTimer = null;
+function loadNotifLog() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(notifLogFile(), 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((e) => e && Number.isFinite(e.at) && typeof e.id === 'string' && Number.isFinite(e.count))
+      .slice(-NOTIF_LOG_MAX).map((e) => ({ at: e.at, id: e.id, count: e.count, popped: e.popped === true }));
+  } catch {
+    return []; // 文件不存在或坏了：从空的开始（只是记录，丢了不影响使用）
+  }
+}
+function saveNotifLogSoon() {
+  clearTimeout(notifLogTimer);
+  notifLogTimer = setTimeout(() => {
+    notifLogTimer = null;
+    try {
+      const file = notifLogFile();
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(notifLog));
+      fs.renameSync(`${file}.tmp`, file);
+    } catch (e) { console.warn('通知记录保存失败', e.message); }
+  }, 2000);
+}
+function addNotifLog({ id, count, popped }) {
+  if (!notifLog) notifLog = loadNotifLog();
+  notifLog.push({ at: Date.now(), id: String(id), count, popped: !!popped });
+  if (notifLog.length > NOTIF_LOG_MAX) notifLog.splice(0, notifLog.length - NOTIF_LOG_MAX);
+  saveNotifLogSoon();
 }
 
 async function createView(acc, loadDelay = 0) {
@@ -1594,10 +1630,21 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings'].includes(p)) return;
+  if (!['account', 'settings', 'overview'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
+});
+// 未读总览页要的通知记录（最新的在前）；清空只清记录，不动未读数
+handleShell('notif:log', () => {
+  if (!notifLog) notifLog = loadNotifLog();
+  return notifLog.slice().reverse();
+});
+handleShell('notif:clear', () => {
+  notifLog = [];
+  clearTimeout(notifLogTimer);
+  try { fs.rmSync(notifLogFile(), { force: true }); } catch {}
+  return true;
 });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
@@ -2064,6 +2111,12 @@ onShell('update:install', () => { if (!updater) return; if (updater.mac) updater
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  // 还没写盘的通知记录马上写
+  if (notifLogTimer) {
+    clearTimeout(notifLogTimer);
+    notifLogTimer = null;
+    try { fs.writeFileSync(notifLogFile(), JSON.stringify(notifLog || [])); } catch {}
+  }
   if (liteHost && liteHost.running() && !liteFlushed) {
     event.preventDefault();
     liteHost.shutdown().finally(() => { liteFlushed = true; app.quit(); });

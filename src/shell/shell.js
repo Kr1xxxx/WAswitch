@@ -19,6 +19,7 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   mute: '<path d="M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h13M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   next: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
   right: '<path d="m9 6 6 6-6 6"/>',
@@ -222,8 +223,12 @@ function renderSide() {
       h('div', { class: 'bars' }, s.accounts.map((a) => h('span', { style: { width: `${((a.memMB || 0) / total) * 100}%`, background: a.color } }))),
       h('small', null, '后台账号已降速，消息照常收')));
   }
+  const totalUnread = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
+  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
+  if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17))));
+    h('button', { class: 'icon-btn', title: '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17)),
+    bell));
   document.body.classList.toggle('mac', mac);
 }
 
@@ -347,6 +352,48 @@ function problemPage(acc) {
 // Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
 const CLASH_DOC = 'https://github.com/Kr1xxxx/WAswitch/blob/main/docs/clash.md';
 const clashLink = () => h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, 'Clash 设置说明');
+
+// ---------- 未读总览 ----------
+// 上半：哪些号有未读（多的在前），点一下切过去；下半：最近的通知记录（只有号、时间、未读数）
+let notifLogCache = [];
+let overviewTotal = 0;
+let overviewSig = '';
+async function loadNotifLog() {
+  try { notifLogCache = await window.wa.notifLog(); } catch { notifLogCache = []; }
+  if (s.page === 'overview') render(true);
+}
+function overviewPage() {
+  const page = h('div', { class: 'page narrow' });
+  const byId = new Map(s.accounts.map((a) => [a.id, a]));
+  const unread = s.accounts.filter((a) => a.unread).sort((a, b) => b.unread - a.unread);
+  const total = unread.reduce((n, a) => n + a.unread, 0);
+  const groupName = (a) => (s.groups || []).find((g) => g.id === a.groupId)?.name || '';
+  page.append(
+    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '未读总览'),
+      h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。点一下切过去。` : '所有号都没有未读对话。')),
+    unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
+      h('span', { class: 'sw', style: { background: a.color } }),
+      h('span', { class: 'ov-name' }, a.name, groupName(a) ? h('span', { class: 'hint' }, ` · ${groupName(a)}`) : null),
+      a.muted || a.groupMuted ? h('span', { class: 'hint' }, '不弹通知') : null,
+      h('span', { class: `pill${a.muted || a.groupMuted ? ' quiet' : ''}` }, a.unread)))) : null,
+    h('div', { class: 'hstack', style: { justifyContent: 'space-between', marginTop: '8px' } },
+      h('h2', { class: 'ov-h2' }, '通知记录'),
+      notifLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.notifClear(); loadNotifLog(); } }, '清空记录') : null),
+    h('p', { class: 'hint', style: { margin: 0 } }, '每次有号的未读变多都记一条（最多 300 条），只记哪个号、什么时候、几个未读，不记消息内容。“没弹”表示当时这个号或分组不弹通知，或者你正看着它。'),
+    notifLogCache.length
+      ? h('div', { class: 'box ov-log' }, notifLogCache.map((e) => {
+        const a = byId.get(e.id);
+        const t = new Date(e.at);
+        const today = t.toDateString() === new Date().toDateString();
+        return h(a ? 'button' : 'div', { class: 'ov-logrow', onclick: a ? () => window.wa.switchTo(a.id) : null },
+          h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', today ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
+          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
+          h('span', { class: 'hint' }, `${e.count} 个未读${e.popped ? '' : ' · 没弹'}`));
+      }))
+      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
+  return page;
+}
 
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), h('small', null, text)));
@@ -771,6 +818,14 @@ function render(forceContent = false) {
   } else if (s.page === 'settings') {
     // 设置页里的下拉框打开时不重画，免得被关掉
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || document.activeElement.tagName !== 'SELECT') $content.replaceChildren(settingsPage());
+  } else if (s.page === 'overview') {
+    // 只有内容变了才重画，免得滚动位置被打回顶部
+    const sig = JSON.stringify([s.accounts.map((a) => [a.id, a.name, a.color, a.unread, a.muted, a.groupMuted, a.groupId]), s.groups, notifLogCache.length, notifLogCache[0]?.at]);
+    if (key !== shown) loadNotifLog();
+    if (forceContent || key !== shown || sig !== overviewSig) { overviewSig = sig; $content.replaceChildren(overviewPage()); }
+    // 有新的未读时顺便刷新记录
+    else if (s.accounts.reduce((n, a) => n + (a.unread || 0), 0) !== overviewTotal) loadNotifLog();
+    overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
   } else if (acc && !acc.problem && acc.mode === 'lite') {

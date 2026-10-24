@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('wa', {
   restart: () => ipcRenderer.send('app:restart'),
   setSetting: (key, value) => ipcRenderer.send('setting', { key, value }),
   setMuted: (id, muted) => ipcRenderer.send('mute', { id, muted }),
+  notifLog: () => ipcRenderer.invoke('notif:log'),
+  notifClear: () => ipcRenderer.invoke('notif:clear'),
   moveAccount: (id, groupId, beforeId) => ipcRenderer.send('acc:move', { id, groupId, beforeId }),
   groupCreate: () => ipcRenderer.send('group:create'),
   groupRename: (id, name) => ipcRenderer.send('group:rename', { id, name }),

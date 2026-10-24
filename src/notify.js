@@ -55,7 +55,10 @@ class Notifier {
     if (count > before) this.lastNewAt = Date.now();
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
-    if (count > before && !this.muted(acc) && !userIsLooking) this.notify(acc, `有 ${count} 个未读对话`);
+    const popped = count > before && !this.muted(acc) && !userIsLooking;
+    if (popped) this.notify(acc, `有 ${count} 个未读对话`);
+    // 通知记录：只记哪个号、什么时候、几个未读，以及有没有弹出来；不记消息内容
+    if (count > before && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count, popped });
     this.refresh();
   }
 
