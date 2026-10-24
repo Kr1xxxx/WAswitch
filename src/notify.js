@@ -113,7 +113,7 @@ class Notifier {
       const n = this.unread.get(acc.id) || 0;
       const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
-        label: `${acc.name}${n ? `（${n}）` : ''}${acc.muted ? ' · 已静音（仍计入总数）' : ''}${mb ? ` · ${mb} MB` : ''}`,
+        label: `${acc.name}${n ? `（${n}）` : ''}${acc.muted ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });

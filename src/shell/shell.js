@@ -4,7 +4,8 @@
 
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
-const PRESETS = [['直连', ''], ['Clash 7891', 'socks5://127.0.0.1:7891'], ['Clash 7892', 'socks5://127.0.0.1:7892'], ['Clash 7893', 'socks5://127.0.0.1:7893']];
+const PRESETS = [['直连', ''], ['Clash 7891', 'socks5://127.0.0.1:7891'], ['Clash 7892', 'socks5://127.0.0.1:7892'], ['Clash 7893', 'socks5://127.0.0.1:7893'], ['带密码的 http', 'http://用户名@代理IP:端口']];
+let liveColor = null; // 编辑页里点了色块、还没保存的颜色（窗口背景先跟着变）
 
 // 固定的图标，不含任何外部数据
 const ICONS = {
@@ -204,13 +205,14 @@ function welcomePage() {
       h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区和语言跟着线路走。')),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色', '比如“客服号”“店铺号”。颜色会铺满窗口背景，一眼认出在用哪个号。'),
-      step(2, '选网络线路（可以跳过）', ['在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
+      step(2, '选网络线路', ['第一个号可以直连；从第二个号起，在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
       step(3, '手机扫码登录', 'WhatsApp › 设置 › 已关联的设备 › 关联新设备。')),
     h('div', null, h('button', { class: 'btn primary', style: { height: '46px', padding: '0 26px' }, onclick: () => window.wa.add() }, '添加第一个账号'))));
 }
 
 // 编辑账号（新建和修改共用）
 function editorPage(id) {
+  liveColor = null;
   const root = h('div', { class: 'page' }, h('div', { class: 'col' }, h('p', { class: 'lead' }, '正在加载…')));
   window.wa.editorLoad(id).then((d) => {
     let color = d.color;
@@ -236,8 +238,10 @@ function editorPage(id) {
       modeCard('web', '网页版（推荐）', '和浏览器里的 WhatsApp Web 一样，最稳。每个号约 300 MB 内存。主号必须用这个。'),
       modeCard('lite', '轻量模式（小号）', '不开网页，每个号几十 MB。只收发文字，有封号风险。'));
     const modeBtnDisabled = (value) => value === 'lite' && (primary.checked || !d.liteAvailable);
+    // 轻量模式卡片灰掉的原因直接写在下面，不只放在悬停提示里
+    const liteReason = h('span', { class: 'hint' });
     const modeRow = d.isNew
-      ? h('div', { class: 'field' }, '账号类型', modeCards,
+      ? h('div', { class: 'field' }, '账号类型', modeCards, liteReason,
         !d.liteAvailable ? h('span', { class: 'hint' }, d.platform === 'linux'
           ? '这台电脑没有系统钥匙串，不能加密保存，所以不能使用轻量模式。安装 gnome-keyring 或 KWallet 后重启 WAswitch 即可。'
           : '这台电脑不支持加密保存，不能使用轻量模式。') : null)
@@ -264,17 +268,24 @@ function editorPage(id) {
     const drawSwatches = () => swatches.replaceChildren(...COLORS.map((c, i) => h('button', {
       class: `swatch${c === color ? ' on' : ''}`, type: 'button', style: { background: c, '--c': c },
       'aria-label': COLOR_NAMES[i] + (c === color ? '，已选' : ''),
-      onclick: () => { color = c; drawSwatches(); },
+      onclick: () => { color = c; liveColor = c; document.body.style.background = tint(c); drawSwatches(); },
     })));
     const drawPresets = () => presets.replaceChildren(...PRESETS.map(([label, v]) => h('button', {
       class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button', hidden: mode === 'lite' && !v,
-      onclick: () => { proxyInput.value = v; onProxyChange(); },
+      onclick: () => {
+        proxyInput.value = v;
+        onProxyChange();
+        // 带密码的模板：选中“用户名@代理IP:端口”，直接输入替换
+        if (v.includes('用户名')) { proxyInput.focus(); proxyInput.setSelectionRange(7, v.length); }
+      },
     }, label)));
     const drawTags = () => {
       const opt = d.regions.find((r) => r.key === region.value);
       const auto = region.value === 'auto';
       tags.replaceChildren(
-        h('span', { class: 'tag' }, auto ? '时区和语言：跟本机一致' : `时区和语言：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, auto
+          ? (proxyInput.value.trim() ? '时区和语言：还没识别，点“测试”自动选好' : '时区和语言：跟本机一致')
+          : `时区和语言：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：用本机真实 IP'));
     };
@@ -297,13 +308,16 @@ function editorPage(id) {
         b.disabled = modeBtnDisabled(b.dataset.mode);
         b.title = b.dataset.mode === 'lite' && primary.checked ? '主号只能用网页版' : '';
       }
+      liteReason.textContent = !d.liteAvailable || !primary.checked ? ''
+        : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的“这是主号”后可以选轻量模式。';
+      proxyInput.placeholder = lite ? '必填，例如 socks5://127.0.0.1:7891' : '留空表示直连，例如 socks5://127.0.0.1:7891';
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
       callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
-        ? ['轻量模式必须走代理，不能直连，并且要先“测试”通过才能保存。出口 IP 不能和主号相同。socks5 不支持密码，带密码的代理请用 http://。']
-        : ['测试会通过这个代理访问 ipinfo.io 查询出口 IP。代理连不上时这个账号会暂停联网，不会改用直连。socks5 不支持密码，带密码的代理请用 http://。用 Clash 的话，给每个号开一个本地端口，填 socks5://127.0.0.1:端口，详见', clashLink(), '。']));
+        ? ['必须走代理并先“测试”通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
+        : ['代理连不上时这个号会暂停联网，不会改用直连。带密码的代理请用 http://。']));
       for (const b of presets.children) if (b.textContent === '直连') b.hidden = lite;
       sidePanel.replaceChildren(...sideText());
     };
@@ -332,7 +346,11 @@ function editorPage(id) {
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
       if (res.region) { region.value = res.region; text += ' 已按出口所在地选好时区和语言。'; } else text += ' 没有匹配的地区预设，请手动选最接近的。';
-      if (res.sameAs) text += `\n注意：和「${res.sameAs}」的出口 IP 相同，两个号会被认为在同一个地方。`;
+      if (res.sameAs) {
+        text += res.sameAt
+          ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
+          : `\n注意：和「${res.sameAs}」的出口 IP 相同，两个号会被认为在同一个地方。`;
+      }
       result.replaceChildren(h('div', { class: `note ${res.sameAs ? 'bad' : 'ok'}`, style: { whiteSpace: 'pre-line' } }, text));
       drawTags();
     };
@@ -366,13 +384,15 @@ function editorPage(id) {
           h('div', { class: 'field' }, '颜色', swatches)),
         modeRow,
         primaryRow,
-        h('div', { class: 'field' }, '网络线路（代理）', presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint),
+        h('div', { class: 'field' },
+          h('span', { class: 'field-head' }, '网络线路（代理）', h('a', { href: '#', class: 'help', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, '怎么在 Clash 里开端口？')),
+          presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint),
         passwordRow,
         callsRow,
         regionRow,
         liteBox,
         error,
-        h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: () => window.wa.showPage('account', true) }, '取消'), saveBtn)),
+        h('div', { class: 'btns sticky-btns' }, h('button', { class: 'btn', type: 'button', onclick: () => window.wa.showPage('account', true) }, '取消'), saveBtn)),
       sidePanel);
     onModeChange();
     name.focus();
@@ -396,10 +416,10 @@ function settingsPage() {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
     const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
       s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
-    select.value = String(st.recycleMB || 800);
+    select.value = String(st.recycleMB || st.recycleLastMB || 800);
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
-        h('p', { class: 'lead' }, '不会让账号休眠，所有账号一直在线收消息。后台账号自动降速，省下来的主要靠下面两项。')),
+        h('p', { class: 'lead' }, '不会让账号休眠，所有账号一直在线收消息。后台账号自动降速，省下来的主要靠下面几项。')),
       h('div', { class: 'box' },
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'), h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0))),
         s.accounts.map((a) => h('div', { class: 'memrow' },
@@ -409,13 +429,13 @@ function settingsPage() {
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
         h('span', { class: 'hint' }, '近似值：只统计每个账号的主页面进程，实际会略高一点。')),
       setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
-        sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? 800 : 0)),
+        sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '关闭显卡加速，整体再省一些内存。代价是滚动和动画没那么顺滑。',
         h('span', { class: 'hstack', style: { gap: '10px' } },
           s.restartNeeded ? h('button', { class: 'btn primary', style: { height: '32px', padding: '0 14px' }, onclick: () => window.wa.restart() }, '立即重启') : null,
           sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v)))),
-      setRow('清理缓存',
+      setRow('清理磁盘缓存',
         `清掉网页版账号可以重新下载的缓存，释放磁盘空间。登录状态和聊天记录不会被清，不会退出登录；部分已下载的图片可能需要重新加载；不包含轻量模式账号。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
         h('button', { class: 'btn', disabled: cacheInfo.busy || !s.accounts.length, onclick: async () => {
           cacheInfo.busy = true; cacheInfo.result = ''; render(true);
@@ -446,7 +466,7 @@ function settingsPage() {
       h('div', null,
         setRow('关闭窗口时缩到托盘', '窗口关掉后继续在后台收消息，从托盘菜单退出。关掉这项则关闭窗口就退出软件。',
           sw(st.closeToTray, '关闭窗口时缩到托盘', (v) => window.wa.setSetting('closeToTray', v))),
-        s.canLoginItem ? setRow('开机自动启动', '开机后自动打开 WAswitch 并缩在托盘里。',
+        s.canLoginItem ? setRow('开机自动启动', s.platform === 'darwin' ? '开机后自动打开 WAswitch。' : '开机后自动打开 WAswitch 并缩在托盘里。',
           sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null,
         setRow('侧栏只显示图标', '给聊天留更多空间。随时可以用左上角按钮切换。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
@@ -526,7 +546,8 @@ function render(forceContent = false) {
   document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
   document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
   const acc = active();
-  document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(s.editorColor) : '#E6E9ED';
+  if (s.page !== 'editor') liveColor = null;
+  document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(liveColor || s.editorColor) : '#E6E9ED';
   renderSide();
   renderAi();
   renderTop();

@@ -5,25 +5,35 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>MCP 接口设置</title>
   <style>
-    body { margin: 0; padding: 24px; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; color: #16181d; background: #fff; font-size: 14px; }
-    h1 { margin: 0 0 6px; font-size: 20px; }
-    h2 { margin: 22px 0 8px; font-size: 14px; }
+    /* 和主界面同一套样式（字体、开关、圆角按钮） */
+    :root { --text: #16181d; --muted: #4a505a; --line: #eceef1; --ok: #05603a; --danger: #b42318; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px 32px; font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; color: var(--text); background: #fff; }
+    h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.01em; }
+    h2 { margin: 26px 0 8px; font-size: 15px; }
     p, li { line-height: 1.6; }
-    .hint { color: #4a505a; font-size: 12px; }
-    .switch { display: flex; align-items: center; gap: 10px; margin: 16px 0 4px; font-weight: 600; }
-    .switch input { width: 18px; height: 18px; }
-    .switch.sub { font-weight: 400; margin-top: 6px; }
-    ul { margin: 4px 0; padding-left: 18px; font-size: 12px; }
-    li button { height: 22px; padding: 0 8px; margin-left: 6px; font-size: 12px; }
-    #state { font-size: 13px; min-height: 20px; }
-    #state.ok { color: #0f7a4d; }
-    #state.bad { color: #b42318; }
-    pre { margin: 0; padding: 10px 12px; background: #f6f7f9; border: 1px solid #e3e6ea; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-    .block { display: flex; flex-direction: column; gap: 6px; }
-    .actions { display: flex; gap: 8px; }
-    button { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid #d5d9de; background: #f6f7f9; font: inherit; font-size: 13px; cursor: pointer; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eceef1; }
+    .hint { color: var(--muted); font-size: 13px; }
+    .switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); font-weight: 600; cursor: pointer; }
+    .switch.sub { font-weight: 400; }
+    .switch input { appearance: none; -webkit-appearance: none; flex: none; order: 2; width: 42px; height: 24px; margin: 0; border-radius: 12px; background: #c9ced6; position: relative; cursor: pointer; transition: background .15s; }
+    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left .15s; }
+    .switch input:checked { background: #16a34a; }
+    .switch input:checked::after { left: 20px; }
+    .switch input:disabled { opacity: .5; cursor: default; }
+    .switch input:focus-visible, button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    ul { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+    li button { height: 26px; padding: 0 10px; margin-left: 6px; font-size: 12px; }
+    #state { font-size: 13px; min-height: 20px; margin-top: 6px; }
+    #state.ok { color: var(--ok); }
+    #state.bad { color: var(--danger); }
+    pre { margin: 0; padding: 12px 14px; background: #f7f8fa; border: 1px solid #e3e6ea; border-radius: 10px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
+    .block { display: flex; flex-direction: column; gap: 8px; }
+    .actions { display: flex; gap: 10px; }
+    button { height: 36px; padding: 0 16px; border-radius: 18px; border: 1px solid #e3e6ea; background: #fff; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+    button:hover { background: #f7f8fa; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -69,7 +79,7 @@
     </table>
     <p class="hint" id="noClients">暂无</p>
     <div class="actions"><button id="regenerate">断开全部并更换 token</button></div>
-    <p class="hint">更换 token 后，Claude Code 需要用新命令重新添加；Claude Desktop 不用改。</p>
+    <p class="hint">更换 token 后（包括把 MCP 接口关掉再打开），Claude Code 需要用新命令重新添加；Claude Desktop 不用改。</p>
   </div>
 
   <script src="settings.js"></script>

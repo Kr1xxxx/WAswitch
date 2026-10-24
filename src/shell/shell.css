@@ -202,3 +202,8 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .update-box .btns { margin-top: 4px; }
 .progress { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
 .progress span { display: block; height: 100%; background: #16A34A; transition: width .3s; }
+
+/* 编辑页：标题旁的帮助链接、底部固定的按钮栏（窗口不高时也看得到“保存”） */
+.field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.field-head .help { font-size: 12px; font-weight: 400; }
+.sticky-btns { position: sticky; bottom: 0; background: #fff; padding: 12px 0 4px; margin-top: -4px; z-index: 1; }
