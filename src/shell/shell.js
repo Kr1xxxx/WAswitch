@@ -137,6 +137,45 @@ function renderSide() {
 
 // ---------- 顶栏 ----------
 
+// 鼠标停在线路上：出口 IP 和上次测到的时间
+function exitTitle(acc) {
+  if (acc.direct) return '网络线路：直连（这台电脑的真实 IP）';
+  if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
+  const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
+  return `网络线路 · 出口 IP ${acc.exitIp}${at}`;
+}
+
+// 当地时间：按账号的时区显示，深夜（22:00–8:00）变黄，提醒这时候发消息不像真人
+const clockFormats = new Map();
+function clockParts(tz) {
+  const key = tz || '';
+  if (!clockFormats.has(key)) {
+    clockFormats.set(key, new Intl.DateTimeFormat('zh-CN', { ...(tz ? { timeZone: tz } : {}), hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' }));
+  }
+  const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
+  const hour = Number(parts.hour);
+  return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night: hour >= 22 || hour < 8 };
+}
+function clockChip(acc) {
+  const place = acc.timezone ? acc.regionLabel.replace(/^出口时区（.*\/(.+)）$/, '$1').replace(/_/g, ' ') : '本机';
+  const chip = h('span', { class: 'chip clock' }, icon('clock', 12), h('span'));
+  const draw = () => {
+    const c = clockParts(acc.timezone);
+    chip.lastChild.textContent = `${place} ${c.text}${c.night ? ' · 深夜' : ''}`;
+    chip.classList.toggle('night', c.night);
+    chip.title = `当地时间（${acc.timezone || '跟随本机时区'}）${c.night ? '。这个号所在地现在是深夜，这时候大量发消息不像真人' : ''}`;
+  };
+  draw();
+  chip.draw = draw;
+  return chip;
+}
+// 每 20 秒只刷新时钟文字，不重画整个顶栏
+setInterval(() => {
+  if ($top.hidden || document.hidden) return;
+  const c = $top.querySelector('.chip.clock');
+  if (c && c.draw) c.draw();
+}, 20000);
+
 function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
@@ -145,8 +184,8 @@ function renderTop() {
   $top.replaceChildren(...kids(
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who' }, `· ${acc.name}`),
     h('span', { class: 'grow' }),
-    h('span', { class: `chip${acc.problem ? ' bad' : ''}`, title: '网络线路' }, icon('globe', 12), acc.problem ? acc.problemShort : acc.proxyLabel),
-    lite ? null : h('span', { class: 'chip', title: '时区' }, icon('clock', 12), acc.regionLabel),
+    h('span', { class: `chip${acc.problem ? ' bad' : ''}`, title: exitTitle(acc) }, icon('globe', 12), acc.problem ? acc.problemShort : acc.proxyLabel),
+    clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));

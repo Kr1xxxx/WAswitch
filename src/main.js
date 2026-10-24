@@ -494,6 +494,10 @@ function pushState() {
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
         regionLabel: regionLabel(acc.fingerprint.region),
+        // 顶栏的“当地时间”：账号的时区；跟随本机时为 null
+        timezone: fingerprint.resolve(acc.fingerprint).timezone || null,
+        exitIp: exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : ''),
+        exitAt: acc.lastExit ? acc.lastExit.at : 0,
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
