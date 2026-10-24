@@ -15,6 +15,7 @@ const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
+const { EventLog } = require('./eventlog');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
@@ -388,7 +389,15 @@ async function watchExits() {
       const proxyAtStart = acc.proxy;
       const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
       // 测的时候代理被改了或者号被删了：结果作废
-      if (!res.ok || !findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
+      if (!findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
+      // 记延迟：成功记往返毫秒数；失败只记“失败”，不记错误原文（里面可能有代理地址）
+      if (res.ok) {
+        lastLatency.set(acc.id, { ms: res.ms, at: Date.now() });
+        netEvent(acc.id, 'exit', { ms: res.ms });
+      } else {
+        netEvent(acc.id, 'exit_fail');
+      }
+      if (!res.ok) continue;
       const label = regionName(res.country);
       if (prev && prev !== res.ip) {
         exitChanges.set(acc.id, { from: prev, to: res.ip, fromLabel: prevLabel, toLabel: label, at: Date.now() });
@@ -617,11 +626,14 @@ function setLocked(on) {
 // 空闲时间：窗口在前台时用系统空闲时间（键盘和鼠标都算，包括在 WhatsApp 页面里滚动、点击）；
 // 窗口不在前台、最小化或缩到托盘时，从失去焦点那一刻起算空闲（用户在别的软件里忙也算没看这里）
 let unfocusedSince = 0;
+let appReadyAt = Date.now(); // 启动时间（app ready 时再更新一次）
 function idleSeconds() {
   const sys = powerMonitor.getSystemIdleTime();
-  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sys; }
+  // 刚启动时不按系统空闲时间算（开机自启、电脑放了很久再打开软件，不会一打开就锁）
+  const sysSinceReady = Math.min(sys, Math.floor((Date.now() - appReadyAt) / 1000));
+  if (win && win.isVisible() && !win.isMinimized() && win.isFocused()) { unfocusedSince = 0; return sysSinceReady; }
   if (!unfocusedSince) unfocusedSince = Date.now();
-  return Math.max(sys, (Date.now() - unfocusedSince) / 1000);
+  return Math.max(sysSinceReady, (Date.now() - unfocusedSince) / 1000);
 }
 function checkIdleLock() {
   const mins = settings.lockMinutes;
@@ -652,7 +664,40 @@ function layout() {
   syncLiteWatch();
 }
 
+// ---------- 连接记录（延迟和掉线） ----------
+// 不额外发网络请求，只记已经看到的事：页面/代理连不上和恢复、掉线要扫码和重新登录、页面崩溃、
+// 30 分钟一次的出口巡检（用它的往返时间当延迟）。detail 只放错误类型，不放代理地址和账号密码。
+let netLog = null;
+const netLastSeen = new Map(); // id -> { problem, login, downAt }
+const lastLatency = new Map(); // id -> { ms, at }
+function netEvent(id, kind, extra = {}) {
+  if (!netLog) return;
+  netLog.add({ id: String(id), kind, ...extra });
+}
+// 每次推状态前对比一下，状态变了就记一条（所有出问题的路径都会走到 pushState）
+function trackNet() {
+  if (!netLog) return;
+  for (const acc of accounts) {
+    const prev = netLastSeen.get(acc.id) || { problem: '', login: '', downAt: 0 };
+    const p = problems.get(acc.id);
+    const problem = p ? String(p.kind || 'unknown').slice(0, 20) : '';
+    const login = loginStates.get(acc.id) || '';
+    const next = { ...prev, problem, login };
+    if (problem && problem !== prev.problem) {
+      netEvent(acc.id, 'down', { detail: problem });
+      if (!prev.problem) next.downAt = Date.now();
+    } else if (!problem && prev.problem) {
+      netEvent(acc.id, 'up', { ms: prev.downAt ? Date.now() - prev.downAt : undefined, detail: prev.problem });
+      next.downAt = 0;
+    }
+    if (login === 'needs_qr' && prev.login === 'logged_in') netEvent(acc.id, 'qr');
+    if (login === 'logged_in' && prev.login === 'needs_qr') netEvent(acc.id, 'login');
+    netLastSeen.set(acc.id, next);
+  }
+}
+
 function pushState() {
+  trackNet();
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
     platform: process.platform,
@@ -696,6 +741,7 @@ function pushState() {
         exitIp: exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : ''),
         exitAt: acc.lastExit ? acc.lastExit.at : 0,
         exitChange: exitChanges.get(acc.id) || null,
+        latency: lastLatency.get(acc.id) || null,
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
@@ -1054,6 +1100,7 @@ async function createView(acc, loadDelay = 0) {
   // 页面进程崩溃后调试连接会断开，直接重建这个账号的视图，保证环境设置重新生效
   wc.on('render-process-gone', (_e, details) => {
     if (details.reason === 'clean-exit') return;
+    netEvent(acc.id, 'crash', { detail: String(details.reason).slice(0, 20) });
     console.warn(`账号 ${acc.id} 的页面进程退出（${details.reason}），正在重建`);
     rebuilding.add(acc.id);
     setTimeout(async () => {
@@ -1631,6 +1678,7 @@ function setupUpdater() {
 app.on('second-instance', () => notifier.showWindow());
 
 app.whenReady().then(async () => {
+  appReadyAt = Date.now();
   if (!isPrimary) return;
   setupMenu();
   // 本地界面用的默认会话不需要任何权限
@@ -1684,6 +1732,7 @@ app.whenReady().then(async () => {
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
   groups = loadGroups();
+  netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 1500, maxAgeMs: 7 * 24 * 3600 * 1000, routine: ['exit', 'exit_fail'], routinePerId: 50 });
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
@@ -1767,6 +1816,9 @@ handleShell('notif:clear', () => {
   try { fs.rmSync(notifLogFile(), { force: true }); } catch {}
   return true;
 });
+// 连接记录：最新的在前；清空只清记录
+handleShell('netlog:get', () => (netLog ? netLog.load().slice().reverse() : []));
+handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
@@ -2248,6 +2300,7 @@ onShell('update:install', () => { if (!updater) return; if (updater.mac) updater
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  if (netLog) netLog.flush();
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
