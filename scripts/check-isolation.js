@@ -79,6 +79,21 @@ app.whenReady().then(async () => {
   check(results.A.chBrands && results.A.chBrands.includes('Google Chrome'), 'Client Hints 里有 Google Chrome');
   check(results.A.body === 'via-proxy' && fake.hits.length === 4, '设了代理的账号流量走代理');
 
+  // 预设里没有的出口（如加拿大）：直接用测到的时区
+  const regions = require('../src/regions');
+  check(regions.regionForTimezone('Asia/Tokyo') === 'JP' && regions.regionForTimezone('America/Toronto') === 'tz:America/Toronto', '出口时区有预设用预设，没有就直接存时区');
+  check(!regions.regionForTimezone('Not/AZone') && !regions.isValidRegion('tz:Not/AZone') && !regions.isValidRegion('tz:') && !regions.isValidRegion('XX'), '无效的时区和地区被拒绝');
+  check(fingerprint.normalize({ region: 'tz:Not/AZone' }).region === 'auto' && fingerprint.normalize({ region: 'tz:Australia/Sydney' }).region === 'tz:Australia/Sydney', '读取账号时无效时区回到“跟随本机”，有效的保留');
+  {
+    const fp = fingerprint.generate('tz:America/Toronto');
+    const tw = new BrowserWindow({ show: false, webPreferences: { session: session.fromPartition('check-tz'), sandbox: true } });
+    await fingerprint.attach(tw.webContents, fp);
+    await tw.loadURL('about:blank');
+    const got = await tw.webContents.executeJavaScript('Intl.DateTimeFormat().resolvedOptions().timeZone');
+    check(got === 'America/Toronto', `自定义出口时区生效（${got}）`);
+    tw.destroy();
+  }
+
   // 代理连不上：应该失败，而不是直连
   const ses = session.fromPartition('check-dead');
   await proxy.apply(ses, 'socks5://127.0.0.1:1');

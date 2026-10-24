@@ -10,7 +10,7 @@
 //
 // 已知局限：调试协议的覆盖只作用于页面本身，不作用于 Web Worker / Service Worker。
 // Worker 里读到的时区仍是本机时区（UA 和语言请求头不受影响，因为会话层也设置了）。
-const { presets: regions } = require('./regions');
+const { presets: regions, isValidRegion, timezoneOf } = require('./regions');
 
 // 所有网页版账号统一的界面语言
 const UI_LOCALE = 'zh-CN';
@@ -27,7 +27,7 @@ function generate(region = 'auto') {
   return {
     version: 2,
     os: hostOs(),
-    region: regions[region] ? region : 'auto',
+    region: isValidRegion(region) ? region : 'auto',
     seed: Math.floor(Math.random() * 0xffffffff),
   };
 }
@@ -39,7 +39,7 @@ function normalize(fp) {
   return {
     version: 2,
     os: ['win', 'mac', 'linux'].includes(fp.os) ? fp.os : base.os,
-    region: regions[fp.region] ? fp.region : 'auto',
+    region: isValidRegion(fp.region) ? fp.region : 'auto',
     seed: Number.isInteger(fp.seed) ? fp.seed : base.seed,
   };
 }
@@ -47,7 +47,6 @@ function normalize(fp) {
 function resolve(fp) {
   const full = process.versions.chrome;
   const major = full.split('.')[0];
-  const region = regions[fp.region] || regions.auto;
   // 平台一律跟随本机，不用保存的值：账号数据拷到另一台系统不同的电脑上时，
   // 声称的平台和实际行为对不上反而容易被识别
   const osInfo = {
@@ -60,7 +59,7 @@ function resolve(fp) {
     platform: osInfo.platform,
     // Chromium 会自己给请求头加上 q 权重，这里只给语言列表
     acceptLanguage: UI_LANGUAGES.join(','),
-    timezone: region.timezone,
+    timezone: timezoneOf(fp.region),
     locale: UI_LOCALE,
     metadata: {
       brands: [
