@@ -160,6 +160,10 @@ function problemPage(acc) {
       h('button', { class: 'btn primary', onclick: () => window.wa.retry(acc.id) }, acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接'))));
 }
 
+// Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
+const CLASH_DOC = 'https://github.com/Kr1xxxx/WAswitch/blob/main/docs/clash.md';
+const clashLink = () => h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, 'Clash 设置说明');
+
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), h('small', null, text)));
   return h('div', { class: 'center', style: { background: '#fff' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
@@ -168,7 +172,7 @@ function welcomePage() {
       h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区和语言跟着线路走。')),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色', '比如“客服号”“店铺号”。颜色会铺满窗口背景，一眼认出在用哪个号。'),
-      step(2, '选网络线路（可以跳过）', '在 Clash 里给每个号开一个本地端口，填进来点“测试”。设置方法见软件目录里的 docs/clash.md。'),
+      step(2, '选网络线路（可以跳过）', ['在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
       step(3, '手机扫码登录', 'WhatsApp › 设置 › 已关联的设备 › 关联新设备。')),
     h('div', null, h('button', { class: 'btn primary', style: { height: '46px', padding: '0 26px' }, onclick: () => window.wa.add() }, '添加第一个账号'))));
 }
@@ -256,9 +260,9 @@ function editorPage(id) {
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
       liteBox.hidden = !lite;
-      proxyHint.textContent = lite
-        ? '轻量模式必须走代理，不能直连，并且要先“测试”通过才能保存。出口 IP 不能和主号相同。socks5 不支持密码，带密码的代理请用 http://。'
-        : '测试会通过这个代理访问 ipinfo.io 查询出口 IP。代理连不上时这个账号会暂停联网，不会改用直连。socks5 不支持密码，带密码的代理请用 http://。Clash 设置方法见 docs/clash.md。';
+      proxyHint.replaceChildren(...(lite
+        ? ['轻量模式必须走代理，不能直连，并且要先“测试”通过才能保存。出口 IP 不能和主号相同。socks5 不支持密码，带密码的代理请用 http://。']
+        : ['测试会通过这个代理访问 ipinfo.io 查询出口 IP。代理连不上时这个账号会暂停联网，不会改用直连。socks5 不支持密码，带密码的代理请用 http://。用 Clash 的话，给每个号开一个本地端口，填 socks5://127.0.0.1:端口，详见', clashLink(), '。']));
       for (const b of presets.children) if (b.textContent === '直连') b.hidden = lite;
       sidePanel.replaceChildren(...sideText());
     };
