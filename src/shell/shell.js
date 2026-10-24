@@ -80,9 +80,12 @@ function tint(color) {
 function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
   const avatar = h('span', { class: 'avatar', style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
-  if (acc.problem || acc.needsQr) avatar.append(h('span', { class: 'dot bad' }, '!'));
+  // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
+  const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
+  const lost = acc.needsQr && !waiting;
+  if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${acc.muted ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
-  const tip = [acc.name, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, acc.needsQr ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const tip = [acc.name, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   return h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
@@ -91,7 +94,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, acc.name),
-    h('span', { class: `sub${acc.problem || acc.needsQr ? ' bad' : ''}` }, acc.problem ? acc.problemShort : acc.needsQr ? '需要扫码登录' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || lost ? ' bad' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
   acc.muted ? h('span', { class: 'mute', title: '不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${acc.muted ? ' quiet' : ''}` }, acc.unread) : null);
 }
@@ -164,15 +167,29 @@ function renderAi() {
 
 // ---------- 卡片里的页面 ----------
 
+const RELEASES = 'https://github.com/Kr1xxxx/WAswitch/releases';
+
+// 按出错的类型配按钮：重连没用的情况不给“重新连接”，直连号不提代理和 Clash
+function problemButtons(acc) {
+  const btn = (text, onclick, primary) => h('button', { class: `btn${primary ? ' primary' : ''}`, onclick }, text);
+  const del = () => btn('删除这个号…', () => window.wa.remove(acc.id));
+  const retry = (text = '重新连接', primary = true) => btn(text, () => window.wa.retry(acc.id), primary);
+  switch (acc.problemKind) {
+    case 'authError': return [del()];
+    case 'banned': return [del(), retry('仍要重试', false)];
+    case 'outdated': return [btn('检查更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
+    case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
+    default: return [acc.direct ? null : btn('修改代理', () => window.wa.edit(acc.id)), retry(acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接')];
+  }
+}
+
 function problemPage(acc) {
   return h('div', { class: 'center' }, h('div', { class: 'panel' },
     h('div', { class: 'warnicon' }, icon('warn', 26)),
     h('h2', null, acc.problemTitle || '代理连不上，这个账号已暂停联网'),
     h('p', null, acc.problem),
-    acc.retrying ? h('p', { class: 'hint' }, '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
-    h('div', { class: 'btns' },
-      h('button', { class: 'btn', onclick: () => window.wa.edit(acc.id) }, '修改代理'),
-      h('button', { class: 'btn primary', onclick: () => window.wa.retry(acc.id) }, acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接'))));
+    acc.retrying ? h('p', { class: 'hint' }, acc.direct ? '正在自动重试，网络恢复后会自动连上。' : '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
+    h('div', { class: 'btns' }, ...kids(...problemButtons(acc)))));
 }
 
 // Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
@@ -229,6 +246,11 @@ function editorPage(id) {
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
     const passwordRow = h('label', { class: 'field' }, '代理密码', password, h('span', { class: 'hint' }, '用系统钥匙串加密后保存在本机。'));
+    // 直连号才有：允许网页版通话（WebRTC 用 UDP 走本机网卡）
+    const allowCalls = h('input', { type: 'checkbox', checked: d.allowCalls });
+    const callsRow = h('div', { class: 'field' }, '通话',
+      h('label', { class: 'check-row' }, allowCalls, h('span', null, '允许通话（直连号）')),
+      h('span', { class: 'hint' }, '打开后这个号能在网页版里打语音、视频电话，通话走这台电脑的真实 IP。Clash 开着“系统代理”时请不要打开（网页和通话会是两个不同的 IP），或者把 Clash 改成 TUN 模式。'));
     const result = h('div', { role: 'status' });
     const region = h('select', { 'aria-label': '地区' }, d.regions.map((r) => h('option', { value: r.key }, r.label)));
     region.value = d.region;
@@ -258,6 +280,7 @@ function editorPage(id) {
     };
     const onProxyChange = () => {
       passwordRow.hidden = !/^https?:\/\/[^/@]+@/i.test(proxyInput.value.trim());
+      callsRow.hidden = mode === 'lite' || !!proxyInput.value.trim();
       result.replaceChildren();
       tested = null;
       drawPresets();
@@ -276,6 +299,7 @@ function editorPage(id) {
       }
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
+      callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
         ? ['轻量模式必须走代理，不能直连，并且要先“测试”通过才能保存。出口 IP 不能和主号相同。socks5 不支持密码，带密码的代理请用 http://。']
@@ -319,13 +343,19 @@ function editorPage(id) {
       saveBtn.disabled = true;
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       if (mode === 'lite' && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
-      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked });
+      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
     };
 
     drawSwatches();
     onProxyChange();
+    // 有改动就告诉主进程：离开编辑页（切号、点通知等）前会先问一句
+    let dirty = false;
+    const markDirty = () => { if (!dirty) { dirty = true; window.wa.editorDirty(true); } };
+    root.addEventListener('input', markDirty);
+    root.addEventListener('change', markDirty);
+    root.addEventListener('click', (e) => { if (e.target.closest('.swatch, .mode, .preset')) markDirty(); });
     root.replaceChildren(
       h('div', { class: 'col' },
         h('div', { class: 'col', style: { gap: '6px' } },
@@ -338,10 +368,11 @@ function editorPage(id) {
         primaryRow,
         h('div', { class: 'field' }, '网络线路（代理）', presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint),
         passwordRow,
+        callsRow,
         regionRow,
         liteBox,
         error,
-        h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: () => window.wa.showPage('account') }, '取消'), saveBtn)),
+        h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: () => window.wa.showPage('account', true) }, '取消'), saveBtn)),
       sidePanel);
     onModeChange();
     name.focus();
@@ -381,7 +412,9 @@ function settingsPage() {
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '关闭显卡加速，整体再省一些内存。代价是滚动和动画没那么顺滑。',
-        sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v))),
+        h('span', { class: 'hstack', style: { gap: '10px' } },
+          s.restartNeeded ? h('button', { class: 'btn primary', style: { height: '32px', padding: '0 14px' }, onclick: () => window.wa.restart() }, '立即重启') : null,
+          sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v)))),
       setRow('清理缓存',
         `清掉网页版账号可以重新下载的缓存，释放磁盘空间。登录状态和聊天记录不会被清，不会退出登录；部分已下载的图片可能需要重新加载；不包含轻量模式账号。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
         h('button', { class: 'btn', disabled: cacheInfo.busy || !s.accounts.length, onclick: async () => {
