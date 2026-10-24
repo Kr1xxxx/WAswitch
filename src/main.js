@@ -892,6 +892,7 @@ const TEAM_PROXY_PROBLEM = {
 // 停掉并隐藏一个号（被后台收回、电脑被停用、或不允许私人号）。数据全部保留
 function parkAccount(acc) {
   if (isLite(acc)) liteHost.stop(acc.id); else destroyView(acc.id);
+  clearRetry(acc.id);
   problems.delete(acc.id);
   loginStates.delete(acc.id);
   liteStates.delete(acc.id);
@@ -1817,7 +1818,7 @@ function setupUpdater() {
       fs.rmSync(updateMarker(), { force: true });
       if (liteHost) {
         liteHost.resume();
-        for (const acc of accounts.filter(isLite)) startLite(acc);
+        for (const acc of visibleAccounts().filter(isLite)) startAccount(acc); // 停着的号不重连，待填代理的号也不联网
       }
       refresh();
     },
@@ -1931,7 +1932,7 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
       // 轻量账号：代理断开、正在重连或停止重连的，马上重试一次
-      for (const acc of accounts.filter(isLite)) {
+      for (const acc of visibleAccounts().filter(isLite)) {
         if (['proxyDown', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
       }
     }, 5000);
