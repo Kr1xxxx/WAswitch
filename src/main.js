@@ -273,6 +273,8 @@ function loadAccounts() {
     acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
     acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
     acc.spellcheck = acc.spellcheck === true;
+    // 自定义下载文件夹：只能是用户在对话框里选的绝对路径，其他一律当没设
+    acc.downloadDir = typeof acc.downloadDir === 'string' && path.isAbsolute(acc.downloadDir) ? acc.downloadDir : '';
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -908,6 +910,74 @@ function setupPageMenu(wc, ses) {
   });
 }
 
+// ---------- 下载：每个号存到自己的文件夹 ----------
+// 默认：系统“下载”文件夹/WAswitch/<账号名>。可以在右键菜单里改成别的文件夹（只能从对话框里选）。
+// 文件夹写不进去时，退回系统的“另存为”对话框。下载完不会自动打开文件。
+const WIN_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+function safeName(name, fallback) {
+  let n = String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_').replace(/\s+/g, ' ').trim();
+  n = n.replace(/[. ]+$/, ''); // Windows 不允许结尾是点或空格
+  if (WIN_RESERVED.test(n)) n = `_${n}`;
+  n = n.slice(0, 80).replace(/[. ]+$/, '');
+  return n || fallback;
+}
+function downloadDirOf(acc) {
+  if (acc.downloadDir) return acc.downloadDir;
+  // 两个号同名时，文件夹名后面加上账号编号，免得混在一起
+  const base = safeName(acc.name, `account-${safeName(acc.id, 'x')}`);
+  const dup = accounts.some((a) => a !== acc && !a.downloadDir && safeName(a.name, '') === base);
+  return path.join(app.getPath('downloads'), 'WAswitch', dup ? `${base}-${safeName(acc.id, 'x')}` : base);
+}
+const reservedDownloads = new Set(); // 正在下载的目标路径，同时下两个同名文件不会撞
+function uniquePath(dir, filename) {
+  const ext = path.extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length) || 'file';
+  for (let i = 0; i < 1000; i += 1) {
+    const p = path.join(dir, i ? `${stem} (${i})${ext}` : `${stem}${ext}`);
+    if (!reservedDownloads.has(p) && !fs.existsSync(p)) return p;
+  }
+  return null;
+}
+const downloadSessions = new WeakSet(); // 每个 session 只挂一次（视图重建时 session 不变）
+function setupDownloads(acc, ses) {
+  if (downloadSessions.has(ses)) return;
+  downloadSessions.add(ses);
+  const id = acc.id;
+  ses.on('will-download', (_e, item) => {
+    const cur = findAcc(id);
+    if (!cur) return;
+    const dir = downloadDirOf(cur);
+    let target = null;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      const name = safeName(path.basename(item.getFilename() || ''), 'download');
+      target = uniquePath(dir, WIN_RESERVED.test(name) ? `_${name}` : name);
+    } catch (e) {
+      console.warn(`账号 ${id} 的下载文件夹不可写（${e.code || e.message}），改用另存为对话框`);
+    }
+    if (!target) return; // 不设路径：Electron 会弹系统的“另存为”对话框
+    reservedDownloads.add(target);
+    item.setSavePath(target);
+    item.once('done', () => reservedDownloads.delete(target));
+  });
+}
+async function pickDownloadDir(id) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  const r = await dialog.showOpenDialog(win, { title: `「${acc.name}」的下载文件夹`, defaultPath: downloadDirOf(acc), properties: ['openDirectory', 'createDirectory'] });
+  if (r.canceled || !r.filePaths[0] || !findAcc(id)) return;
+  acc.downloadDir = r.filePaths[0];
+  saveAccounts();
+}
+function openDownloadDir(id) {
+  const acc = findAcc(id);
+  if (!acc) return;
+  const dir = downloadDirOf(acc);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  shell.openPath(dir);
+}
+
 async function createView(acc, loadDelay = 0) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   const r = fingerprint.resolve(acc.fingerprint);
@@ -916,6 +986,7 @@ async function createView(acc, loadDelay = 0) {
   setupPermissions(ses);
   // 代理没设好之前先关掉拼写检查，免得词典下载走真实 IP
   ses.setSpellCheckerEnabled(false);
+  setupDownloads(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
   // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
   proxyReady.set(acc.id, !applied.error);
@@ -1796,6 +1867,16 @@ onShell('context', (id) => {
         : process.platform === 'darwin' ? '拼写检查（英文）'
           : `拼写检查（英文，第一次会${acc.proxy ? '通过本号代理' : '直连'}下载词典）`, type: 'checkbox', checked: acc.spellcheck, enabled: !isLite(acc),
       click: () => setSpellcheck(id, !acc.spellcheck),
+    },
+    {
+      label: isLite(acc) ? '下载文件夹（轻量模式不支持）' : '下载文件夹',
+      enabled: !isLite(acc),
+      submenu: isLite(acc) ? [] : [
+        { label: downloadDirOf(acc).length > 60 ? `…${downloadDirOf(acc).slice(-58)}` : downloadDirOf(acc), enabled: false },
+        { label: '打开文件夹', click: () => openDownloadDir(id) },
+        { label: '更改…', click: () => pickDownloadDir(id) },
+        { label: '恢复默认', enabled: !!acc.downloadDir, click: () => { acc.downloadDir = ''; saveAccounts(); } },
+      ],
     },
     {
       label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
