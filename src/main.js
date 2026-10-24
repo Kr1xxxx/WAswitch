@@ -6,7 +6,7 @@
 //   3. 环境：独立的浏览器标识、语言、时区（fingerprint.js），只用官方接口设置
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
 // 主号只能用网页版。轻量模式必须走代理，后台进程里有网络护栏，任何直连都会被拦下。
-const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -16,6 +16,7 @@ const proxy = require('./proxy');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
+const records = require('./records');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
@@ -71,6 +72,7 @@ const SIDE_COLLAPSED = 64;
 const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
+const PANEL_W = 300; // 右侧话术/客户面板的宽度
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
@@ -643,6 +645,40 @@ function checkIdleLock() {
 
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
+// ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
+let panelOpen = false;
+let replyStore = null;
+let customerStore = null;
+const panelShown = () => panelOpen && page === 'account' && !locked && accounts.length > 0;
+function togglePanel(on = !panelOpen) {
+  panelOpen = !!on;
+  refresh();
+}
+function panelData() {
+  const names = new Map(accounts.map((a) => [a.id, a.name]));
+  return {
+    replies: replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })),
+    customers: customerStore.list().map((c) => ({
+      id: c.id, accountId: c.accountId, accountName: names.get(c.accountId) || '', name: c.name, phone: c.phone,
+      note: c.note, tags: c.tags, followUpAt: c.followUpAt, updatedAt: c.updatedAt,
+    })),
+  };
+}
+// 跟进提醒：每分钟看一次，到时间的弹一条通知，只写名字（通知会显示在锁屏上，不写电话和备注）
+function checkFollowUps() {
+  if (!customerStore) return;
+  const now = Date.now();
+  for (const c of customerStore.list()) {
+    if (!c.followUpAt || c.reminded || c.followUpAt > now) continue;
+    customerStore.patch(c.id, { reminded: true });
+    const accId = c.accountId;
+    notifier.notifyApp('WAswitch', `跟进提醒：${c.name || c.phone}`, () => {
+      notifier.showWindow();
+      if (findAcc(accId)) userActivate(accId); // 只切换账号，不自动打开面板
+    });
+  }
+}
+
 function layout() {
   if (!win) return;
   const { width, height } = win.getContentBounds();
@@ -652,7 +688,7 @@ function layout() {
   const bounds = {
     x: side,
     y: GAP + top,
-    width: Math.max(0, width - side - GAP),
+    width: Math.max(0, width - side - GAP - (panelShown() ? PANEL_W : 0)),
     height: Math.max(0, height - GAP * 2 - top),
   };
   for (const [id, view] of views) {
@@ -710,6 +746,7 @@ function pushState() {
     update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
     locked,
+    panelOpen: panelShown(),
     lockChoices: memory.LOCK_CHOICES,
     // 分组：每组带上未读总数，折叠后组头上也能看到
     groups: groups.map((g) => ({
@@ -1586,6 +1623,12 @@ app.on('web-contents-created', (_e, wc) => {
       }
       return;
     }
+    // Ctrl+Shift+K（Mac 是 Cmd+Shift+K）：打开/收起右侧的话术和客户面板
+    if (mod && input.shift && input.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      togglePanel();
+      return;
+    }
     if (input.shift) return;
     // Ctrl+L（Mac 是 Cmd+L）：立即锁定聊天
     if (mod && input.key.toLowerCase() === 'l') {
@@ -1733,6 +1776,10 @@ app.whenReady().then(async () => {
   bindLiteEvents();
   groups = loadGroups();
   netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 1500, maxAgeMs: 7 * 24 * 3600 * 1000, routine: ['exit', 'exit_fail'], routinePerId: 50 });
+  replyStore = new records.Records(app.getPath('userData'), 'replies');
+  customerStore = new records.Records(app.getPath('userData'), 'customers');
+  setInterval(checkFollowUps, 60 * 1000);
+  setTimeout(checkFollowUps, 15 * 1000);
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
@@ -1819,6 +1866,71 @@ handleShell('notif:clear', () => {
 // 连接记录：最新的在前；清空只清记录
 handleShell('netlog:get', () => (netLog ? netLog.load().slice().reverse() : []));
 handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
+// ---- 面板 ----
+onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
+handleShell('panel:data', () => panelData());
+handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
+handleShell('reply:delete', (id) => { if (typeof id === 'string') replyStore.remove(id); return panelData(); });
+handleShell('cust:save', (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
+  return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt }) ? panelData() : null;
+});
+handleShell('cust:delete', (id) => { if (typeof id === 'string') customerStore.remove(id); return panelData(); });
+handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
+// 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
+handleShell('panel:insert', ({ accountId, text } = {}) => {
+  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+  const acc = findAcc(accountId);
+  if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
+  if (isLite(acc)) return 'lite'; // 轻量模式的输入框在软件界面里，由界面自己填
+  const view = views.get(accountId);
+  if (!view || view.webContents.isDestroyed()) return 'changed';
+  clipboard.writeText(text.slice(0, 4000));
+  view.webContents.focus();
+  view.webContents.paste();
+  return 'ok';
+});
+handleShell('panel:export', async ({ kind, format } = {}) => {
+  if (!['replies', 'customers'].includes(kind)) return null;
+  const store = kind === 'replies' ? replyStore : customerStore;
+  const rows = kind === 'replies' ? store.list() : panelData().customers;
+  const json = format === 'json';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const r = await dialog.showSaveDialog(win, {
+    title: kind === 'replies' ? '导出话术' : '导出客户名单',
+    defaultPath: path.join(app.getPath('documents'), `${kind === 'replies' ? '话术' : '客户'}-${stamp}.${json ? 'json' : 'csv'}`),
+    filters: [json ? { name: 'JSON', extensions: ['json'] } : { name: 'CSV（Excel 可以打开）', extensions: ['csv'] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+  const out = json
+    ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
+    : records.toCsv(kind, rows);
+  fs.writeFileSync(r.filePath, out);
+  return { count: rows.length };
+});
+handleShell('panel:import', async ({ kind } = {}) => {
+  if (!['replies', 'customers'].includes(kind)) return null;
+  const r = await dialog.showOpenDialog(win, {
+    title: kind === 'replies' ? '导入话术' : '导入客户名单',
+    properties: ['openFile'],
+    filters: [{ name: 'CSV 或 JSON', extensions: ['csv', 'json'] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const res = records.readImport(kind, r.filePaths[0]);
+  if (res.error) return { error: res.error };
+  const store = kind === 'replies' ? replyStore : customerStore;
+  let added = 0;
+  for (const row of res.rows) {
+    const data = { ...row, id: undefined };
+    // 客户：文件里的账号编号对得上就用它，否则记到当前账号
+    if (kind === 'customers') data.accountId = typeof row.accountId === 'string' && findAcc(row.accountId) ? row.accountId : activeId || '';
+    if (store.upsert(data, { save: false })) added += 1;
+  }
+  store.save();
+  return { added, skipped: res.rows.length - added, data: panelData() };
+});
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));

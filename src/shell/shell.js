@@ -19,6 +19,7 @@ const ICONS = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   mute: '<path d="M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h13M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   next: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
@@ -60,6 +61,7 @@ const $top = document.getElementById('topbar');
 const $ai = document.getElementById('aibar');
 const $content = document.getElementById('content');
 const $lock = document.getElementById('lock');
+const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
 let settingsTab = 'memory';
@@ -305,6 +307,7 @@ function renderTop() {
     !lite && acc.zoom && acc.zoom !== 1 ? h('button', { class: 'chip', type: 'button', title: `这个号的页面缩放到了 ${Math.round(acc.zoom * 100)}%。点一下还原到 100%（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + = / - / 0 也能调）`, onclick: () => window.wa.zoom(acc.id, 0) }, `${Math.round(acc.zoom * 100)}%`) : null,
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
+    h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `话术和客户（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '话术和客户', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
 }
@@ -394,6 +397,147 @@ function overviewPage() {
       }))
       : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
   return page;
+}
+
+// ---------- 右侧面板：话术库和客户名单 ----------
+// 只存本机。点“复制”放进剪贴板；点“插入”等于帮你按一次 Ctrl+V 贴进当前聊天框（会覆盖剪贴板），不会自动发送
+const pn = { tab: 'replies', q: '', all: false, edit: null, msg: '', bad: false, data: { replies: [], customers: [] }, loaded: false, accountId: null, sig: '' };
+async function panelLoad() {
+  try { pn.data = await window.wa.panelData(); pn.loaded = true; } catch {}
+  renderPanel(true);
+}
+function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }
+async function panelInsert(text) {
+  const acc = active();
+  if (!acc || acc.id !== pn.accountId) return panelSay('当前账号变了，请再点一次', true);
+  if (acc.mode === 'lite') {
+    // 轻量模式的输入框就在软件界面里：直接填进去，不碰剪贴板
+    const box = $content.querySelector('.lite-compose textarea');
+    if (!box) return panelSay('先在左边打开一个对话', true);
+    const at = box.selectionStart ?? box.value.length;
+    box.value = box.value.slice(0, at) + text + box.value.slice(box.selectionEnd ?? at);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    box.focus();
+    return panelSay('已填进输入框，检查后自己按发送');
+  }
+  const r = await window.wa.panelInsert(pn.accountId, text);
+  if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
+  else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
+}
+const fmtDue = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const toLocalInput = (t) => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+function replyForm() {
+  const r = pn.edit;
+  const title = h('input', { value: r.title || '', maxlength: '60', placeholder: '标题（可不填）', 'aria-label': '标题' });
+  const text = h('textarea', { maxlength: '2000', placeholder: '话术内容', 'aria-label': '话术内容' }, r.text || '');
+  requestAnimationFrame(() => (r.title ? text : title).focus());
+  return h('div', { class: 'pn-form' }, title, text,
+    h('div', { class: 'pn-item acts', style: { border: 'none', padding: 0, background: 'none', flexDirection: 'row' } },
+      h('button', { class: 'pn-btn primary', onclick: async () => {
+        const d = await window.wa.replySave({ id: r.id, title: title.value, text: text.value });
+        if (!d) return panelSay('内容不能是空的', true);
+        pn.data = d; pn.edit = null; panelSay('已保存');
+      } }, '保存'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
+}
+function customerForm() {
+  const c = pn.edit;
+  const name = h('input', { value: c.name || '', maxlength: '60', placeholder: '名字', 'aria-label': '名字' });
+  const phone = h('input', { value: c.phone || '', maxlength: '40', placeholder: '电话（例如 +81 90 1234 5678）', 'aria-label': '电话' });
+  const tags = h('input', { value: (c.tags || []).join('，'), maxlength: '220', placeholder: '标签，用逗号隔开', 'aria-label': '标签' });
+  const note = h('textarea', { maxlength: '500', placeholder: '备注', 'aria-label': '备注' }, c.note || '');
+  const due = h('input', { type: 'datetime-local', value: toLocalInput(c.followUpAt), 'aria-label': '下次跟进时间' });
+  const acc = h('select', { 'aria-label': '属于哪个号' }, s.accounts.map((a) => h('option', { value: a.id }, a.name)));
+  acc.value = s.accounts.some((a) => a.id === c.accountId) ? c.accountId : (s.activeId || '');
+  requestAnimationFrame(() => name.focus());
+  return h('div', { class: 'pn-form' }, name, phone, tags, note,
+    h('label', { class: 'hint' }, '下次跟进（到时间弹一条只写名字的提醒）'), due,
+    h('label', { class: 'hint' }, '属于哪个号'), acc,
+    h('div', { class: 'acts', style: { display: 'flex', gap: '4px' } },
+      h('button', { class: 'pn-btn primary', onclick: async () => {
+        const t = due.value ? new Date(due.value).getTime() : 0;
+        const d = await window.wa.custSave({ id: c.id, accountId: acc.value, name: name.value, phone: phone.value, tags: tags.value, note: note.value, followUpAt: Number.isFinite(t) ? t : 0 });
+        if (!d) return panelSay('名字和电话至少填一个', true);
+        pn.data = d; pn.edit = null; panelSay('已保存');
+      } }, '保存'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
+}
+function replyItems() {
+  const q = pn.q.toLowerCase();
+  const list = pn.data.replies.filter((r) => !q || `${r.title}\n${r.text}`.toLowerCase().includes(q)).sort((a, b) => b.updatedAt - a.updatedAt);
+  if (!list.length) return [h('div', { class: 'hint', style: { padding: '8px 2px' } }, pn.data.replies.length ? '没有找到。' : '还没有话术。点“新建”加一条常用回复。')];
+  return list.map((r) => h('div', { class: 'pn-item' },
+    r.title ? h('span', { class: 't' }, r.title) : null,
+    h('span', { class: 'x' }, r.text),
+    h('span', { class: 'acts' },
+      h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
+      h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(r.text); panelSay('已复制'); } }, '复制'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.replyDelete(r.id); panelSay('已删除'); } }, '删除'))));
+}
+function customerItems() {
+  const q = pn.q.toLowerCase();
+  const list = pn.data.customers
+    .filter((c) => pn.all || c.accountId === pn.accountId)
+    .filter((c) => !q || `${c.name}\n${c.phone}\n${c.tags.join(',')}\n${c.note}`.toLowerCase().includes(q))
+    .sort((a, b) => (a.followUpAt || Infinity) - (b.followUpAt || Infinity) || b.updatedAt - a.updatedAt);
+  if (!list.length) return [h('div', { class: 'hint', style: { padding: '8px 2px' } }, pn.data.customers.length ? '没有找到。' : '还没有客户。点“新建”记一个。')];
+  const now = Date.now();
+  return list.map((c) => h('div', { class: 'pn-item' },
+    h('span', { class: 't' }, c.name || c.phone),
+    c.name && c.phone ? h('span', { class: 'x' }, c.phone) : null,
+    pn.all ? h('span', { class: 'hint' }, c.accountName || '已删除的账号') : null,
+    c.tags.length ? h('span', null, c.tags.map((t) => h('span', { class: 'pn-tag' }, t))) : null,
+    c.note ? h('span', { class: 'x' }, c.note) : null,
+    c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
+    h('span', { class: 'acts' },
+      c.phone ? h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(c.phone); panelSay('电话已复制'); } }, '复制电话') : null,
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
+}
+// force：用户在面板里操作了；不 force 时，面板里正在输入就不重画
+function renderPanel(force = false) {
+  const show = !!s.panelOpen && !s.locked && s.page === 'account';
+  $panel.hidden = !show;
+  if (!show) return;
+  if (!pn.loaded) { pn.loaded = true; panelLoad(); }
+  const sig = `${s.activeId}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
+  if (!force && sig === pn.sig && $panel.firstChild) return;
+  if (!force && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  pn.sig = sig;
+  pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
+  const replies = pn.tab === 'replies';
+  const search = h('input', { type: 'search', value: pn.q, placeholder: replies ? '搜索话术' : '搜索名字、电话、标签', 'aria-label': '搜索' });
+  search.addEventListener('input', () => { pn.q = search.value; const list = $panel.querySelector('.pn-list'); if (list) list.replaceChildren(...(pn.tab === 'replies' ? replyItems() : customerItems())); });
+  const io = async (what) => {
+    const kind = replies ? 'replies' : 'customers';
+    if (what === 'import') {
+      const r = await window.wa.panelImport(kind);
+      if (!r) return;
+      if (r.error) return panelSay(`导入失败：${r.error}`, true);
+      pn.data = r.data;
+      return panelSay(`导入了 ${r.added} 条${r.skipped ? `，跳过 ${r.skipped} 条空的` : ''}`);
+    }
+    const r = await window.wa.panelExport(kind, what);
+    if (r) panelSay(`导出了 ${r.count} 条`);
+  };
+  $panel.replaceChildren(...kids(
+    h('div', { class: 'pn-tabs' },
+      h('button', { class: `pn-tab${replies ? ' on' : ''}`, onclick: () => { pn.tab = 'replies'; pn.edit = null; pn.q = ''; pn.msg = ''; renderPanel(true); } }, '话术'),
+      h('button', { class: `pn-tab${replies ? '' : ' on'}`, onclick: () => { pn.tab = 'customers'; pn.edit = null; pn.q = ''; pn.msg = ''; renderPanel(true); } }, '客户'),
+      h('span', { class: 'grow' }),
+      h('button', { class: 'icon-btn', title: '收起', 'aria-label': '收起面板', onclick: () => window.wa.panelToggle(false) }, icon('back', 14))),
+    pn.edit ? null : h('div', { class: 'pn-tools' }, search,
+      h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
+    !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },
+      h('input', { type: 'checkbox', checked: pn.all, onchange: (e) => { pn.all = e.target.checked; renderPanel(true); } }), '显示所有号的客户') : null,
+    pn.msg ? h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg) : null,
+    pn.edit ? (replies ? replyForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
+    pn.edit ? null : h('div', { class: 'pn-foot' },
+      h('button', { class: 'pn-btn', onclick: () => io('import') }, '导入'),
+      h('button', { class: 'pn-btn', onclick: () => io('csv') }, '导出 CSV'),
+      h('button', { class: 'pn-btn', onclick: () => io('json') }, '导出 JSON'),
+      h('span', { class: 'hint', style: { width: '100%' } }, '只存在这台电脑上，不上传。“插入”会占用剪贴板，不会自动发送。'))));
 }
 
 function welcomePage() {
@@ -872,6 +1016,7 @@ function render(forceContent = false) {
   renderAi();
   renderTop();
   renderLock();
+  renderPanel();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;
