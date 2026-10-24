@@ -12,7 +12,7 @@
 
 ## 安装
 
-在 [Releases](https://github.com/Kr1xxxx/WAswitch/releases) 下载最新的安装包：Windows 用 `.exe`，macOS 用 `.dmg`。
+在 [Releases](https://github.com/Kr1xxxx/WAswitch/releases) 下载最新的安装包：Windows 用 `.exe`；macOS 用 `.dmg`，M 系列芯片下载带 `arm64` 的，Intel 芯片下载带 `x64` 的。
 
 安装包没有做代码签名（需要付费证书），第一次打开时系统会拦一下：
 

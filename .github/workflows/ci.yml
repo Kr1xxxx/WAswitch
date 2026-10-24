@@ -1,0 +1,35 @@
+# 每次 push 和 PR 自动跑全部自检，并打一个 Linux 包启动 10 秒做冒烟。
+# 所有 action 按 commit 固定版本；只读权限。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: MCP 自检
+        run: npm run check:mcp
+      - name: 轻量模式自检（Electron 内置 Node 和系统 Node 各一遍）
+        run: npm run check:lite
+      - name: 隔离自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
+      - name: 读取对话列表自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
+      - name: 打包（Linux 目录版）
+        run: npx electron-builder --linux dir --publish never
+      - name: 打包后启动冒烟
+        run: xvfb-run -a node scripts/smoke-packaged.js dist/linux-unpacked/waswitch
