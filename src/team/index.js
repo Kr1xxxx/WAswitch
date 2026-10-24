@@ -29,9 +29,10 @@ const UPLOAD_FIELDS = [
   '每个团队号：代理通不通、延迟、出口 IP 和国家、出口 IP 是否变了',
   '状态变化记录：掉线、恢复、换出口、代理断开或恢复（只有类型、时间和国家代码）',
   '这台电脑：WAswitch 版本、系统类型（Windows / Mac / Linux）、内存占用、是否省内存模式',
+  '管理员给某个团队号开了“同步到 CRM”时：这个号单聊里的文字消息（对方号码、时间、收 / 发、文字），用来写进公司的 CRM。侧栏会一直显示“CRM”标记',
 ];
 const NEVER_UPLOAD = [
-  '聊天内容、对话列表、通知内容、联系人和通讯录',
+  '没开“同步到 CRM”的号的聊天内容；所有号的群聊、对话列表、通知内容、联系人名字和通讯录',
   '二维码、登录数据、cookie、轻量号密钥',
   '代理地址、端口、用户名、密码',
   '你操作电脑的时间、最后操作时间（不监控员工活动）',
@@ -364,15 +365,17 @@ class TeamSync {
         color: typeof s.color === 'string' && COLOR_RE.test(s.color) ? s.color : null,
         note: typeof s.note === 'string' ? s.note.slice(0, 500) : '',
         expected: typeof s.expected_country === 'string' && /^[A-Z]{2}$/.test(s.expected_country) ? s.expected_country : '',
+        crm: s.crm_sync === true,
       };
       if (acc) {
         if (fields.name) acc.name = fields.name;
         if (fields.color) acc.color = fields.color;
         acc.teamNote = fields.note;
         acc.teamExpected = fields.expected;
+        acc.teamCrm = fields.crm;
         if (acc.teamHidden) { acc.teamHidden = false; this.hooks.unpark(acc); }
       } else {
-        this.hooks.createSeat({ teamId: s.team_id, name: fields.name || '团队账号', color: fields.color, mode: s.mode === 'lite' ? 'lite' : 'web', note: fields.note, expected: fields.expected });
+        this.hooks.createSeat({ teamId: s.team_id, name: fields.name || '团队账号', color: fields.color, mode: s.mode === 'lite' ? 'lite' : 'web', note: fields.note, expected: fields.expected, crm: fields.crm });
       }
       changed = true;
     }

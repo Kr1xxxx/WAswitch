@@ -42,7 +42,7 @@ async function me(db, user) {
 
 async function overview(db, user) {
   const where = isOwner(user) ? 'WHERE a.deleted_at IS NULL' : 'WHERE a.deleted_at IS NULL AND a.group_id = ?';
-  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.user_id, a.device_id,
+  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.crm_sync, a.user_id, a.device_id,
       u.name AS user_name, d.name AS device_name, d.last_seen_at, d.revoked_at, d.app_version,
       st.state, st.unread, st.proxy_ok, st.proxy_ms, st.exit_ip, st.exit_country, st.exit_changed, st.reported_at
     FROM wa_accounts a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
@@ -218,6 +218,10 @@ async function updateAccount(db, user, id, body) {
   if (body.color !== undefined) { sets.push('color = ?'); vals.push(typeof body.color === 'string' && COLORS_RE.test(body.color) ? body.color : ''); }
   if (body.expected_country !== undefined) { sets.push('expected_country = ?'); vals.push(country(body.expected_country)); }
   if (body.note !== undefined) { sets.push('note = ?'); vals.push(str(body.note, 500)); }
+  if (body.crm_sync !== undefined) {
+    need(isOwner(user), '只有老板能开关聊天同步');
+    sets.push('crm_sync = ?'); vals.push(body.crm_sync === true ? 1 : 0);
+  }
   if (body.group_id !== undefined) {
     need(isOwner(user), '只有老板能改账号的组');
     const g = str(body.group_id, 36) || null;

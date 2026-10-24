@@ -27,6 +27,8 @@ const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater } = require('./updater');
 const { TeamSync } = require('./team');
+const { CrmQueue } = require('./crm/queue');
+const crmWeb = require('./crm/web');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -296,6 +298,7 @@ function loadAccounts() {
     acc.teamHidden = !!acc.teamId && acc.teamHidden === true;
     acc.teamNeedsProxy = !!acc.teamId && acc.teamNeedsProxy === true;
     acc.teamNote = typeof acc.teamNote === 'string' ? acc.teamNote.slice(0, 500) : '';
+    acc.teamCrm = acc.teamCrm === true && !!acc.teamId;
     acc.teamExpected = typeof acc.teamExpected === 'string' && /^[A-Z]{2}$/.test(acc.teamExpected) ? acc.teamExpected : '';
   });
   // 只能有一个主号；没有时把第一个网页版账号设为主号
@@ -761,6 +764,7 @@ function trackNet() {
 
 function pushState() {
   team?.noteChange();
+  crmReconcile();
   trackNet();
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
@@ -824,6 +828,9 @@ function pushState() {
         liteStatus: isLite(acc) ? (liteStates.get(acc.id)?.status || 'connecting') : '',
         team: !!acc.teamId,
         teamNote: acc.teamNote || '',
+        // 开了“同步到 CRM”：侧栏一直显示标记；团队页显示条数（不显示内容）
+        crm: crmOn(acc) ? crmQueue.stats(acc.id) : null,
+        crmWanted: !!(acc.teamCrm && !isParked(acc)),
       };
     }),
     lite: liteStateForShell(),
@@ -928,7 +935,7 @@ function createTeamSeat(seat) {
     id: String(id), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
-    teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected,
+    teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
   };
   accounts.push(acc);
   problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
@@ -1350,7 +1357,7 @@ function startLite(acc) {
     return;
   }
   liteStates.set(acc.id, { status: 'connecting', qr: null });
-  liteHost.start(acc.id, { proxy: url, key, os: process.platform });
+  liteHost.start(acc.id, { proxy: url, key, os: process.platform, crm: crmOn(acc) ? crmQueue.enable(acc.id) : 0 });
 }
 
 function startAccount(acc, loadDelay = 0) {
@@ -1451,6 +1458,13 @@ function bindLiteEvents() {
     if (userIsReading(id, jid)) liteHost.read(id, jid);
   });
   liteHost.on('guard', () => { liteGuardHits += 1; });
+  // 轻量号采集到的 CRM 消息：主进程再查一遍开关，只进本机加密队列
+  liteHost.on('crm', ({ id, items, skipped }) => {
+    const acc = findAcc(id);
+    if (!crmOn(acc) || !isLite(acc)) return;
+    for (const item of Array.isArray(items) ? items.slice(0, 500) : []) crmQueue.add(acc.id, item);
+    if (Number.isInteger(skipped) && skipped > 0) crmQueue.skip(acc.id, Math.min(skipped, 500));
+  });
 }
 
 // 告诉后台进程现在在看哪个轻量账号、哪个对话（只有它会推送对话列表）
@@ -1478,6 +1492,7 @@ function liteStateForShell() {
 // focus：用户自己切的号（点侧栏、Ctrl+数字、托盘或通知）才把键盘焦点交给新账号，切完就能直接打字。
 // MCP 引起的切换不给焦点，免得用户打的字落到别的号里。
 function activate(id, { focus = false } = {}) {
+  if (activeId && activeId !== id) crmReadWeb(activeId, true); // 切走前把这个号打开的对话再读一次
   activeId = id;
   // 记住在看哪个号，下次启动直接打开它
   if (id && settings.lastAccountId !== id) { settings.lastAccountId = id; memory.saveSettings(settings); }
@@ -1840,6 +1855,65 @@ function setupUpdater() {
 app.on('second-instance', () => notifier.showWindow());
 
 // ---------- 团队模式 ----------
+// ---------- 同步到 CRM（第 1 步：只采集到本机加密队列，不上传） ----------
+// 只有团队号、管理员在后台开了同步、号没停着、系统能真加密时才采集；私人号永远不采集
+let crmQueue = null;
+let crmTimer = null;
+const CRM_READ_MS = 15 * 1000;
+const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
+// 开关、收回、停用、换私人号、删号之后：停止采集，删掉队列和去重表
+function crmReconcile() {
+  if (!crmQueue) return;
+  for (const id of crmQueue.enabledIds()) {
+    if (crmOn(accounts.find((a) => a.id === id))) continue;
+    crmQueue.purge(id);
+    crmSkipSeen.delete(id);
+    if (liteHost) liteHost.setCrm(id, 0);
+  }
+  for (const acc of accounts) {
+    if (!crmOn(acc)) continue;
+    const since = crmQueue.enable(acc.id);
+    if (isLite(acc) && liteHost) liteHost.setCrm(acc.id, since);
+  }
+}
+// 网页版号：只读员工正在看的对话，条件和悬浮窗一样（账号页、窗口看得见、没锁、号正常、页面没在加载）
+// switching = 切走前最后读一次（这时它还是当前号）
+async function crmReadWeb(id, switching) {
+  const acc = findAcc(id);
+  if (!crmOn(acc) || isLite(acc) || problems.has(acc.id)) return;
+  if (page !== 'account' || locked || !win || !win.isVisible() || win.isMinimized()) return;
+  if (!switching && id !== activeId) return;
+  const view = views.get(acc.id);
+  if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return;
+  const r = await waPage.readOpenChat(view.webContents);
+  if (!r.ok || !crmOn(acc)) return;
+  const since = crmQueue.since(acc.id);
+  const now = Date.now();
+  const lidIds = [];
+  for (const m of r.msgs) {
+    const x = crmWeb.webItem(m, since, now);
+    if (x && x.item) crmQueue.add(acc.id, x.item);
+    else if (x && x.skip) lidIds.push(m.id);
+  }
+  // 认不出号码（@lid）的消息：每 15 秒会重复读到，只按第一次见到的计数
+  const skipped = crmSkipNew(acc.id, lidIds);
+  if (skipped) crmQueue.skip(acc.id, skipped);
+}
+// 认不出号码的消息只算一次
+const crmSkipSeen = new Map(); // accId -> Set(消息编号)，只在内存里
+function crmSkipNew(accId, ids) {
+  let set = crmSkipSeen.get(accId);
+  if (!set) { set = new Set(); crmSkipSeen.set(accId, set); }
+  let n = 0;
+  for (const id of ids) {
+    if (set.has(id)) continue;
+    set.add(id);
+    n += 1;
+  }
+  if (set.size > 2000) crmSkipSeen.set(accId, new Set([...set].slice(-1000)));
+  return n;
+}
+
 function setupTeam() {
   team = new TeamSync({
     dir: app.getPath('userData'),
@@ -1857,6 +1931,8 @@ function setupTeam() {
       refresh: () => refresh(),
     },
   });
+  crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
+  crmTimer = setInterval(() => { if (activeId) crmReadWeb(activeId, false); }, CRM_READ_MS);
   // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }
@@ -2902,6 +2978,7 @@ onShell('update:install', () => { if (!updater) return; if (updater.mac) updater
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {

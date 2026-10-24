@@ -25,7 +25,7 @@ async function jwt(email) {
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, new TextEncoder().encode(`${head}.${body}`));
   return `${head}.${body}.${Buffer.from(sig).toString('base64url')}`;
 }
-const db = fakeD1(path.join(root, 'server/migrations/0001_init.sql'));
+const db = fakeD1(path.join(root, 'server/migrations'));
 const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: 'aud', OWNER_EMAIL: 'boss@example.com', ASSETS: { fetch: async () => new Response('') } };
 async function boss(method, p, body) {
   const res = await worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
@@ -186,6 +186,15 @@ await test('后台不允许私人号：私人号停着；再允许就恢复', as
   await A.team.syncNow();
   assert.equal(A.team.isParked(A.accounts[3]), false);
   assert.ok(A.log.includes('unpark:104'));
+});
+await test('后台开了“同步到 CRM”：坐席同步后这个号带上 teamCrm；关掉就去掉', async () => {
+  const mine = A.accounts.find((a) => a.teamId && !a.teamHidden);
+  await boss('PATCH', `accounts/${mine.teamId}`, { crm_sync: true });
+  assert.deepEqual(await A.team.syncNow(), { ok: true });
+  assert.equal(mine.teamCrm, true);
+  await boss('PATCH', `accounts/${mine.teamId}`, { crm_sync: false });
+  await A.team.syncNow();
+  assert.equal(mine.teamCrm, false);
 });
 await test('提前同步只看状态变化，未读数不触发；离上一次同步至少 60 秒', async () => {
   let clock = Date.now();

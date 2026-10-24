@@ -290,3 +290,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .tr-prow > :first-child { flex: none; max-width: 40%; }
 .tr-form input, .tr-form textarea, .tr-form select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; background: #fff; box-sizing: border-box; }
 .tr-form textarea { width: 100%; resize: vertical; }
+
+/* 开了“同步到 CRM”的号 */
+.avatar.crm { box-shadow: 0 0 0 2px var(--tint), 0 0 0 4px #2563EB; }
+.crm-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #2563EB; color: #fff; font-size: 10px; font-weight: 600; line-height: 16px; vertical-align: 1px; }

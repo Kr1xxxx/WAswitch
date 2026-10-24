@@ -163,14 +163,17 @@ function editAccount(a) {
     expected_country: el('input', { value: a.expected_country || '', maxlength: 2, placeholder: '如 US', size: 4 }),
     note: el('input', { value: a.note || '', maxlength: 500, placeholder: '备注（会显示给员工）', size: 30 }),
   };
+  // 同步到 CRM：只有老板能开；开了以后员工侧栏会一直显示 CRM 标记
+  const crm = me.user.role === 'owner' ? el('input', { type: 'checkbox', checked: a.crm_sync === 1 }) : null;
   const group = me.user.role === 'owner' ? el('select', {}, el('option', { value: '' }, '未分组'), me.groups.map((g) => el('option', { value: g.id, selected: g.id === a.group_id }, g.name))) : null;
   const form = el('form', { class: 'row', onsubmit: (e) => {
     e.preventDefault();
     const body = Object.fromEntries(Object.entries(f).map(([k, n]) => [k, n.value.trim()]));
     body.expected_country = body.expected_country.toUpperCase();
     if (group) body.group_id = group.value;
+    if (crm) body.crm_sync = crm.checked;
     act(() => api('PATCH', `accounts/${a.id}`, body), '已保存');
-  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
+  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, crm ? el('label', { title: '这个号单聊里的文字消息会同步到 CRM；员工那边会一直看到 CRM 标记' }, crm, ' 同步聊天到 CRM') : null, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
   document.getElementById('detail').replaceChildren(form);
 }
 

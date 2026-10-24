@@ -125,13 +125,14 @@ function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
   // 自己关了通知，或者所在分组整组关了，都显示成灰色
   const quiet = acc.muted || acc.groupMuted;
-  const avatar = h('span', { class: 'avatar', style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
+  // 开了“同步到 CRM”的号：头像外圈蓝色、名字旁边 CRM 标记，侧栏收起时也看得到
+  const avatar = h('span', { class: `avatar${acc.crm ? ' crm' : ''}`, style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
-  const tip = [acc.name, acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const tip = [acc.name, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   const row = h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
@@ -139,7 +140,7 @@ function accountRow(acc) {
   },
   avatar,
   h('span', { class: 'meta' },
-    h('span', { class: 'name' }, acc.name),
+    h('span', { class: 'name' }, acc.name, acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
     h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
@@ -1122,7 +1123,7 @@ function settingsPage() {
   } else if (settingsTab === 'translate') {
     translatePage(page);
   } else if (settingsTab === 'team') {
-    page.append(teamPage(s.team));
+    page.append(teamPage(s.team, s.accounts));
   } else if (settingsTab === 'check') {
     const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
       checkRunning = true; render(true);
@@ -1164,7 +1165,21 @@ function settingsPage() {
 }
 
 // ---------- 设置 › 团队 ----------
-function teamPage(t) {
+// 同步到 CRM：只显示条数，不显示内容
+function crmBox(accounts) {
+  const list = accounts.filter((a) => a.team && (a.crm || a.crmWanted));
+  if (!list.length) return null;
+  return h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '同步到 CRM'),
+    h('p', { class: 'hint', style: { margin: '0' } }, '管理员给下面这些号开了同步：单聊里的文字消息先加密存在这台电脑上。群聊不同步；网页版的号只同步你打开看过的对话。'),
+    list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
+      h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+      h('span', { class: 'meta' }, a.name),
+      h('span', { class: 'hint', style: { fontSize: '12px' } }, a.crm
+        ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}`
+        : '这台电脑不能加密保存，没有采集'))));
+}
+
+function teamPage(t, accounts = []) {
   const wrap = h('div', { class: 'col', style: { gap: '16px' } });
   if (!t) return wrap;
   const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
@@ -1205,7 +1220,7 @@ function teamPage(t) {
             render(true);
           } }, '加入团队')))));
     }
-    wrap.append(fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
+    wrap.append(...[crmBox(accounts)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
     return wrap;
   }
 

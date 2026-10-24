@@ -116,11 +116,43 @@ async function readChatList(wc, { includePreview = false } = {}) {
   }
 }
 
-// 悬浮翻译：只读当前打开的对话的最后 20 条消息。
+// 从 data-pre-plain-text（形如 "[10:31, 2026/10/24] 名字: "）里只取出时间，名字不出隔离环境。
+// 返回 { y, mo, d, h, mi, ambig }（ambig = 日 / 月顺序拿不准），认不出返回 null。
+// 这个函数会被原样放进页面的隔离环境里运行（见 READ_CHAT_CODE），所以不能用外面的变量。
+function parsePre(raw) {
+  const m = /^\[([^\]]{3,60})\]/.exec(String(raw || ''));
+  if (!m) return null;
+  const inner = m[1];
+  const tm = /(上午|下午|凌晨|早上|中午|晚上)?\s*(\d{1,2})[:.](\d{2})(?:[:.]\d{2})?\s*(AM|PM|am|pm|a\.\s?m\.|p\.\s?m\.)?/.exec(inner);
+  const dm = /(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})/.exec(inner);
+  if (!tm || !dm) return null;
+  let h = Number(tm[2]);
+  const mi = Number(tm[3]);
+  const pm = (tm[4] && /p/i.test(tm[4])) || (tm[1] && /下午|晚上/.test(tm[1]));
+  const am = (tm[4] && /a/i.test(tm[4])) || (tm[1] && /上午|凌晨|早上/.test(tm[1]));
+  if (pm && h < 12) h += 12;
+  if (am && h === 12) h = 0;
+  const a = Number(dm[1]);
+  const b = Number(dm[2]);
+  const c = Number(dm[3]);
+  let y;
+  let mo;
+  let d;
+  let ambig = false;
+  if (dm[1].length === 4) { y = a; mo = b; d = c; } else if (dm[3].length === 2 || dm[3].length === 4) {
+    y = c < 100 ? 2000 + c : c;
+    if (a > 12) { d = a; mo = b; } else if (b > 12) { mo = a; d = b; } else { d = a; mo = b; ambig = a !== b; }
+  } else return null;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+  return { y, mo, d, h, mi, ambig };
+}
+
+// 悬浮翻译和 CRM 同步：只读当前打开的对话的最后 20 条消息。
 // 只用 querySelector / getAttribute / textContent（不用 innerText，不触发排版），不滚动、不聚焦、不改页面。
-// 不读时间、群里的发送人、引用的消息和链接预览。每条最多 4000 字，总共最多 20000 字。
+// 不读群里的发送人、引用的消息和链接预览；时间只在隔离环境里解析成数字（t），发送人名字不带出来。每条最多 4000 字，总共最多 20000 字。
 const MAX_MSGS = 20;
 const READ_CHAT_CODE = `(() => {
+  const parsePre = ${parsePre.toString()};
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip })};
   const main = document.querySelector(S.main);
   if (!main) return { ok: false, why: 'nochat' };
@@ -141,6 +173,7 @@ const READ_CHAT_CODE = `(() => {
     const id = n.getAttribute('data-id').slice(0, 300);
     let text = '';
     const body = n.querySelector(S.body);
+    const t = body ? parsePre(body.getAttribute('data-pre-plain-text')) : null;
     if (body) {
       for (const sp of body.querySelectorAll(S.text)) {
         if (sp.closest(S.skip)) continue;
@@ -151,11 +184,19 @@ const READ_CHAT_CODE = `(() => {
     text = text.slice(0, 4000);
     if (size + text.length > 20000) break;
     size += text.length;
-    msgs.push({ id, out: id.startsWith('true_'), text });
+    msgs.push({ id, out: id.startsWith('true_'), text, t });
   }
   msgs.reverse();
   return { ok: true, title, msgs };
 })()`;
+
+const cleanTime = (t) => {
+  if (!t || typeof t !== 'object') return null;
+  const n = (k, lo, hi) => (Number.isInteger(t[k]) && t[k] >= lo && t[k] <= hi ? t[k] : NaN);
+  const v = { y: n('y', 2000, 2100), mo: n('mo', 1, 12), d: n('d', 1, 31), h: n('h', 0, 23), mi: n('mi', 0, 59) };
+  if (Object.values(v).some(Number.isNaN)) return null;
+  return { ...v, ambig: t.ambig === true };
+};
 
 async function readOpenChat(wc) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
@@ -163,11 +204,11 @@ async function readOpenChat(wc) {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: READ_CHAT_CODE }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-MAX_MSGS)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000) }));
+      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
     return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', msgs };
   } catch {
     return { ok: false, why: 'error' };
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, READ_CHAT_CODE };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, READ_CHAT_CODE, parsePre };

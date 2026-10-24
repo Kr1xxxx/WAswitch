@@ -113,9 +113,10 @@ class LiteHost extends EventEmitter {
   }
 
   // proxy：socks5h://… 或 http(s)://…；key：这个号的数据密钥（hex）
-  start(id, { proxy, key, os }) {
+  // crm：开了 CRM 同步时是开关打开的时间（只收之后的消息），没开是 0
+  start(id, { proxy, key, os, crm = 0 }) {
     if (!this.proc) this.crashes = []; // 用户手动重新连接时重新计数
-    const cfg = { id, proxy, key, os, dir: this.dirOf(id) };
+    const cfg = { id, proxy, key, os, crm, dir: this.dirOf(id) };
     this.sessions.set(id, cfg);
     this.send({ type: 'start', ...cfg, ...this.watchFor(id) });
   }
@@ -139,6 +140,13 @@ class LiteHost extends EventEmitter {
     if (this.watch.id === id && this.watch.jid === jid) return;
     this.watch = { id, jid };
     if (this.proc) this.send({ type: 'watch', id, jid });
+  }
+
+  setCrm(id, since) {
+    const cfg = this.sessions.get(id);
+    if (!cfg || cfg.crm === since) return;
+    cfg.crm = since;
+    if (this.proc) this.send({ type: 'crm', id, since });
   }
 
   read(id, jid) {

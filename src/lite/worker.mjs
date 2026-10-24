@@ -21,7 +21,7 @@ async function handle(m) {
   switch (m.type) {
     case 'start': {
       if (s) { s.stop(); sessions.delete(m.id); }
-      const session = new Session({ id: m.id, proxy: m.proxy, dir: m.dir, key: m.key, os: m.os }, post);
+      const session = new Session({ id: m.id, proxy: m.proxy, dir: m.dir, key: m.key, os: m.os, crm: m.crm }, post);
       sessions.set(m.id, session);
       refreshAllowed();
       session.watch(m.watched, m.jid);
@@ -36,6 +36,9 @@ async function handle(m) {
       return undefined;
     case 'watch':
       for (const [id, x] of sessions) x.watch(id === m.id, id === m.id ? m.jid : undefined);
+      return undefined;
+    case 'crm':
+      if (s) s.setCrm(m.since);
       return undefined;
     case 'read':
       if (s) await s.read(m.jid);
