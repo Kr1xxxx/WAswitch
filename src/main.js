@@ -343,7 +343,7 @@ const mcpHooks = {
     problem: problems.get(a.id)?.text || '',
   })),
   regions: () => Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
-  // MCP 引起的切换不抢键盘焦点；用户正在打字时不切，改为在窗口顶部问用户。返回 'done' | 'pending'
+  // MCP 引起的切换不抢键盘焦点；用户正在打字时不切，改为在窗口顶部问用户。返回 'done' | 'pending' | 'hidden'（添加页开在托盘里的窗口）
   activate: (id) => aiAsk({ kind: 'switch', id }),
   // 不直接创建：打开“添加账号”页面并预填，由人确认代理后保存，避免新号先用真实 IP 联网
   openAddAccount: ({ name, region }) => aiAsk({ kind: 'add', name, region }),
@@ -882,7 +882,8 @@ function aiAsk(req) {
     return 'pending';
   }
   runAiRequest(req, false);
-  return 'done';
+  // 窗口在托盘里：添加页已经开好，但用户看不见，告诉 AI 让用户打开窗口
+  return req.kind === 'add' && win && (!win.isVisible() || win.isMinimized()) ? 'hidden' : 'done';
 }
 
 // byUser：用户在横幅里点了“切换”，可以把窗口拿到前台并给焦点。

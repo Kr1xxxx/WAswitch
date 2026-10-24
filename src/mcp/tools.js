@@ -47,7 +47,7 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
 
   server.registerTool('switch_account', {
     title: '切换账号',
-    description: '在 WAswitch 窗口里切换到指定账号（不抢键盘焦点，窗口在托盘里时会显示出来但不激活）。如果用户正在 WAswitch 里打字或编辑账号，不会直接切，而是在窗口顶部问用户，这时返回 pending: true，切不切由用户决定。',
+    description: '在 WAswitch 窗口里切换到指定账号（不抢键盘焦点；窗口在托盘里时不会弹出，用户打开窗口后已是这个账号）。如果用户正在 WAswitch 里打字或编辑账号，不会直接切，而是在窗口顶部问用户，这时返回 pending: true，切不切由用户决定。',
     inputSchema: { id: idArg },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ id }) => {
@@ -66,8 +66,12 @@ function registerAccountTools(server, hooks, { confirmTimeoutMs }) {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   }, async ({ name, region }) => {
-    if (hooks.openAddAccount({ name, region: region || 'auto' }) === 'pending') {
+    const r = hooks.openAddAccount({ name, region: region || 'auto' });
+    if (r === 'pending') {
       return text({ ok: true, created: false, pending: true, next: '用户正在使用 WAswitch，已在窗口顶部询问是否打开“添加账号”窗口。不要重复调用。' });
+    }
+    if (r === 'hidden') {
+      return text({ ok: true, created: false, next: 'WAswitch 窗口在托盘里，“添加账号”页已准备好。请用户打开 WAswitch 窗口，确认名称、代理和地区后点保存，再用手机扫码登录。' });
     }
     return text({ ok: true, created: false, next: '已在 WAswitch 里打开“添加账号”窗口。请用户确认名称、代理和地区后点保存，再用手机 WhatsApp 扫码登录。' });
   });
