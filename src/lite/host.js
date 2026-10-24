@@ -89,6 +89,11 @@ class LiteHost extends EventEmitter {
     this.emit(m.type, m);
   }
 
+  // 有请求（比如发消息）还没回来
+  busy() {
+    return this.pending.size > 0 || this.queue.length > 0;
+  }
+
   send(msg) {
     this.ensure();
     if (this.ready) this.proc.postMessage(msg); else this.queue.push(msg);
@@ -177,6 +182,11 @@ class LiteHost extends EventEmitter {
   async shutdown() {
     this.shuttingDown = true;
     await this.shutdownProc();
+  }
+
+  // 关掉之后又不退出了（比如自动更新没装成）：允许重新启动后台进程
+  resume() {
+    this.shuttingDown = false;
   }
 }
 

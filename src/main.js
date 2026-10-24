@@ -21,6 +21,7 @@ const { setupMcp } = require('./mcp');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
+const { Updater } = require('./updater');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -76,6 +77,7 @@ const canLoginItem = process.platform === 'win32' || process.platform === 'darwi
 // macOS 13 以后系统不告诉软件是不是开机启动的，所以 Mac 上开机自启会正常弹出窗口。
 function shouldStartHidden() {
   if (process.argv.includes('--hidden')) return true;
+  if (takeUpdateMarker()) return true;
   if (process.platform !== 'darwin') return false;
   try { return app.getLoginItemSettings().wasOpenedAtLogin === true; } catch { return false; }
 }
@@ -310,6 +312,14 @@ const notifier = new Notifier({
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
     ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
   ],
+  trayText: () => (updater ? updater.trayText() : ''),
+  updateMenu: () => {
+    const u = updater?.state;
+    if (!u || u.status !== 'downloaded') return [];
+    return u.mac
+      ? [{ label: `打开新版本 ${u.version} 的安装包`, click: () => updater.openMacInstaller() }]
+      : [{ label: `重启以更新到 ${u.version}`, click: () => updater.install() }];
+  },
 });
 
 // MCP 接口（默认关闭）。在 app ready 之后创建。
@@ -460,6 +470,7 @@ function pushState() {
     editorNonce,
     editorColor,
     aiRequest: aiRequestForShell(),
+    update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
     accounts: accounts.map((acc) => {
       const problem = problems.get(acc.id);
@@ -602,6 +613,7 @@ async function createView(acc, loadDelay = 0) {
   });
 
   let failed = false;
+  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
   wc.on('did-start-loading', () => {
     failed = false;
     if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
@@ -632,12 +644,17 @@ async function createView(acc, loadDelay = 0) {
   wc.on('render-process-gone', (_e, details) => {
     if (details.reason === 'clean-exit') return;
     console.warn(`账号 ${acc.id} 的页面进程退出（${details.reason}），正在重建`);
+    rebuilding.add(acc.id);
     setTimeout(async () => {
-      // 这 1 秒里账号被删了，或视图已经被别处重建（比如保存了设置），就不再动它
-      if (!accounts.includes(acc) || views.get(acc.id) !== view) return;
-      destroyView(acc.id);
-      await createView(acc);
-      refresh();
+      try {
+        // 这 1 秒里账号被删了，或视图已经被别处重建（比如保存了设置），就不再动它
+        if (!accounts.includes(acc) || views.get(acc.id) !== view) return;
+        destroyView(acc.id);
+        await createView(acc);
+        refresh();
+      } finally {
+        rebuilding.delete(acc.id);
+      }
     }, 1000);
   });
 
@@ -814,7 +831,10 @@ function bindLiteEvents() {
     liteViews.set(v.id, v);
     pushState();
   });
-  liteHost.on('incoming', ({ id, jid }) => { if (userIsReading(id, jid)) liteHost.read(id, jid); });
+  liteHost.on('incoming', ({ id, jid }) => {
+    notifier.lastNewAt = Date.now(); // 自动装更新要看 10 分钟内有没有新消息
+    if (userIsReading(id, jid)) liteHost.read(id, jid);
+  });
   liteHost.on('guard', () => { liteGuardHits += 1; });
 }
 
@@ -1045,6 +1065,68 @@ function setupMenu() {
   }
 }
 
+// ---------- 自动更新 ----------
+
+// 在托盘里自动装更新时留个记号，装完重启后直接回到托盘（15 分钟内有效）
+const updateMarker = () => path.join(app.getPath('userData'), 'update-relaunch-hidden');
+function takeUpdateMarker() {
+  try {
+    const at = Number(fs.readFileSync(updateMarker(), 'utf8'));
+    fs.rmSync(updateMarker(), { force: true });
+    return Date.now() - at < 15 * 60 * 1000;
+  } catch { return false; }
+}
+
+const QUIET_MS = 10 * 60 * 1000; // 10 分钟内有新消息就不自动装
+const rebuilding = new Set(); // 页面进程崩溃后正在重建的账号
+const webLoadedAt = new Map(); // 网页版账号最近一次页面加载完的时间
+let updater = null;
+
+// 现在能不能自动装更新；不能时返回原因（只记日志用）
+function updateIdleReason() {
+  if (!win || (win.isVisible() && !win.isMinimized())) return '窗口开着';
+  if (win.isVisible()) return '窗口最小化但没缩到托盘';
+  if (notifier.total() > 0) return '有未读';
+  if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
+  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
+  if (pendingLoad.size || [...views.values()].some((v) => !v.webContents.isDestroyed() && v.webContents.isLoading())) return '有页面在加载';
+  // 网页版停在二维码页、且 10 分钟内刚加载过：可能有人正要扫码。长期掉线的号不挡更新
+  if (accounts.some((a) => !isLite(a) && loginStates.get(a.id) === 'needs_qr' && Date.now() - (webLoadedAt.get(a.id) || 0) < QUIET_MS)) return '有网页版账号在等扫码';
+  if (rebuilding.size) return '有页面在重建';
+  if (liteHost && liteHost.busy()) return '有消息在发';
+  if (clearingCache || confirmDialogOpen) return '正在操作';
+  return null;
+}
+
+function setupUpdater() {
+  updater = new Updater({
+    onChange: () => { notifier.refresh(); pushState(); },
+    idleReason: updateIdleReason,
+    beforeInstall: async () => {
+      if (!win || !win.isVisible()) fs.writeFileSync(updateMarker(), String(Date.now()));
+      quitting = true;
+      // 和正常退出一样，先让轻量模式后台进程把凭据和聊天缓存写盘
+      if (liteHost && liteHost.running() && !liteFlushed) {
+        await liteHost.shutdown().catch(() => {});
+        liteFlushed = true;
+      }
+    },
+    // 没装成：取消退出状态、删掉回托盘记号、重新连上轻量账号，软件继续正常收消息
+    installFailed: async () => {
+      quitting = false;
+      liteFlushed = false;
+      fs.rmSync(updateMarker(), { force: true });
+      if (liteHost) {
+        liteHost.resume();
+        for (const acc of accounts.filter(isLite)) startLite(acc);
+      }
+      refresh();
+    },
+    notify: (title, body, onClick) => notifier.notifyApp(title, body, onClick),
+  });
+  updater.start();
+}
+
 // ---------- 启动 ----------
 
 app.on('second-instance', () => notifier.showWindow());
@@ -1130,6 +1212,7 @@ app.whenReady().then(async () => {
 
   mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
   await mcp.init();
+  setupUpdater();
   notifier.refresh();
 });
 
@@ -1510,6 +1593,10 @@ handleShell('check:fix', async ({ id, region } = {}) => {
   refresh();
   return { ok: true };
 });
+
+// 关于页：检查更新、重启以更新（Mac：打开安装包）
+onShell('update:check', () => updater?.check());
+onShell('update:install', () => { if (!updater) return; if (updater.mac) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）
 let liteFlushed = false;

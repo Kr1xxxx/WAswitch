@@ -451,10 +451,40 @@ function settingsPage() {
         h('span', null, '内核'), h('span', null, `Electron ${a.electron} · Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
+      updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
       h('span', { class: 'hint' }, '遇到问题时把日志文件夹里最近的文件发过来。日志只记录软件运行情况，不记录聊天内容和号码。'));
   }
   return page;
+}
+
+// 关于页里的“软件更新”：状态、进度条、上次检查的时间和结果。连续失败 3 次标黄
+function updateBox(u) {
+  if (!u) return null;
+  const when = u.lastCheckAt ? new Date(u.lastCheckAt).toLocaleString('zh-CN') : '还没检查过';
+  const line = {
+    dev: '开发版不检查更新。',
+    off: '这种安装方式不支持自动更新，请到 Releases 页面下载新版。',
+    idle: '启动 1 分钟后自动检查，之后每 6 小时检查一次。',
+    checking: '正在检查…',
+    none: '已是最新版本。',
+    downloading: `正在下载新版本 ${u.version}… ${u.percent}%`,
+    downloaded: u.mac
+      ? `新版本 ${u.version} 已下载并校验通过。打开安装包，把 WAswitch 拖进“应用程序”替换旧版。`
+      : `新版本 ${u.version} 已下载。缩到托盘后，没有未读、10 分钟没有新消息时会自动安装并重启；也可以现在重启。`,
+    error: '这次检查没成功，会在 6 小时后自动再试。',
+  }[u.status] || '';
+  const busy = ['checking', 'downloading'].includes(u.status);
+  return h('div', { class: `note ${u.warn ? 'warn' : 'plain'} update-box` },
+    h('b', null, '软件更新'),
+    h('span', null, line),
+    u.status === 'downloading' ? h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })) : null,
+    h('span', { class: 'hint' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`),
+    u.warn ? h('span', null, `已经连续 ${u.failures} 次检查失败，可能是网络连不上 GitHub。可以到 Releases 页面手动下载新版。`) : null,
+    u.status === 'dev' || u.status === 'off' ? null : h('div', { class: 'btns' },
+      u.status === 'downloaded'
+        ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '现在重启并更新')
+        : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, u.status === 'downloading' ? '正在下载…' : busy ? '检查中…' : '检查更新')));
 }
 
 // ---------- 总渲染 ----------

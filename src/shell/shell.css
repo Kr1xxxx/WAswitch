@@ -112,6 +112,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .note.ok { background: #ecfdf3; color: var(--ok); }
 .note.bad { background: #fdecee; color: var(--danger); }
 .note.plain { background: #f7f8fa; color: var(--soft); }
+.note.warn { background: #FEF9C3; color: #713F12; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { height: 24px; padding: 0 9px; border-radius: 12px; background: #f2f4f6; font-size: 12px; font-weight: 400; color: var(--soft); display: flex; align-items: center; }
 .side-panel { width: 248px; flex: none; align-self: flex-start; border-radius: 16px; background: #f7f8fa; border: 1px solid var(--line); padding: 22px; display: flex; flex-direction: column; gap: 14px; font-size: 13px; color: var(--soft); }
@@ -195,3 +196,9 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .lite-compose { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
 .lite-compose textarea { flex: 1; resize: none; min-height: 40px; max-height: 140px; border: 1px solid var(--field); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 14px; line-height: 1.45; }
 .field .check-row input { height: auto; padding: 0; border: none; margin-top: 4px; }
+
+/* 关于页：软件更新 */
+.update-box { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+.update-box .btns { margin-top: 4px; }
+.progress { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
+.progress span { display: block; height: 100%; background: #16A34A; transition: width .3s; }

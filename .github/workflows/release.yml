@@ -1,5 +1,7 @@
 # 打 tag（例如 v0.2.0）时自动打包 Windows 和 macOS 安装包，上传到 GitHub Releases。
 # 所有 action 按 commit 固定版本；只用默认的 GITHUB_TOKEN，写权限只给发布这一步。
+# 自动更新只认这里上传的文件：安装包、latest.yml / latest-mac.yml（含 sha512）和 blockmap。
+# 不要手动往 Release 里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
 name: release
 
 on:
@@ -22,6 +24,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: tag 和 package.json 的版本号一致
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
       # 没有代码签名证书：不自动找签名证书，也不在打包时发布
       - run: npx electron-builder --publish never
         env:
@@ -32,6 +37,9 @@ jobs:
           path: |
             dist/*.exe
             dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest*.yml
           if-no-files-found: error
 
   publish:
