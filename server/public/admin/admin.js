@@ -7,7 +7,8 @@ const STATE_TEXT = {
 };
 const EVENT_TEXT = { dropped: '掉线', recovered: '恢复', exit_changed: '出口 IP 变了', proxy_down: '代理断开', proxy_up: '代理恢复', banned: '可能被封' };
 const ROLE_TEXT = { owner: '老板', supervisor: '主管', agent: '坐席' };
-const COLORS = ['#25d366', '#34b7f1', '#ff9f43', '#ee5253', '#a55eea', '#10ac84', '#f368e0', '#576574'];
+// 和 WAswitch 侧栏的颜色一致（src/main.js COLORS）
+const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 
 let me = null;
 let tab = 'overview';
@@ -207,7 +208,10 @@ async function peoplePage() {
         d.name, el('span', { class: 'muted' }, ` · ${d.revoked_at ? '已停用' : ago(d.last_seen_at, now)} · v${d.app_version || '?'} ${d.platform}`),
         d.revoked_at ? btn('恢复', () => act(() => api('POST', `devices/${d.id}/restore`), '已恢复'))
           : btn('停用', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
-        btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); })))
+        btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); }),
+        d.held_hides ? el('div', { class: 'warn' }, `这台电脑一次要收回 ${d.held_hides} 个号（超过一半），已暂停执行。`,
+          d.confirm_hides ? el('span', { class: 'muted' }, ' 已确认，等电脑下次同步。')
+            : btn('确认收回', () => confirm('确认让这台电脑停止并隐藏这些号？') && act(() => api('POST', `devices/${d.id}/confirm-hides`), '已确认'))) : null))
         : el('span', { class: 'muted' }, '还没登记电脑')),
       el('td', {},
         u.disabled_at ? null : btn('生成登记码', () => act(async () => {

@@ -67,8 +67,8 @@ async function listUsers(db, user) {
     ? db.prepare('SELECT id, name, email, role, group_id, disabled_at, created_at FROM users ORDER BY role, name')
     : db.prepare('SELECT id, name, email, role, group_id, disabled_at, created_at FROM users WHERE group_id = ? ORDER BY role, name').bind(user.group_id)).all();
   const devices = await (isOwner(user)
-    ? db.prepare('SELECT id, user_id, name, app_version, platform, mem_mb, low_mem, created_at, last_seen_at, revoked_at FROM devices ORDER BY created_at')
-    : db.prepare(`SELECT d.id, d.user_id, d.name, d.app_version, d.platform, d.mem_mb, d.low_mem, d.created_at, d.last_seen_at, d.revoked_at
+    ? db.prepare('SELECT id, user_id, name, app_version, platform, mem_mb, low_mem, held_hides, confirm_hides, created_at, last_seen_at, revoked_at FROM devices ORDER BY created_at')
+    : db.prepare(`SELECT d.id, d.user_id, d.name, d.app_version, d.platform, d.mem_mb, d.low_mem, d.held_hides, d.confirm_hides, d.created_at, d.last_seen_at, d.revoked_at
         FROM devices d JOIN users u ON u.id = d.user_id WHERE u.group_id = ? ORDER BY d.created_at`).bind(user.group_id)).all();
   return json({ users: users.results, devices: devices.results, server_time: now() });
 }
@@ -176,6 +176,14 @@ async function setDeviceRevoked(db, user, id, revoked) {
   await targetDevice(db, user, id);
   await db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(revoked ? now() : null, id).run();
   await audit(db, user.id, revoked ? 'device.revoke' : 'device.restore', id);
+  return json({ ok: true });
+}
+
+// 客户端一次要隐藏一半以上的号时会暂停执行并上报；管理员确认后下次同步才执行
+async function confirmHides(db, user, id) {
+  await targetDevice(db, user, id);
+  await db.prepare('UPDATE devices SET confirm_hides = 1 WHERE id = ? AND held_hides > 0').bind(id).run();
+  await audit(db, user.id, 'device.confirm_hides', id);
   return json({ ok: true });
 }
 
@@ -312,6 +320,7 @@ export async function handleAdmin(request, env, path, identity) {
     case 'PATCH devices/:id': return renameDevice(db, user, id, body);
     case 'POST devices/:id/revoke': return setDeviceRevoked(db, user, id, true);
     case 'POST devices/:id/restore': return setDeviceRevoked(db, user, id, false);
+    case 'POST devices/:id/confirm-hides': return confirmHides(db, user, id);
     case 'POST groups': return createGroup(db, user, body);
     case 'PUT settings': return updateSettings(db, user, body);
     case 'GET audit': return auditList(db, user, url);

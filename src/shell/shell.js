@@ -60,6 +60,8 @@ let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重�
 let settingsTab = 'memory';
 let checkResult = null;
 let checkRunning = false;
+// 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
+const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
 function refreshCacheSize() {
@@ -108,7 +110,7 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['about', '关于']].map(([id, label]) =>
+      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
         h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label))));
     return;
   }
@@ -235,6 +237,7 @@ function problemButtons(acc) {
     case 'banned': return [del(), retry('仍要重试', false)];
     case 'outdated': return [btn('检查更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
+    case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     default: return [acc.direct ? null : btn('修改代理', () => window.wa.edit(acc.id)), retry(acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接')];
   }
 }
@@ -533,6 +536,8 @@ function settingsPage() {
         setRow('侧栏只显示图标', '给聊天留更多空间。随时可以用左上角按钮切换。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号。`, h('span'))));
+  } else if (settingsTab === 'team') {
+    page.append(teamPage(s.team));
   } else if (settingsTab === 'check') {
     const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
       checkRunning = true; render(true);
@@ -571,6 +576,82 @@ function settingsPage() {
       h('span', { class: 'hint' }, '遇到问题时把日志文件夹里最近的文件发过来。日志只记录软件运行情况，不记录聊天内容和号码。'));
   }
   return page;
+}
+
+// ---------- 设置 › 团队 ----------
+function teamPage(t) {
+  const wrap = h('div', { class: 'col', style: { gap: '16px' } });
+  if (!t) return wrap;
+  const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
+  const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: '13px' } }, x))));
+  const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result) : null;
+  wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '团队'),
+    h('p', { class: 'lead' }, '登记到公司的团队后台后，管理员可以给你分配账号、看到每个号是否正常。不登记时 WAswitch 和以前完全一样。')));
+
+  if (t.joined && !t.revoked) {
+    const ok = !t.offline && !t.lastError;
+    wrap.append(
+      h('div', { class: 'kv' },
+        h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, t.server),
+        h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
+        h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
+        h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
+      ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发消息，连上后自动补报。`),
+      t.held ? h('div', { class: 'note warn' }, `后台要求一次收回 ${t.held} 个号（超过这台电脑团队号的一半），为防止误操作已暂停执行，等管理员在后台确认。`) : null,
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn', disabled: teamForm.busy, onclick: async () => {
+          teamForm.busy = true; render(true);
+          const r = await window.wa.teamSync();
+          teamForm.busy = false;
+          teamForm.result = r && r.ok ? '✓ 已同步' : (r && r.error) || '同步没成功';
+          render(true);
+        } }, teamForm.busy ? '同步中…' : '立即同步'),
+        h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
+      result,
+      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null);
+    if (t.privateAccounts.length && t.allowPrivate) {
+      wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
+        t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
+          h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+          h('span', { class: 'meta' }, a.name),
+          h('button', { class: 'btn', onclick: async () => {
+            const r = await window.wa.teamJoin([a.id]);
+            teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功';
+            render(true);
+          } }, '加入团队')))));
+    }
+    wrap.append(fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
+    return wrap;
+  }
+
+  if (t.revoked) wrap.append(h('div', { class: 'note bad' }, '这台电脑已被管理员停用，团队账号已暂停并隐藏（数据没删）。私人号不受影响。需要恢复请联系管理员，或用新的登记码重新登记。'));
+  if (!t.canEncrypt) {
+    wrap.append(h('div', { class: 'note bad' }, '这台电脑不支持加密保存，不能登记到团队。'));
+    return wrap;
+  }
+  if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
+  const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
+  const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
+  wrap.append(
+    h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
+    h('label', { class: 'field' }, '登记码（管理员在后台生成，15 分钟内有效）', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
+    h('label', { class: 'field' }, '这台电脑的名字（给管理员看）', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
+    t.privateAccounts.length ? h('div', { class: 'field' }, '哪些号加入团队（没勾的留作私人号）',
+      t.privateAccounts.map((a) => h('label', { class: 'check-row' },
+        h('input', { type: 'checkbox', checked: teamForm.picked.has(a.id), onchange: (e) => { if (e.target.checked) teamForm.picked.add(a.id); else teamForm.picked.delete(a.id); } }),
+        a.name))) : null,
+    h('div', { class: 'box' }, fieldList('登记后会上传', t.uploadFields), fieldList('不会上传', t.neverUpload),
+      h('label', { class: 'check-row' }, consent, '我看过上面的清单，同意上传这些内容')),
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: !teamForm.consent || teamForm.busy, onclick: async () => {
+      teamForm.busy = true; teamForm.result = ''; render(true);
+      const r = await window.wa.teamEnroll({ server: teamForm.server, code: teamForm.code, deviceName: teamForm.deviceName, localIds: [...teamForm.picked], consent: teamForm.consent });
+      teamForm.busy = false;
+      teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功';
+      if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
+      render(true);
+    } }, teamForm.busy ? '登记中…' : '登记')),
+    result);
+  return wrap;
 }
 
 // 关于页里的“软件更新”：状态、进度条、上次检查的时间和结果。连续失败 3 次标黄
@@ -620,7 +701,8 @@ function render(forceContent = false) {
     if (forceContent || key !== shown) $content.replaceChildren(editorPage(s.editorId));
   } else if (s.page === 'settings') {
     // 设置页里的下拉框打开时不重画，免得被关掉
-    if (forceContent || key !== shown || !$content.contains(document.activeElement) || document.activeElement.tagName !== 'SELECT') $content.replaceChildren(settingsPage());
+    // 输入框正在输入时也不重画（团队页的登记表单）
+    if (forceContent || key !== shown || !$content.contains(document.activeElement) || !['SELECT', 'INPUT'].includes(document.activeElement.tagName)) $content.replaceChildren(settingsPage());
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
   } else if (acc && !acc.problem && acc.mode === 'lite') {

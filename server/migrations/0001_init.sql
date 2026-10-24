@@ -25,6 +25,8 @@ CREATE TABLE devices (
   platform TEXT NOT NULL DEFAULT '',
   mem_mb INTEGER NOT NULL DEFAULT 0,
   low_mem INTEGER NOT NULL DEFAULT 0,
+  held_hides INTEGER NOT NULL DEFAULT 0,      -- 客户端暂停执行的收回个数（一次要隐藏一半以上时）
+  confirm_hides INTEGER NOT NULL DEFAULT 0,   -- 管理员确认后置 1，客户端执行完报 0 时清掉
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL DEFAULT 0,
   revoked_at INTEGER

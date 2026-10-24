@@ -215,6 +215,15 @@ await test('收回后才能删除记录；只有老板能删', async () => {
   assert.equal((await admin('sup@example.com').del(`accounts/${acc1}`)).status, 403);
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 200);
 });
+await test('客户端暂停的收回：上报后台，管理员确认后下发，执行完清掉', async () => {
+  await sync(tokA, { device: { held_hides: 3 } });
+  assert.equal(db.raw.prepare('SELECT held_hides FROM devices WHERE id = ?').get(devA).held_hides, 3);
+  assert.equal((await sync(tokA, { device: { held_hides: 3 } })).data.confirm_hides, false);
+  assert.equal((await boss.post(`devices/${devA}/confirm-hides`)).status, 200);
+  assert.equal((await sync(tokA, { device: { held_hides: 3 } })).data.confirm_hides, true);
+  await sync(tokA, { device: { held_hides: 0 } });
+  assert.equal(db.raw.prepare('SELECT confirm_hides FROM devices WHERE id = ?').get(devA).confirm_hides, 0);
+});
 await test('私人号开关随同步下发', async () => {
   await boss.put('settings', { allow_private: false });
   assert.equal((await sync(tokA, {})).data.allow_private, false);

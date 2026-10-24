@@ -38,10 +38,11 @@ export async function sha256hex(text) {
 
 // 读 JSON 请求体：必须是 application/json，最多 maxBytes
 export async function readJson(request, maxBytes = 64 * 1024) {
-  const type = request.headers.get('content-type') || '';
-  if (!type.toLowerCase().startsWith('application/json')) throw new HttpError(415, '请求必须是 JSON');
   const text = await request.text();
   if (text.length > maxBytes) throw new HttpError(413, '请求太大');
+  if (!text) return {}; // 没有请求体的 POST（比如“生成登记码”）
+  const type = request.headers.get('content-type') || '';
+  if (!type.toLowerCase().startsWith('application/json')) throw new HttpError(415, '请求必须是 JSON');
   try {
     const v = JSON.parse(text || '{}');
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not object');

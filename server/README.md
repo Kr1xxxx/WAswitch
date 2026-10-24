@@ -1,0 +1,21 @@
+# WAswitch 团队后台
+
+Cloudflare Worker + D1。管理员网页在 `/admin/`（Cloudflare Access 登录），WAswitch 通过 `/api/device/*` 同步。
+设计和审计：见项目里的设计文档。第一阶段只有登记、坐席分配和状态监控；不上传聊天内容、通讯录、代理地址和密码，也不采集员工活动。
+
+## 本地自检
+
+```
+node server/test/run.mjs        # 后台接口
+node scripts/check-team.mjs     # WAswitch 同步模块对着后台跑一遍
+```
+
+## 部署（老板在 Cloudflare 控制台做，一次）
+
+1. 建 D1 数据库 `waswitch-team`，把它的 ID 填进 `wrangler.jsonc` 的 `database_id`，执行 `migrations/0001_init.sql`。
+2. Workers 里从 GitHub 导入本仓库，根目录填 `server`，只从 `main` 分支部署，关掉非生产分支的构建。
+3. 给 Worker 绑一个自定义域名（`workers.dev` 和预览网址已在配置里关掉）。
+4. Zero Trust 里加“一次性验证码”登录方式，再加一个 Access 应用保护这个域名，策略只写允许的邮箱列表。
+5. Worker 的环境变量：`OWNER_EMAIL`（老板邮箱）、`ACCESS_TEAM_DOMAIN`（如 `xxx.cloudflareaccess.com`）、`ACCESS_AUD`（Access 应用的 AUD 标签）。
+
+没配好 Access 变量时，除了设备接口，所有地址一律拒绝。

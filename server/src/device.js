@@ -18,7 +18,7 @@ async function authDevice(request, db) {
   if (!m) throw new HttpError(401, '缺少设备令牌');
   const hash = await sha256hex(m[1]);
   const row = await db.prepare(`SELECT d.id, d.user_id, d.revoked_at, d.last_seen_at, d.app_version, d.platform, d.mem_mb, d.low_mem,
-      u.disabled_at, u.group_id FROM devices d JOIN users u ON u.id = d.user_id WHERE d.token_hash = ?`).bind(hash).first();
+      d.held_hides, d.confirm_hides, u.disabled_at, u.group_id FROM devices d JOIN users u ON u.id = d.user_id WHERE d.token_hash = ?`).bind(hash).first();
   if (!row) throw new HttpError(401, '设备令牌无效');
   if (row.revoked_at || row.disabled_at) throw new HttpError(403, '这台电脑已被管理员停用', { revoked: true, device_id: row.id });
   return row;
@@ -132,10 +132,13 @@ async function sync(request, env) {
 
   // 设备信息：5 分钟写一次在线时间，信息变了也写
   const d = body.device || {};
-  const info = { app_version: str(d.app_version, 20), platform: oneOf(d.platform, PLATFORMS, ''), mem_mb: int(d.mem_mb, 0, 1e6, 0), low_mem: d.low_mem === true ? 1 : 0 };
-  if (t - dev.last_seen_at >= SEEN_EVERY_MS || info.app_version !== dev.app_version || info.platform !== dev.platform || info.low_mem !== dev.low_mem) {
-    stmts.push(db.prepare('UPDATE devices SET last_seen_at = ?, app_version = ?, platform = ?, mem_mb = ?, low_mem = ? WHERE id = ?')
-      .bind(t, info.app_version, info.platform, info.mem_mb, info.low_mem, dev.id));
+  const info = { app_version: str(d.app_version, 20), platform: oneOf(d.platform, PLATFORMS, ''), mem_mb: int(d.mem_mb, 0, 1e6, 0), low_mem: d.low_mem === true ? 1 : 0, held_hides: int(d.held_hides, 0, 1000, 0) };
+  // 管理员确认过收回、客户端也执行完了（报 0），清掉确认标记
+  const confirm = dev.confirm_hides === 1 && info.held_hides === 0 ? 0 : dev.confirm_hides;
+  if (t - dev.last_seen_at >= SEEN_EVERY_MS || info.app_version !== dev.app_version || info.platform !== dev.platform || info.low_mem !== dev.low_mem
+    || info.held_hides !== dev.held_hides || confirm !== dev.confirm_hides) {
+    stmts.push(db.prepare('UPDATE devices SET last_seen_at = ?, app_version = ?, platform = ?, mem_mb = ?, low_mem = ?, held_hides = ?, confirm_hides = ? WHERE id = ?')
+      .bind(t, info.app_version, info.platform, info.mem_mb, info.low_mem, info.held_hides, confirm, dev.id));
   }
 
   // 只收这台电脑当前可见的团队号
@@ -183,6 +186,7 @@ async function sync(request, env) {
     cursor: list.length ? list[list.length - 1].version : cursor,
     more: list.length === 200,
     allow_private: await allowPrivate(db),
+    confirm_hides: dev.confirm_hides === 1,
     next_sync_s: interval,
     server_time: t,
   });
