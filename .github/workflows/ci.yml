@@ -25,6 +25,8 @@ jobs:
         run: npm run check:mcp
       - name: 翻译自检
         run: npm run check:translate
+      - name: 悬浮翻译自检
+        run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 轻量模式自检（Electron 内置 Node 和系统 Node 各一遍）

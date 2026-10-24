@@ -9,6 +9,8 @@ const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
 const MAX_PROVIDERS = 10;
+const DAILY_CAPS = [100, 200, 500, 1000, 2000];
+const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
 
 const PRESETS = {
   hunyuan: { name: '腾讯混元', baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', model: 'hunyuan-turbos-latest' },
@@ -144,7 +146,9 @@ class Translator {
 
   load() {
     if (this.cfg) return this.cfg;
-    const base = { providers: [], primaryId: '', fallbackId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {} };
+    const base = { providers: [], primaryId: '', fallbackId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {},
+      // 悬浮窗：哪些号开了自动翻译、哪些号确认过自动翻译、每个号每天最多自动翻几条、收到用的模式、窗口位置
+      accountAuto: {}, autoConsent: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false } };
     try {
       if (fs.existsSync(this.file)) {
         const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -158,6 +162,10 @@ class Translator {
           if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200) };
           if (raw.consented && typeof raw.consented === 'object') for (const [k, v] of Object.entries(raw.consented)) if (v === true) base.consented[k] = true;
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
+          for (const key of ['accountAuto', 'autoConsent']) if (raw[key] && typeof raw[key] === 'object') for (const [k, v] of Object.entries(raw[key])) if (v === true) base[key][k] = true;
+          if (DAILY_CAPS.includes(raw.dailyCap)) base.dailyCap = raw.dailyCap;
+          if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
+          if (raw.float && typeof raw.float === 'object') base.float = { dx: clampNum(raw.float.dx, 0, 4000, 24), dy: clampNum(raw.float.dy, 0, 4000, 64), collapsed: raw.float.collapsed === true };
         }
       }
     } catch (e) {
@@ -185,6 +193,11 @@ class Translator {
       fallbackId: c.fallbackId,
       network: { ...c.network },
       accountLang: { ...c.accountLang },
+      accountAuto: { ...c.accountAuto },
+      autoConsent: { ...c.autoConsent },
+      dailyCap: c.dailyCap,
+      dailyCaps: DAILY_CAPS,
+      floatInMode: c.floatInMode,
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
       canEncrypt: canEncrypt(this.deps.safeStorage),
@@ -264,7 +277,23 @@ class Translator {
 
   forgetAccount(accId) {
     const c = this.load();
-    if (c.accountLang[accId]) { delete c.accountLang[accId]; this.save(); }
+    if (c.accountLang[accId] || c.accountAuto[accId] || c.autoConsent[accId]) {
+      delete c.accountLang[accId]; delete c.accountAuto[accId]; delete c.autoConsent[accId];
+      this.save();
+    }
+  }
+
+  // 悬浮窗的设置（只接受固定的几种值）
+  setFloat({ accId, auto, autoConsent, dailyCap, inMode, pos } = {}) {
+    const c = this.load();
+    if (typeof accId === 'string' && accId) {
+      if (auto === true) c.accountAuto[accId] = true; else if (auto === false) delete c.accountAuto[accId];
+      if (autoConsent === true) c.autoConsent[accId] = true;
+    }
+    if (DAILY_CAPS.includes(dailyCap)) c.dailyCap = dailyCap;
+    if (typeof inMode === 'string') c.floatInMode = inMode.slice(0, 64);
+    if (pos && typeof pos === 'object') c.float = { dx: clampNum(pos.dx, 0, 4000, c.float.dx), dy: clampNum(pos.dy, 0, 4000, c.float.dy), collapsed: typeof pos.collapsed === 'boolean' ? pos.collapsed : c.float.collapsed };
+    this.save();
   }
 
   consent(id) {
@@ -397,4 +426,4 @@ class Translator {
   }
 }
 
-module.exports = { Translator, PRESETS, LANGS, DEFAULT_MODES, checkBaseUrl, fillPrompt, buildMessages, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, checkBaseUrl, fillPrompt, buildMessages, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
