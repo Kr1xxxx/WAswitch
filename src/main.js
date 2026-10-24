@@ -868,11 +868,13 @@ function addNotifLog({ id, count, popped }) {
 }
 
 // ---------- 拼写检查（每个号单独开关） ----------
-// Windows / macOS 用系统自带的拼写检查，不下载东西；Linux 第一次开会下载英文词典，
-// 走的是这个号自己的 session，也就是这个号的代理，不会直连
+// macOS 用系统自带的拼写检查，不下载东西；Windows、Linux 第一次开可能会下载英文词典，
+// 走的是这个号自己的 session，也就是这个号的代理（代理没设好时不打开）
+const proxyReady = new Map(); // id -> 这个号的代理是否已经设好（没设好时绝不打开拼写检查）
 function applySpellcheck(acc, ses = session.fromPartition(`persist:wa-${acc.id}`)) {
-  if (acc.spellcheck && process.platform !== 'darwin') ses.setSpellCheckerLanguages(['en-US']);
-  ses.setSpellCheckerEnabled(acc.spellcheck);
+  const on = acc.spellcheck && proxyReady.get(acc.id) === true;
+  if (on && process.platform !== 'darwin') ses.setSpellCheckerLanguages(['en-US']);
+  ses.setSpellCheckerEnabled(on);
 }
 function setSpellcheck(id, on) {
   const acc = findAcc(id);
@@ -911,10 +913,13 @@ async function createView(acc, loadDelay = 0) {
   const r = fingerprint.resolve(acc.fingerprint);
   // 网络请求层面的 UA 和语言（包括 Service Worker 发出的请求）
   ses.setUserAgent(r.userAgent, r.acceptLanguage);
-  // 拼写检查每个号单独开关，默认关（关着就不会去下载词典）
-  applySpellcheck(acc, ses);
   setupPermissions(ses);
+  // 代理没设好之前先关掉拼写检查，免得词典下载走真实 IP
+  ses.setSpellCheckerEnabled(false);
   const applied = await proxy.apply(ses, acc.proxy);
+  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
+  proxyReady.set(acc.id, !applied.error);
+  if (!applied.error) applySpellcheck(acc, ses);
 
   const view = new WebContentsView({
     // spellcheck 在这里打开，真正开不开由 session 的开关决定（applySpellcheck），切换时不用重开页面
@@ -1787,7 +1792,9 @@ onShell('context', (id) => {
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
     {
-      label: isLite(acc) ? '拼写检查（轻量模式不支持）' : '拼写检查（英文）', type: 'checkbox', checked: acc.spellcheck, enabled: !isLite(acc),
+      label: isLite(acc) ? '拼写检查（轻量模式不支持）'
+        : process.platform === 'darwin' ? '拼写检查（英文）'
+          : `拼写检查（英文，第一次会${acc.proxy ? '通过本号代理' : '直连'}下载词典）`, type: 'checkbox', checked: acc.spellcheck, enabled: !isLite(acc),
       click: () => setSpellcheck(id, !acc.spellcheck),
     },
     {
