@@ -12,6 +12,7 @@
     "check:view-race": "node scripts/check-view-race.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
+    "check:translate": "node scripts/check-translate.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs"
   },
   "license": "MIT",

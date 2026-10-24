@@ -37,9 +37,26 @@ const KINDS = {
         tags: [...new Set(tags)].slice(0, 10),
         followUpAt: Number.isFinite(Number(r.followUpAt)) && Number(r.followUpAt) > 0 ? Math.floor(Number(r.followUpAt)) : 0,
         reminded: r.reminded === true,
+        lang: line(r.lang, 20), // 翻译给这个客户时默认用的语言，可以不填
       };
     },
     valid: (r) => !!(r.name || r.phone),
+  },
+  // 翻译模式：名字 + 提示词 + 用在哪个方向（发出 out / 收到 in / 都可以 both）
+  tmodes: {
+    file: 'translate-modes.json',
+    max: 200,
+    clean(r) {
+      const t = Number(r.temperature);
+      return {
+        name: line(r.name, 40),
+        direction: ['out', 'in', 'both'].includes(r.direction) ? r.direction : 'both',
+        prompt: str(r.prompt, 4000).trim(),
+        temperature: Number.isFinite(t) && r.temperature !== '' && r.temperature !== null && r.temperature !== undefined ? Math.min(1.5, Math.max(0, Math.round(t * 10) / 10)) : 0.3,
+        scope: 'mine',
+      };
+    },
+    valid: (r) => !!(r.name && r.prompt),
   },
 };
 
@@ -98,6 +115,13 @@ class Records {
     return this.load().find((r) => r.id === id && !r.deleted) || null;
   }
 
+  // 第一次用（文件还不存在）时放进默认内容
+  seed(rows) {
+    if (fs.existsSync(this.file) || this.load().length) return;
+    for (const r of rows) this.upsert(r, { save: false });
+    this.save();
+  }
+
   // 新建或修改；返回保存后的记录，内容不合格返回 null
   // imported：导入的记录，跟进时间已经过了的当作已提醒，避免导入后一下子弹出一堆通知
   upsert(data, { save = true, imported = false } = {}) {
@@ -113,6 +137,7 @@ class Records {
       Object.assign(old, clean, { updatedAt: Date.now() });
       rec = old;
     } else {
+      if (this.def.max && this.list().length >= this.def.max) return null; // 有上限的（翻译模式 200 个）
       if (this.kind === 'customers') clean.reminded = imported && !!clean.followUpAt && clean.followUpAt <= Date.now();
       rec = { id: crypto.randomUUID(), ...clean, updatedAt: Date.now(), deleted: false };
       this.items.push(rec);
@@ -149,7 +174,8 @@ function csvCell(v) {
 }
 const COLUMNS = {
   replies: [['title', '标题'], ['text', '内容']],
-  customers: [['name', '名字'], ['phone', '电话'], ['tags', '标签'], ['note', '备注'], ['followUpAt', '下次跟进'], ['accountId', '账号编号'], ['accountName', '账号']],
+  tmodes: [['name', '名字'], ['direction', '方向'], ['prompt', '提示词'], ['temperature', '温度']],
+  customers: [['name', '名字'], ['phone', '电话'], ['tags', '标签'], ['note', '备注'], ['followUpAt', '下次跟进'], ['accountId', '账号编号'], ['accountName', '账号'], ['lang', '语言']],
 };
 function toCsv(kind, rows) {
   const cols = COLUMNS[kind];
@@ -200,6 +226,7 @@ function readImport(kind, file) {
       const o = {};
       for (const [k] of COLUMNS[kind]) if (typeof r[k] === 'string' || (k === 'tags' && Array.isArray(r[k]))) o[k] = k === 'tags' ? r[k].filter((t) => typeof t === 'string') : r[k];
       if (kind === 'customers' && typeof r.followUpAt === 'number') o.followUpAt = r.followUpAt;
+      if (kind === 'tmodes' && typeof r.temperature === 'number') o.temperature = r.temperature;
       return o;
     });
   } else {
@@ -215,8 +242,9 @@ function readImport(kind, file) {
       return o;
     });
   }
-  if (rows.length > IMPORT_MAX_ROWS) return { error: `超过 ${IMPORT_MAX_ROWS} 条` };
+  const maxRows = KINDS[kind].max || IMPORT_MAX_ROWS;
+  if (rows.length > maxRows) return { error: `超过 ${maxRows} 条` };
   return { rows };
 }
 
-module.exports = { Records, toCsv, readImport, parseCsv, csvCell };
+module.exports = { KINDS, Records, toCsv, readImport, parseCsv, csvCell };

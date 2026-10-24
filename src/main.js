@@ -17,6 +17,7 @@ const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
+const { Translator, DEFAULT_MODES } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { setupMcp } = require('./mcp');
@@ -665,6 +666,8 @@ function checkIdleLock() {
 let panelOpen = false;
 let replyStore = null;
 let customerStore = null;
+let modeStore = null; // 翻译模式
+let translator = null;
 const panelShown = () => panelOpen && page === 'account' && !locked && visibleAccounts().length > 0;
 function togglePanel(on = !panelOpen) {
   panelOpen = !!on;
@@ -678,7 +681,7 @@ function panelData() {
     replies: replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })),
     customers: customerStore.list().filter((c) => !parkedCustomer(c)).map((c) => ({
       id: c.id, accountId: c.accountId, accountName: names.get(c.accountId) || '', name: c.name, phone: c.phone,
-      note: c.note, tags: c.tags, followUpAt: c.followUpAt, updatedAt: c.updatedAt,
+      note: c.note, tags: c.tags, followUpAt: c.followUpAt, updatedAt: c.updatedAt, lang: c.lang,
     })),
   };
 }
@@ -1600,6 +1603,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   liteOpen.delete(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
+  if (translator) translator.forgetAccount(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   const wasPrimary = acc.primary;
@@ -1911,6 +1915,10 @@ app.whenReady().then(async () => {
   netLog = new EventLog(path.join(app.getPath('userData'), 'net-log.json'), { max: 1500, maxAgeMs: 7 * 24 * 3600 * 1000, routine: ['exit', 'exit_fail'], routinePerId: 50 });
   replyStore = new records.Records(app.getPath('userData'), 'replies');
   customerStore = new records.Records(app.getPath('userData'), 'customers');
+  modeStore = new records.Records(app.getPath('userData'), 'tmodes');
+  try { modeStore.seed(DEFAULT_MODES); } catch (e) { console.warn(`翻译模式初始化失败：${e.message}`); }
+  translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: translateSession });
+  applyTranslateNet().catch(() => {});
   setInterval(checkFollowUps, 60 * 1000);
   setTimeout(checkFollowUps, 15 * 1000);
   accounts = loadAccounts();
@@ -2012,7 +2020,7 @@ handleShell('cust:save', (data) => {
   const existing = typeof data.id === 'string' ? customerStore.get(data.id) : null;
   if (existing && parkedCustomer(existing)) return null;
   const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
-  return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt }) ? panelData() : null;
+  return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt, lang: data.lang }) ? panelData() : null;
 });
 handleShell('cust:delete', (id) => {
   if (typeof id === 'string' && customerStore.get(id) && !parkedCustomer(customerStore.get(id))) customerStore.remove(id);
@@ -2033,15 +2041,17 @@ handleShell('panel:insert', ({ accountId, text } = {}) => {
   view.webContents.paste();
   return 'ok';
 });
+const STORE_LABEL = { replies: ['话术', '导出话术', '导入话术'], customers: ['客户', '导出客户名单', '导入客户名单'], tmodes: ['翻译模式', '导出翻译模式', '导入翻译模式'] };
+const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmodes: modeStore })[kind];
 handleShell('panel:export', async ({ kind, format } = {}) => {
-  if (!['replies', 'customers'].includes(kind)) return null;
-  const store = kind === 'replies' ? replyStore : customerStore;
-  const rows = kind === 'replies' ? store.list() : panelData().customers;
+  if (!STORE_LABEL[kind]) return null;
+  const store = storeOf(kind);
+  const rows = kind === 'customers' ? panelData().customers : store.list();
   const json = format === 'json';
   const stamp = new Date().toISOString().slice(0, 10);
   const r = await dialog.showSaveDialog(win, {
-    title: kind === 'replies' ? '导出话术' : '导出客户名单',
-    defaultPath: path.join(app.getPath('documents'), `${kind === 'replies' ? '话术' : '客户'}-${stamp}.${json ? 'json' : 'csv'}`),
+    title: STORE_LABEL[kind][1],
+    defaultPath: path.join(app.getPath('documents'), `${STORE_LABEL[kind][0]}-${stamp}.${json ? 'json' : 'csv'}`),
     filters: [json ? { name: 'JSON', extensions: ['json'] } : { name: 'CSV（Excel 可以打开）', extensions: ['csv'] }],
   });
   if (r.canceled || !r.filePath) return null;
@@ -2052,16 +2062,16 @@ handleShell('panel:export', async ({ kind, format } = {}) => {
   return { count: rows.length };
 });
 handleShell('panel:import', async ({ kind } = {}) => {
-  if (!['replies', 'customers'].includes(kind)) return null;
+  if (!STORE_LABEL[kind]) return null;
   const r = await dialog.showOpenDialog(win, {
-    title: kind === 'replies' ? '导入话术' : '导入客户名单',
+    title: STORE_LABEL[kind][2],
     properties: ['openFile'],
     filters: [{ name: 'CSV 或 JSON', extensions: ['csv', 'json'] }],
   });
   if (r.canceled || !r.filePaths[0]) return null;
   const res = records.readImport(kind, r.filePaths[0]);
   if (res.error) return { error: res.error };
-  const store = kind === 'replies' ? replyStore : customerStore;
+  const store = storeOf(kind);
   let added = 0;
   for (const row of res.rows) {
     const data = { ...row, id: undefined };
@@ -2070,8 +2080,48 @@ handleShell('panel:import', async ({ kind } = {}) => {
     if (store.upsert(data, { save: false, imported: true })) added += 1;
   }
   store.save();
-  return { added, skipped: res.rows.length - added, data: panelData() };
+  return { added, skipped: res.rows.length - added, data: panelData(), modes: modeStore.list() };
 });
+// ---- 翻译（只翻用户自己放进来的文字；不读页面、不自动发送） ----
+// 翻译请求用单独的内存会话，和任何 WhatsApp 账号都不共用 cookie 和代理
+function translateSession(local) {
+  return session.fromPartition(local ? 'wa-translate-local' : 'wa-translate');
+}
+async function applyTranslateNet() {
+  const net = translator.load().network;
+  const remote = translateSession(false);
+  if (net.mode === 'proxy' && net.proxyUrl) await remote.setProxy({ proxyRules: net.proxyUrl, proxyBypassRules: '<local>' });
+  else await remote.setProxy({ mode: net.mode === 'direct' ? 'direct' : 'system' });
+  await translateSession(true).setProxy({ mode: 'direct' }); // 本机模型不走代理
+}
+const trState = () => ({ config: translator.publicConfig(), modes: modeStore.list() });
+handleShell('tr:config', () => trState());
+handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), ...trState() }));
+handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
+handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
+handleShell('tr:network', async (net) => {
+  const r = translator.setNetwork(net && typeof net === 'object' ? net : {});
+  if (r.ok) { try { await applyTranslateNet(); } catch { return { error: '代理设置没生效', ...trState() }; } }
+  return { ...r, ...trState() };
+});
+handleShell('tr:test', (id) => (typeof id === 'string' ? translator.test(id) : { error: '找不到这个服务商' }));
+handleShell('tr:consent', (ids) => { if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id); return trState(); });
+handleShell('tr:run', async ({ text, modeId, target, source } = {}) => {
+  // __back：回译成中文核对，用固定的忠实翻译提示词
+  const mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
+    : typeof modeId === 'string' ? modeStore.get(modeId) : null;
+  return translator.translate({ text, mode, target, source });
+});
+handleShell('tr:cancel', () => translator.cancel());
+// 只在用户点“翻译剪贴板”时读一次，从不轮询
+handleShell('tr:clipboard', async () => { const t = await clipboard.readText(); return typeof t === 'string' ? t.slice(0, 4000) : ''; });
+handleShell('tr:lang', ({ accountId, lang } = {}) => { if (findAcc(accountId)) translator.setAccountLang(accountId, lang); return trState(); });
+handleShell('tmode:save', (data) => {
+  if (!data || typeof data !== 'object') return { error: '数据不对' };
+  const rec = modeStore.upsert({ id: data.id, name: data.name, direction: data.direction, prompt: data.prompt, temperature: data.temperature });
+  return rec ? { ok: true, id: rec.id, ...trState() } : { error: modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
+});
+handleShell('tmode:delete', (id) => { if (typeof id === 'string') modeStore.remove(id); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
