@@ -13,6 +13,7 @@ import { makeTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
 import { ChatStore } from './store.mjs';
 import { waVersion, resetVersionCache } from './version.mjs';
+import { crmItem } from './crm.mjs';
 
 export const SEND_LIMIT = 10;
 const SEND_WINDOW_MS = 60 * 1000;
@@ -70,6 +71,27 @@ export class Session {
     this.watchJid = null;
     this.rev = 0;
     this.lastUnread = -1;
+    this.crmSince = Number(cfg.crm) || 0; // 开了 CRM 同步：只收这个时间之后的消息；0 = 没开
+  }
+
+  // 主进程打开 / 关掉这个号的 CRM 同步
+  setCrm(since) { this.crmSince = Number(since) || 0; }
+
+  // 只取单聊里开关打开之后的消息（见 crm.mjs）。历史同步（messaging-history.set）不走这里
+  async captureCrm(sock, messages) {
+    const since = this.crmSince;
+    const items = [];
+    let skipped = 0;
+    const pnForLid = (lid) => sock.signalRepository?.lidMapping?.getPNForLID?.(lid);
+    for (const m of messages) {
+      try {
+        const r = await crmItem(m, since, pnForLid);
+        if (!r) continue;
+        if (r.skip) skipped += 1; else items.push(r.item);
+      } catch { /* 这一条取不出来就跳过 */ }
+    }
+    if (sock !== this.sock || this.crmSince !== since || (!items.length && !skipped)) return;
+    this.post({ type: 'crm', id: this.id, items, skipped });
   }
 
   log(msg) { this.post({ type: 'log', id: this.id, msg: scrub(msg) }); }
@@ -152,6 +174,7 @@ export class Session {
         const r = this.store.addMessage(m, { countUnread: type === 'notify' });
         if (r && r.incoming) this.post({ type: 'incoming', id: this.id, jid: r.jid });
       }
+      if (this.crmSince) this.captureCrm(sock, messages);
       this.changed();
     });
   }

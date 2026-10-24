@@ -1,6 +1,7 @@
 // 测试用：用 Node 自带的 node:sqlite 模拟 D1 绑定（prepare/bind/first/all/run/batch）。
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
+import path from 'node:path';
 
 class Stmt {
   constructor(db, sql, args = []) { this.db = db; this.sql = sql; this.args = args; }
@@ -15,9 +16,13 @@ class Stmt {
   _runSync() { return this._s().run(...this.args); }
 }
 
-export function fakeD1(migrationFile) {
+// migrations：迁移文件夹（按文件名顺序全部执行，和 wrangler d1 migrations apply 一样）或单个文件
+export function fakeD1(migrations) {
   const db = new DatabaseSync(':memory:');
-  db.exec(fs.readFileSync(migrationFile, 'utf8'));
+  const files = fs.statSync(migrations).isDirectory()
+    ? fs.readdirSync(migrations).filter((f) => f.endsWith('.sql')).sort().map((f) => path.join(migrations, f))
+    : [migrations];
+  for (const f of files) db.exec(fs.readFileSync(f, 'utf8'));
   let writes = 0;
   const wrap = {
     prepare: (sql) => {

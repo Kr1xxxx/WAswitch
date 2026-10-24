@@ -28,7 +28,7 @@ async function jwt(email, { aud = AUD, iss = `https://${DOMAIN}`, exp = Math.flo
   return `${head}.${body}.${Buffer.from(sig).toString('base64url')}`;
 }
 
-const db = fakeD1(path.join(here, '../migrations/0001_init.sql'));
+const db = fakeD1(path.join(here, '../migrations'));
 const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: AUD, OWNER_EMAIL: 'Boss@Example.com', SYNC_INTERVAL_S: '120', ASSETS: { fetch: async () => new Response('<html>admin</html>', { headers: { 'content-type': 'text/html' } }) } };
 
 async function call(method, p, { token, body, jwtFor, headers = {}, rawJwt } = {}) {
@@ -183,6 +183,18 @@ await test('改账号名称后，持有它的电脑拿到新名称；备注只�
   assert.equal(r.data.seats[0].name, '美国号-新');
   assert.equal(r.data.seats[0].note, '只接美国客户');
   assert.equal(r.data.seats[0].expected_country, '');
+});
+await test('同步到 CRM 的开关：只有老板能开，随坐席下发', async () => {
+  const before = (await sync(tokB, {})).data.cursor;
+  assert.equal((await admin('sup@example.com').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
+  assert.equal((await boss.patch(`accounts/${acc1}`, { crm_sync: true })).status, 200);
+  const r = await sync(tokB, { cursor: before });
+  assert.equal(r.data.seats[0].crm_sync, true);
+  assert.equal((await boss.get('overview')).data.accounts.find((a) => a.id === acc1).crm_sync, 1);
+  await boss.patch(`accounts/${acc1}`, { crm_sync: false });
+  const actions = db.raw.prepare('SELECT action FROM audit_log WHERE target = ? ORDER BY at').all(acc1).map((r) => r.action);
+  assert.ok(actions.includes('account.crm_on') && actions.includes('account.crm_off'), '开关聊天同步要记操作记录');
+  assert.equal((await sync(tokB, { cursor: r.data.cursor })).data.seats[0].crm_sync, false);
 });
 await test('主管看不到别组的号，也不能分配', async () => {
   const s = admin('sup@example.com');
