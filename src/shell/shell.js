@@ -200,7 +200,7 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['about', '关于']].map(([id, label]) =>
+      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['about', '关于']].map(([id, label]) =>
         h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label))));
     return;
   }
@@ -239,7 +239,8 @@ function exitTitle(acc) {
   if (acc.direct) return '网络线路：直连（这台电脑的真实 IP）';
   if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
-  return `网络线路 · 出口 IP ${acc.exitIp}${at}`;
+  const lat = acc.latency ? `\n最近一次巡检用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
+  return `网络线路 · 出口 IP ${acc.exitIp}${at}${lat}`;
 }
 
 // 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
@@ -616,6 +617,65 @@ function setRow(title, desc, control, extra) {
   return h('div', { class: 'setrow' }, h('div', { class: 'meta' }, h('span', { class: 'title' }, title), h('span', { class: 'desc' }, desc), extra), control);
 }
 
+// ---------- 连接记录 ----------
+let netLogCache = [];
+let netLogAt = 0;
+let netFilter = '';
+async function loadNetLog() {
+  netLogAt = Date.now();
+  try { netLogCache = await window.wa.netLog(); } catch { netLogCache = []; }
+  if (s.page === 'settings' && settingsTab === 'net') render(true);
+}
+const NET_TEXT = {
+  down: (e) => `连不上（${{ proxy: '代理', network: '网络' }[e.detail] || e.detail || '未知'}）`,
+  up: (e) => `恢复了${e.ms ? `，断了 ${fmtDur(e.ms)}` : ''}`,
+  qr: () => '掉线，需要重新扫码',
+  login: () => '重新登录成功',
+  crash: (e) => `页面进程退出（${e.detail || '未知'}），已自动重建`,
+  exit: (e) => `出口巡检正常，用时 ${e.ms} ms`,
+  exit_fail: () => '出口巡检失败（代理没响应）',
+};
+function fmtDur(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return `${Math.max(1, Math.round(ms / 1000))} 秒`;
+  if (m < 60) return `${m} 分钟`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分钟`;
+}
+function netPage(page) {
+  if (Date.now() - netLogAt > 10000) loadNetLog();
+  const byId = new Map(s.accounts.map((a) => [a.id, a]));
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  const filterSel = h('select', { 'aria-label': '只看某个号', onchange: (e) => { netFilter = e.target.value; render(true); } },
+    h('option', { value: '' }, '全部账号'), s.accounts.map((a) => h('option', { value: a.id }, a.name)));
+  filterSel.value = byId.has(netFilter) ? netFilter : '';
+  const rows = netLogCache.filter((e) => !netFilter || e.id === netFilter).slice(0, 300);
+  page.append(
+    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '连接记录'),
+      h('p', { class: 'lead' }, '最近 7 天每个号的掉线、恢复和出口巡检。不会为此多发任何网络请求；“用时”是每 30 分钟测一次出口 IP 的往返时间，可以当延迟参考。')),
+    h('div', { class: 'box' }, s.accounts.map((a) => {
+      const drops = netLogCache.filter((e) => e.id === a.id && e.at >= dayAgo && (e.kind === 'down' || e.kind === 'qr')).length;
+      return h('div', { class: 'memrow netrow' },
+        h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        h('span', { class: 'hint' }, a.direct ? '直连 · 不巡检' : a.latency ? `最近用时 ${a.latency.ms} ms` : '还没测过'),
+        h('b', { style: { textAlign: 'right', color: drops ? 'var(--danger)' : null } }, `24 小时掉线 ${drops} 次`),
+        h('span', { class: 'hint' }, a.problem ? a.problemShort : '正常'));
+    })),
+    h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, filterSel,
+      netLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.netLogClear(); loadNetLog(); } }, '清空记录') : null),
+    rows.length
+      ? h('div', { class: 'box ov-log' }, rows.map((e) => {
+        const a = byId.get(e.id);
+        const t = new Date(e.at);
+        return h('div', { class: 'ov-logrow' },
+          h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
+          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          h('span', { class: 'ov-name', style: { flex: 'none', width: '110px' } }, a ? a.name : '已删除的号'),
+          h('span', { class: `ov-name${['down', 'qr', 'crash', 'exit_fail'].includes(e.kind) ? ' bad-text' : ''}` }, (NET_TEXT[e.kind] || (() => e.kind))(e)));
+      }))
+      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
+  return page;
+}
+
 function settingsPage() {
   const st = s.settings;
   const page = h('div', { class: 'page narrow' });
@@ -681,6 +741,8 @@ function settingsPage() {
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
+  } else if (settingsTab === 'net') {
+    netPage(page);
   } else if (settingsTab === 'check') {
     const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
       checkRunning = true; render(true);

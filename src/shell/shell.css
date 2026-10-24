@@ -246,3 +246,5 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .ov-time { width: 92px; flex: none; }
 .ov-h2 { margin: 0; font-size: 16px; }
 .ov-row .sw, .ov-logrow .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.bad-text { color: var(--danger); }
+.memrow.netrow { grid-template-columns: 130px 1fr 130px 90px; }
