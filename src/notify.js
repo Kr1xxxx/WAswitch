@@ -42,8 +42,9 @@ class Notifier {
   }
 
   // 页面标题变化时调用
-  update(acc, count, { isActive }) {
-    const before = this.unread.get(acc.id) || 0;
+  // baseline：页面刚刷新时，刷新前的未读数。涨回这个数之前不算新消息
+  update(acc, count, { isActive, baseline = 0 }) {
+    const before = Math.max(this.unread.get(acc.id) || 0, baseline);
     this.unread.set(acc.id, count);
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
