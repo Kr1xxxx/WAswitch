@@ -857,7 +857,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
       message: `删除「${acc.name}」？`,
       detail: `${isLite(acc)
         ? '会让手机“已关联的设备”里的这台设备退出（已连上时），并清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置）。手机上的聊天记录不受影响。'
-        : '会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。手机的“已关联的设备”里还会显示这台电脑，可以在手机上手动退出。'}${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
+        : '注意：这不会让手机退出。删除后请在手机 WhatsApp › 设置 › 已关联的设备 里手动退出这台电脑。\n\n会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。'}${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
     }));
   } finally {
     clearTimeout(timer);
@@ -1153,7 +1153,7 @@ onShell('context', (id) => {
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
     { type: 'separator' },
-    { label: `删除「${acc.name}」并退出登录…`, click: () => removeAccount(id) },
+    { label: isLite(acc) ? `删除「${acc.name}」并退出登录…` : `删除「${acc.name}」…`, click: () => removeAccount(id) },
   ]).popup({ window: win });
 });
 
