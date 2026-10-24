@@ -272,6 +272,7 @@ function loadAccounts() {
     // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
     acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
     acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
+    acc.spellcheck = acc.spellcheck === true;
     acc.mode = acc.mode === 'lite' ? 'lite' : 'web';
     acc.liteKey = typeof acc.liteKey === 'string' ? acc.liteKey : '';
     // 老版本没有这个字段：当作登录过（之前已经在用的号），掉线照样标红
@@ -866,23 +867,69 @@ function addNotifLog({ id, count, popped }) {
   saveNotifLogSoon();
 }
 
+// ---------- 拼写检查（每个号单独开关） ----------
+// macOS 用系统自带的拼写检查，不下载东西；Windows、Linux 第一次开可能会下载英文词典，
+// 走的是这个号自己的 session，也就是这个号的代理（代理没设好时不打开）
+const proxyReady = new Map(); // id -> 这个号的代理是否已经设好（没设好时绝不打开拼写检查）
+function applySpellcheck(acc, ses = session.fromPartition(`persist:wa-${acc.id}`)) {
+  const on = acc.spellcheck && proxyReady.get(acc.id) === true;
+  if (on && process.platform !== 'darwin') ses.setSpellCheckerLanguages(['en-US']);
+  ses.setSpellCheckerEnabled(on);
+}
+function setSpellcheck(id, on) {
+  const acc = findAcc(id);
+  if (!acc || isLite(acc)) return;
+  acc.spellcheck = !!on;
+  saveAccounts();
+  applySpellcheck(acc);
+  pushState();
+}
+// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴。不提供“检查元素”
+function setupPageMenu(wc, ses) {
+  wc.on('context-menu', (_e, p) => {
+    const items = [];
+    if (p.misspelledWord) {
+      for (const word of (p.dictionarySuggestions || []).slice(0, 5)) items.push({ label: word, click: () => wc.replaceMisspelling(word) });
+      if (!items.length) items.push({ label: '没有拼写建议', enabled: false });
+      items.push({ label: `把“${p.misspelledWord.slice(0, 30)}”加入词典`, click: () => ses.addWordToSpellCheckerDictionary(p.misspelledWord) });
+      items.push({ type: 'separator' });
+    }
+    if (p.isEditable) {
+      items.push(
+        { label: '剪切', role: 'cut', enabled: p.editFlags.canCut },
+        { label: '复制', role: 'copy', enabled: p.editFlags.canCopy },
+        { label: '粘贴', role: 'paste', enabled: p.editFlags.canPaste },
+        { label: '全选', role: 'selectAll', enabled: p.editFlags.canSelectAll },
+      );
+    } else if (p.selectionText) {
+      items.push({ label: '复制', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
+  });
+}
+
 async function createView(acc, loadDelay = 0) {
   const ses = session.fromPartition(`persist:wa-${acc.id}`);
   const r = fingerprint.resolve(acc.fingerprint);
   // 网络请求层面的 UA 和语言（包括 Service Worker 发出的请求）
   ses.setUserAgent(r.userAgent, r.acceptLanguage);
-  // 不用拼写检查，也就不会去下载词典
-  ses.setSpellCheckerEnabled(false);
   setupPermissions(ses);
+  // 代理没设好之前先关掉拼写检查，免得词典下载走真实 IP
+  ses.setSpellCheckerEnabled(false);
   const applied = await proxy.apply(ses, acc.proxy);
+  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
+  proxyReady.set(acc.id, !applied.error);
+  if (!applied.error) applySpellcheck(acc, ses);
 
   const view = new WebContentsView({
-    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
+    // spellcheck 在这里打开，真正开不开由 session 的开关决定（applySpellcheck），切换时不用重开页面
+    webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: true },
   });
   if (typeof view.setBorderRadius === 'function') view.setBorderRadius(14);
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy(webrtcPolicy(acc));
   setupNavigationGuards(wc);
+  setupPageMenu(wc, ses);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
 
@@ -1743,6 +1790,12 @@ onShell('context', (id) => {
     {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
+    },
+    {
+      label: isLite(acc) ? '拼写检查（轻量模式不支持）'
+        : process.platform === 'darwin' ? '拼写检查（英文）'
+          : `拼写检查（英文，第一次会${acc.proxy ? '通过本号代理' : '直连'}下载词典）`, type: 'checkbox', checked: acc.spellcheck, enabled: !isLite(acc),
+      click: () => setSpellcheck(id, !acc.spellcheck),
     },
     {
       label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
