@@ -124,7 +124,9 @@ async function updateUser(db, user, id, body) {
   if (isOwner(user)) {
     if (body.role !== undefined) {
       need(u.id !== user.id, '不能改自己的角色');
-      sets.push('role = ?'); vals.push(oneOf(body.role, ['owner', 'supervisor', 'agent'], u.role));
+      // 不合法的角色直接拒绝，不能退回旧快照写回去（会覆盖并发的角色修改）
+      if (!['owner', 'supervisor', 'agent'].includes(body.role)) return fail(400, '角色不对');
+      sets.push('role = ?'); vals.push(body.role);
     }
     if (body.group_id !== undefined) {
       const g = str(body.group_id, 36) || null;
@@ -138,17 +140,30 @@ async function updateUser(db, user, id, body) {
     }
   }
   if (!sets.length) return json({ ok: true });
+  // 校验最终值与 UPDATE 是同一条语句。失败时不写任何字段，也不靠旧快照回滚。
+  // 未修改字段直接取数据库当前值，避免并发角色变更使预检查失效。
+  const guardVals = [];
+  const proposed = (column) => {
+    const i = sets.indexOf(`${column} = ?`);
+    if (i < 0) return column;
+    guardVals.push(vals[i]);
+    return '?';
+  };
+  // 只改名字或停用时不做角色校验：停用是离职流程，不能被旧数据挡住
+  const touched = (...cols) => cols.some((c) => sets.includes(`${c} = ?`));
+  const guards = [];
+  if (touched('role', 'email')) guards.push(`(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)`);
+  if (touched('role', 'group_id')) guards.push(`(${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`);
+  const valid = guards.length ? guards.join(' AND ') : '1';
+  let after;
   try {
-    await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id).run();
+    after = await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND ${valid}
+      RETURNING role, group_id, email`).bind(...vals, id, ...guardVals).first();
   } catch (e) {
     if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
     throw e;
   }
-  const after = await db.prepare('SELECT role, group_id, email FROM users WHERE id = ?').bind(id).first();
-  if (after.role !== 'agent' && !after.email) {
-    await db.prepare('UPDATE users SET role = ?, email = ? WHERE id = ?').bind(u.role, u.email, id).run();
-    return fail(400, '老板和主管要有邮箱');
-  }
+  if (!after) return fail(400, '老板和主管要有邮箱，主管还要选择一个组');
   await audit(db, user.id, 'user.update', id, body);
   // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
   if (body.group_id !== undefined && isOwner(user)) {

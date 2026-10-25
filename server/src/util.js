@@ -41,8 +41,26 @@ export async function readJson(request, maxBytes = 64 * 1024) {
   // 先看声明的长度，太大的请求不读进内存
   const declared = Number(request.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) throw new HttpError(413, '请求太大');
-  const text = await request.text();
-  if (text.length > maxBytes) throw new HttpError(413, '请求太大');
+  // content-length 可以缺失或不可信；按实际 UTF-8 字节边读边限流。
+  let text = '';
+  if (request.body) {
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new HttpError(413, '请求太大');
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally { reader.releaseLock(); }
+  }
   if (!text) return {}; // 没有请求体的 POST（比如“生成登记码”）
   const type = request.headers.get('content-type') || '';
   if (!type.toLowerCase().startsWith('application/json')) throw new HttpError(415, '请求必须是 JSON');

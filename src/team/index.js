@@ -70,6 +70,12 @@ class TeamSync {
     this.failures = 0;
     this.lastSig = '';
     this.state = this.load();
+    // 升级前已暂停的收回可能不会再次下发，启动时先撤销这些号的采集授权。
+    let changed = false;
+    for (const acc of this.state.held.length ? this.hooks.accounts() : []) {
+      if (this.state.held.includes(acc.teamId) && acc.teamCrm) { acc.teamCrm = false; changed = true; }
+    }
+    if (changed) this.hooks.save();
   }
 
   // ---------- 本地文件 ----------
@@ -358,7 +364,11 @@ class TeamSync {
       if (!s || !UUID_RE.test(s.team_id)) continue;
       const acc = accs.find((a) => a.teamId === s.team_id);
       if (s.visible !== true) {
-        if (s.visible === false && acc && !acc.teamHidden) hides.push(acc);
+        if (s.visible === false && acc) {
+          // 暂停批量隐藏不等于继续授权采集；收回一到达就撤销 CRM。
+          if (acc.teamCrm) { acc.teamCrm = false; changed = true; }
+          if (!acc.teamHidden) hides.push(acc);
+        }
         continue;
       }
       this.state.held = this.state.held.filter((id) => id !== s.team_id);
@@ -385,6 +395,8 @@ class TeamSync {
     const visibleTeam = accs.filter((a) => a.teamId && !a.teamHidden).length;
     const heldIds = new Set(this.state.held);
     for (const a of hides) heldIds.add(a.teamId);
+    // 兼容升级前已暂停的收回：cursor 已推进，下次可能不再重复下发隐藏记录。
+    for (const a of accs) if (heldIds.has(a.teamId) && a.teamCrm) { a.teamCrm = false; changed = true; }
     const pending = accs.filter((a) => a.teamId && !a.teamHidden && heldIds.has(a.teamId));
     if (pending.length && (confirmHides || visibleTeam < 2 || pending.length * 2 <= visibleTeam)) {
       for (const a of pending) { a.teamHidden = true; this.hooks.park(a); }

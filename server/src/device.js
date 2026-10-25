@@ -121,6 +121,13 @@ function cleanStatus(s) {
 }
 const SAME_KEYS = ['state', 'unread', 'proxy_ok', 'proxy_ms', 'exit_ip', 'exit_country', 'exit_changed', 'device_id'];
 
+// 请求开始后的归属和停用状态仍可能变化；写入时在同一事务重新检查。
+const MAY_REPORT = `EXISTS (SELECT 1 FROM wa_accounts a
+  JOIN device_seats s ON s.account_id = a.id AND s.device_id = a.device_id AND s.visible = 1
+  JOIN devices d ON d.id = a.device_id JOIN users u ON u.id = d.user_id
+  WHERE a.id = ? AND a.device_id = ? AND a.deleted_at IS NULL
+    AND d.revoked_at IS NULL AND u.disabled_at IS NULL)`;
+
 async function sync(request, env) {
   const db = env.DB;
   const dev = await authDevice(request, db);
@@ -155,10 +162,11 @@ async function sync(request, env) {
     s.device_id = dev.id;
     if (old.state !== null && SAME_KEYS.every((k) => old[k] === s[k])) continue; // 没变化不写
     stmts.push(db.prepare(`INSERT INTO account_status (account_id, device_id, state, unread, proxy_ok, proxy_ms, exit_ip, exit_country, exit_changed, reported_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET device_id = excluded.device_id, state = excluded.state,
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${MAY_REPORT}
+      ON CONFLICT(account_id) DO UPDATE SET device_id = excluded.device_id, state = excluded.state,
       unread = excluded.unread, proxy_ok = excluded.proxy_ok, proxy_ms = excluded.proxy_ms, exit_ip = excluded.exit_ip,
       exit_country = excluded.exit_country, exit_changed = excluded.exit_changed, reported_at = excluded.reported_at`)
-      .bind(s.account_id, dev.id, s.state, s.unread, s.proxy_ok, s.proxy_ms, s.exit_ip, s.exit_country, s.exit_changed, t));
+      .bind(s.account_id, dev.id, s.state, s.unread, s.proxy_ok, s.proxy_ms, s.exit_ip, s.exit_country, s.exit_changed, t, s.account_id, dev.id));
   }
 
   // 状态变化记录：客户端时间按它报的 now 换算成服务器时间
@@ -168,7 +176,8 @@ async function sync(request, env) {
     if (!e || typeof e !== 'object' || !mine.has(e.team_id) || !EVENT_KINDS.includes(e.kind)) continue;
     const detail = country(e.detail) || (DETAIL_ENUM.includes(e.detail) ? e.detail : '');
     const at = Number.isFinite(e.at) ? Math.min(t, Math.max(t - 7 * 864e5, t - (clientNow - e.at))) : t;
-    stmts.push(db.prepare('INSERT INTO status_events (account_id, at, kind, detail) VALUES (?, ?, ?, ?)').bind(e.team_id, at, e.kind, detail));
+    stmts.push(db.prepare(`INSERT INTO status_events (account_id, at, kind, detail)
+      SELECT ?, ?, ?, ? WHERE ${MAY_REPORT}`).bind(e.team_id, at, e.kind, detail, e.team_id, dev.id));
   }
   if (stmts.length) await db.batch(stmts);
 
