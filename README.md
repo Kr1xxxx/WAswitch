@@ -2,6 +2,8 @@
 
 在一个窗口里同时登录多个 WhatsApp 账号的桌面软件（Windows / macOS / Linux）。
 
+维护文档：[问题记录与回归检查](docs/ISSUES.md)（已发现问题、修复依据和防止复发的检查要求）。
+
 ## 原理
 
 基于 Electron。每个账号加载 `https://web.whatsapp.com`，并使用独立的 session 分区
