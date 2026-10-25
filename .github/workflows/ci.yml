@@ -1,4 +1,5 @@
-# 每次 push 和 PR 自动跑全部自检，并打一个 Linux 包启动 10 秒做冒烟，确认生成了自动更新需要的文件。
+# 每次 push 和 PR 自动跑全部自检；再打一个 Windows 包启动 10 秒做冒烟，确认生成了自动更新需要的文件。
+# 软件只发 Windows 和 macOS。自检放在 Ubuntu 上跑只是因为便宜、有 xvfb，不代表支持 Linux。
 # 所有 action 按 commit 固定版本；只读权限。
 name: ci
 
@@ -41,13 +42,26 @@ jobs:
         run: xvfb-run -a node scripts/check-view-race.js
       - name: 自动更新自检
         run: npm run check:updater
-      - name: 打包（Linux 目录版和 AppImage）
-        run: npx electron-builder --linux dir AppImage --publish never
-      - name: 生成了自动更新需要的文件
-        run: |
-          grep -q '^sha512: ' dist/latest-linux.yml
-          ls dist/*.AppImage.blockmap 2>/dev/null || grep -q 'blockMapSize' dist/latest-linux.yml
-          grep -q 'provider: github' dist/linux-unpacked/resources/app-update.yml
-      - name: 打包后启动冒烟
-        run: xvfb-run -a node scripts/smoke-packaged.js dist/linux-unpacked/waswitch
 
+  package-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 没有代码签名证书：不自动找签名证书
+      - name: 打包（Windows 安装包）
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: 生成了自动更新需要的文件
+        shell: bash
+        run: |
+          grep -q '^sha512: ' dist/latest.yml
+          ls dist/*.exe.blockmap
+          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+      - name: 打包后启动冒烟
+        run: node scripts/smoke-packaged.js dist/win-unpacked/WAswitch.exe

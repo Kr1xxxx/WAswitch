@@ -103,7 +103,7 @@ class Notifier {
     const total = this.total();
     const win = this.hooks.getWindow();
 
-    // macOS Dock 和 Linux（Unity 等）显示数字
+    // macOS Dock 显示数字
     if (process.platform !== 'win32') app.setBadgeCount(total);
     // Windows 任务栏：图标右下角加红点
     if (process.platform === 'win32' && win) {

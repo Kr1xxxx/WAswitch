@@ -1075,7 +1075,7 @@ function addNotifLog({ id, count, popped }) {
 }
 
 // ---------- 拼写检查（每个号单独开关） ----------
-// macOS 用系统自带的拼写检查，不下载东西；Windows、Linux 第一次开可能会下载英文词典，
+// macOS 用系统自带的拼写检查，不下载东西；Windows 第一次开可能会下载英文词典，
 // 走的是这个号自己的 session，也就是这个号的代理（代理没设好时不打开）
 const proxyReady = new Map(); // id -> 这个号的代理是否已经设好（没设好时绝不打开拼写检查）
 function applySpellcheck(acc, ses = session.fromPartition(`persist:wa-${acc.id}`)) {
@@ -1196,7 +1196,7 @@ async function createView(acc, loadDelay = 0) {
   ses.setSpellCheckerEnabled(false);
   setupDownloads(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
-  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
+  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Windows 可能会下载词典）
   proxyReady.set(acc.id, !applied.error);
   if (!applied.error) applySpellcheck(acc, ses);
 
@@ -1782,7 +1782,7 @@ function setupMenu() {
     // macOS 需要“编辑”菜单，Cmd+C / Cmd+V 才能用
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
   } else {
-    // Windows / Linux 不显示菜单栏（默认菜单里有开发者工具），复制粘贴照常可用
+    // Windows 不显示菜单栏（默认菜单里有开发者工具），复制粘贴照常可用
     Menu.setApplicationMenu(null);
   }
 }
