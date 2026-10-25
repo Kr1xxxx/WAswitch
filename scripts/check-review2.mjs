@@ -167,6 +167,21 @@ try {
     assert.equal(row.role, 'supervisor'); assert.equal(row.email, 'supervisor@example.com'); assert.equal(row.name, 'Supervisor');
   });
 
+  await test('不合法角色返回 400；没分组的旧主管仍能改名和停用，但不能在无组时设为主管', async () => {
+    const f = await fixture();
+    const row = () => ({ ...f.db.raw.prepare('SELECT * FROM users WHERE id=?').get(f.agent) });
+    const before = row();
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { role: 'boss' })).status, 400);
+    assert.deepEqual(row(), before);
+    f.db.raw.prepare('UPDATE users SET group_id = NULL WHERE id = ?').run(f.agent);
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { name: 'renamed' })).status, 200);
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { disabled: true })).status, 200);
+    assert.equal(row().name, 'renamed'); assert.ok(row().disabled_at);
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { role: 'agent' })).status, 200);
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { role: 'supervisor' })).status, 400);
+    assert.equal(row().role, 'agent');
+  });
+
   await test('JSON 请求上限按 UTF-8 字节计算，并保持合法中文请求可读', async () => {
     const request = text => new Request('https://team.example/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
     await assert.rejects(readJson(request('中'.repeat(30)), 64), e => e.status === 413);

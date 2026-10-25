@@ -124,7 +124,9 @@ async function updateUser(db, user, id, body) {
   if (isOwner(user)) {
     if (body.role !== undefined) {
       need(u.id !== user.id, '不能改自己的角色');
-      sets.push('role = ?'); vals.push(oneOf(body.role, ['owner', 'supervisor', 'agent'], u.role));
+      // 不合法的角色直接拒绝，不能退回旧快照写回去（会覆盖并发的角色修改）
+      if (!['owner', 'supervisor', 'agent'].includes(body.role)) return fail(400, '角色不对');
+      sets.push('role = ?'); vals.push(body.role);
     }
     if (body.group_id !== undefined) {
       const g = str(body.group_id, 36) || null;
@@ -147,8 +149,12 @@ async function updateUser(db, user, id, body) {
     guardVals.push(vals[i]);
     return '?';
   };
-  const valid = `(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)
-    AND (${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`;
+  // 只改名字或停用时不做角色校验：停用是离职流程，不能被旧数据挡住
+  const touched = (...cols) => cols.some((c) => sets.includes(`${c} = ?`));
+  const guards = [];
+  if (touched('role', 'email')) guards.push(`(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)`);
+  if (touched('role', 'group_id')) guards.push(`(${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`);
+  const valid = guards.length ? guards.join(' AND ') : '1';
   let after;
   try {
     after = await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND ${valid}
