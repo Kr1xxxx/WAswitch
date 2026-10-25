@@ -1078,19 +1078,25 @@ function settingsPage() {
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
         h('span', { class: 'hint' }, '近似值：只统计每个账号的主页面进程，实际会略高一点。')),
-      setRow('立即清理内存', '马上把没有未读消息的后台账号悄悄刷新一遍，内存会降回刚打开时的水平。不会退出登录，不会漏消息；正在看的账号和有未读的账号不动。',
+      setRow('立即清理内存', '马上把没有未读消息、内存涨了不少的后台账号悄悄刷新一遍，降回刚打开时的水平。只是刷新网页：不会退出登录，不删聊天记录，不会漏消息。正在看的、有未读的、正在下载的、刚切走 30 秒内的账号不动。',
         h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: async () => {
           memClean.busy = true; memClean.result = ''; render(true);
           const r = await window.wa.memClean();
           memClean.busy = false;
           if (r.error) memClean.result = r.error;
-          else if (!r.recycled) memClean.result = r.skipped ? `后台账号都有未读或正在加载，这次没有刷新（${r.skipped} 个）。` : '没有可以清理的后台账号。';
-          else memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${r.skipped ? `${r.skipped} 个有未读或正在加载的跳过了。` : ''}`;
+          else {
+            const skip = r.skipped ? `${r.skipped} 个有未读、刚切走或正在加载/下载的跳过了。` : '';
+            if (r.recycled) memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${skip}`;
+            else if (r.skipped) memClean.result = `这次没有刷新。${skip}`;
+            else memClean.result = '后台账号都刚刷新过或占用不大，不用清理。';
+          }
           render(true);
         } }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
-      setRow('总内存上限', '所有账号加起来超过上限时，从占用最大的后台账号开始悄悄刷新，直到降回上限以内。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
-        capSelect),
+      setRow('总内存上限', '所有账号加起来超过上限时，从涨得最多的后台账号开始悄悄刷新，直到降回上限以内。同一个号至少隔 1 小时，全部每小时最多 6 次。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
+        capSelect,
+        st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
+          `账号较多，刚打开时加起来就接近 ${mb(st.capMB)}，这个上限达不到，已暂停按上限刷新。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
       setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),

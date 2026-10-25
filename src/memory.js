@@ -6,6 +6,9 @@
 //    WhatsApp 的消息是服务器推送的，节流不会耽误收消息。
 // 1b. 总上限：所有账号加起来超过上限（默认 2 GB）时，从占用最大的后台账号开始刷新，直到降回上限以内。
 //     同样不碰正在看的账号、有未读的账号和正在加载的账号。
+//     每个账号打开或刷新 5 分钟后记一个“底数”，只有比底数涨了 250 MB 以上才刷新；
+//     所有账号底数加起来就超过上限时（账号太多），不再为上限刷新，只在内存页提示调高上限。
+//     同一个号至少隔 60 分钟，全部加起来每小时最多 6 次，不会反复重连。
 // 1c. 立即清理：用户手动点，把所有没有未读的后台账号刷新一遍，不退出登录、不丢消息。
 // 3. 省内存模式：关闭显卡加速，整体再省一些内存，代价是动画没那么顺滑。需要重启生效。
 // 4. 统计每个账号占用的内存，显示在托盘菜单里。只统计主页面进程，是近似值，略低于实际。
@@ -31,10 +34,15 @@ const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
 const CHECK_EVERY_MS = 60 * 1000;
 const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
 const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回收
-const CAP_GAP_MS = 10 * 60 * 1000; // 超总上限时，同一个账号两次刷新至少隔 10 分钟
+const CAP_GAP_MS = 60 * 60 * 1000; // 超总上限时，同一个账号两次刷新至少隔 60 分钟
 const CAP_BACKGROUND_MS = 2 * 60 * 1000; // 超总上限时，在后台待了 2 分钟就可以回收
 const CAP_MAX_PER_CHECK = 2; // 每分钟最多刷新 2 个，免得一下子全部重新加载
-const FRESH_PAGE_MB = 300; // 刚刷新完的 WhatsApp 网页大约占这么多，用来估算刷新能省下多少
+const CAP_MAX_PER_HOUR = 6; // 因为总上限刷新的，全部账号加起来每小时最多 6 次
+const FRESH_PAGE_MB = 300; // 还没量到时，假定刚打开的 WhatsApp 网页占这么多
+const BASELINE_AFTER_MS = 5 * 60 * 1000; // 打开或刷新 5 分钟后量一次，作为这个账号的“底数”
+const GROWTH_MB = 250; // 比底数多出这么多才值得刷新，否则刷了也省不下来
+const MANUAL_GROWTH_MB = 100; // 手动清理时，比底数多出这么多才刷新
+const MANUAL_BACKGROUND_MS = 30 * 1000; // 手动清理时，刚切走 30 秒内的账号不动（可能有没打完的字或正在上传）
 const MANUAL_GAP_MS = 2500; // 手动清理时，账号之间隔一会儿再刷新，避免卡顿
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -89,6 +97,10 @@ class MemoryManager {
     this.backgroundSince = new Map(); // id -> 进入后台的时间
     this.timer = null;
     this.cleaning = false;
+    this.baselineMB = new Map(); // id -> 打开或刷新 5 分钟后的占用
+    this.measureFrom = new Map(); // id -> 从什么时候起可以量底数（第一次见到或刷新的时间）
+    this.capReloads = []; // 因为总上限刷新的时间，用来限制每小时次数
+    this.capAdvice = 0; // 账号太多、上限达不到时，建议调到的上限（MB），0 表示没问题
   }
 
   start() {
@@ -109,6 +121,12 @@ class MemoryManager {
     this.usageMB.delete(id);
     this.lastRecycle.delete(id);
     this.backgroundSince.delete(id);
+    this.baselineMB.delete(id);
+    this.measureFrom.delete(id);
+  }
+
+  baseline(id) {
+    return this.baselineMB.get(id) || FRESH_PAGE_MB;
   }
 
   totalMB() {
@@ -128,7 +146,16 @@ class MemoryManager {
     for (const [id, view] of this.hooks.views) {
       const wc = view.webContents;
       if (wc.isDestroyed()) continue;
-      this.usageMB.set(id, Math.round(byPid.get(wc.getOSProcessId()) || 0));
+      const mb = Math.round(byPid.get(wc.getOSProcessId()) || 0);
+      this.usageMB.set(id, mb);
+      // 打开或刷新满 5 分钟、已经加载完，记下底数
+      const now = Date.now();
+      if (!this.measureFrom.has(id)) this.measureFrom.set(id, now);
+      const from = this.measureFrom.get(id);
+      if (from && now - from >= BASELINE_AFTER_MS && !wc.isLoading() && mb > 0) {
+        this.baselineMB.set(id, mb);
+        this.measureFrom.set(id, 0); // 0 表示这一轮已经量过
+      }
     }
   }
 
@@ -144,6 +171,7 @@ class MemoryManager {
   recycle(id, wc, why) {
     console.log(`账号 ${id} 占用 ${this.usageMB.get(id) || 0} MB，${why}，后台刷新回收内存`);
     this.lastRecycle.set(id, Date.now());
+    this.measureFrom.set(id, Date.now()); // 刷新后重新量底数
     wc.reload();
   }
 
@@ -157,7 +185,8 @@ class MemoryManager {
     if (limit) {
       for (const [id, view] of this.hooks.views) {
         const wc = view.webContents;
-        if ((this.usageMB.get(id) || 0) < limit || !this.canRecycle(id, wc)) continue;
+        const mb = this.usageMB.get(id) || 0;
+        if (mb < limit || mb < this.baseline(id) + GROWTH_MB || !this.canRecycle(id, wc)) continue;
         if (now - (this.backgroundSince.get(id) || now) < BACKGROUND_FOR_MS) continue;
         if (now - (this.lastRecycle.get(id) || 0) < MIN_RECYCLE_GAP_MS) continue;
         this.recycle(id, wc, `超过 ${limit} MB`);
@@ -165,32 +194,45 @@ class MemoryManager {
       }
     }
 
-    // 所有账号加起来超过总上限：从占用最大的后台账号开始刷新
+    // 所有账号加起来超过总上限：从涨得最多的后台账号开始刷新
     const cap = this.settings.capMB;
+    this.capAdvice = 0;
     if (cap) {
-      let total = this.totalMB();
-      for (const id of done) total -= Math.max(0, (this.usageMB.get(id) || 0) - FRESH_PAGE_MB);
-      if (total > cap) {
-        const list = [...this.hooks.views]
-          .filter(([id, view]) => !done.has(id) && this.canRecycle(id, view.webContents)
-            && (this.usageMB.get(id) || 0) > FRESH_PAGE_MB
-            && now - (this.backgroundSince.get(id) || now) >= CAP_BACKGROUND_MS
-            && now - (this.lastRecycle.get(id) || 0) >= CAP_GAP_MS)
-          .sort((a, b) => (this.usageMB.get(b[0]) || 0) - (this.usageMB.get(a[0]) || 0));
-        let n = 0;
-        for (const [id, view] of list) {
-          if (total <= cap || n >= CAP_MAX_PER_CHECK) break;
-          this.recycle(id, view.webContents, `总占用超过上限 ${cap} MB`);
-          total -= (this.usageMB.get(id) || 0) - FRESH_PAGE_MB;
-          n += 1;
+      // 刷新也降不下去的部分：网页账号的底数 + 轻量模式等其他占用
+      let floor = this.totalMB();
+      for (const [id] of this.hooks.views) floor -= Math.max(0, (this.usageMB.get(id) || 0) - this.baseline(id));
+      if (floor > cap * 0.9) {
+        // 账号太多，底数加起来就快到上限了：不为上限刷新，免得反复重连还省不下来
+        this.capAdvice = CAP_CHOICES.find((c) => c >= floor * 1.3) || 0;
+        if (!this.capAdvice) this.capAdvice = -1; // -1：建议不限
+      } else {
+        let total = this.totalMB();
+        for (const id of done) total -= Math.max(0, (this.usageMB.get(id) || 0) - this.baseline(id));
+        this.capReloads = this.capReloads.filter((t) => now - t < 60 * 60 * 1000);
+        const growth = (id) => (this.usageMB.get(id) || 0) - this.baseline(id);
+        if (total > cap) {
+          const list = [...this.hooks.views]
+            .filter(([id, view]) => !done.has(id) && this.canRecycle(id, view.webContents)
+              && growth(id) >= GROWTH_MB
+              && now - (this.backgroundSince.get(id) || now) >= CAP_BACKGROUND_MS
+              && now - (this.lastRecycle.get(id) || 0) >= CAP_GAP_MS)
+            .sort((a, b) => growth(b[0]) - growth(a[0]));
+          let n = 0;
+          for (const [id, view] of list) {
+            if (total <= cap || n >= CAP_MAX_PER_CHECK || this.capReloads.length >= CAP_MAX_PER_HOUR) break;
+            total -= growth(id);
+            this.recycle(id, view.webContents, `总占用超过上限 ${cap} MB`);
+            this.capReloads.push(now);
+            n += 1;
+          }
         }
       }
     }
     this.hooks.onUpdate();
   }
 
-  // 立即清理：把所有可以安全刷新的后台账号刷新一遍（不看阈值、不看间隔）。
-  // 返回刷新了几个、跳过了几个（有未读、正在看或在加载）、估计能省下多少
+  // 立即清理：把所有可以安全刷新、并且比底数涨了不少的后台账号刷新一遍（不看阈值和间隔）。
+  // 返回刷新了几个、跳过了几个（有未读、刚切走、在加载或下载）、几个本来就不大、估计能省下多少
   async cleanNow() {
     if (this.cleaning) return { error: '正在清理，请稍等' };
     this.cleaning = true;
@@ -199,19 +241,24 @@ class MemoryManager {
       let recycled = 0;
       let skipped = 0;
       let savedMB = 0;
+      let fresh = 0;
       const list = [...this.hooks.views].sort((a, b) => (this.usageMB.get(b[0]) || 0) - (this.usageMB.get(a[0]) || 0));
       for (const [id, view] of list) {
         const wc = view.webContents;
         if (wc.isDestroyed()) continue;
-        if (!this.canRecycle(id, wc)) { if (this.hooks.isBackground(id)) skipped += 1; continue; }
+        if (!this.hooks.isBackground(id)) continue;
+        const growth = (this.usageMB.get(id) || 0) - this.baseline(id);
+        if (growth < MANUAL_GROWTH_MB) { fresh += 1; continue; } // 刚刷新过或本来就不大，刷了也省不下
+        const ok = () => this.canRecycle(id, wc) && Date.now() - (this.backgroundSince.get(id) || Date.now()) >= MANUAL_BACKGROUND_MS;
+        if (!ok()) { skipped += 1; continue; }
         if (recycled) await new Promise((resolve) => { setTimeout(resolve, MANUAL_GAP_MS); });
-        if (!this.canRecycle(id, wc)) { skipped += 1; continue; } // 等的这一会儿里来了消息或切了过去
-        savedMB += Math.max(0, (this.usageMB.get(id) || 0) - FRESH_PAGE_MB);
+        if (!ok()) { skipped += 1; continue; } // 等的这一会儿里来了消息或切了过去
+        savedMB += growth;
         this.recycle(id, wc, '手动清理');
         recycled += 1;
       }
       this.hooks.onUpdate();
-      return { ok: true, recycled, skipped, savedMB };
+      return { ok: true, recycled, skipped, fresh, savedMB };
     } finally {
       this.cleaning = false;
     }
