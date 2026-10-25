@@ -216,10 +216,47 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .field .check-row input { height: auto; padding: 0; border: none; margin-top: 4px; }
 
 /* 关于页：软件更新 */
-.update-box { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
-.update-box .btns { margin-top: 4px; }
+/* 关于页：软件更新卡片 */
+.update-box { --upd: #4a505a; --upd-bg: #f2f4f6; display: flex; flex-direction: column; gap: 12px; max-width: 600px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.update-box.ok { --upd: #15803D; --upd-bg: #ecfdf3; }
+.update-box.busy { --upd: #15803D; --upd-bg: #ecfdf3; }
+.update-box.new { --upd: #fff; --upd-bg: #1FAF6E; border-color: #bfe8d3; background: linear-gradient(180deg, #f3fbf7, #fff 70%); }
+.update-box.warn { --upd: #8a5a00; --upd-bg: #FEF9C3; }
+.upd-main { display: flex; align-items: center; gap: 14px; }
+.upd-mark { flex: none; width: 40px; height: 40px; border-radius: 12px; background: var(--upd-bg); color: var(--upd); display: flex; align-items: center; justify-content: center; }
+.upd-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.upd-text b { font-size: 15px; font-weight: 600; color: var(--text); }
+.upd-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); }
+.upd-main .btn { flex: none; }
+.upd-progress { display: flex; align-items: center; gap: 10px; padding-left: 54px; }
+.upd-progress .progress { flex: 1; }
+.upd-progress .pct { flex: none; min-width: 36px; text-align: right; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--soft); }
+.upd-foot { padding-left: 54px; }
+.update-box .note { margin-left: 54px; }
+.spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(21,128,61,.2); border-top-color: currentColor; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .progress { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
-.progress span { display: block; height: 100%; background: #16A34A; transition: width .3s; }
+.progress.thin { height: 4px; border-radius: 2px; background: rgba(0,0,0,.08); }
+.progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22C55E, #15803D); transition: width .3s; }
+
+/* 侧栏：更新提示 */
+.updcard { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: none; border-radius: 10px; background: rgba(255,255,255,.6); font-size: 12px; color: var(--soft); text-align: left; width: 100%; }
+.updcard.busy:hover { background: rgba(255,255,255,.8); }
+.updcard .top { display: flex; align-items: center; gap: 6px; }
+.updcard .top b { color: var(--text); font-variant-numeric: tabular-nums; }
+.updcard .top .grow { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.updicon { width: 20px; height: 20px; flex: none; border-radius: 6px; background: #1FAF6E; color: #fff; display: flex; align-items: center; justify-content: center; }
+.updcard.ready { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px rgba(31,175,110,.25); }
+.updcard small { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.updbtns { display: flex; gap: 6px; margin-top: 2px; }
+.updbtns button { flex: 1; height: 28px; border-radius: 14px; font-size: 12px; }
+.updbtns .later { border: 1px solid #e3e6ea; background: #fff; color: var(--soft); }
+.updbtns .go { border: none; background: #1FAF6E; color: #fff; font-weight: 600; }
+.updbtns .go:hover { background: #18965d; }
+.icon-btn { position: relative; }
+.dot.new { top: 3px; right: 3px; min-width: 0; width: 10px; height: 10px; padding: 0; border-color: #E6E9ED; background: #1FAF6E; }
+#side .tab { display: flex; align-items: center; justify-content: space-between; }
+.tab-dot { width: 8px; height: 8px; border-radius: 50%; background: #1FAF6E; }
 
 /* 编辑页：标题旁的帮助链接、底部固定的按钮栏（窗口不高时也看得到“保存”） */
 .field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
