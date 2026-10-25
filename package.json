@@ -47,6 +47,9 @@
     },
     "mac": {
       "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "files": [
+        "!src/fonts/misans/**"
+      ],
       "target": [
         {
           "target": "dmg",

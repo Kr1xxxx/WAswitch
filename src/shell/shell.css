@@ -14,7 +14,7 @@
 html, body { height: 100%; }
 body {
   margin: 0; display: flex; overflow: hidden; background: var(--tint); color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  font: 14px/1.5 var(--font-ui);
   user-select: none;
 }
 button, input, select { font: inherit; color: inherit; }
