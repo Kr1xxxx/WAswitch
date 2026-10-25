@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { canEncrypt } = require('../secure-storage');
 
 const FILE = 'crm-queue.bin';
 const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
@@ -16,17 +17,6 @@ const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_SEEN = 5000;
 const MAX_TEXT = 4000;
 const SAVE_DELAY_MS = 2000;
-
-// Linux 上没有钥匙环时 Electron 会退回 basic_text（只是混淆，不算加密），这种情况当作不能加密
-function canEncrypt(ss) {
-  try {
-    if (!ss || !ss.isEncryptionAvailable()) return false;
-    if (process.platform === 'linux' && ss.getSelectedStorageBackend && ss.getSelectedStorageBackend() === 'basic_text') return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 const hashOf = (accId, mid) => crypto.createHash('sha256').update(`${accId}|${mid}`).digest('hex').slice(0, 32);
 
@@ -67,6 +57,7 @@ class CrmQueue {
       try { fs.renameSync(this.file, `${this.file}.bad-${this.now()}`); } catch { /* 改名失败就算了 */ }
       this.accs = new Map();
     }
+    if (this.trim()) this.saveNow();
     return this.accs;
   }
 
@@ -127,12 +118,14 @@ class CrmQueue {
 
   // 只给条数，不给内容（团队页显示）
   stats(accId) {
+    this.sweep();
     const a = this.load().get(accId);
     return a ? { on: true, since: a.since, queued: a.items.length, skipped: a.skipped, notime: a.notime || 0 } : { on: false, queued: 0, skipped: 0, notime: 0 };
   }
 
   // 第 2 步上传时用：取出最早的一批（不删，确认上传成功后再 ack）
   peek(accId, max = 500) {
+    this.sweep();
     const a = this.load().get(accId);
     return a ? a.items.slice(0, max).map((x) => ({ ...x })) : [];
   }
@@ -145,11 +138,20 @@ class CrmQueue {
     this.saveSoon();
   }
 
+  // 启动、读取和主进程定时器都清理；没有新消息时也不能无限保留旧内容。
+  sweep() {
+    this.load();
+    if (this.trim()) this.saveNow();
+  }
+
   trim() {
     const cut = this.now() - MAX_AGE_MS;
     let size = 0;
+    let changed = false;
     for (const a of this.accs.values()) {
+      const before = a.items.length;
       a.items = a.items.filter((x) => x.at >= cut);
+      if (a.items.length !== before) changed = true;
       for (const x of a.items) size += x.text.length * 3 + 100;
     }
     while (size > MAX_BYTES) {
@@ -158,8 +160,10 @@ class CrmQueue {
       for (const a of this.accs.values()) if (a.items.length && (!oldest || a.items[0].at < oldest.items[0].at)) oldest = a;
       if (!oldest) break;
       const x = oldest.items.shift();
+      changed = true;
       size -= x.text.length * 3 + 100;
     }
+    return changed;
   }
 
   saveSoon() {
@@ -186,3 +190,4 @@ class CrmQueue {
 }
 
 module.exports = { CrmQueue, canEncrypt, hashOf, MAX_SEEN, MAX_AGE_MS };
+

@@ -71,13 +71,8 @@ export const country = (v) => (typeof v === 'string' && /^[A-Z]{2}$/.test(v) ? v
 export const ipText = (v) => (typeof v === 'string' && /^[0-9a-fA-F:.]{2,45}$/.test(v) ? v : '');
 export const COLORS_RE = /^#[0-9a-fA-F]{6}$/;
 
-// 全局版本号 +1，返回新值。坐席每次变化都写这个版本，客户端按版本取增量。
-export async function nextVersion(db) {
-  const row = await db.prepare("UPDATE meta SET value = value + 1 WHERE key = 'version' RETURNING value").first();
-  return row.value;
-}
-
 export async function audit(db, actorId, action, target = '', detail = '') {
   await db.prepare('INSERT INTO audit_log (actor_id, action, target, at, detail) VALUES (?, ?, ?, ?, ?)')
     .bind(actorId, action, String(target), now(), typeof detail === 'string' ? detail : JSON.stringify(detail)).run();
 }
+

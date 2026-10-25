@@ -89,7 +89,7 @@ core().then(() => {
     assert(!JSON.stringify(r).includes('18:40'), '不读时间');
     assert(!JSON.stringify(r).includes('Pedro'), '不读群发送人');
     // CRM 同步要时间：只在隔离环境里解析成数字，名字不带出来
-    assert.deepStrictEqual(r.msgs[0].t, { y: 2026, mo: 10, d: 24, h: 18, mi: 40, ambig: false });
+    assert.deepStrictEqual(r.msgs[0].t, { y: 2026, mo: 10, d: 24, h: 18, mi: 40, ambig: false, at: new Date(2026, 9, 24, 18, 40).getTime(), altAt: null });
     assert(!JSON.stringify(r).includes('Carlos:'), '不带出发送人名字');
     assert(!JSON.stringify(r).includes('quoted text'), '不读引用');
     assert.strictEqual(after.split('|')[0], String(before), '页面没有被改');
@@ -111,3 +111,4 @@ core().then(() => {
     app.exit(0);
   }).catch((e) => { console.error(e); app.exit(1); });
 }).catch((e) => { console.error(e); process.exit(1); });
+

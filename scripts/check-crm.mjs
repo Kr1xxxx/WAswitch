@@ -139,32 +139,33 @@ await test('轻量号：拆开限时 / 一次性消息；表情回应、撤回�
 // ---- 网页版 ----
 await test('网页版：时间只取数字，名字不带出来；日月拿不准时取不晚于现在的', async () => {
   const p = parsePre('[10:31, 2026/10/24] 张三: ');
-  assert.deepEqual(p, { y: 2026, mo: 10, d: 24, h: 10, mi: 31, ambig: false });
+  assert.deepEqual(p, { y: 2026, mo: 10, d: 24, h: 10, mi: 31, ambig: false, at: new Date(2026, 9, 24, 10, 31).getTime(), altAt: null });
   assert.ok(!JSON.stringify(p).includes('张三'));
   assert.equal(parsePre('[下午3:05, 2026/10/24] x: ').h, 15);
   assert.equal(parsePre('[3:05 PM, 10/24/2026] x: ').d, 24);
   assert.equal(parsePre('没有时间'), null);
   const now = new Date(2026, 9, 24, 12, 0).getTime();
-  const amb = timeOf({ y: 2026, mo: 11, d: 10, h: 9, mi: 0, ambig: true }, now); // 11 月 10 日在将来，取 10 月 11 日
+  const amb = timeOf(parsePre('[09:00, 10/11/2026] x: '), now); // 11 月 10 日在将来，取 10 月 11 日
   assert.equal(amb.at, new Date(2026, 9, 11, 9, 0).getTime());
   assert.equal(amb.approx, true);
-  assert.deepEqual(timeOf(null, now), { at: now, approx: true });
+  assert.equal(timeOf(null, now), null, '没有时间不能用读取时刻补造');
+  assert.equal(parsePre('[09:00, 2026/2/30] x: '), null, '不存在的日期不能进位');
 });
 
 await test('网页版：@c.us 收，@lid 跳过计数，群不收，开关之前的不收', async () => {
   const now = new Date(2026, 9, 24, 12, 0).getTime();
   const since = new Date(2026, 9, 24, 10, 0).getTime();
-  const t = { y: 2026, mo: 10, d: 24, h: 11, mi: 0, ambig: false };
+  const t = parsePre('[11:00, 2026/10/24] x: ');
   const r = webItem({ id: 'false_8613800000000@c.us_3EB0AAA', out: false, text: '在吗', t }, since, now);
   assert.deepEqual(r.item, { mid: 'false_8613800000000@c.us_3EB0AAA', peer: '8613800000000', out: false, at: new Date(2026, 9, 24, 11, 0).getTime(), approx: false, text: '在吗' });
   assert.equal(webItem({ id: 'true_8613800000000@c.us_3EB0BBB', text: '', t }, since, now).item.text, '[非文字消息]');
   assert.deepEqual(webItem({ id: 'true_8613800000000@c.us_3EB0BBB', text: '', t: null }, since, now), { skip: 'notime' });
   assert.deepEqual(webItem({ id: 'false_99887766@lid_3EB0CCC', text: 'x', t }, since, now), { skip: 'nonumber' });
   assert.equal(webItem({ id: 'false_120363@g.us_3EB0DDD_861@c.us', text: 'x', t }, since, now), null);
-  assert.equal(webItem({ id: 'false_8613800000000@c.us_3EB0EEE', text: 'x', t: { ...t, h: 9 } }, since, now), null);
+  assert.equal(webItem({ id: 'false_8613800000000@c.us_3EB0EEE', text: 'x', t: parsePre('[09:00, 2026/10/24] x: ') }, since, now), null);
 });
 
-await test('网页版：打开旧对话时，读不出时间的旧消息不收；之后新出现的才收', async () => {
+await test('网页版：无时间的消息始终跳过，滚动加载的历史不能当作新消息', async () => {
   const now = new Date(2026, 9, 24, 12, 0).getTime();
   const since = new Date(2026, 9, 24, 10, 0).getTime();
   const reader = new WebReader();
@@ -174,10 +175,12 @@ await test('网页版：打开旧对话时，读不出时间的旧消息不收�
   const b = reader.collect('5', old, since, now + 15000);
   assert.deepEqual(b, { items: [], nonumber: 0, notime: 0 }, '再读一次不重复计数');
   const c = reader.collect('5', [...old, { id: 'false_8613800000000@c.us_NEW1', text: '', t: null }], since, now + 30000);
-  assert.equal(c.items.length, 1);
-  assert.deepEqual(c.items[0], { mid: 'false_8613800000000@c.us_NEW1', peer: '8613800000000', out: false, at: now + 30000, approx: true, text: '[非文字消息]' });
+  assert.equal(c.items.length, 0);
+  assert.equal(c.notime, 1, '后续出现的无时间消息也不采集');
+  const scroll = reader.collect('5', [{ id: 'false_8613800000000@c.us_OLDER_SCROLL', text: '旧内容', t: null }], since, now + 45000);
+  assert.equal(scroll.items.length, 0, '滚动回历史记录不能绕过采集开始时间');
   // 有时间的消息第一次读到也照常按时间判断
-  const t = { y: 2026, mo: 10, d: 24, h: 11, mi: 0, ambig: false };
+  const t = parsePre('[11:00, 2026/10/24] x: ');
   const d = reader.collect('5', [{ id: 'false_8613811112222@c.us_T1', text: '新', t }, { id: 'false_77@lid_L1', text: 'x', t }], since, now);
   assert.equal(d.items.length, 1);
   assert.equal(d.nonumber, 1);
@@ -194,3 +197,4 @@ await test('代码里不把队列内容写进日志', async () => {
 });
 
 console.log(`全部通过（${passed} 项）`);
+

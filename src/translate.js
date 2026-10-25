@@ -127,12 +127,7 @@ async function readCapped(res) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-// Linux 上没有钥匙环时 Electron 会退回 basic_text（只是混淆，不算加密），这种情况当作不能加密
-function canEncrypt(ss) {
-  if (!ss.isEncryptionAvailable()) return false;
-  try { if (process.platform === 'linux' && ss.getSelectedStorageBackend && ss.getSelectedStorageBackend() === 'basic_text') return false; } catch {}
-  return true;
-}
+const { canEncrypt } = require('./secure-storage');
 
 class Translator {
   // deps: { dir, safeStorage, sessionFor(local) -> Electron session, now? }
@@ -427,3 +422,4 @@ class Translator {
 }
 
 module.exports = { DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, checkBaseUrl, fillPrompt, buildMessages, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+
