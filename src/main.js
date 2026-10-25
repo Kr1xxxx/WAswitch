@@ -325,7 +325,11 @@ function applyPhone(acc, phone) {
   if (acc.phone === phone) return;
   acc.phone = phone;
   acc.phoneManual = !!phone;
-  if (!phone) phoneRead.delete(acc.id);
+  if (!phone) {
+    phoneRead.delete(acc.id);
+    // 轻量模式：用上次连上时读到的号，不用等下次重连
+    setDetectedPhone(acc, waPage.parseWid(liteMe.get(acc.id)));
+  }
 }
 
 // 登录后读到的本号手机号。用户自己填过的不覆盖
@@ -1022,6 +1026,7 @@ async function retryNow(id) {
 // 每 3 分钟只读检查一次每个账号是否停在扫码页（在隔离环境里看页面结构，不读聊天内容）。
 // 从“已登录”变成“要扫码”时，不管有没有关通知都提醒，因为掉线会漏掉所有消息。
 
+const liteMe = new Map(); // 轻量模式：上次连上时的本号 id
 const phoneRead = new Set(); // 这次登录已经读过手机号的网页版账号
 async function checkLogins() {
   let changed = false;
@@ -1473,7 +1478,7 @@ function bindLiteEvents() {
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null });
-    if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); setDetectedPhone(acc, waPage.parseWid(me)); }
+    if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
     const make = LITE_PROBLEMS[status];
