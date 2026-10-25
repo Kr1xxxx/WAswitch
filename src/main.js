@@ -21,6 +21,7 @@ const { Translator, DEFAULT_MODES } = require('./translate');
 const { FloatCore } = require('./floatcore');
 const memory = require('./memory');
 const waPage = require('./wa-page');
+const { matchChatCustomer } = require('./chatlang');
 const { setupMcp } = require('./mcp');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
@@ -2136,7 +2137,9 @@ handleShell('cust:save', (data) => {
   const existing = typeof data.id === 'string' ? customerStore.get(data.id) : null;
   if (existing && parkedCustomer(existing)) return null;
   const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
-  return customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt, lang: data.lang }) ? panelData() : null;
+  const ok = customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt, lang: data.lang });
+  if (ok && floatOpen) pushFloat(); // 悬浮窗的目标语言可能跟着这个客户变
+  return ok ? panelData() : null;
 });
 handleShell('cust:delete', (id) => {
   if (typeof id === 'string' && customerStore.get(id) && !parkedCustomer(customerStore.get(id))) customerStore.remove(id);
@@ -2267,6 +2270,18 @@ handleShell('tr:run', async ({ text, modeId, target, source } = {}) => {
 handleShell('tr:cancel', () => userCancel());
 // 只在用户点“翻译剪贴板”时读一次，从不轮询
 handleShell('tr:clipboard', async () => { const t = await clipboard.readText(); return typeof t === 'string' ? t.slice(0, 4000) : ''; });
+// 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
+const chatCustomer = (accId, title) => matchChatCustomer(customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
+handleShell('tr:chatlang', async (accountId) => {
+  const acc = findAcc(accountId);
+  if (!acc || accountId !== activeId || page !== 'account' || locked || isLite(acc) || problems.has(acc.id)) return null;
+  const view = views.get(acc.id);
+  if (!view || view.webContents.isDestroyed()) return null;
+  const r = await waPage.readOpenChat(view.webContents);
+  if (!r.ok || accountId !== activeId) return null;
+  const c = chatCustomer(acc.id, r.title);
+  return { title: r.title, lang: c ? c.lang : '', name: c ? c.name : '' };
+});
 handleShell('tr:lang', ({ accountId, lang } = {}) => { if (findAcc(accountId)) translator.setAccountLang(accountId, lang); return trState(); });
 handleShell('tmode:save', (data) => {
   if (!data || typeof data !== 'object') return { error: '数据不对' };
@@ -2359,6 +2374,7 @@ function floatState() {
   const v = acc ? floatCore.viewOf(acc.id) : { title: '', items: [], paused: '' };
   const primary = translator.provider(cfg.primaryId);
   const inMode = floatInMode();
+  const chat = acc && v.title ? chatCustomer(acc.id, v.title) : null;
   return {
     accountId: acc ? acc.id : '',
     accountName: acc ? acc.name : '',
@@ -2380,7 +2396,8 @@ function floatState() {
     },
     inModeId: inMode ? inMode.id : '',
     langs: translator.publicConfig().langs,
-    target: (acc && cfg.accountLang[acc.id]) || '英语',
+    target: (chat && chat.lang) || (acc && cfg.accountLang[acc.id]) || '英语',
+    targetFrom: chat ? chat.name : '', // 目标语言来自这个客户
   };
 }
 function pushFloat() {

@@ -500,14 +500,14 @@ function customerItems() {
     c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
     h('span', { class: 'acts' },
       c.phone ? h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(c.phone); panelSay('电话已复制'); } }, '复制电话') : null,
-      c.lang ? h('button', { class: 'pn-btn', title: `打开翻译，翻成${c.lang}`, onclick: () => { tr.forLang = c.lang; pn.tab = 'translate'; pn.msg = ''; renderPanel(true); } }, `翻译（${c.lang}）`) : null,
+      c.lang ? h('button', { class: 'pn-btn', title: `打开翻译，翻成${c.lang}`, onclick: () => { tr.forLang = c.lang; tr.pick = ''; pn.tab = 'translate'; pn.msg = ''; renderPanel(true); } }, `翻译（${c.lang}）`) : null,
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
 }
 // ---------- 翻译（面板里的第三个标签） ----------
 // 文字由用户自己打进来或点“翻译剪贴板”放进来；译文只能“放进输入框”（不发送）或复制
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
-const tr = { cfg: null, modes: [], text: '', out: '', back: '', busy: false, warn: [], recent: [], consent: null, pending: null, outMode: LS('tr.outMode') || '', inMode: LS('tr.inMode') || '', info: '' };
+const tr = { cfg: null, modes: [], text: '', out: '', back: '', busy: false, warn: [], recent: [], consent: null, pending: null, outMode: LS('tr.outMode') || '', inMode: LS('tr.inMode') || '', info: '', chat: null, pick: '' };
 async function trLoad() {
   if (tr.loading) return;
   tr.loading = true;
@@ -518,9 +518,18 @@ async function trLoad() {
   if (pn.tab === 'translate') renderPanel(true);
 }
 const modesFor = (dir) => tr.modes.filter((m) => m.direction === dir || m.direction === 'both');
-// 目标语言：从客户卡片点进来时用客户的语言，否则用这个号的默认语言
-const trTarget = () => tr.forLang || (tr.cfg && tr.cfg.accountLang[pn.accountId]) || '英语';
-async function trRun(kind) {
+// 目标语言：手动选的 > 从客户卡片点进来的客户语言 > 当前对话对上的客户语言 > 这个号的默认语言
+const trTarget = () => tr.pick || tr.forLang || (tr.chat && tr.chat.lang) || (tr.cfg && tr.cfg.accountLang[pn.accountId]) || '英语';
+// 读一次当前对话标题，看看对不对得上客户（只读，不碰 WhatsApp 页面）
+async function trReadChat() {
+  let r = null;
+  try { r = await window.wa.trChatLang(pn.accountId); } catch {}
+  if (r && tr.chat && tr.chat.title !== r.title) tr.pick = ''; // 换了对话：上次手动选的语言不再沿用
+  tr.chat = r;
+  return r;
+}
+// insert=true：翻译完直接放进聊天框（不发送）
+async function trRun(kind, insert = false) {
   if (tr.busy) return;
   let req;
   if (kind === 'clip') {
@@ -536,9 +545,11 @@ async function trRun(kind) {
   } else {
     const m = modesFor('out').find((x) => x.id === tr.outMode) || modesFor('out')[0];
     if (!m) return panelSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
+    if (!tr.text.trim()) return panelSay('先写要发的话', true);
+    await trReadChat(); // 看当前对话对不对得上客户，也记下对话，一键插入时翻完再对比
     req = { text: tr.text, modeId: m.id, target: trTarget() };
   }
-  return trRunReq({ kind, req });
+  return trRunReq({ kind, req, insert: insert && kind === 'out', acc: pn.accountId, title: tr.chat ? tr.chat.title : null });
 }
 function trConsentBox() {
   const list = tr.consent || [];
@@ -563,11 +574,23 @@ async function trRunReq(p) {
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   tr.busy = false;
+  // 翻译途中换了号：译文作废，免得给 A 客户的话出现在 B 号下面
+  if (p.acc && p.acc !== pn.accountId) return renderPanel(true);
   if (r.kind === 'consent') { tr.consent = r.consent; tr.pending = p; return renderPanel(true); }
   if (r.error) return panelSay(r.error, true);
   if (p.kind === 'back') tr.back = r.text;
   else { tr.out = r.text; tr.back = ''; tr.warn = r.warn || []; tr.recent.unshift({ text: p.req.text, out: r.text, at: Date.now() }); tr.recent = tr.recent.slice(0, 20); }
+  if (p.insert) return trInsertAfter(p);
   panelSay(`${r.provider}${r.fallback ? '（默认的连不上，用了备用）' : ''} · ${(r.ms / 1000).toFixed(1)} 秒`);
+}
+// 一键翻译插入：翻译期间对话换了就不贴，译文留在框里，让人自己看了再点
+async function trInsertAfter(p) {
+  if (tr.warn.length) return panelSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
+  if (p.title !== null) {
+    const now = await trReadChat();
+    if (!now || now.title !== p.title) return panelSay('翻译时对话换了，没有贴。看一下再点“放进输入框”', true);
+  }
+  return panelInsert(tr.out);
 }
 function translateTab() {
   if (!tr.cfg) { trLoad(); return [h('div', { class: 'hint', style: { padding: '8px 12px' } }, '加载中…')]; }
@@ -584,12 +607,17 @@ function translateTab() {
   };
   const outModes = modesFor('out');
   const inModes = modesFor('in');
-  const lang = h('select', { 'aria-label': '翻译成', onchange: async (e) => { tr.forLang = ''; const r = await window.wa.trLang(pn.accountId, e.target.value); tr.cfg = r.config; } },
+  // 跟着客户的时候手动改只管这一次（换号就忘）；否则改的是这个号的默认语言
+  const lang = h('select', { 'aria-label': '翻译成', onchange: async (e) => {
+    if (tr.forLang || (tr.chat && tr.chat.lang)) { tr.pick = e.target.value; return renderPanel(true); }
+    const r = await window.wa.trLang(pn.accountId, e.target.value); tr.cfg = r.config;
+  } },
     tr.cfg.langs.map((l) => h('option', { value: l }, l)));
   lang.value = trTarget();
-  const input = h('textarea', { maxlength: '4000', placeholder: '用中文写要发的话，Ctrl+Enter 翻译', 'aria-label': '要翻译的文字' }, tr.text);
+  const input = h('textarea', { maxlength: '4000', placeholder: '用中文写要发的话。Ctrl+Enter 翻译，Ctrl+Shift+Enter 翻译并放进输入框', 'aria-label': '要翻译的文字' }, tr.text);
   input.addEventListener('input', () => { tr.text = input.value; });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); trRun('out'); } });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); trRun('out', e.shiftKey); } });
+  const from = tr.pick ? '' : tr.forLang ? '跟随客户卡片' : tr.chat && tr.chat.lang ? `跟随客户「${tr.chat.name}」` : '';
   const out = h('textarea', { 'aria-label': '译文（可以直接改）', placeholder: '译文会显示在这里，可以直接改' }, tr.out);
   out.addEventListener('input', () => { tr.out = out.value; });
   const primary = tr.cfg.providers.find((p) => p.id === tr.cfg.primaryId);
@@ -597,11 +625,13 @@ function translateTab() {
     h('div', { class: 'tr-row' },
       sel(outModes, tr.outMode, (v) => { tr.outMode = v; LS('tr.outMode', v); }, '发出用的模式'),
       h('span', { class: 'hint' }, '→'), lang),
+    from ? h('span', { class: 'hint' }, `目标语言${from}`) : null,
     input,
     h('div', { class: 'acts', style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } },
       tr.busy
         ? h('button', { class: 'pn-btn', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
-        : h('button', { class: 'pn-btn primary', onclick: () => trRun('out') }, '翻译'),
+        : h('button', { class: 'pn-btn primary', title: '翻译后直接贴进当前聊天框，不会发送（Ctrl+Shift+Enter）', onclick: () => trRun('out', true) }, '翻译并放进输入框'),
+      tr.busy ? null : h('button', { class: 'pn-btn', onclick: () => trRun('out') }, '只翻译'),
       h('button', { class: 'pn-btn', disabled: tr.busy, title: '先在聊天里复制客户的消息，再点这里翻成中文', onclick: () => trRun('clip') }, '翻译剪贴板'),
       sel(inModes, tr.inMode, (v) => { tr.inMode = v; LS('tr.inMode', v); }, '收到用的模式')),
     out,
@@ -733,7 +763,7 @@ function renderPanel(force = false) {
   if (!force && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
   pn.sig = sig;
   // 换了号：清掉上一个号的翻译内容，免得把给 A 客户的译文贴给 B
-  if (pn.accountId && pn.accountId !== s.activeId) { tr.text = ''; tr.out = ''; tr.back = ''; tr.warn = []; tr.forLang = ''; }
+  if (pn.accountId && pn.accountId !== s.activeId) { tr.text = ''; tr.out = ''; tr.back = ''; tr.warn = []; tr.forLang = ''; tr.chat = null; tr.pick = ''; }
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
   const replies = pn.tab === 'replies';
   const tabBtn = (id, label) => h('button', { class: `pn-tab${pn.tab === id ? ' on' : ''}`, onclick: () => { pn.tab = id; pn.edit = null; pn.q = ''; pn.msg = ''; if (id !== 'translate') tr.forLang = ''; renderPanel(true); } }, label);
