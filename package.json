@@ -7,6 +7,7 @@
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
     "check:mcp": "node scripts/check-mcp.js",
+    "check:review": "node scripts/check-review.mjs",
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:view-race": "node scripts/check-view-race.js",
@@ -78,3 +79,4 @@
     }
   }
 }
+

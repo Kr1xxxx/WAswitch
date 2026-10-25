@@ -117,7 +117,8 @@ async function readChatList(wc, { includePreview = false } = {}) {
 }
 
 // 从 data-pre-plain-text（形如 "[10:31, 2026/10/24] 名字: "）里只取出时间，名字不出隔离环境。
-// 返回 { y, mo, d, h, mi, ambig }（ambig = 日 / 月顺序拿不准），认不出返回 null。
+// 在账号页面自己的时区里转成绝对时间；主进程的系统时区不能用来解释页面时间。
+// ambig = 日 / 月顺序拿不准，altAt 是另一种解释；认不出返回 null。
 // 这个函数会被原样放进页面的隔离环境里运行（见 READ_CHAT_CODE），所以不能用外面的变量。
 function parsePre(raw) {
   const m = /^\[([^\]]{3,60})\]/.exec(String(raw || ''));
@@ -145,7 +146,16 @@ function parsePre(raw) {
     if (a > 12) { d = a; mo = b; } else if (b > 12) { mo = a; d = b; } else { d = a; mo = b; ambig = a !== b; }
   } else return null;
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
-  return { y, mo, d, h, mi, ambig };
+  const make = (month, day) => {
+    const v = new Date(y, month - 1, day, h, mi);
+    // 拒绝不存在的日期和夏令时跳过的本地时间，不让 Date 自动进位。
+    return v.getFullYear() === y && v.getMonth() === month - 1 && v.getDate() === day
+      && v.getHours() === h && v.getMinutes() === mi ? v.getTime() : null;
+  };
+  const at = make(mo, d);
+  const altAt = ambig ? make(d, mo) : null;
+  if (at === null && altAt === null) return null;
+  return { y, mo, d, h, mi, ambig, at, altAt };
 }
 
 // 悬浮翻译和 CRM 同步：只读当前打开的对话的最后 20 条消息。
@@ -196,7 +206,11 @@ const cleanTime = (t) => {
   const n = (k, lo, hi) => (Number.isInteger(t[k]) && t[k] >= lo && t[k] <= hi ? t[k] : NaN);
   const v = { y: n('y', 2000, 2100), mo: n('mo', 1, 12), d: n('d', 1, 31), h: n('h', 0, 23), mi: n('mi', 0, 59) };
   if (Object.values(v).some(Number.isNaN)) return null;
-  return { ...v, ambig: t.ambig === true };
+  const stamp = (n) => Number.isSafeInteger(n) && n >= Date.UTC(1999, 0, 1) && n < Date.UTC(2102, 0, 1) ? n : null;
+  const at = stamp(t.at);
+  const altAt = t.ambig === true ? stamp(t.altAt) : null;
+  if (at === null && altAt === null) return null;
+  return { ...v, ambig: t.ambig === true, at, altAt };
 };
 
 async function readOpenChat(wc) {
@@ -213,3 +227,4 @@ async function readOpenChat(wc) {
 }
 
 module.exports = { SELECTORS, loginState, readChatList, readOpenChat, READ_CHAT_CODE, parsePre };
+

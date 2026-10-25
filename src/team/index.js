@@ -9,6 +9,7 @@
 // - 不采集员工活动（最后操作时间、未读等待时长），只报未读数。
 const fs = require('fs');
 const path = require('path');
+const { canEncrypt } = require('../secure-storage');
 
 const PROTOCOL = 1;
 const FILE = 'team.json';
@@ -101,6 +102,7 @@ class TeamSync {
     fs.renameSync(`${file}.tmp`, file);
   }
   tokenPlain() {
+    if (!canEncrypt(this.safe)) return '';
     if (!this.state.token) return '';
     try { return this.safe.decryptString(Buffer.from(this.state.token, 'base64')); } catch { return ''; }
   }
@@ -133,7 +135,7 @@ class TeamSync {
       uploadFields: UPLOAD_FIELDS,
       neverUpload: NEVER_UPLOAD,
       lastUpload: this.state.lastUpload ? JSON.stringify(this.state.lastUpload, null, 2) : '',
-      canEncrypt: this.safe.isEncryptionAvailable(),
+      canEncrypt: canEncrypt(this.safe),
     };
   }
 
@@ -179,7 +181,7 @@ class TeamSync {
   // 登记：员工填后台地址和登记码，选择哪些本机账号加入团队，并确认上传清单
   async enroll({ server, code, deviceName, localIds = [], consent } = {}) {
     if (consent !== true) return { error: '请先确认上传清单' };
-    if (!this.safe.isEncryptionAvailable()) return { error: '这台电脑不支持加密保存，不能登记到团队' };
+    if (!canEncrypt(this.safe)) return { error: '系统没有安全钥匙环，不能登记到团队' };
     const origin = cleanServer(server);
     if (!origin) return { error: '后台地址必须是 https:// 开头的网址' };
     if (this.enrolled()) return { error: '这台电脑已经登记过了' };
@@ -396,3 +398,4 @@ class TeamSync {
 }
 
 module.exports = { TeamSync, cleanServer, UPLOAD_FIELDS, NEVER_UPLOAD, PROTOCOL };
+

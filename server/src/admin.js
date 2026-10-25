@@ -1,6 +1,6 @@
 // 管理后台接口。进来之前 index.js 已经验过 Access JWT，这里按邮箱查人和权限。
 // 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组；坐席 agent 不能登录后台。
-import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, nextVersion, audit } from './util.js';
+import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit } from './util.js';
 
 const CODE_TTL_MS = 15 * 60 * 1000;
 const ONLINE_MS = 6 * 60 * 1000;
@@ -25,11 +25,10 @@ const inScope = (me, groupId) => isOwner(me) || (!!groupId && groupId === me.gro
 function need(cond, msg = '没有权限') { if (!cond) throw new HttpError(403, msg); }
 function found(row, msg = '找不到') { if (!row) throw new HttpError(404, msg); return row; }
 
-// 改一个号在某台电脑上的显示记录（版本号 +1，客户端下次同步拿到）
-async function seatStmt(db, deviceId, accountId, visible) {
-  const v = await nextVersion(db);
+// 版本由数据库触发器在同一事务中生成，不在提交前分配。
+function seatStmt(db, deviceId, accountId, visible) {
   return db.prepare(`INSERT INTO device_seats (device_id, account_id, visible, version) VALUES (?, ?, ?, ?)
-    ON CONFLICT(device_id, account_id) DO UPDATE SET visible = excluded.visible, version = excluded.version`).bind(deviceId, accountId, visible ? 1 : 0, v);
+    ON CONFLICT(device_id, account_id) DO UPDATE SET visible = excluded.visible`).bind(deviceId, accountId, visible ? 1 : 0, 0);
 }
 
 // ---------- 读 ----------
@@ -231,7 +230,9 @@ async function updateAccount(db, user, id, body) {
   if (!sets.length) return json({ ok: true });
   sets.push('updated_at = ?'); vals.push(now());
   const stmts = [db.prepare(`UPDATE wa_accounts SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id)];
-  if (a.device_id) stmts.push(await seatStmt(db, a.device_id, id, true)); // 让当前电脑拿到新名称/颜色/备注
+  // 用事务内的当前归属刷新版本，不能用请求开始时读到的旧 device_id。
+  stmts.push(db.prepare(`UPDATE device_seats SET visible = visible WHERE account_id = ? AND visible = 1
+    AND device_id = (SELECT device_id FROM wa_accounts WHERE id = ?)`).bind(id, id));
   await db.batch(stmts);
   await audit(db, user.id, 'account.update', id, body);
   // 开 / 关聊天同步单独记一笔，方便以后查是谁、什么时候打开的
@@ -245,11 +246,11 @@ async function assignAccount(db, user, id, body) {
   const d = await targetDevice(db, user, deviceId);
   if (d.revoked_at) return fail(400, '这台电脑已停用');
   if (!isOwner(user)) need(d.group_id === a.group_id, '只能分给本组的人');
-  if (a.device_id === deviceId) return json({ ok: true });
   const stmts = [];
-  if (a.device_id) stmts.push(await seatStmt(db, a.device_id, id, false)); // 原电脑：显式隐藏
-  stmts.push(await seatStmt(db, deviceId, id, true));
+  // 同一事务撤掉所有旧坐席，避免并发请求各自依据过时的归属留下有效坐席。
+  stmts.push(db.prepare('UPDATE device_seats SET visible = 0 WHERE account_id = ? AND visible = 1').bind(id));
   stmts.push(db.prepare('UPDATE wa_accounts SET user_id = ?, device_id = ?, updated_at = ? WHERE id = ?').bind(d.user_id, deviceId, now(), id));
+  stmts.push(seatStmt(db, deviceId, id, true));
   await db.batch(stmts);
   await audit(db, user.id, 'account.assign', id, { from: a.device_id, to: deviceId });
   return json({ ok: true });
@@ -257,9 +258,8 @@ async function assignAccount(db, user, id, body) {
 
 async function unassignAccount(db, user, id) {
   const a = await targetAccount(db, user, id);
-  if (!a.device_id) return json({ ok: true });
   await db.batch([
-    await seatStmt(db, a.device_id, id, false),
+    db.prepare('UPDATE device_seats SET visible = 0 WHERE account_id = ? AND visible = 1').bind(id),
     db.prepare('UPDATE wa_accounts SET user_id = NULL, device_id = NULL, updated_at = ? WHERE id = ?').bind(now(), id),
   ]);
   await audit(db, user.id, 'account.unassign', id, { from: a.device_id });
@@ -338,3 +338,4 @@ export async function handleAdmin(request, env, path, identity) {
     default: return fail(404, '没有这个接口');
   }
 }
+

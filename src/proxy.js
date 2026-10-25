@@ -7,6 +7,7 @@
 // 安全原则：代理配置了就必须走代理。代理连不上时请求直接失败，绝不悄悄改成直连，
 // 否则会在用户不知情的情况下暴露真实 IP。
 const { net, safeStorage, session } = require('electron');
+const { canEncrypt } = require('./secure-storage');
 
 // 地址写错时用的“黑洞”代理：所有请求都会失败，而不是直连
 const BLACKHOLE = 'socks5://127.0.0.1:9';
@@ -41,13 +42,29 @@ function parse(raw) {
 // 密码用系统钥匙串（Windows DPAPI / macOS Keychain / Linux Secret Service）加密后再写盘
 function encryptPassword(password) {
   if (!password) return '';
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('这台电脑不支持加密保存密码，请改用不带密码的代理');
+  if (!canEncrypt(safeStorage)) throw new Error('系统没有安全钥匙环，不能保存代理密码');
   return safeStorage.encryptString(password).toString('base64');
 }
 
 function decryptPassword(enc) {
   if (!enc) return '';
+  if (!canEncrypt(safeStorage)) return '';
   try { return safeStorage.decryptString(Buffer.from(enc, 'base64')); } catch { return ''; }
+}
+
+// 候选账号必须先按请求所属 session 筛选。无法归属的后台请求仅在凭据完全一致时放行。
+function credentialsFor(authInfo, accounts) {
+  const choices = new Map();
+  for (const acc of accounts) {
+    const p = parse(acc.proxy);
+    if (!p || p.error || !p.username || p.host !== authInfo.host || p.port !== authInfo.port) continue;
+    if (acc.proxyPassword && !canEncrypt(safeStorage)) return null;
+    const password = decryptPassword(acc.proxyPassword);
+    if (acc.proxyPassword && !password) return null;
+    const value = { username: p.username, password };
+    choices.set(JSON.stringify(value), value);
+  }
+  return choices.size === 1 ? [...choices.values()][0] : null;
 }
 
 // 把代理应用到账号的会话。返回 { ok } 或 { error }，出错时会话被设成黑洞，不会直连。
@@ -136,4 +153,5 @@ async function testDirect() {
   }
 }
 
-module.exports = { parse, apply, test, testDirect, encryptPassword, decryptPassword };
+module.exports = { parse, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
+

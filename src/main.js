@@ -29,6 +29,7 @@ const { Updater } = require('./updater');
 const { TeamSync } = require('./team');
 const { CrmQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
+const { canEncrypt } = require('./secure-storage');
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
@@ -1312,11 +1313,12 @@ function destroyView(id) {
 
 // 每个轻量账号一把随机数据密钥，用系统钥匙串加密后存在 accounts.json 里
 function newLiteKey() {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('这台电脑不支持加密保存，不能使用轻量模式');
+  if (!canEncrypt(safeStorage)) throw new Error('系统没有安全钥匙环，不能使用轻量模式');
   return safeStorage.encryptString(crypto.randomBytes(32).toString('hex')).toString('base64');
 }
 
 function liteKeyOf(acc) {
+  if (!canEncrypt(safeStorage)) throw new Error('系统没有安全钥匙环');
   const hex = safeStorage.decryptString(Buffer.from(acc.liteKey, 'base64'));
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error('密钥格式不对');
   return hex;
@@ -1420,7 +1422,7 @@ const LITE_PROBLEMS = {
 
 // 用户正在看这个号的这个对话（窗口在前台）
 function userIsReading(id, jid) {
-  return !!win && id === activeId && page === 'account' && win.isVisible() && win.isFocused() && liteOpen.get(id) === jid && !problems.has(id);
+  return !locked && !!win && id === activeId && page === 'account' && win.isVisible() && win.isFocused() && liteOpen.get(id) === jid && !problems.has(id);
 }
 
 function bindLiteEvents() {
@@ -1649,18 +1651,15 @@ async function removeAccount(id, { timeoutMs } = {}) {
   return 'removed';
 }
 
-// 带用户名密码的 http 代理：按代理的地址和端口找到对应账号，取它的密码。
-// 不按页面匹配，因为 Service Worker 发出的请求没有对应页面。
-app.on('login', (event, _webContents, _details, authInfo, callback) => {
+// 代理认证必须属于请求的 session。后台请求无法归属且凭据有歧义时直接取消，绝不取第一个账号。
+app.on('login', (event, webContents, _details, authInfo, callback) => {
   if (!authInfo.isProxy) return;
-  for (const acc of accounts) {
-    const p = proxy.parse(acc.proxy);
-    if (p && !p.error && p.username && p.host === authInfo.host && p.port === authInfo.port) {
-      event.preventDefault();
-      callback(p.username, proxy.decryptPassword(acc.proxyPassword));
-      return;
-    }
-  }
+  const candidates = accounts.filter((a) => !isLite(a) && !isParked(a)
+    && (!webContents || session.fromPartition(`persist:wa-${a.id}`) === webContents.session));
+  const credentials = proxy.credentialsFor(authInfo, candidates);
+  event.preventDefault();
+  if (credentials) callback(credentials.username, credentials.password);
+  else callback();
 });
 
 // ---------- 设置 ----------
@@ -1915,7 +1914,10 @@ function setupTeam() {
     },
   });
   crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
-  crmTimer = setInterval(() => { if (activeId) crmReadWeb(activeId, false); }, CRM_READ_MS);
+  crmTimer = setInterval(() => {
+    crmQueue.sweep();
+    if (activeId) crmReadWeb(activeId, false);
+  }, CRM_READ_MS);
   // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }
@@ -2001,6 +2003,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('lock-screen', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
+    crmQueue?.sweep();
     setTimeout(() => {
       for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
       // 轻量账号：代理断开、正在重连或停止重连的，马上重试一次
@@ -2673,7 +2676,7 @@ handleShell('editor:load', (id) => {
     // 新账号：还没有主号时默认就是主号
     primary: acc ? acc.primary : !accounts.some((a) => a.primary),
     primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
-    liteAvailable: safeStorage.isEncryptionAvailable(),
+    liteAvailable: canEncrypt(safeStorage),
     platform: process.platform,
   };
 });
@@ -2978,3 +2981,4 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {});
 // macOS 点 Dock 图标时重新显示窗口
 app.on('activate', () => notifier.showWindow());
+

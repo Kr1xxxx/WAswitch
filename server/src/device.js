@@ -1,6 +1,6 @@
 // 设备接口：登记、加入团队、同步。只认设备令牌，不认 Access。
 // 规则见设计文档：只收白名单字段；只有显式 403 {revoked:true} 才让客户端停号。
-import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE, nextVersion } from './util.js';
+import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE } from './util.js';
 
 export const PROTOCOL = 1;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
@@ -44,11 +44,10 @@ async function addAccounts(db, user, deviceId, list) {
   const stmts = [];
   for (const a of list) {
     const id = uuid();
-    const v = await nextVersion(db);
     const t = now();
     stmts.push(db.prepare(`INSERT INTO wa_accounts (id, label, group_id, user_id, device_id, mode, color, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, a.name, user.group_id || null, user.user_id, deviceId, a.mode, a.color, t, t));
-    stmts.push(db.prepare('INSERT INTO device_seats (device_id, account_id, visible, version) VALUES (?, ?, 1, ?)').bind(deviceId, id, v));
+    stmts.push(db.prepare('INSERT INTO device_seats (device_id, account_id, visible, version) VALUES (?, ?, 1, 0)').bind(deviceId, id));
     out.push({ local_id: a.local_id, team_id: id });
   }
   if (stmts.length) await db.batch(stmts);
@@ -143,7 +142,8 @@ async function sync(request, env) {
 
   // 只收这台电脑当前可见的团队号
   const seats = await db.prepare(`SELECT s.account_id, st.state, st.unread, st.proxy_ok, st.proxy_ms, st.exit_ip, st.exit_country, st.exit_changed, st.device_id
-    FROM device_seats s LEFT JOIN account_status st ON st.account_id = s.account_id WHERE s.device_id = ? AND s.visible = 1`).bind(dev.id).all();
+    FROM device_seats s JOIN wa_accounts a ON a.id = s.account_id AND a.device_id = s.device_id AND a.deleted_at IS NULL
+    LEFT JOIN account_status st ON st.account_id = s.account_id WHERE s.device_id = ? AND s.visible = 1`).bind(dev.id).all();
   const mine = new Map(seats.results.map((r) => [r.account_id, r]));
 
   const status = Array.isArray(body.status) ? body.status.slice(0, 100) : [];
@@ -174,7 +174,7 @@ async function sync(request, env) {
 
   // 坐席增量：比客户端手上版本新的显示记录（含显式隐藏）
   const cursor = int(body.cursor, 0, Number.MAX_SAFE_INTEGER, 0);
-  const rows = await db.prepare(`SELECT s.account_id, s.visible, s.version, a.deleted_at, a.label, a.color, a.mode, a.expected_country, a.note, a.crm_sync
+  const rows = await db.prepare(`SELECT s.account_id, s.visible, s.version, a.device_id, a.deleted_at, a.label, a.color, a.mode, a.expected_country, a.note, a.crm_sync
     FROM device_seats s JOIN wa_accounts a ON a.id = s.account_id WHERE s.device_id = ? AND s.version > ? ORDER BY s.version LIMIT 200`)
     .bind(dev.id, cursor).all();
   const list = rows.results;
@@ -182,7 +182,7 @@ async function sync(request, env) {
   return json({
     ok: true,
     device_id: dev.id,
-    seats: list.map((r) => ({ team_id: r.account_id, visible: r.visible === 1 && r.deleted_at == null, name: r.label, color: r.color, mode: r.mode, expected_country: r.expected_country, note: r.note, crm_sync: r.crm_sync === 1 && r.deleted_at == null })),
+    seats: list.map((r) => ({ team_id: r.account_id, visible: r.visible === 1 && r.deleted_at == null && r.device_id === dev.id, name: r.label, color: r.color, mode: r.mode, expected_country: r.expected_country, note: r.note, crm_sync: r.visible === 1 && r.crm_sync === 1 && r.deleted_at == null && r.device_id === dev.id })),
     cursor: list.length ? list[list.length - 1].version : cursor,
     more: list.length === 200,
     allow_private: await allowPrivate(db),
@@ -199,3 +199,4 @@ export async function handleDevice(request, env, path) {
   if (path === '/api/device/sync') return sync(request, env);
   return fail(404, '没有这个接口');
 }
+
