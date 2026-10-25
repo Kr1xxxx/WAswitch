@@ -14,6 +14,9 @@ const chatOf = (dataId) => String(dataId).split('_')[1] || '';
 // 按本机日期算“今天”（北京时间 0 点换天，不是 UTC）
 const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 
+// 消息上显示的时间（WhatsApp 页面上写的“几点几分”），认不出就空着
+const hhmm = (t) => (t && Number.isInteger(t.h) && Number.isInteger(t.mi) ? `${String(t.h).padStart(2, '0')}:${String(t.mi).padStart(2, '0')}` : '');
+
 class FloatCore {
   // deps: { translate(text, modeId) -> Promise<result>, now?() }
   constructor(deps) {
@@ -77,7 +80,7 @@ class FloatCore {
       if (m.out || !String(m.text || '').trim()) continue;
       const h = hashOf(accId, m.id);
       if (st.items.has(h)) continue;
-      const item = { h, text: String(m.text), state: 'manual', tr: '', err: '', warn: [], note: '' };
+      const item = { h, text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       st.items.set(h, item);
       fresh.push(item);
     }
@@ -149,13 +152,15 @@ class FloatCore {
   // 给悬浮窗看的：当前对话里收到的消息（不含 data-id）
   viewOf(accId) {
     const st = this.accs.get(accId);
-    if (!st) return { title: '', items: [], paused: '' };
+    if (!st) return { title: '', items: [], paused: '', chatKey: '' };
     return {
       title: st.title,
+      // 对话的 hash（记住客户语言用），不含号码
+      chatKey: st.chat ? hashOf(accId, `chat|${st.chat}`) : '',
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, state, tr, err, warn, note }) => ({ h, text, state, tr, err, warn, note })),
+        .map(({ h, text, t, state, tr, err, warn, note }) => ({ h, text, t, state, tr, err, warn, note })),
     };
   }
 }

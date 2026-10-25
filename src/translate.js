@@ -9,6 +9,8 @@ const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
 const MAX_PROVIDERS = 10;
+const MAX_CHAT_LANGS = 1000;
+const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
 const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
 
@@ -143,7 +145,9 @@ class Translator {
     if (this.cfg) return this.cfg;
     const base = { providers: [], primaryId: '', fallbackId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {},
       // 悬浮窗：哪些号开了自动翻译、哪些号确认过自动翻译、每个号每天最多自动翻几条、收到用的模式、窗口位置
-      accountAuto: {}, autoConsent: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false } };
+      accountAuto: {}, autoConsent: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
+      // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
+      chatLang: {} };
     try {
       if (fs.existsSync(this.file)) {
         const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -160,6 +164,11 @@ class Translator {
           for (const key of ['accountAuto', 'autoConsent']) if (raw[key] && typeof raw[key] === 'object') for (const [k, v] of Object.entries(raw[key])) if (v === true) base[key][k] = true;
           if (DAILY_CAPS.includes(raw.dailyCap)) base.dailyCap = raw.dailyCap;
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
+          if (raw.chatLang && typeof raw.chatLang === 'object') {
+            for (const [k, v] of Object.entries(raw.chatLang)) {
+              if (CHAT_KEY.test(k) && v && LANGS.includes(v.lang) && ['manual', 'detected'].includes(v.src)) base.chatLang[k] = { lang: v.lang, src: v.src, at: Number(v.at) || 0 };
+            }
+          }
           if (raw.float && typeof raw.float === 'object') base.float = { dx: clampNum(raw.float.dx, 0, 4000, 24), dy: clampNum(raw.float.dy, 0, 4000, 64), collapsed: raw.float.collapsed === true };
         }
       }
@@ -272,10 +281,37 @@ class Translator {
 
   forgetAccount(accId) {
     const c = this.load();
-    if (c.accountLang[accId] || c.accountAuto[accId] || c.autoConsent[accId]) {
+    const chats = Object.keys(c.chatLang).filter((k) => k.startsWith(`${accId}:`));
+    if (c.accountLang[accId] || c.accountAuto[accId] || c.autoConsent[accId] || chats.length) {
       delete c.accountLang[accId]; delete c.accountAuto[accId]; delete c.autoConsent[accId];
+      for (const k of chats) delete c.chatLang[k];
       this.save();
     }
+  }
+
+  // 对话记住的语言：{ lang, src } 或 null
+  chatLang(key) {
+    const v = this.load().chatLang[key];
+    return v ? { lang: v.lang, src: v.src } : null;
+  }
+
+  // 记住对话的语言。认出来的不会盖掉手动选的；lang 为空表示忘掉（回到自动）。返回是否有变化
+  setChatLang(key, lang, src) {
+    const c = this.load();
+    if (!CHAT_KEY.test(String(key || '')) || !['manual', 'detected'].includes(src)) return false;
+    const old = c.chatLang[key];
+    if (!lang) { if (!old) return false; delete c.chatLang[key]; this.save(); return true; }
+    if (!LANGS.includes(lang)) return false;
+    if (src === 'detected' && old && old.src === 'manual') return false;
+    if (old && old.lang === lang && old.src === src) return false;
+    c.chatLang[key] = { lang, src, at: this.deps.now ? this.deps.now() : Date.now() };
+    const keys = Object.keys(c.chatLang);
+    if (keys.length > MAX_CHAT_LANGS) {
+      keys.sort((a, b) => c.chatLang[a].at - c.chatLang[b].at);
+      for (const k of keys.slice(0, keys.length - MAX_CHAT_LANGS)) delete c.chatLang[k];
+    }
+    this.save();
+    return true;
   }
 
   // 悬浮窗的设置（只接受固定的几种值）

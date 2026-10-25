@@ -21,6 +21,12 @@ async function core() {
   assert.strictEqual(v.items.length, 12);
   assert(!JSON.stringify(v).includes('c.us'), '悬浮窗拿到的数据里不能有 data-id');
   assert.strictEqual(v.items[0].state, 'manual');
+  // 记客户语言用的对话 hash：固定、不含号码
+  assert.match(v.chatKey, /^[0-9a-f]{16}$/);
+  assert.strictEqual(fc.viewOf('A').chatKey, v.chatKey);
+  // 消息时间（页面上写的几点几分）
+  fc.ingest('T', { title: 'x', msgs: [{ ...msg(1, false, '222@c.us'), t: { h: 9, mi: 5 } }] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc.viewOf('T').items[0].t, '09:05');
   // 同一个对话来了新消息：自动翻
   fc.ingest('A', { title: 'Carlos', msgs: [...first.slice(1), msg(12)] }, { auto: true, dailyCap: 500 });
   await sleep(20);

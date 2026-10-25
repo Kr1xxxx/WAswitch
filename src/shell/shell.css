@@ -331,3 +331,62 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 /* 开了“同步到 CRM”的号 */
 .avatar.crm { box-shadow: 0 0 0 2px var(--tint), 0 0 0 4px #2563EB; }
 .crm-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #2563EB; color: #fff; font-size: 10px; font-weight: 600; line-height: 16px; vertical-align: 1px; }
+
+/* 顶栏的“话术 / 客户 / 翻译”（打开右侧面板到那一页） */
+.tb-tabs { display: flex; align-self: stretch; gap: 2px; }
+.tb-tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
+.tb-tab:hover { color: var(--text); background: rgba(0,0,0,.03); }
+.tb-tab.on { color: var(--text); font-weight: 600; border-bottom-color: #15803D; }
+.tb-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #15803D; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* 右侧面板的“翻译”页：上面状态条，中间收到的消息，下面写回复 */
+#panel.dock { width: 380px; background: #fff; }
+.dk { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.dk-strip { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, .8fr); border-bottom: 1px solid var(--line); background: #fbfbfc; }
+.dk-cell { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dk-cell + .dk-cell { border-left: 1px solid var(--line); }
+.dk-label { font-size: 11px; color: var(--muted); letter-spacing: .02em; white-space: nowrap; }
+.dk-val { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.dk-mono { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-dim { color: var(--muted); font-size: 12px; }
+.dk-lang { min-width: 0; max-width: 88px; border: 1px solid var(--field); border-radius: 6px; padding: 1px 4px; font: inherit; font-size: 13px; background: #fff; }
+.dk-note { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.dk-note.on { color: var(--ok); }
+.dk-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
+.dk-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--soft); white-space: nowrap; cursor: pointer; }
+.dk-switch { appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--field); position: relative; margin: 0; cursor: pointer; transition: background .15s; }
+.dk-switch::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 7px; background: #fff; transition: left .15s; }
+.dk-switch:checked { background: #15803D; }
+.dk-switch:checked::after { left: 14px; }
+.dk-switch:disabled { opacity: .5; cursor: default; }
+.dk-switch:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; }
+.dk-mini { max-width: 96px; border: 1px solid var(--line); border-radius: 6px; padding: 1px 4px; font: inherit; font-size: 12px; background: #fff; color: var(--soft); }
+.dk-list { flex: 1; min-height: 80px; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.dk-item { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; padding: 7px 6px; border-radius: 8px; }
+.dk-item.last { background: #f2f7f3; }
+.dk-item.clip { background: #f6f7f9; margin-bottom: 4px; }
+.dk-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.dk-item.last .dk-time { color: #15803D; font-weight: 600; }
+.dk-texts { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
+.dk-orig { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.dk-tr { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.dk-tr.bad { color: var(--danger); font-size: 12px; }
+.dk-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #15803D; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.dk-link:disabled { color: var(--muted); cursor: default; }
+.dk-hint { padding: 6px 6px; margin: 0; }
+.dk-msg { padding: 6px 12px 0; }
+.dk-compose { border-top: 1px solid var(--line); padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 6px; background: #fbfbfc; }
+.dk-compose .dk-head { padding: 8px 0 0; }
+.dk-chip { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--field); background: #fff; font: inherit; font-size: 12px; color: var(--soft); cursor: pointer; }
+.dk-chip:hover { color: var(--text); }
+.dk-chip.on { background: var(--text); border-color: var(--text); color: #fff; }
+.dk-in, .dk-out { width: 100%; resize: vertical; border: 1px solid var(--field); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; background: #fff; user-select: text; min-height: 58px; }
+.dk-out { background: #f6f9f6; }
+.dk-in:focus, .dk-out:focus { outline: 2px solid #15803D; outline-offset: -1px; border-color: transparent; }
+.dk-outhead { display: flex; align-items: center; gap: 8px; }
+.dk-edited { font-size: 11px; color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 0 6px; }
+.dk-edited[hidden] { display: none; }
+.dk-acts { display: flex; gap: 8px; }
+.dk-acts .btn { height: 36px; padding: 0 14px; font-size: 13px; }
+.dk-insert { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.dk-key { font-size: 11px; opacity: .7; font-weight: 400; }

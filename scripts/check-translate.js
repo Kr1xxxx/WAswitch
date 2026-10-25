@@ -89,6 +89,35 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(mc(cs,'a1','Maria 2024'),null);
   assert.equal(mc(cs,'a1',''),null);
   assert.equal(mc(cs,'a3','Maria Lopez'),null); // 别的号的客户不算
+  // 客户语言自动识别（本机算，不联网）
+  const { detectLang: dl } = require('../src/langdetect');
+  assert.equal(dl('Kalau ambil 200 pcs bisa diskon berapa?'),'印尼语');
+  assert.equal(dl('Hello, how much is this?'),'英语');
+  assert.equal(dl('Hola, ¿cuánto cuesta el envío?'),'西班牙语');
+  assert.equal(dl('Olá, quanto custa o envio para você?'),'葡萄牙语');
+  assert.equal(dl('مرحبا كم السعر'),'阿拉伯语');
+  assert.equal(dl('Xin chào, giá bao nhiêu?'),'越南语');
+  assert.equal(dl('Привет, сколько стоит?'),'俄语');
+  assert.equal(dl('ok'),'');
+  assert.equal(dl('👍👍'),'');
+  // 对话记住的语言：认出来的不盖手动选的，键里没有号码
+  const t2=new T.Translator({dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  const key='a1:0123456789abcdef';
+  assert.equal(t2.setChatLang(key,'印尼语','detected'),true);
+  assert.deepEqual(t2.chatLang(key),{lang:'印尼语',src:'detected'});
+  assert.equal(t2.setChatLang(key,'印尼语','detected'),false); // 没变不写盘
+  assert.equal(t2.setChatLang(key,'马来语','manual'),true);
+  assert.equal(t2.setChatLang(key,'英语','detected'),false);
+  assert.equal(t2.chatLang(key).lang,'马来语');
+  assert.equal(t2.setChatLang('a1:+8613800000000','英语','manual'),false);
+  assert.equal(t2.setChatLang(key,'火星语','manual'),false);
+  const t3=new T.Translator({dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  assert.equal(t3.chatLang(key).lang,'马来语'); // 存盘读回
+  t3.forgetAccount('a1');
+  assert.equal(t3.chatLang(key),null);
+  assert.equal(t3.setChatLang(key,'英语','manual'),true);
+  assert.equal(t3.setChatLang(key,'','manual'),true); // 回到自动
+  assert.equal(t3.chatLang(key),null);
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
