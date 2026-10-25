@@ -30,6 +30,7 @@ const { Updater } = require('./updater');
 const { TeamSync } = require('./team');
 const { CrmQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
+const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
 
 // ---------- 只允许运行一个 WAswitch ----------
@@ -809,7 +810,7 @@ function pushState() {
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
     collapsed: settings.sidebarCollapsed,
-    team: team ? team.snapshot() : null,
+    team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
     locked,
     panelOpen: panelShown(),
     floatOpen,
@@ -1904,10 +1905,12 @@ function setupUpdater() {
 app.on('second-instance', () => notifier.showWindow());
 
 // ---------- 团队模式 ----------
-// ---------- 同步到 CRM（第 1 步：只采集到本机加密队列，不上传） ----------
+// ---------- 同步到 CRM：采集到本机加密队列（第 1 步），定时传到团队后台（第 2 步） ----------
 // 只有团队号、管理员在后台开了同步、号没停着、系统能真加密时才采集；私人号永远不采集
 let crmQueue = null;
 let crmTimer = null;
+let crmUploader = null;
+const CRM_UPLOAD_MS = 10 * 60 * 1000;
 const CRM_READ_MS = 15 * 1000;
 const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
 // 开关、收回、停用、换私人号、删号之后：停止采集，删掉队列和去重表
@@ -1968,6 +1971,11 @@ function setupTeam() {
     crmQueue.sweep();
     if (activeId) crmReadWeb(activeId, false);
   }, CRM_READ_MS);
+  // 第 2 步：每 10 分钟把本机队列传到团队后台；后台确认收到才从本机删
+  crmUploader = new CrmUploader({ queue: crmQueue, team, accounts: () => accounts, crmOn });
+  const upload = () => crmUploader.run().then(() => refresh(), (e) => console.warn(`CRM 上传失败：${e.message}`));
+  setTimeout(upload, 60 * 1000).unref?.();
+  setInterval(upload, CRM_UPLOAD_MS).unref?.();
   // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }

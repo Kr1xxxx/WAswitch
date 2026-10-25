@@ -136,7 +136,7 @@ async function accountsPage() {
     });
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${a.color || '#999'}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
-      el('td', {}, a.mode === 'lite' ? '轻量' : '网页'),
+      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : el('span', { class: 'muted' }, '未分组')),
       el('td', {}, a.user_name ? `${a.user_name} · ${a.device_name}` : el('span', { class: 'muted' }, '未分配')),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
@@ -146,7 +146,12 @@ async function accountsPage() {
         btn('记录', () => showEvents(a)),
         !a.device_id && me.user.role === 'owner' ? btn('删除记录', () => confirm(`删除「${a.label}」的后台记录？`) && act(() => api('DELETE', `accounts/${a.id}`), '已删除'), 'danger') : null));
   });
+  const crmOn = data.accounts.some((a) => a.crm_sync === 1);
+  const crmNote = !crmOn ? null : data.crm && data.crm.auth_fail_at
+    ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${new Date(data.crm.auth_fail_at).toLocaleString()}），已暂停推送。请检查两边的推送密钥。`)
+    : data.crm && !data.crm.push ? el('p', { class: 'muted' }, '聊天同步：推送还没开，员工电脑上的聊天先留在本机（最多 7 天）。') : null;
   return [
+    crmNote,
     el('p', { class: 'muted' }, '账号由员工在 WAswitch 里"加入团队"时自动出现在这里。分给别人后，新电脑需要自己填代理并扫码；代理和登录数据不会经过后台。'),
     el('div', { class: 'wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, ['账号', '模式', '组', '分给', '应在国家', '操作'].map((h) => el('th', {}, h)))),
