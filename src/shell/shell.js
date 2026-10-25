@@ -1156,6 +1156,7 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '内核'), h('span', null, `Electron ${a.electron} · Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
+        h('span', null, '界面字体'), h('span', null, 'Inter（英文和数字）· Windows 中文用小米 MiSans · Mac 中文用系统苹方'),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
       updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),

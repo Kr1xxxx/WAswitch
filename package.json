@@ -37,11 +37,15 @@
     "productName": "WAswitch",
     "files": [
       "src/**/*",
+      "!src/fonts/misans{,/**/*}",
       "bin/**/*",
       "assets/**/*"
     ],
     "icon": "assets/icon.png",
     "win": {
+      "files": [
+        "src/fonts/misans/**/*"
+      ],
       "target": "nsis",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
@@ -79,4 +83,3 @@
     }
   }
 }
-
