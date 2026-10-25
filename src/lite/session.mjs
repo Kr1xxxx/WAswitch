@@ -191,7 +191,8 @@ export class Session {
       this.attempt = 0;
       this.lastCode = null;
       this.sameCode = 0;
-      this.setStatus('open');
+      // 自己的号（如 "8613800000000:12@s.whatsapp.net"），主进程只取出手机号显示在侧栏
+      this.setStatus('open', { me: String(this.auth?.state?.creds?.me?.id || '').slice(0, 100) });
       this.changed();
       // 群名称
       sock.groupFetchAllParticipating().then((groups) => {

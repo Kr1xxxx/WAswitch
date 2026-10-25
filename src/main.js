@@ -273,6 +273,9 @@ function loadAccounts() {
     acc.name = String(acc.name || '未命名').slice(0, 40);
     // 备注：手机号、用途、负责人之类，只在本机显示，不给 MCP
     acc.note = typeof acc.note === 'string' ? cleanNote(acc.note) : '';
+    // 手机号：登录后自动读到的，或用户在编辑里自己填的（phoneManual）。同样只在本机显示，不给 MCP
+    acc.phone = cleanPhone(acc.phone);
+    acc.phoneManual = acc.phoneManual === true && !!acc.phone;
     acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
@@ -310,6 +313,31 @@ function loadAccounts() {
     if (first) first.primary = true;
   }
   return list;
+}
+
+// 只留数字、空格、+ - ( )，最多 24 个字符
+function cleanPhone(phone) {
+  return String(phone || '').replace(/[^\d+\-() ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+}
+
+// 编辑里改了手机号：填了就以用户的为准；清空则回到自动读取
+function applyPhone(acc, phone) {
+  if (acc.phone === phone) return;
+  acc.phone = phone;
+  acc.phoneManual = !!phone;
+  if (!phone) {
+    phoneRead.delete(acc.id);
+    // 轻量模式：用上次连上时读到的号，不用等下次重连
+    setDetectedPhone(acc, waPage.parseWid(liteMe.get(acc.id)));
+  }
+}
+
+// 登录后读到的本号手机号。用户自己填过的不覆盖
+function setDetectedPhone(acc, phone) {
+  if (!acc || !phone || acc.phoneManual || acc.phone === phone) return;
+  acc.phone = phone;
+  saveAccounts();
+  pushState();
 }
 
 function cleanNote(note) {
@@ -801,6 +829,7 @@ function pushState() {
         id: acc.id,
         name: acc.name,
         note: acc.note,
+        phone: acc.phone,
         color: acc.color,
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
@@ -997,6 +1026,8 @@ async function retryNow(id) {
 // 每 3 分钟只读检查一次每个账号是否停在扫码页（在隔离环境里看页面结构，不读聊天内容）。
 // 从“已登录”变成“要扫码”时，不管有没有关通知都提醒，因为掉线会漏掉所有消息。
 
+const liteMe = new Map(); // 轻量模式：上次连上时的本号 id
+const phoneRead = new Set(); // 这次登录已经读过手机号的网页版账号
 async function checkLogins() {
   let changed = false;
   for (const acc of accounts) {
@@ -1004,6 +1035,12 @@ async function checkLogins() {
     if (!view || problems.has(acc.id)) continue;
     const state = await waPage.loginState(view.webContents);
     if (state === 'unknown') continue;
+    // 登录后读一次自己的手机号（只读 localStorage，见 wa-page.js）；掉线后重新登录再读
+    if (state === 'needs_qr') phoneRead.delete(acc.id);
+    if (state === 'logged_in' && !phoneRead.has(acc.id)) {
+      const phone = await waPage.readOwnNumber(view.webContents);
+      if (phone) { phoneRead.add(acc.id); setDetectedPhone(acc, phone); }
+    }
     const before = loginStates.get(acc.id);
     if (state === before) continue;
     if (state === 'needs_qr') mcp?.controller.gate.clearAccount(acc.id);
@@ -1436,12 +1473,12 @@ function userIsReading(id, jid) {
 }
 
 function bindLiteEvents() {
-  liteHost.on('state', ({ id, status, qr }) => {
+  liteHost.on('state', ({ id, status, qr, me }) => {
     const acc = findAcc(id);
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null });
-    if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); }
+    if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
     const make = LITE_PROBLEMS[status];
@@ -2679,6 +2716,7 @@ handleShell('editor:load', (id) => {
     isNew: !acc,
     name: acc ? acc.name : String(editorPrefill?.name || nextName()).slice(0, 40),
     note: acc ? acc.note : '',
+    phone: acc ? acc.phone : '',
     color: acc ? acc.color : editorColor || nextColor(),
     proxy: acc ? acc.proxy : '',
     hasPassword: !!(acc && acc.proxyPassword),
@@ -2724,9 +2762,10 @@ handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   return res;
 });
 
-handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
+handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
   name = String(name || '').trim().slice(0, 40);
   note = cleanNote(note);
+  phone = cleanPhone(phone);
   if (!name) return { error: '请填写名称' };
   if (!COLORS.includes(color)) color = nextColor();
   const parsed = proxy.parse(String(proxyText || ''));
@@ -2808,7 +2847,7 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
   const teamFirstSave = !!(acc && acc.teamNeedsProxy);
   if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
   if (!acc) {
-    acc = { id: String(Date.now()), name, note, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+    acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
     accounts.push(acc);
     if (tested) recordExit(acc, tested.ip);
     saveAccounts();
@@ -2822,6 +2861,7 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.note = note;
+    applyPhone(acc, phone);
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
@@ -2838,6 +2878,7 @@ handleShell('editor:save', async ({ id, name, note, color, proxy: proxyText, pas
     if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
     acc.name = name;
     acc.note = note;
+    applyPhone(acc, phone);
     acc.color = color;
     acc.proxy = proxyStored;
     acc.proxyPassword = encPassword;
