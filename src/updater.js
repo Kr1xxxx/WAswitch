@@ -4,7 +4,7 @@
 // 重定向到别的地方一律当失败。走系统网络设置，不用任何账号的代理（这不是 WhatsApp 流量）。
 // 启动 1 分钟后查一次，之后每 6 小时查一次，有新版就自动下载。
 //
-// Windows（和 Linux AppImage）：electron-updater 下载并校验 sha512。下载好后两种安装时机：
+// Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
 //   - 用户点“重启以更新”（关于页或托盘菜单）；
 //   - 窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
 //     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）。
@@ -215,7 +215,7 @@ class Updater {
     }
   }
 
-  // ---------- Windows / Linux：electron-updater ----------
+  // ---------- Windows：electron-updater ----------
 
   setupElectronUpdater() {
     const { autoUpdater } = require('electron-updater');

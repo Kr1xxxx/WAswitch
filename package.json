@@ -11,6 +11,7 @@
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:view-race": "node scripts/check-view-race.js",
+    "check:memory": "node scripts/check-memory.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
     "check:translate": "node scripts/check-translate.js",
@@ -37,11 +38,15 @@
     "productName": "WAswitch",
     "files": [
       "src/**/*",
+      "!src/fonts/misans{,/**/*}",
       "bin/**/*",
       "assets/**/*"
     ],
     "icon": "assets/icon.png",
     "win": {
+      "files": [
+        "src/fonts/misans/**/*"
+      ],
       "target": "nsis",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
@@ -62,9 +67,6 @@
         }
       ]
     },
-    "linux": {
-      "target": "AppImage"
-    },
     "publish": [
       {
         "provider": "github",
@@ -79,4 +81,3 @@
     }
   }
 }
-

@@ -39,7 +39,7 @@ function parse(raw) {
   };
 }
 
-// 密码用系统钥匙串（Windows DPAPI / macOS Keychain / Linux Secret Service）加密后再写盘
+// 密码用系统钥匙串（Windows DPAPI / macOS Keychain）加密后再写盘
 function encryptPassword(password) {
   if (!password) return '';
   if (!canEncrypt(safeStorage)) throw new Error('系统没有安全钥匙环，不能保存代理密码');

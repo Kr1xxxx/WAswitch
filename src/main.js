@@ -495,6 +495,7 @@ const memoryManager = new memory.MemoryManager(settings, {
   },
   isBackground: (id) => id !== activeId || page !== 'account' || !win || !win.isVisible(),
   unreadOf: (id) => notifier.unread.get(id) || 0,
+  skip: (id) => problems.has(id) || isParkedId(id) || activeDownloads.has(id), // 出错、停用、正在下载的账号不刷新
   onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
@@ -514,6 +515,7 @@ const notifier = new Notifier({
       checked: settings.recycleMB > 0,
       click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : settings.recycleLastMB),
     },
+    { label: '立即清理内存（刷新没有未读的后台账号）', click: () => { memoryManager.cleanNow(); } },
     {
       label: '省内存模式（关闭显卡加速，重启后生效）',
       type: 'checkbox',
@@ -864,6 +866,8 @@ function pushState() {
     settings,
     restartNeeded: settings.lowMemoryMode !== startupLowMemory,
     recycleChoices: memory.RECYCLE_CHOICES,
+    capChoices: memory.CAP_CHOICES,
+    capAdvice: memoryManager.capAdvice,
     canLoginItem,
     about: {
       version: app.getVersion(),
@@ -1107,7 +1111,7 @@ function addNotifLog({ id, count, popped }) {
 }
 
 // ---------- 拼写检查（每个号单独开关） ----------
-// macOS 用系统自带的拼写检查，不下载东西；Windows、Linux 第一次开可能会下载英文词典，
+// macOS 用系统自带的拼写检查，不下载东西；Windows 第一次开可能会下载英文词典，
 // 走的是这个号自己的 session，也就是这个号的代理（代理没设好时不打开）
 const proxyReady = new Map(); // id -> 这个号的代理是否已经设好（没设好时绝不打开拼写检查）
 function applySpellcheck(acc, ses = session.fromPartition(`persist:wa-${acc.id}`)) {
@@ -1175,6 +1179,7 @@ function uniquePath(dir, filename) {
   }
   return null;
 }
+const activeDownloads = new Map(); // id -> 正在下载的文件数，下载中的账号不做内存回收
 const downloadSessions = new WeakSet(); // 每个 session 只挂一次（视图重建时 session 不变）
 function setupDownloads(acc, ses) {
   if (downloadSessions.has(ses)) return;
@@ -1183,6 +1188,11 @@ function setupDownloads(acc, ses) {
   ses.on('will-download', (_e, item) => {
     const cur = findAcc(id);
     if (!cur) return;
+    activeDownloads.set(id, (activeDownloads.get(id) || 0) + 1);
+    item.once('done', () => {
+      const n = (activeDownloads.get(id) || 1) - 1;
+      if (n > 0) activeDownloads.set(id, n); else activeDownloads.delete(id);
+    });
     const dir = downloadDirOf(cur);
     let target = null;
     try {
@@ -1228,7 +1238,7 @@ async function createView(acc, loadDelay = 0) {
   ses.setSpellCheckerEnabled(false);
   setupDownloads(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
-  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Linux 等可能会下载词典）
+  // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Windows 可能会下载词典）
   proxyReady.set(acc.id, !applied.error);
   if (!applied.error) applySpellcheck(acc, ses);
 
@@ -1705,6 +1715,8 @@ function applyLoginItem() {
 function setSetting(key, value) {
   if (key === 'recycleMB') {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
+  } else if (key === 'capMB') {
+    if (!memory.CAP_CHOICES.includes(value)) return;
   } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
@@ -1814,7 +1826,7 @@ function setupMenu() {
     // macOS 需要“编辑”菜单，Cmd+C / Cmd+V 才能用
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
   } else {
-    // Windows / Linux 不显示菜单栏（默认菜单里有开发者工具），复制粘贴照常可用
+    // Windows 不显示菜单栏（默认菜单里有开发者工具），复制粘贴照常可用
     Menu.setApplicationMenu(null);
   }
 }
@@ -2577,6 +2589,9 @@ handleShell('cache:clear', async () => {
     clearingCache = false;
   }
 });
+
+// 立即清理内存：刷新所有没有未读的后台账号
+handleShell('mem:clean', () => memoryManager.cleanNow());
 
 // 聊天里的链接：只放行 http、https、mailto、tel，用系统程序打开
 onShell('open-link', (url) => { if (isSafeLink(url)) shell.openExternal(url); });

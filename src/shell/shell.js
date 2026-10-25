@@ -71,6 +71,7 @@ let checkRunning = false;
 const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
+let memClean = { busy: false, result: '' };
 function refreshCacheSize() {
   if (cacheInfo.busy || Date.now() - cacheInfo.at < 30000) return;
   cacheInfo.at = Date.now();
@@ -818,9 +819,7 @@ function editorPage(id) {
     const liteReason = h('span', { class: 'hint' });
     const modeRow = d.isNew
       ? h('div', { class: 'field' }, '账号类型', modeCards, liteReason,
-        !d.liteAvailable ? h('span', { class: 'hint' }, d.platform === 'linux'
-          ? '这台电脑没有系统钥匙串，不能加密保存，所以不能使用轻量模式。安装 gnome-keyring 或 KWallet 后重启 WAswitch 即可。'
-          : '这台电脑不支持加密保存，不能使用轻量模式。') : null)
+        !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
     const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：日本客户群 · 小王负责' });
@@ -1063,17 +1062,41 @@ function settingsPage() {
     const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
       s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
     select.value = String(st.recycleMB || st.recycleLastMB || 800);
+    const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
+      (s.capChoices || [0, 2048]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
+    capSelect.value = String(st.capMB ?? 2048);
+    const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
         h('p', { class: 'lead' }, '不会让账号休眠，所有账号一直在线收消息。后台账号自动降速，省下来的主要靠下面几项。')),
       h('div', { class: 'box' },
-        h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'), h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0))),
+        h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
+          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
         h('span', { class: 'hint' }, '近似值：只统计每个账号的主页面进程，实际会略高一点。')),
+      setRow('立即清理内存', '马上把没有未读消息、内存涨了不少的后台账号悄悄刷新一遍，降回刚打开时的水平。只是刷新网页：不会退出登录，不删聊天记录，不会漏消息。正在看的、有未读的、正在下载的、刚切走 30 秒内的账号不动。',
+        h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: async () => {
+          memClean.busy = true; memClean.result = ''; render(true);
+          const r = await window.wa.memClean();
+          memClean.busy = false;
+          if (r.error) memClean.result = r.error;
+          else {
+            const skip = r.skipped ? `${r.skipped} 个有未读、刚切走或正在加载/下载的跳过了。` : '';
+            if (r.recycled) memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${skip}`;
+            else if (r.skipped) memClean.result = `这次没有刷新。${skip}`;
+            else memClean.result = '后台账号都刚刷新过或占用不大，不用清理。';
+          }
+          render(true);
+        } }, memClean.busy ? '清理中…' : '立即清理'),
+        memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
+      setRow('总内存上限', '所有账号加起来超过上限时，从涨得最多的后台账号开始悄悄刷新，直到降回上限以内。同一个号至少隔 1 小时，全部每小时最多 6 次。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
+        capSelect,
+        st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
+          `账号较多，刚打开时加起来就接近 ${mb(st.capMB)}，这个上限达不到，已暂停按上限刷新。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
       setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),
@@ -1158,6 +1181,7 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '内核'), h('span', null, `Electron ${a.electron} · Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
+        h('span', null, '界面字体'), h('span', null, 'Inter（英文和数字）· Windows 中文用小米 MiSans · Mac 中文用系统苹方'),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
       updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
