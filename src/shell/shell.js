@@ -71,6 +71,7 @@ let checkRunning = false;
 const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
+let memClean = { busy: false, result: '' };
 function refreshCacheSize() {
   if (cacheInfo.busy || Date.now() - cacheInfo.at < 30000) return;
   cacheInfo.at = Date.now();
@@ -1061,17 +1062,35 @@ function settingsPage() {
     const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
       s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
     select.value = String(st.recycleMB || st.recycleLastMB || 800);
+    const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
+      (s.capChoices || [0, 2048]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
+    capSelect.value = String(st.capMB ?? 2048);
+    const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
         h('p', { class: 'lead' }, '不会让账号休眠，所有账号一直在线收消息。后台账号自动降速，省下来的主要靠下面几项。')),
       h('div', { class: 'box' },
-        h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'), h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0))),
+        h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
+          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台 · 已降速'))),
         h('span', { class: 'hint' }, '近似值：只统计每个账号的主页面进程，实际会略高一点。')),
+      setRow('立即清理内存', '马上把没有未读消息的后台账号悄悄刷新一遍，内存会降回刚打开时的水平。不会退出登录，不会漏消息；正在看的账号和有未读的账号不动。',
+        h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: async () => {
+          memClean.busy = true; memClean.result = ''; render(true);
+          const r = await window.wa.memClean();
+          memClean.busy = false;
+          if (r.error) memClean.result = r.error;
+          else if (!r.recycled) memClean.result = r.skipped ? `后台账号都有未读或正在加载，这次没有刷新（${r.skipped} 个）。` : '没有可以清理的后台账号。';
+          else memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${r.skipped ? `${r.skipped} 个有未读或正在加载的跳过了。` : ''}`;
+          render(true);
+        } }, memClean.busy ? '清理中…' : '立即清理'),
+        memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
+      setRow('总内存上限', '所有账号加起来超过上限时，从占用最大的后台账号开始悄悄刷新，直到降回上限以内。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
+        capSelect),
       setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
         sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 800 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),

@@ -4,6 +4,9 @@
 //    在后台刷新一次。刷新只要几秒，期间收到的消息会从手机同步过来，不会丢。
 // 2. 后台降级：不在看的账号设为“隐藏”，Chromium 会降低它的优先级、节流定时器、释放画面缓存。
 //    WhatsApp 的消息是服务器推送的，节流不会耽误收消息。
+// 1b. 总上限：所有账号加起来超过上限（默认 2 GB）时，从占用最大的后台账号开始刷新，直到降回上限以内。
+//     同样不碰正在看的账号、有未读的账号和正在加载的账号。
+// 1c. 立即清理：用户手动点，把所有没有未读的后台账号刷新一遍，不退出登录、不丢消息。
 // 3. 省内存模式：关闭显卡加速，整体再省一些内存，代价是动画没那么顺滑。需要重启生效。
 // 4. 统计每个账号占用的内存，显示在托盘菜单里。只统计主页面进程，是近似值，略低于实际。
 const { app } = require('electron');
@@ -19,13 +22,20 @@ const DEFAULTS = {
   sidebarCollapsed: false, // 侧栏只显示图标
   recycleLastMB: 800, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
+  capMB: 2048, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
   lockMinutes: 5, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
 };
 const RECYCLE_CHOICES = [600, 800, 1000, 1500];
+const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096];
 const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
 const CHECK_EVERY_MS = 60 * 1000;
 const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
 const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回收
+const CAP_GAP_MS = 10 * 60 * 1000; // 超总上限时，同一个账号两次刷新至少隔 10 分钟
+const CAP_BACKGROUND_MS = 2 * 60 * 1000; // 超总上限时，在后台待了 2 分钟就可以回收
+const CAP_MAX_PER_CHECK = 2; // 每分钟最多刷新 2 个，免得一下子全部重新加载
+const FRESH_PAGE_MB = 300; // 刚刷新完的 WhatsApp 网页大约占这么多，用来估算刷新能省下多少
+const MANUAL_GAP_MS = 2500; // 手动清理时，账号之间隔一会儿再刷新，避免卡顿
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -48,6 +58,7 @@ function loadSettings() {
       sidebarCollapsed: bool('sidebarCollapsed'),
       recycleLastMB: nearestRecycle(raw.recycleLastMB) || DEFAULTS.recycleLastMB,
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
+      capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,
       lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
     };
   } catch {
@@ -68,7 +79,8 @@ function applyStartupSwitches(settings) {
 }
 
 class MemoryManager {
-  // hooks: { views: Map, isBackground(id), unreadOf(id), onUpdate(), extraUsage(byPid)（可选：不是网页的账号的占用） }
+  // hooks: { views: Map, isBackground(id), unreadOf(id), onUpdate(), extraUsage(byPid)（可选：不是网页的账号的占用），
+  //         skip(id)（可选：出错、停用等不该刷新的账号） }
   constructor(settings, hooks) {
     this.settings = settings;
     this.hooks = hooks;
@@ -76,6 +88,7 @@ class MemoryManager {
     this.lastRecycle = new Map(); // id -> 上次自动刷新的时间
     this.backgroundSince = new Map(); // id -> 进入后台的时间
     this.timer = null;
+    this.cleaning = false;
   }
 
   start() {
@@ -104,34 +117,105 @@ class MemoryManager {
     return sum;
   }
 
-  check() {
+  measure() {
     const byPid = new Map();
     for (const m of app.getAppMetrics()) {
       // Windows 上用私有内存更准确，其他系统用常驻内存。单位是 KB
       const kb = m.memory.privateBytes || m.memory.workingSetSize;
       byPid.set(m.pid, kb / 1024);
     }
-    const now = Date.now();
     for (const [id, mb] of (this.hooks.extraUsage ? this.hooks.extraUsage(byPid) : [])) this.usageMB.set(id, mb);
     for (const [id, view] of this.hooks.views) {
       const wc = view.webContents;
       if (wc.isDestroyed()) continue;
-      const mb = Math.round(byPid.get(wc.getOSProcessId()) || 0);
-      this.usageMB.set(id, mb);
+      this.usageMB.set(id, Math.round(byPid.get(wc.getOSProcessId()) || 0));
+    }
+  }
 
-      const limit = this.settings.recycleMB;
-      if (!limit || mb < limit) continue;
-      if (!this.hooks.isBackground(id)) continue;
-      if (now - (this.backgroundSince.get(id) || now) < BACKGROUND_FOR_MS) continue;
-      if (this.hooks.unreadOf(id) > 0) continue; // 有未读时不动，免得用户回来看到页面在加载
-      if (now - (this.lastRecycle.get(id) || 0) < MIN_RECYCLE_GAP_MS) continue;
-      if (wc.isLoading()) continue;
-      console.log(`账号 ${id} 占用 ${mb} MB，超过 ${limit} MB，后台刷新回收内存`);
-      this.lastRecycle.set(id, now);
-      wc.reload();
+  // 可以安全刷新的后台账号：不是正在看的、没有未读、没在加载、没出错
+  canRecycle(id, wc) {
+    if (wc.isDestroyed() || wc.isLoading()) return false;
+    if (!this.hooks.isBackground(id)) return false;
+    if (this.hooks.unreadOf(id) > 0) return false; // 有未读时不动，免得用户回来看到页面在加载
+    if (this.hooks.skip && this.hooks.skip(id)) return false;
+    return true;
+  }
+
+  recycle(id, wc, why) {
+    console.log(`账号 ${id} 占用 ${this.usageMB.get(id) || 0} MB，${why}，后台刷新回收内存`);
+    this.lastRecycle.set(id, Date.now());
+    wc.reload();
+  }
+
+  check() {
+    this.measure();
+    const now = Date.now();
+    const done = new Set();
+
+    // 单个账号超过阈值
+    const limit = this.settings.recycleMB;
+    if (limit) {
+      for (const [id, view] of this.hooks.views) {
+        const wc = view.webContents;
+        if ((this.usageMB.get(id) || 0) < limit || !this.canRecycle(id, wc)) continue;
+        if (now - (this.backgroundSince.get(id) || now) < BACKGROUND_FOR_MS) continue;
+        if (now - (this.lastRecycle.get(id) || 0) < MIN_RECYCLE_GAP_MS) continue;
+        this.recycle(id, wc, `超过 ${limit} MB`);
+        done.add(id);
+      }
+    }
+
+    // 所有账号加起来超过总上限：从占用最大的后台账号开始刷新
+    const cap = this.settings.capMB;
+    if (cap) {
+      let total = this.totalMB();
+      for (const id of done) total -= Math.max(0, (this.usageMB.get(id) || 0) - FRESH_PAGE_MB);
+      if (total > cap) {
+        const list = [...this.hooks.views]
+          .filter(([id, view]) => !done.has(id) && this.canRecycle(id, view.webContents)
+            && (this.usageMB.get(id) || 0) > FRESH_PAGE_MB
+            && now - (this.backgroundSince.get(id) || now) >= CAP_BACKGROUND_MS
+            && now - (this.lastRecycle.get(id) || 0) >= CAP_GAP_MS)
+          .sort((a, b) => (this.usageMB.get(b[0]) || 0) - (this.usageMB.get(a[0]) || 0));
+        let n = 0;
+        for (const [id, view] of list) {
+          if (total <= cap || n >= CAP_MAX_PER_CHECK) break;
+          this.recycle(id, view.webContents, `总占用超过上限 ${cap} MB`);
+          total -= (this.usageMB.get(id) || 0) - FRESH_PAGE_MB;
+          n += 1;
+        }
+      }
     }
     this.hooks.onUpdate();
   }
+
+  // 立即清理：把所有可以安全刷新的后台账号刷新一遍（不看阈值、不看间隔）。
+  // 返回刷新了几个、跳过了几个（有未读、正在看或在加载）、估计能省下多少
+  async cleanNow() {
+    if (this.cleaning) return { error: '正在清理，请稍等' };
+    this.cleaning = true;
+    try {
+      this.measure();
+      let recycled = 0;
+      let skipped = 0;
+      let savedMB = 0;
+      const list = [...this.hooks.views].sort((a, b) => (this.usageMB.get(b[0]) || 0) - (this.usageMB.get(a[0]) || 0));
+      for (const [id, view] of list) {
+        const wc = view.webContents;
+        if (wc.isDestroyed()) continue;
+        if (!this.canRecycle(id, wc)) { if (this.hooks.isBackground(id)) skipped += 1; continue; }
+        if (recycled) await new Promise((resolve) => { setTimeout(resolve, MANUAL_GAP_MS); });
+        if (!this.canRecycle(id, wc)) { skipped += 1; continue; } // 等的这一会儿里来了消息或切了过去
+        savedMB += Math.max(0, (this.usageMB.get(id) || 0) - FRESH_PAGE_MB);
+        this.recycle(id, wc, '手动清理');
+        recycled += 1;
+      }
+      this.hooks.onUpdate();
+      return { ok: true, recycled, skipped, savedMB };
+    } finally {
+      this.cleaning = false;
+    }
+  }
 }
 
-module.exports = { DEFAULTS, RECYCLE_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };
+module.exports = { DEFAULTS, RECYCLE_CHOICES, CAP_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };
