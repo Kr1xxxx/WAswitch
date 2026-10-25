@@ -341,21 +341,26 @@ function renderTop() {
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: `icon-btn${s.floatOpen ? ' on' : ''}`, title: '悬浮翻译：自动翻译当前对话收到的消息', 'aria-label': '悬浮翻译', 'aria-pressed': String(!!s.floatOpen), onclick: () => window.wa.floatToggle() }, icon('globe', 15)),
-    panelTabs(),
+    h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
 }
 
-// 顶栏右边的“话术 / 客户 / 翻译”：点一下打开右侧面板到那一页，再点一下收起（Ctrl+Shift+K 也能开关）
-function panelTabs() {
-  const key = `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K`;
+// 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）
+function panelHead() {
   const tab = (id, label, ic) => {
-    const on = !!s.panelOpen && s.panelTab === id;
+    const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
-    return h('button', { class: `tb-tab${on ? ' on' : ''}`, title: on ? `收起（${key}）` : `打开${label}（${key}）`, 'aria-pressed': String(on),
-      onclick: () => (on ? window.wa.panelToggle(false) : window.wa.panelTab(id)) }, ic ? icon(ic, 15) : null, label, badge);
+    return h('button', { class: `tb-tab${on ? ' on' : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
   };
-  return h('div', { class: 'tb-tabs', role: 'group', 'aria-label': '右侧面板' }, tab('replies', '话术'), tab('customers', '客户'), tab('translate', '翻译', 'translate'));
+  return h('div', { class: 'wb-tabs', role: 'tablist', 'aria-label': '工作台' },
+    tab('customers', '客户资料'), tab('replies', '话术'), tab('translate', '翻译', 'translate'),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'icon-btn', title: '收起', 'aria-label': '收起工作台', onclick: () => window.wa.panelToggle(false) }, icon('back', 14)));
+}
+function refreshPanelHead() {
+  const old = $panel.querySelector('.wb-tabs');
+  if (old) old.replaceWith(panelHead());
 }
 
 // AI（MCP 客户端）想切换账号或打开添加页，但用户正在打字：问一下，不直接切
@@ -677,8 +682,8 @@ function renderPanel(force = false) {
   pn.tab = tab;
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
   $panel.classList.toggle('dock', tab === 'translate');
-  $panel.setAttribute('aria-label', tab === 'translate' ? '翻译' : '话术和客户');
-  if (tab === 'translate') { dockRender(true); return; }
+  $panel.setAttribute('aria-label', '工作台');
+  if (tab === 'translate') { $panel.replaceChildren(panelHead(), h('div', { class: 'dk-host' })); dockRender(true); return; }
   const replies = tab === 'replies';
   if (!tr.cfg) trLoad(); // 客户表单里的语言选项要用
   const search = h('input', { type: 'search', value: pn.q, placeholder: replies ? '搜索话术' : '搜索名字、电话、标签', 'aria-label': '搜索' });
@@ -696,6 +701,7 @@ function renderPanel(force = false) {
     if (r) panelSay(`导出了 ${r.count} 条`);
   };
   $panel.replaceChildren(...kids(
+    panelHead(),
     pn.edit ? null : h('div', { class: 'pn-tools' }, search,
       h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
     !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },

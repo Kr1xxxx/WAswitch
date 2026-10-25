@@ -1,5 +1,5 @@
 // 右侧面板的“翻译”页（shen 2026-10-25 选的方案 C 指挥舱侧栏，风格先沿用软件现有的）。
-// 上：状态条（客户语言、引擎、今天自动翻了几条）；中：当前对话收到的消息和译文（只读页面，和悬浮窗同一套）；
+// 上：当前对话收到的消息和译文（只读页面，和悬浮窗同一套）；
 // 下：写中文回复，选语气，翻好的译文可以直接改，改过就不会被自动覆盖。只“放进输入框”，永远不按发送。
 // 这个文件在 shell.js 之前加载，里面用到的 h、icon、kids、s、pn、tr、panelInsert 等都在 shell.js 里，运行时才调用。
 
@@ -54,7 +54,7 @@ window.wa.onDock((st) => {
   const before = dk.unread;
   dockCountUnread();
   if (dockVisible()) dockRender(false);
-  if (before !== dk.unread && s) renderTop();
+  if (before !== dk.unread && s) refreshPanelHead();
 });
 async function dockFetch() {
   try { const st = await window.wa.dockGet(); if (st) { if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; } dk.st = st; dockCountUnread(); } } catch {}
@@ -85,7 +85,7 @@ async function dockRun(p) {
   if (r.kind === 'consent') { dk.consent = { kind: 'provider', list: r.consent }; dk.pending = p; return dockRender(true); }
   if (r.error) return dockSay(r.error, true);
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.warn = r.warn || []; dk.forTitle = p.title;
-  if (!p.insert) return dockSay(`${r.provider}${r.fallback ? '（默认的连不上，用了备用）' : ''} · ${(r.ms / 1000).toFixed(1)} 秒`);
+  if (!p.insert) return dockSay(r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
   if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   return dockInsert();
 }
@@ -142,9 +142,10 @@ function dockConsentBox() {
       h('button', { class: 'pn-btn', onclick: () => { dk.consent = null; dk.pending = null; dockRender(true); } }, '取消')));
 }
 
-function dockStrip() {
+// 发出时翻成哪种语言：认出来或选过的会记在这个对话上
+function dockLangSel() {
   const st = dk.st;
-  const lang = h('select', { class: 'dk-lang', 'aria-label': '客户语言（发出时翻成这种语言）', onchange: async (e) => {
+  const lang = h('select', { class: 'dk-lang', 'aria-label': '翻成哪种语言', title: { manual: '你给这个对话选的语言，已记住', detected: '从客户发来的消息认出来的，已记住', customer: `客户资料里「${st.targetFrom}」填的语言`, default: '这个号的默认语言' }[st.targetSrc] || null, onchange: async (e) => {
     const v = e.target.value;
     dk.st = await window.wa.dockLang(st.accountId, st.title, v === '__auto' ? '' : v);
     dockRender(true);
@@ -152,13 +153,7 @@ function dockStrip() {
     st.canRemember && st.targetSrc === 'manual' ? h('option', { value: '__auto' }, '自动识别') : null,
     st.langs.map((l) => h('option', { value: l }, l)));
   lang.value = st.target;
-  const note = { manual: '已记住', detected: '已记住', customer: '客户名单', default: st.canRemember ? '还没认出来' : '号的默认' }[st.targetSrc] || '';
-  const noteTitle = { manual: '你给这个对话选的语言，下次打开这个对话还用它', detected: '从客户发来的消息认出来的，记在这个对话上', customer: `客户名单里「${st.targetFrom}」填的语言`, default: '用这个号的默认语言' }[st.targetSrc] || null;
-  const cell = (label, ...body) => h('div', { class: 'dk-cell' }, h('span', { class: 'dk-label' }, label), h('div', { class: 'dk-val' }, ...body));
-  return h('div', { class: 'dk-strip' },
-    cell('客户语言', lang, note ? h('span', { class: `dk-note${st.targetSrc === 'default' ? '' : ' on'}`, title: noteTitle }, note) : null),
-    cell('引擎', h('span', { class: 'dk-mono', title: st.providerName }, st.engine || '—')),
-    cell('今日自动', h('span', { class: 'dk-mono', title: '今天这个号自动翻了几条 / 每天上限（设置 › 翻译里改）' }, `${st.today}`, h('span', { class: 'dk-dim' }, `/${st.dailyCap}`))));
+  return lang;
 }
 
 function dockItemRow(it, last) {
@@ -253,7 +248,7 @@ function dockCompose() {
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), modeSel, ...tones),
     input,
     h('div', { class: 'dk-outhead' },
-      h('span', { class: 'dk-label' }, `→ ${st.target}`),
+      h('span', { class: 'dk-label' }, '→'), dockLangSel(),
       h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改'),
       stale ? h('span', { class: 'dk-dim' }, '中文改过了') : null,
       h('span', { class: 'grow' }),
@@ -270,27 +265,29 @@ function dockCompose() {
 // force=false：只刷新状态条和消息列表，正在写的回复不动
 function dockRender(force = false) {
   if (!dockVisible()) return;
-  if (!dk.st || dk.st.accountId !== s.activeId) { if (!dk.fetching) { dk.fetching = true; dockFetch().finally(() => { dk.fetching = false; }); } if (!dk.st) { $panel.replaceChildren(h('div', { class: 'hint dk-hint' }, '加载中…')); return; } }
+  const host = $panel.querySelector('.dk-host');
+  if (!host) return;
+  if (!dk.st || dk.st.accountId !== s.activeId) { if (!dk.fetching) { dk.fetching = true; dockFetch().finally(() => { dk.fetching = false; }); } if (!dk.st) { host.replaceChildren(h('div', { class: 'hint dk-hint' }, '加载中…')); return; } }
   const st = dk.st;
-  if (!st.accountId) { $panel.replaceChildren(h('p', { class: 'hint dk-hint' }, '先添加一个 WhatsApp 账号。')); return; }
+  if (!st.accountId) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '先添加一个 WhatsApp 账号。')); return; }
   if (!st.hasProvider) {
-    $panel.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
+    host.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
       h('span', { class: 'hint' }, '还没设置翻译服务。支持腾讯混元、智谱、OpenRouter 和其他 OpenAI 兼容接口。'),
       h('button', { class: 'pn-btn primary', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); } }, '去设置')));
     return;
   }
-  if (dk.consent) { $panel.replaceChildren(dockConsentBox()); return; }
-  const root = $panel.querySelector('.dk');
+  if (dk.consent) { host.replaceChildren(dockConsentBox()); return; }
+  const root = host.querySelector('.dk');
   const msg = dk.msg ? h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
-    root.replaceChildren(...kids(dockStrip(), dockInHead(), dockIncoming(), msg, keep));
+    root.replaceChildren(...kids(dockInHead(), dockIncoming(), msg, keep));
     return;
   }
-  const el = h('div', { class: 'dk' }, ...kids(dockStrip(), dockInHead(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: 'dk' }, ...kids(dockInHead(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
-  $panel.replaceChildren(el);
+  host.replaceChildren(el);
   if (focusIn) { const box = el.querySelector('.dk-in'); box.focus(); box.selectionStart = box.selectionEnd = box.value.length; }
 }

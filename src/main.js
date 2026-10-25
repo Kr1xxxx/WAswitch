@@ -81,8 +81,7 @@ const SIDE_COLLAPSED = 64;
 const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
-const PANEL_W = 300; // 右侧话术/客户面板的宽度
-const DOCK_W = 380; // 面板切到“翻译”时更宽一些（收到的消息和写回复都在里面）
+const PANEL_W = 380; // 右侧工作台（客户资料 / 话术 / 翻译）的宽度
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
@@ -753,7 +752,7 @@ function layout() {
   const bounds = {
     x: side,
     y: GAP + top,
-    width: Math.max(0, width - side - GAP - (panelShown() ? (panelTab === 'translate' ? DOCK_W : PANEL_W) : 0)),
+    width: Math.max(0, width - side - GAP - (panelShown() ? PANEL_W : 0)),
     height: Math.max(0, height - GAP * 2 - top),
   };
   for (const [id, view] of views) {

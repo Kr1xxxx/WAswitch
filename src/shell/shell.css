@@ -288,7 +288,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 
 #body { flex: 1; min-height: 0; display: flex; }
 #body > #content, #body > #lock { flex: 1; min-width: 0; }
-#panel { flex: none; width: 300px; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: #fbfbfc; font-size: 13px; }
+#panel { flex: none; width: 380px; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: #fbfbfc; font-size: 13px; }
 #panel[hidden] { display: none; }
 .pn-tabs { display: flex; gap: 4px; padding: 8px 10px 6px; border-bottom: 1px solid var(--line); align-items: center; }
 .pn-tab { border: none; background: transparent; padding: 5px 10px; border-radius: 7px; font: inherit; font-weight: 600; color: var(--muted); }
@@ -332,26 +332,22 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .avatar.crm { box-shadow: 0 0 0 2px var(--tint), 0 0 0 4px #2563EB; }
 .crm-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #2563EB; color: #fff; font-size: 10px; font-weight: 600; line-height: 16px; vertical-align: 1px; }
 
-/* 顶栏的“话术 / 客户 / 翻译”（打开右侧面板到那一页） */
-.tb-tabs { display: flex; align-self: stretch; gap: 2px; }
+/* 右侧工作台顶部的切页：客户资料 / 话术 / 翻译 */
+.wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: 1px solid var(--line); background: #fff; }
+.wb-tabs .icon-btn { align-self: center; }
 .tb-tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .tb-tab:hover { color: var(--text); background: rgba(0,0,0,.03); }
 .tb-tab.on { color: var(--text); font-weight: 600; border-bottom-color: #15803D; }
 .tb-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #15803D; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* 右侧面板的“翻译”页：上面状态条，中间收到的消息，下面写回复 */
-#panel.dock { width: 380px; background: #fff; }
+#panel.dock { background: #fff; }
+.dk-host { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .dk { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.dk-strip { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, .8fr); border-bottom: 1px solid var(--line); background: #fbfbfc; }
-.dk-cell { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dk-cell + .dk-cell { border-left: 1px solid var(--line); }
 .dk-label { font-size: 11px; color: var(--muted); letter-spacing: .02em; white-space: nowrap; }
-.dk-val { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
 .dk-mono { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dk-dim { color: var(--muted); font-size: 12px; }
 .dk-lang { min-width: 0; max-width: 88px; border: 1px solid var(--field); border-radius: 6px; padding: 1px 4px; font: inherit; font-size: 13px; background: #fff; }
-.dk-note { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.dk-note.on { color: var(--ok); }
 .dk-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
 .dk-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--soft); white-space: nowrap; cursor: pointer; }
 .dk-switch { appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--field); position: relative; margin: 0; cursor: pointer; transition: background .15s; }
