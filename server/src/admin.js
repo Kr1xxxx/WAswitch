@@ -138,17 +138,26 @@ async function updateUser(db, user, id, body) {
     }
   }
   if (!sets.length) return json({ ok: true });
+  // 校验最终值与 UPDATE 是同一条语句。失败时不写任何字段，也不靠旧快照回滚。
+  // 未修改字段直接取数据库当前值，避免并发角色变更使预检查失效。
+  const guardVals = [];
+  const proposed = (column) => {
+    const i = sets.indexOf(`${column} = ?`);
+    if (i < 0) return column;
+    guardVals.push(vals[i]);
+    return '?';
+  };
+  const valid = `(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)
+    AND (${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`;
+  let after;
   try {
-    await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id).run();
+    after = await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND ${valid}
+      RETURNING role, group_id, email`).bind(...vals, id, ...guardVals).first();
   } catch (e) {
     if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
     throw e;
   }
-  const after = await db.prepare('SELECT role, group_id, email FROM users WHERE id = ?').bind(id).first();
-  if (after.role !== 'agent' && !after.email) {
-    await db.prepare('UPDATE users SET role = ?, email = ? WHERE id = ?').bind(u.role, u.email, id).run();
-    return fail(400, '老板和主管要有邮箱');
-  }
+  if (!after) return fail(400, '老板和主管要有邮箱，主管还要选择一个组');
   await audit(db, user.id, 'user.update', id, body);
   // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
   if (body.group_id !== undefined && isOwner(user)) {
