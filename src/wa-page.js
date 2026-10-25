@@ -226,5 +226,33 @@ async function readOpenChat(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, READ_CHAT_CODE, parsePre };
+// 自己的手机号：WhatsApp Web 登录后把本机账号的 id（如 "8613800000000:12@c.us"）存在 localStorage 里。
+// 只读这两个键，不读别的、不写任何东西。读不到就返回空，用户可以在编辑账号里自己填。
+const OWN_NUMBER_KEYS = ['last-wid-md', 'last-wid'];
+const OWN_NUMBER_CODE = `(() => {
+  try {
+    for (const k of ${JSON.stringify(OWN_NUMBER_KEYS)}) {
+      const v = window.localStorage.getItem(k);
+      if (v) return String(v).slice(0, 100);
+    }
+  } catch {}
+  return '';
+})()`;
+
+// "8613800000000:12@c.us"、"\\"8613800000000@c.us\\"" → "+8613800000000"；认不出返回 ''
+function parseWid(raw) {
+  const m = /^"?(\d{6,15})(?::\d+)?@(?:c\.us|s\.whatsapp\.net)"?$/.exec(String(raw || '').trim());
+  return m ? `+${m[1]}` : '';
+}
+
+async function readOwnNumber(wc) {
+  if (wc.isDestroyed() || wc.isLoading()) return '';
+  try {
+    return parseWid(await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: OWN_NUMBER_CODE }]));
+  } catch {
+    return '';
+  }
+}
+
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readOwnNumber, parseWid, READ_CHAT_CODE, parsePre };
 
