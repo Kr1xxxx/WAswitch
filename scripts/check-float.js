@@ -21,6 +21,26 @@ async function core() {
   assert.strictEqual(v.items.length, 12);
   assert(!JSON.stringify(v).includes('c.us'), '悬浮窗拿到的数据里不能有 data-id');
   assert.strictEqual(v.items[0].state, 'manual');
+  // 记客户语言用的对话 hash：固定、不含号码
+  assert.match(v.chatKey, /^[0-9a-f]{16}$/);
+  assert.strictEqual(fc.viewOf('A').chatKey, v.chatKey);
+  // 上下文：这条之前的几条（双方都有）；手动改的译文保留，纠错结果只当建议
+  const ctxMsgs = [msg(1, false, '333@c.us'), msg(2, true, '333@c.us'), msg(3, false, '333@c.us')];
+  fc.ingest('C', { title: 'c', msgs: ctxMsgs }, { auto: false, dailyCap: 500 });
+  assert.deepStrictEqual(fc.contextOf('C', hashOf('C', ctxMsgs[2].id)).map((m) => m.out), [false, true]);
+  assert.strictEqual(fc.contextOf('C').length, 3);
+  const hc = hashOf('C', ctxMsgs[2].id);
+  assert(fc.edit('C', hc, '我改的'));
+  assert(fc.manual('C', hc, true));
+  await sleep(20);
+  const ci = fc.viewOf('C').items.find((x) => x.h === hc);
+  assert.strictEqual(ci.tr, '我改的');
+  assert.strictEqual(ci.suggest, '译:hola 3');
+  assert(fc.suggestion('C', hc, true));
+  assert.strictEqual(fc.viewOf('C').items.find((x) => x.h === hc).tr, '译:hola 3');
+  // 消息时间（页面上写的几点几分）
+  fc.ingest('T', { title: 'x', msgs: [{ ...msg(1, false, '222@c.us'), t: { h: 9, mi: 5 } }] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc.viewOf('T').items[0].t, '09:05');
   // 同一个对话来了新消息：自动翻
   fc.ingest('A', { title: 'Carlos', msgs: [...first.slice(1), msg(12)] }, { auto: true, dailyCap: 500 });
   await sleep(20);

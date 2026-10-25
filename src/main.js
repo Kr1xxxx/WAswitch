@@ -19,6 +19,7 @@ const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES } = require('./translate');
 const { FloatCore } = require('./floatcore');
+const { detectLang } = require('./langdetect');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
@@ -80,7 +81,7 @@ const SIDE_COLLAPSED = 64;
 const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
-const PANEL_W = 300; // 右侧话术/客户面板的宽度
+const PANEL_W = 380; // 右侧工作台（客户资料 / 话术 / 翻译）的宽度
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
@@ -701,6 +702,7 @@ function checkIdleLock() {
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
 let panelOpen = false;
+let panelTab = 'replies'; // replies | customers | translate
 let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
@@ -813,6 +815,7 @@ function pushState() {
     team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
     locked,
     panelOpen: panelShown(),
+    panelTab,
     floatOpen,
     lockChoices: memory.LOCK_CHOICES,
     // 分组：每组带上未读总数，折叠后组头上也能看到
@@ -2137,6 +2140,13 @@ handleShell('netlog:get', () => (netLog ? netLog.load().filter((e) => !isParkedI
 handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 // ---- 面板 ----
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
+// 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
+onShell('panel:tab', (tab) => {
+  if (!['replies', 'customers', 'translate'].includes(tab)) return;
+  panelTab = tab;
+  panelOpen = true;
+  refresh();
+});
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
 handleShell('reply:delete', (id) => { if (typeof id === 'string') replyStore.remove(id); return panelData(); });
@@ -2146,7 +2156,7 @@ handleShell('cust:save', (data) => {
   if (existing && parkedCustomer(existing)) return null;
   const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
   const ok = customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt, lang: data.lang });
-  if (ok && floatOpen) pushFloat(); // 悬浮窗的目标语言可能跟着这个客户变
+  if (ok) pushFloat(); // 悬浮窗和面板的目标语言可能跟着这个客户变
   return ok ? panelData() : null;
 });
 handleShell('cust:delete', (id) => {
@@ -2269,11 +2279,22 @@ function userCancel() {
   userTr.gen += 1;
   return true;
 }
-handleShell('tr:run', async ({ text, modeId, target, source } = {}) => {
+// 面板“翻译”页的语气：加在所选模式的提示词后面
+const TONES = {
+  biz: '语气礼貌、专业，适合商务沟通。',
+  casual: '像当地人日常聊天一样自然、亲切。',
+  short: '尽量简短，一两句话说清楚，不丢掉任何信息和数字。',
+};
+handleShell('tr:run', async ({ text, modeId, target, source, tone, ctxAccount, fix, draft } = {}) => {
+  // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
+  const context = typeof ctxAccount === 'string' && ctxAccount === activeId && floatCore ? floatCore.contextOf(activeId) : undefined;
   // __back：回译成中文核对，用固定的忠实翻译提示词
-  const mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
+  // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改
+  if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft });
+  let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
     : typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return userTranslate({ text, mode, target, source });
+  if (mode && modeId !== '__back' && Object.hasOwn(TONES, tone)) mode = { ...mode, prompt: `${mode.prompt}\n${TONES[tone]}` };
+  return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
 });
 handleShell('tr:cancel', () => userCancel());
 // 只在用户点“翻译剪贴板”时读一次，从不轮询
@@ -2314,26 +2335,44 @@ let floatReadable = 'loading'; // ok | nochat | unreadable | loading
 let floatArea = null; // 账号视图的位置（layout 算出来的）
 let floatCore = null;
 const floatAuto = (id) => !!translator.load().accountAuto[id];
+// 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
+const readerOn = () => (floatOpen && !!floatView) || panelShown();
+let floatBusy = false;
 function floatInMode() {
   const cfg = translator.load();
   const list = modeStore.list().filter((m) => m.direction === 'in' || m.direction === 'both');
   return list.find((m) => m.id === cfg.floatInMode) || list[0] || null;
 }
+// 纠错（AI 校对）的内置提示词：[原文] = <text>，[译文] = <draft>，[上下文] = <context>
+const FIX_IN = {
+  prompt: '你是翻译校对员。<text> 里是客户原文，<draft> 里是当前中文译文，<context> 里是最近聊天记录，只用来理解意思，不要翻译。'
+    + '对照原文和上下文检查译文：错译、漏译、多译、语气不对，人名、数字、金额、日期、型号是否正确，俚语、缩写、错别字是否理解对。'
+    + '只输出改好的中文译文，不要解释；如果已经正确，原样输出。',
+  temperature: 0.2,
+};
+const FIX_OUT = {
+  prompt: '你是{目标语言}母语的校对员。<text> 里是中文原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
+    + '检查译文是否准确表达原文、有没有漏译多译，修正语法和拼写，让说法自然、符合当地人聊天习惯，保持原来的语气。'
+    + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
+  temperature: 0.2,
+};
 function setupFloatCore() {
   floatCore = new FloatCore({
-    translate: (text) => {
-      const mode = floatInMode();
+    translate: (text, { fix, context, prev } = {}) => {
+      // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
+      const draft = fix && typeof prev === 'string' ? prev : '';
+      const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
       if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
       // 用户点的翻译在等：先让它
       if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-      return translator.translate({ text, mode, target: '中文' });
+      return translator.translate({ text, mode, target: '中文', context, draft });
     },
   });
   floatCore.onChange = (accId) => { if (accId === activeId) pushFloat(); };
 }
 // 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
 function floatCanRead() {
-  if (!floatOpen || !floatView || page !== 'account' || locked || !win || !win.isVisible() || win.isMinimized()) return null;
+  if (!readerOn() || page !== 'account' || locked || !win || !win.isVisible() || win.isMinimized()) return null;
   const acc = findAcc(activeId);
   if (!acc || isLite(acc) || problems.has(acc.id)) return null;
   const view = views.get(acc.id);
@@ -2342,18 +2381,21 @@ function floatCanRead() {
 }
 async function floatTick() {
   floatTimer = null;
-  if (!floatOpen) return;
+  if (!readerOn() || floatBusy) return;
   const target = floatCanRead();
   let delay = 2000;
   if (target) {
-    const r = await waPage.readOpenChat(target.wc);
-    if (!floatOpen || target.acc.id !== activeId) { scheduleFloat(500); return; }
+    floatBusy = true;
+    let r;
+    try { r = await waPage.readOpenChat(target.wc); } finally { floatBusy = false; }
+    if (!readerOn() || target.acc.id !== activeId) { scheduleFloat(500); return; }
     if (r.ok && r.msgs.length) {
       floatFails = 0;
       const was = floatReadable;
       floatReadable = 'ok';
       const cfg = translator.load();
-      const changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id) && !!cfg.autoConsent[target.acc.id], dailyCap: cfg.dailyCap });
+      let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id) && !!cfg.autoConsent[target.acc.id], dailyCap: cfg.dailyCap });
+      if (changed) changed = rememberDetected(target.acc.id) || changed;
       if (changed || was !== 'ok') pushFloat();
     } else if (r.why === 'nochat') {
       // 没打开对话：不算失败，3 秒后再看
@@ -2373,7 +2415,26 @@ async function floatTick() {
 }
 function scheduleFloat(ms) {
   if (floatTimer) clearTimeout(floatTimer);
-  floatTimer = floatOpen ? setTimeout(floatTick, ms) : null;
+  floatTimer = readerOn() ? setTimeout(floatTick, ms) : null;
+}
+// 从最近收到的几条认出客户用的语言，记在这个对话上（手动选过的不改）
+function rememberDetected(accId) {
+  const v = floatCore.viewOf(accId);
+  if (!v.chatKey || !v.items.length) return false;
+  const lang = detectLang(v.items.slice(-5).map((it) => it.text).join('\n'));
+  if (!lang || lang === '中文') return false;
+  return translator.setChatLang(`${accId}:${v.chatKey}`, lang, 'detected');
+}
+// 发出的目标语言和它的来源：手动选的 > 客户名单里填的 > 认出来的 > 这个号的默认语言
+function outTarget(acc, v) {
+  const cfg = translator.load();
+  const key = acc && v.chatKey ? `${acc.id}:${v.chatKey}` : '';
+  const kept = key ? translator.chatLang(key) : null;
+  const chat = acc && v.title ? chatCustomer(acc.id, v.title) : null;
+  if (kept && kept.src === 'manual') return { lang: kept.lang, from: 'manual', name: chat ? chat.name : '' };
+  if (chat) return { lang: chat.lang, from: 'customer', name: chat.name };
+  if (kept) return { lang: kept.lang, from: 'detected', name: '' };
+  return { lang: (acc && cfg.accountLang[acc.id]) || '英语', from: 'default', name: '' };
 }
 function floatState() {
   const cfg = translator.load();
@@ -2382,7 +2443,7 @@ function floatState() {
   const v = acc ? floatCore.viewOf(acc.id) : { title: '', items: [], paused: '' };
   const primary = translator.provider(cfg.primaryId);
   const inMode = floatInMode();
-  const chat = acc && v.title ? chatCustomer(acc.id, v.title) : null;
+  const out = outTarget(acc, v);
   return {
     accountId: acc ? acc.id : '',
     accountName: acc ? acc.name : '',
@@ -2397,6 +2458,7 @@ function floatState() {
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
     providerName: primary ? primary.name : '',
+    engine: primary ? (primary.model || primary.name) : '',
     collapsed: cfg.float.collapsed,
     modes: {
       out: modes.filter((m) => m.direction !== 'in').map(({ id, name }) => ({ id, name })),
@@ -2404,25 +2466,34 @@ function floatState() {
     },
     inModeId: inMode ? inMode.id : '',
     langs: translator.publicConfig().langs,
-    target: (chat && chat.lang) || (acc && cfg.accountLang[acc.id]) || '英语',
-    targetFrom: chat ? chat.name : '', // 目标语言来自这个客户
+    target: out.lang,
+    targetSrc: out.from, // manual | customer | detected | default
+    canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
+    // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话
+    targetFrom: out.from === 'default' ? '' : (out.name || '这个对话'),
   };
 }
 function pushFloat() {
-  if (floatView && !floatView.webContents.isDestroyed()) floatView.webContents.send('float:state', floatState());
+  const both = floatView && !floatView.webContents.isDestroyed();
+  const dock = panelShown() && shellView && !shellView.webContents.isDestroyed();
+  if (!both && !dock) return;
+  const st = floatState();
+  if (both) floatView.webContents.send('float:state', st);
+  if (dock) shellView.webContents.send('dock:state', st);
 }
 let floatLastAcc = null;
 function layoutFloat(area) {
   floatArea = area;
-  if (!floatView) return;
-  // 换了号：重新开始读，悬浮窗只显示新号的内容
-  if (activeId !== floatLastAcc) {
+  // 换了号：重新开始读，悬浮窗和面板只显示新号的内容
+  if (readerOn() && activeId !== floatLastAcc) {
     floatLastAcc = activeId;
     floatFails = 0;
     floatReadable = 'loading';
     pushFloat();
     scheduleFloat(200);
-  }
+  } else if (readerOn() && !floatTimer && !floatBusy) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
+  if (!readerOn()) floatLastAcc = null;
+  if (!floatView) return;
   const acc = findAcc(activeId);
   const show = floatOpen && page === 'account' && !locked && !!acc && !problems.has(acc.id) && area.width > FLOAT_W + 40;
   floatView.setVisible(show);
@@ -2458,7 +2529,6 @@ function openFloat() {
 }
 function closeFloat() {
   floatOpen = false;
-  floatLastAcc = null;
   if (floatTimer) { clearTimeout(floatTimer); floatTimer = null; }
   if (floatView) {
     const v = floatView;
@@ -2498,15 +2568,15 @@ onFloat('float:moveend', () => {
   const b = floatView.getBounds();
   translator.setFloat({ pos: { dx: floatArea.x + floatArea.width - b.width - b.x, dy: b.y - floatArea.y } });
 });
-handleFloat('float:item', (h) => {
+function readerItem(h, fix) {
   if (typeof h !== 'string' || !activeId) return null;
   const need = translator.needConsent();
   if (need.length) return { consent: need };
-  floatCore.manual(activeId, h);
+  floatCore.manual(activeId, h, fix === true);
   pushFloat();
   return { ok: true };
-});
-handleFloat('float:auto', (on) => {
+}
+function readerAuto(on) {
   const acc = findAcc(activeId);
   if (!acc) return null;
   const cfg = translator.load();
@@ -2515,22 +2585,47 @@ handleFloat('float:auto', (on) => {
   if (on) floatCore.backfill(acc.id, { dailyCap: cfg.dailyCap });
   pushFloat();
   return { ok: true };
-});
-handleFloat('float:consent', ({ kind, ids } = {}) => {
+}
+function readerConsent({ kind, ids } = {}) {
   if (kind === 'auto' && activeId) translator.setFloat({ accId: activeId, autoConsent: true });
   if (kind === 'provider' && Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id);
   pushFloat();
   return true;
+}
+const readerInMode = (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; };
+handleFloat('float:item', (h) => readerItem(h, false));
+handleFloat('float:auto', readerAuto);
+handleFloat('float:consent', readerConsent);
+handleFloat('float:inmode', readerInMode);
+// 面板“翻译”页用的同一套（只接受软件界面发来的）
+handleShell('dock:get', () => floatState());
+handleShell('dock:item', ({ h, fix } = {}) => readerItem(h, fix));
+handleShell('dock:suggest', ({ accountId, h, take } = {}) => (accountId === activeId && typeof h === 'string' ? floatCore.suggestion(activeId, h, take === true) : false));
+handleShell('dock:edit', ({ accountId, h, text } = {}) => {
+  if (accountId !== activeId || typeof h !== 'string' || typeof text !== 'string') return false;
+  return floatCore.edit(activeId, h, text);
+});
+handleShell('dock:auto', readerAuto);
+handleShell('dock:consent', readerConsent);
+handleShell('dock:inmode', readerInMode);
+// 手动选这个对话的客户语言，记住；lang 为空 = 忘掉，回到自动。对话已经换了就不记
+handleShell('dock:lang', ({ accountId, title, lang } = {}) => {
+  const acc = findAcc(accountId);
+  if (!acc || accountId !== activeId) return floatState();
+  const v = floatCore.viewOf(acc.id);
+  if (v.chatKey && v.title === title) translator.setChatLang(`${acc.id}:${v.chatKey}`, lang || '', 'manual');
+  else if (!v.chatKey && lang) translator.setAccountLang(acc.id, lang); // 读不到对话（轻量模式等）：改这个号的默认语言
+  pushFloat();
+  return floatState();
 });
 handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
   if (accountId !== activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
   const mode = typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return userTranslate({ text, mode, target });
+  return userTranslate({ text, mode, target, context: floatCore.contextOf(activeId) }); // 带上当前对话最近几条当上下文
 });
 handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
-handleFloat('float:inmode', (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; });
 handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
 handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
