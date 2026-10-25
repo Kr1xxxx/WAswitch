@@ -1,5 +1,6 @@
 // 管理后台接口。进来之前 index.js 已经验过 Access JWT，这里按邮箱查人和权限。
 // 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组；坐席 agent 不能登录后台。
+import { pushReady } from './crm.js';
 import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit } from './util.js';
 
 const CODE_TTL_MS = 15 * 60 * 1000;
@@ -39,17 +40,20 @@ async function me(db, user) {
   return json({ user, groups: groups.results, settings: { allow_private: !ap || ap.value !== 0 }, server_time: now() });
 }
 
-async function overview(db, user) {
+async function overview(db, user, env) {
   const where = isOwner(user) ? 'WHERE a.deleted_at IS NULL' : 'WHERE a.deleted_at IS NULL AND a.group_id = ?';
-  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.crm_sync, a.user_id, a.device_id,
+  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.crm_sync, a.crm_stored, a.crm_dropped, a.crm_pushed_at, a.user_id, a.device_id,
       u.name AS user_name, d.name AS device_name, d.last_seen_at, d.revoked_at, d.app_version,
       st.state, st.unread, st.proxy_ok, st.proxy_ms, st.exit_ip, st.exit_country, st.exit_changed, st.reported_at
     FROM wa_accounts a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
     LEFT JOIN account_status st ON st.account_id = a.id AND st.device_id = a.device_id ${where} ORDER BY a.label`);
   const rows = await (isOwner(user) ? stmt : stmt.bind(user.group_id)).all();
   const t = now();
+  const authFail = await db.prepare("SELECT value FROM meta WHERE key = 'crm_auth_fail_at'").first();
   return json({
     server_time: t,
+    // 聊天同步：推送开没开、来财最近一次拒绝签名的时间（0 = 没有）
+    crm: { push: pushReady(env), auth_fail_at: authFail ? authFail.value : 0 },
     accounts: rows.results.map((r) => ({ ...r, device_online: !!(r.device_id && !r.revoked_at && t - r.last_seen_at < ONLINE_MS) })),
   });
 }
@@ -245,6 +249,8 @@ async function updateAccount(db, user, id, body) {
   if (!sets.length) return json({ ok: true });
   sets.push('updated_at = ?'); vals.push(now());
   const stmts = [db.prepare(`UPDATE wa_accounts SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id)];
+  // 关掉聊天同步：这个号还没推出去的聊天一起删
+  if (body.crm_sync !== undefined && body.crm_sync !== true) stmts.push(db.prepare('DELETE FROM crm_batches WHERE account_id = ?').bind(id));
   // 用事务内的当前归属刷新版本，不能用请求开始时读到的旧 device_id。
   stmts.push(db.prepare(`UPDATE device_seats SET visible = visible WHERE account_id = ? AND visible = 1
     AND device_id = (SELECT device_id FROM wa_accounts WHERE id = ?)`).bind(id, id));
@@ -290,7 +296,8 @@ async function deleteAccount(db, user, id) {
   await db.batch([
     db.prepare('DELETE FROM account_status WHERE account_id = ?').bind(id),
     db.prepare('DELETE FROM status_events WHERE account_id = ?').bind(id),
-    db.prepare("UPDATE wa_accounts SET deleted_at = ?, label = '已删除', number_label = '', note = '', expected_country = '', updated_at = ? WHERE id = ?").bind(now(), now(), id),
+    db.prepare('DELETE FROM crm_batches WHERE account_id = ?').bind(id),
+    db.prepare("UPDATE wa_accounts SET deleted_at = ?, crm_sync = 0, label = '已删除', number_label = '', note = '', expected_country = '', updated_at = ? WHERE id = ?").bind(now(), now(), id),
   ]);
   await audit(db, user.id, 'account.delete', id);
   return json({ ok: true });
@@ -333,7 +340,7 @@ export async function handleAdmin(request, env, path, identity) {
   const route = `${m} ${seg[0]}${seg.length > 1 ? '/:id' : ''}${seg[2] ? `/${seg[2]}` : ''}`;
   switch (route) {
     case 'GET me': return me(db, user);
-    case 'GET overview': return overview(db, user);
+    case 'GET overview': return overview(db, user, env);
     case 'GET accounts/:id/events': return events(db, user, id);
     case 'PATCH accounts/:id': return updateAccount(db, user, id, body);
     case 'POST accounts/:id/assign': return assignAccount(db, user, id, body);

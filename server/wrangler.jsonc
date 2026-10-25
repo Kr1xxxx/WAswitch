@@ -21,7 +21,14 @@
       "migrations_dir": "migrations"
     }
   ],
-  "triggers": { "crons": ["17 19 * * *"] },
-  "vars": { "SYNC_INTERVAL_S": "120" },
+  // 每天清理一次；每 30 分钟把聊天推给来财
+  "triggers": { "crons": ["17 19 * * *", "*/30 * * * *"] },
+  // CRM_PUSH：来财接收入口做好、真实客户上云、验收通过后才改成 "1"。没开时电脑不上传聊天
+  "vars": { "SYNC_INTERVAL_S": "120", "CRM_PUSH": "0" },
+  // 聊天同步：来财那边的命名入口做好后再取消注释（Worker 不存在时部署会失败）
+  // "services": [{ "binding": "LAICRM", "service": "laicrm-app", "entrypoint": "WaswitchIngest" }],
+  // 另外两个 secret 由老板自己放（wrangler secret put），不写在这里：
+  //   CRM_KEY        32 字节随机数的 base64，用来加密暂存的聊天和算消息编号
+  //   LAICRM_SECRET  推送签名密钥，和来财的 WASWITCH_INGEST_SECRET 一样
   "observability": { "enabled": true }
 }

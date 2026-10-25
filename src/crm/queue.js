@@ -18,6 +18,14 @@ const MAX_SEEN = 5000;
 const MAX_TEXT = 4000;
 const SAVE_DELAY_MS = 2000;
 
+// WhatsApp 自己的消息编号：网页版的编号形如 "false_8613800000000@c.us_3EB0..."，取最后一段；轻量版本来就是它。
+// 同一条消息在网页版和轻量版、换电脑后都一样，来财靠它去重
+function keyIdOf(mid) {
+  const m = /^(?:true|false)_[^_]+_([A-Za-z0-9]{6,64})$/.exec(mid);
+  if (m) return m[1];
+  return /^[A-Za-z0-9]{6,64}$/.test(mid) ? mid : '';
+}
+
 const hashOf = (accId, mid) => crypto.createHash('sha256').update(`${accId}|${mid}`).digest('hex').slice(0, 32);
 
 class CrmQueue {
@@ -87,14 +95,15 @@ class CrmQueue {
   add(accId, item) {
     const a = this.load().get(accId);
     if (!a || !item || typeof item.mid !== 'string' || !item.mid) return false;
-    if (!/^\d{6,20}$/.test(String(item.peer || ''))) return false;
     const at = Number(item.at);
     if (!Number.isFinite(at) || at < a.since) return false;
     const h = hashOf(accId, item.mid);
     if (a.seen.includes(h)) return false;
     a.seen.push(h);
     if (a.seen.length > MAX_SEEN) a.seen.splice(0, a.seen.length - MAX_SEEN);
-    a.items.push({ h, peer: String(item.peer), out: item.out === true, at: Math.round(at), approx: item.approx === true, text: String(item.text || '').slice(0, MAX_TEXT) });
+    // 号码只收 8～15 位（国际号码最长 15 位，和来财一致）；不合格的只计数
+    if (!/^\d{8,15}$/.test(String(item.peer || ''))) { a.skipped += 1; this.saveSoon(); return false; }
+    a.items.push({ h, k: keyIdOf(item.mid), peer: String(item.peer), out: item.out === true, at: Math.round(at), approx: item.approx === true, text: Array.from(String(item.text || '')).slice(0, MAX_TEXT).join('') });
     this.trim();
     this.saveSoon();
     return true;
@@ -189,5 +198,5 @@ class CrmQueue {
   }
 }
 
-module.exports = { CrmQueue, canEncrypt, hashOf, MAX_SEEN, MAX_AGE_MS };
+module.exports = { CrmQueue, canEncrypt, hashOf, keyIdOf, MAX_SEEN, MAX_AGE_MS };
 

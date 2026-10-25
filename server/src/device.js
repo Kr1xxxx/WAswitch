@@ -1,5 +1,6 @@
 // 设备接口：登记、加入团队、同步。只认设备令牌，不认 Access。
 // 规则见设计文档：只收白名单字段；只有显式 403 {revoked:true} 才让客户端停号。
+import { uploadChats } from './crm.js';
 import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE } from './util.js';
 
 export const PROTOCOL = 1;
@@ -13,7 +14,7 @@ const ENROLL_LIMIT = 10; // 每个 IP 每 10 分钟最多试 10 次
 const ENROLL_WINDOW_MS = 10 * 60 * 1000;
 
 // 设备令牌 -> { device, user }。失败时抛出带状态码的错误
-async function authDevice(request, db) {
+export async function authDevice(request, db) {
   const m = /^Bearer ([A-Za-z0-9_-]{40,60})$/.exec(request.headers.get('authorization') || '');
   if (!m) throw new HttpError(401, '缺少设备令牌');
   const hash = await sha256hex(m[1]);
@@ -206,6 +207,7 @@ export async function handleDevice(request, env, path) {
   if (path === '/api/device/enroll') return enroll(request, env);
   if (path === '/api/device/join') return join(request, env);
   if (path === '/api/device/sync') return sync(request, env);
+  if (path === '/api/device/chats') return uploadChats(request, env, await authDevice(request, env.DB));
   return fail(404, '没有这个接口');
 }
 

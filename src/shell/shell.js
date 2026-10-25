@@ -1222,11 +1222,15 @@ function settingsPage() {
 
 // ---------- 设置 › 团队 ----------
 // 同步到 CRM：只显示条数，不显示内容
-function crmBox(accounts) {
+function crmBox(accounts, upload) {
   const list = accounts.filter((a) => a.team && (a.crm || a.crmWanted));
   if (!list.length) return null;
+  const last = upload && upload.at
+    ? `上次上传：${new Date(upload.at).toLocaleString('zh-CN', { hour12: false })}${upload.error ? `（${upload.error}）` : '（成功）'}`
+    : '还没有上传过';
   return h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '同步到 CRM'),
-    h('p', { class: 'hint', style: { margin: '0' } }, '管理员给下面这些号开了同步：单聊里的文字消息先加密存在这台电脑上。群聊不同步；网页版的号只同步你打开看过的对话。'),
+    h('p', { class: 'hint', style: { margin: '0' } }, '管理员给下面这些号开了同步：单聊里的文字消息先加密存在这台电脑上，每 10 分钟传到团队后台，再写进公司的 CRM。群聊不同步；网页版的号只同步你打开看过的对话。'),
+    h('p', { class: 'hint', style: { margin: '0', fontSize: '12px' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
       h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
       h('span', { class: 'meta' }, a.name),
@@ -1276,7 +1280,7 @@ function teamPage(t, accounts = []) {
             render(true);
           } }, '加入团队')))));
     }
-    wrap.append(...[crmBox(accounts)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
+    wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
     return wrap;
   }
 

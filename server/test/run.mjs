@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fakeD1 } from './fake-d1.mjs';
 import worker from '../src/index.js';
+import { chunkMessages } from '../src/crm.js';
 import { _resetCertCache } from '../src/access.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -195,6 +196,117 @@ await test('同步到 CRM 的开关：只有老板能开，随坐席下发', asy
   const actions = db.raw.prepare('SELECT action FROM audit_log WHERE target = ? ORDER BY at').all(acc1).map((r) => r.action);
   assert.ok(actions.includes('account.crm_on') && actions.includes('account.crm_off'), '开关聊天同步要记操作记录');
   assert.equal((await sync(tokB, { cursor: r.data.cursor })).data.seats[0].crm_sync, false);
+});
+// ---- 同步到 CRM 第 2 步：上传、加密暂存、推给来财 ----
+const CRM_SECRET = 'test-laicrm-secret-0123456789abcdef';
+const laicrm = { calls: [], mode: 'ok', seen: new Set(),
+  async fetch(req) {
+    const body = await req.text();
+    const ts = req.headers.get('x-waswitch-timestamp');
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(CRM_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${body}`))).toString('hex');
+    assert.equal(req.headers.get('x-waswitch-signature'), `sha256=${sig}`, '签名要对');
+    assert.ok(Math.abs(Date.now() - Number(ts)) < 60000);
+    assert.ok(Buffer.byteLength(body) <= 256 * 1024, '每批不超过 256 KB');
+    const data = JSON.parse(body);
+    laicrm.calls.push(data);
+    if (laicrm.mode === '500') return new Response('x', { status: 500 });
+    if (laicrm.mode === '401') return new Response('x', { status: 401 });
+    const results = data.messages.map((m) => ({ id: m.id, status: m.peer !== '447700900123' ? 'unmatched' : laicrm.seen.has(m.id) ? 'duplicate' : (laicrm.seen.add(m.id), 'stored') }));
+    if (laicrm.mode === 'partial') results.pop();
+    if (laicrm.mode === 'foreign') results[0] = { id: 'f'.repeat(32), status: 'stored' };
+    return new Response(JSON.stringify({ results }), { headers: { 'content-type': 'application/json' } });
+  } };
+const chats = (token, team_id, items) => call('POST', '/api/device/chats', { token, body: { v: 1, team_id, items } });
+const cron = () => worker.scheduled({ cron: '*/30 * * * *' }, env);
+const msg = (k, extra = {}) => ({ k, peer: '447700900123', out: false, at: Date.now() - 60000, approx: false, text: '你好 price list', ...extra });
+const resetRate = () => db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'chats:%'").run();
+
+await test('CRM 上传：推送没配齐时回 503，电脑留着本机队列', async () => {
+  await boss.patch(`accounts/${acc1}`, { crm_sync: true });
+  const r = await chats(tokB, acc1, [msg('3EB0AAAA0001')]);
+  assert.equal(r.status, 503);
+  assert.equal(r.data.crm_paused, true);
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
+});
+Object.assign(env, { CRM_PUSH: '1', CRM_KEY: Buffer.alloc(32, 7).toString('base64'), LAICRM_SECRET: CRM_SECRET, LAICRM: laicrm });
+await test('CRM 上传：只收这台电脑上、开着同步的号；不合格的条目拒收', async () => {
+  assert.equal((await chats(tokA, acc1, [msg('3EB0AAAA0001')])).status, 409, '号不在这台电脑上');
+  assert.equal((await chats(tokB, acc2, [msg('3EB0AAAA0001')])).status, 409);
+  const r = await chats(tokB, acc1, [msg('3EB0AAAA0001'), msg('3EB0AAAA0002', { at: Date.now() - 120000, out: true }), msg('bad', { peer: '12345' }), msg('3EB0AAAA0003', { peer: '1234567890123456' }), { k: '../x' }]);
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.data.accepted, r.data.rejected], [2, 3]);
+  const dump = JSON.stringify(db.raw.prepare('SELECT * FROM crm_batches').all());
+  assert.ok(!dump.includes('price') && !dump.includes('447700900123'), '暂存的是密文');
+});
+await test('CRM 上传：每个号每 10 分钟最多 3 次', async () => {
+  assert.equal((await chats(tokB, acc1, [])).status, 200);
+  assert.equal((await chats(tokB, acc1, [])).status, 200);
+  assert.equal((await chats(tokB, acc1, [])).status, 429);
+  resetRate();
+});
+await test('CRM 推送：签名、按时间排序、消息编号稳定；写进来财后删掉，对不上的也删、只计数', async () => {
+  await chats(tokB, acc1, [msg('3EB0AAAA0004', { peer: '8613800000000' })]);
+  laicrm.calls = [];
+  await cron();
+  assert.equal(laicrm.calls.length, 2);
+  const first = laicrm.calls[0];
+  assert.equal(first.account.id, acc1);
+  assert.equal(first.staff.name, '坐席A');
+  assert.ok(first.messages.every((m) => /^[0-9a-f]{32}$/.test(m.id)));
+  assert.deepEqual(first.messages.map((m) => m.dir), ['out', 'in'], '按时间从早到晚');
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
+  const a = db.raw.prepare('SELECT crm_stored, crm_dropped FROM wa_accounts WHERE id = ?').get(acc1);
+  assert.deepEqual([a.crm_stored, a.crm_dropped], [2, 1]);
+  // 同一条消息再传一次（比如换了电脑）：编号一样，来财回 duplicate
+  resetRate();
+  await chats(tokB, acc1, [msg('3EB0AAAA0001')]);
+  laicrm.calls = [];
+  await cron();
+  assert.equal(laicrm.calls[0].messages[0].id, first.messages[1].id);
+  assert.equal(db.raw.prepare('SELECT crm_stored FROM wa_accounts WHERE id = ?').get(acc1).crm_stored, 3);
+});
+await test('CRM 推送：来财出错、少回结果、回了不是这批的编号时整批留着下一轮重推', async () => {
+  for (const mode of ['500', 'partial', 'foreign']) {
+    resetRate();
+    await chats(tokB, acc1, [msg(`3EB0BBBB${mode}`.replace(/[^A-Za-z0-9]/g, 'X')), msg('3EB0BBBB0002')]);
+    laicrm.mode = mode;
+    await cron();
+    assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 1, mode);
+    laicrm.mode = 'ok';
+    await cron();
+    assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0, mode);
+  }
+});
+await test('CRM 推送：签名被拒时停推并在后台提示，恢复后提示消失', async () => {
+  resetRate();
+  await chats(tokB, acc1, [msg('3EB0CCCC0001')]);
+  laicrm.mode = '401';
+  await cron();
+  assert.ok((await boss.get('overview')).data.crm.auth_fail_at > 0);
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 1);
+  laicrm.mode = 'ok';
+  await cron();
+  const o = (await boss.get('overview')).data;
+  assert.equal(o.crm.auth_fail_at, 0);
+  assert.equal(o.crm.push, true);
+});
+await test('CRM 推送：长中文消息按字节拆成多批，每批 ≤256 KB', async () => {
+  const msgs = Array.from({ length: 100 }, (_, i) => ({ id: String(i).padStart(32, '0'), peer: '447700900123', dir: 'in', at: i, approx: false, text: '中'.repeat(3000) }));
+  const parts = chunkMessages({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '' } }, msgs);
+  assert.ok(parts.length >= 4);
+  assert.equal(parts.flat().length, 100);
+  for (const p of parts) assert.ok(Buffer.byteLength(JSON.stringify({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '' }, messages: p })) <= 256 * 1024);
+});
+await test('CRM：关掉同步时，没推出去的聊天一起删；超过 7 天的也删', async () => {
+  resetRate();
+  await chats(tokB, acc1, [msg('3EB0DDDD0001')]);
+  await boss.patch(`accounts/${acc1}`, { crm_sync: false });
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
+  db.raw.prepare("INSERT INTO crm_batches (id, account_id, device_id, n, iv, data, created_at) VALUES ('old', ?, ?, 1, 'x', 'x', ?)").run(acc1, devB, Date.now() - 8 * 864e5);
+  await cron();
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
+  Object.assign(env, { CRM_PUSH: '0' });
 });
 await test('主管看不到别组的号，也不能分配', async () => {
   const s = admin('sup@example.com');

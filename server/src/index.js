@@ -4,6 +4,7 @@ import { fail, HttpError } from './util.js';
 import { verifyAccess } from './access.js';
 import { handleDevice } from './device.js';
 import { handleAdmin } from './admin.js';
+import { pushCrm } from './crm.js';
 
 const SECURITY_HEADERS = {
   'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
@@ -48,6 +49,8 @@ export default {
 
   // 每天清理：状态变化记录留 30 天，操作记录留 180 天，过期登记码和限速记录
   async scheduled(event, env) {
+    // 每 30 分钟：把聊天推给来财
+    if (event && event.cron === '*/30 * * * *') { await pushCrm(env); return; }
     const t = Date.now();
     await env.DB.batch([
       env.DB.prepare('DELETE FROM status_events WHERE at < ?').bind(t - 30 * 864e5),

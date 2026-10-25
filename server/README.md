@@ -20,3 +20,20 @@ node scripts/check-team.mjs     # WAswitch 同步模块对着后台跑一遍
 
 没配好 Access 变量时，除了设备接口，所有地址一律拒绝。
 
+
+## 聊天同步到来财（第 2 步）
+
+员工电脑每 10 分钟把开了“同步到 CRM”的号的聊天传上来，后台加密暂存，每 30 分钟推给来财，推完就删，最多留 7 天。对不上来财客户的消息直接丢掉，只计数。格式见交接说明文档。
+
+**真实客户上云、来财接收入口验收通过之前不要开。** 没开时员工电脑不上传，聊天留在本机（最多 7 天）。
+
+开的步骤（老板做）：
+
+1. 来财 `laicrm-app` 做好命名入口 `WaswitchIngest` 后，取消 `wrangler.jsonc` 里 `services` 那行的注释。
+2. 自己生成两个随机密钥，用 `npx wrangler secret put` 放进这个 Worker，不要发在聊天里：
+   - `CRM_KEY`：32 字节随机数的 base64（`openssl rand -base64 32`），加密暂存的聊天、算消息编号。换了它，还没推出去的聊天会作废。
+   - `LAICRM_SECRET`：推送签名密钥（`openssl rand -hex 32`），和来财的 `WASWITCH_INGEST_SECRET` 放同一个。
+3. 执行迁移 `0004_crm_push.sql`。
+4. 把 `wrangler.jsonc` 里的 `CRM_PUSH` 改成 `"1"`，部署。
+
+Cloudflare 免费版每个账号最多 5 个定时任务，这个 Worker 用 2 个（每天清理、每 30 分钟推送），和来财、mailflare 共用。后台“账号”页显示每个号已写入和丢弃的条数；来财拒绝签名时页面顶上会提示。
