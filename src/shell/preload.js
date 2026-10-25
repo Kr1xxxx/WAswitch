@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld('wa', {
   openLink: (url) => ipcRenderer.send('open-link', url),
   cacheSize: () => ipcRenderer.invoke('cache:size'),
   clearCache: () => ipcRenderer.invoke('cache:clear'),
+  memClean: () => ipcRenderer.invoke('mem:clean'),
   teamEnroll: (data) => ipcRenderer.invoke('team:enroll', data),
   teamJoin: (localIds) => ipcRenderer.invoke('team:join', { localIds }),
   teamSync: () => ipcRenderer.invoke('team:sync'),
