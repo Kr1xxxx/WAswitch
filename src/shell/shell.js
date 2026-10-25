@@ -25,6 +25,8 @@ const ICONS = {
   down: '<path d="m6 9 6 6 6-6"/>',
   right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  update: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
 };
 
 function icon(name, size = 16) {
@@ -207,7 +209,8 @@ function renderSide() {
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
       h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['translate', '翻译'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
-        h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label))));
+        h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+          id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))));
     return;
   }
   const label = s.collapsed ? '展开侧栏' : '收起侧栏';
@@ -222,6 +225,8 @@ function renderSide() {
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ' on' : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
     h('div', { class: 'grow' })));
+  const upd = updateCard();
+  if (upd) $side.append(upd);
   if (s.accounts.length && s.totalMB) {
     const total = s.accounts.reduce((n, a) => n + (a.memMB || 0), 0) || 1;
     $side.append(h('div', { class: 'membox', title: '近似值：只统计每个账号的主页面进程' },
@@ -233,9 +238,32 @@ function renderSide() {
   const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
   if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17)),
+    h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17),
+      updateReady() ? h('span', { class: 'dot new', 'aria-hidden': 'true' }) : null),
     bell));
   document.body.classList.toggle('mac', mac);
+}
+
+// ---------- 侧栏里的更新提示 ----------
+// 下载中显示进度，下载好显示“重启更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
+let updateHidden = '';
+const updateReady = () => !!(s.update && s.update.status === 'downloaded');
+function openAbout() { settingsTab = 'about'; window.wa.showPage('settings'); render(true); }
+function updateCard() {
+  const u = s.update;
+  if (!u || s.collapsed || !['downloading', 'downloaded'].includes(u.status)) return null;
+  if (u.status === 'downloaded' && updateHidden === u.version) return null;
+  if (u.status === 'downloading') {
+    return h('button', { class: 'updcard busy', title: '下载好后会提示你；也可以在 设置 › 关于 里看', onclick: openAbout },
+      h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
+      h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
+  }
+  return h('div', { class: 'updcard ready', role: 'status' },
+    h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('b', { class: 'grow' }, `新版本 ${u.version} 已就绪`)),
+    h('small', null, u.mac ? '打开安装包，把 WAswitch 拖进“应用程序”替换旧版。' : '重启后生效，账号和聊天记录都在。'),
+    h('div', { class: 'updbtns' },
+      h('button', { class: 'later', onclick: () => { updateHidden = u.version; render(); } }, '稍后'),
+      h('button', { class: 'go', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '重启更新')));
 }
 
 // ---------- 顶栏 ----------
@@ -1206,7 +1234,7 @@ function settingsPage() {
     const a = s.about;
     page.append(
       h('div', { class: 'hstack', style: { gap: '18px' } },
-        h('span', { class: 'avatar', style: { width: '64px', height: '64px', borderRadius: '18px', fontSize: '26px', background: 'linear-gradient(135deg, #22C55E, #15803D)' } }, 'W'),
+        h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(31,175,110,.25)' } }),
         h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: '14px' } }, `版本 ${a.version} · 团队内部使用`))),
       h('div', { class: 'kv' },
         h('span', null, '内核'), h('span', null, `Electron ${a.electron} · Chrome ${a.chrome}`),
@@ -1314,33 +1342,39 @@ function teamPage(t, accounts = []) {
   return wrap;
 }
 
-// 关于页里的“软件更新”：状态、进度条、上次检查的时间和结果。连续失败 3 次标黄
+// 关于页里的“软件更新”：状态图标、标题、进度条、上次检查的时间和结果。连续失败 3 次标黄
 function updateBox(u) {
   if (!u) return null;
-  const when = u.lastCheckAt ? new Date(u.lastCheckAt).toLocaleString('zh-CN') : '还没检查过';
-  const line = {
-    dev: '开发版不检查更新。',
-    off: '这种安装方式不支持自动更新，请到 Releases 页面下载新版。',
-    idle: '启动 1 分钟后自动检查，之后每 6 小时检查一次。',
-    checking: '正在检查…',
-    none: '已是最新版本。',
-    downloading: `正在下载新版本 ${u.version}… ${u.percent}%`,
+  const when = u.lastCheckAt ? new Date(u.lastCheckAt).toLocaleString('zh-CN', { hour12: false }) : '还没检查过';
+  const [title, line, tone] = {
+    dev: ['开发版', '开发版不检查更新。', 'idle'],
+    off: ['不支持自动更新', '这种安装方式不支持自动更新，请到 Releases 页面下载新版。', 'idle'],
+    idle: ['自动更新已开启', '启动 1 分钟后自动检查，之后每 6 小时检查一次。', 'idle'],
+    checking: ['正在检查更新…', '正在连接 GitHub。', 'busy'],
+    none: ['已是最新版本', '有新版本时会自动下载，下载好后提醒你。', 'ok'],
+    downloading: [`正在下载 ${u.version}`, '下载在后台进行，不影响收发消息。', 'busy'],
     downloaded: u.mac
-      ? `新版本 ${u.version} 已下载并校验通过。打开安装包，把 WAswitch 拖进“应用程序”替换旧版。`
-      : `新版本 ${u.version} 已下载。缩到托盘后，没有未读、10 分钟没有新消息时会自动安装并重启；也可以现在重启。`,
-    error: '这次检查没成功，会在 6 小时后自动再试。',
-  }[u.status] || '';
+      ? [`新版本 ${u.version} 已就绪`, '已下载并校验通过。打开安装包，把 WAswitch 拖进“应用程序”替换旧版。', 'new']
+      : [`新版本 ${u.version} 已就绪`, '缩到托盘后，没有未读、10 分钟没有新消息时会自动安装并重启；也可以现在重启。账号和聊天记录都在。', 'new'],
+    error: ['这次检查没成功', '会在 6 小时后自动再试。', 'idle'],
+  }[u.status] || ['软件更新', '', 'idle'];
+  const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
-  return h('div', { class: `note ${u.warn ? 'warn' : 'plain'} update-box` },
-    h('b', null, '软件更新'),
-    h('span', null, line),
-    u.status === 'downloading' ? h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })) : null,
-    h('span', { class: 'hint' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`),
-    u.warn ? h('span', null, `已经连续 ${u.failures} 次检查失败，可能是网络连不上 GitHub。可以到 Releases 页面手动下载新版。`) : null,
-    u.status === 'dev' || u.status === 'off' ? null : h('div', { class: 'btns' },
-      u.status === 'downloaded'
-        ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '现在重启并更新')
-        : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, u.status === 'downloading' ? '正在下载…' : busy ? '检查中…' : '检查更新')));
+  const mark = t === 'ok' ? icon('check', 18) : t === 'warn' ? icon('warn', 18) : t === 'busy' ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : icon('update', 18);
+  const action = u.status === 'dev' || u.status === 'off' || u.status === 'downloading' ? null
+    : u.status === 'downloaded'
+      ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '现在重启并更新')
+      : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, busy ? '检查中…' : '检查更新');
+  return h('div', { class: `update-box ${t}`, role: 'status' },
+    h('div', { class: 'upd-main' },
+      h('span', { class: 'upd-mark' }, mark),
+      h('div', { class: 'upd-text' }, h('span', { class: 'upd-label' }, '软件更新'), h('b', null, title), line ? h('span', null, line) : null),
+      action),
+    u.status === 'downloading' ? h('div', { class: 'upd-progress' },
+      h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
+      h('span', { class: 'pct' }, `${u.percent}%`)) : null,
+    u.warn ? h('div', { class: 'note warn' }, `已经连续 ${u.failures} 次检查失败，可能是网络连不上 GitHub。可以到 Releases 页面手动下载新版。`) : null,
+    h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`));
 }
 
 // ---------- 总渲染 ----------

@@ -1,0 +1,5 @@
+@import url('../../src/fonts/fonts.css');
+* { box-sizing: border-box; margin: 0; }
+html, body { overflow: hidden; }
+body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; }
+.icon { display: block; border-radius: 22%; }
