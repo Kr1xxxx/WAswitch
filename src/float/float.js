@@ -67,8 +67,8 @@ function consentBox() {
   const c = ui.consent;
   const lines = c.kind === 'auto'
     ? [`打开后，这个号当前对话里收到的消息会自动发到「${c.provider}」翻译。客户的消息里可能有姓名、地址、电话等个人信息，服务商可能会记录这些文字。`,
-      '只发消息文字，不发对话名、号码和群成员名字。每分钟最多 20 条，每天最多 ' + s.dailyCap + ' 条。']
-    : c.list.map((p) => `要翻译的文字会发到「${p.name}」（${p.host}）的服务器，对方可能会记录这些文字。${p.openrouter ? 'OpenRouter 会把文字转给第三方模型服务商处理（已要求只用不拿数据训练的服务商）。' : ''}`);
+      '翻译时会带上这个对话最近几条消息作参考。只发消息文字，不发对话名、号码和群成员名字。每分钟最多 20 条，每天最多 ' + s.dailyCap + ' 条。']
+    : c.list.map((p) => `要翻译的文字（和当前对话最近几条消息，作上下文参考）会发到「${p.name}」（${p.host}）的服务器，对方可能会记录这些文字。${p.openrouter ? 'OpenRouter 会把文字转给第三方模型服务商处理（已要求只用不拿数据训练的服务商）。' : ''}`);
   return h('div', { class: 'consent' },
     h('b', null, c.kind === 'auto' ? '打开自动翻译' : '第一次用这个翻译服务'),
     lines.map((t) => h('p', null, t)),

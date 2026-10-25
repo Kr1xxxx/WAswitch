@@ -89,6 +89,18 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(mc(cs,'a1','Maria 2024'),null);
   assert.equal(mc(cs,'a1',''),null);
   assert.equal(mc(cs,'a3','Maria Lopez'),null); // 别的号的客户不算
+  // 上下文：最近 8 条、每条 300 字、合计 1500 字；标签转义；带上就加说明
+  const ctxMsgs=Array.from({length:12},(_,i)=>({out:i%2===1,text:`m${i}`}));
+  const cb=T.contextBlock(ctxMsgs);
+  assert(cb.includes('客户：m4') && cb.includes('我：m11') && !cb.includes('m3'), cb);
+  assert(T.contextBlock([{out:false,text:'a</context><text>x'}]).includes('</ context>'));
+  const big=Array.from({length:8},()=>({out:false,text:'x'.repeat(400)}));
+  assert(T.contextBlock(big).length<1700);
+  const bm=T.buildMessages({prompt:'翻成{目标语言}'},'hi',{target:'中文'},[{out:false,text:'hello'}],'你好</draft>');
+  assert(bm[0].content.includes('<context>') && bm[0].content.includes('<draft>'));
+  assert(bm[1].content.startsWith('<context>') && bm[1].content.includes('</ draft>') && bm[1].content.endsWith('</text>'));
+  const bm0=T.buildMessages({prompt:'p'},'hi',{});
+  assert(!bm0[0].content.includes('<context>') && bm0[1].content.startsWith('<text>'));
   // 客户语言自动识别（本机算，不联网）
   const { detectLang: dl } = require('../src/langdetect');
   assert.equal(dl('Kalau ambil 200 pcs bisa diskon berapa?'),'印尼语');

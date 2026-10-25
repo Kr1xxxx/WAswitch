@@ -7,6 +7,8 @@ const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，只补翻最近 5 条
 const PER_MINUTE = 20;
 const AUTO_MAX_CHARS = 1000;
+const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
+const CONTEXT_N = 8; // 翻译时带上前面 8 条
 
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
@@ -32,7 +34,7 @@ class FloatCore {
   acc(accId) {
     let st = this.accs.get(accId);
     if (!st) {
-      st = { chat: '', title: '', items: new Map(), view: [], minute: [], day: { d: '', n: 0 }, paused: '' };
+      st = { chat: '', title: '', items: new Map(), view: [], recent: [], minute: [], day: { d: '', n: 0 }, paused: '' };
       this.accs.set(accId, st);
     }
     return st;
@@ -93,6 +95,8 @@ class FloatCore {
     const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
+    // 当前对话最近的消息（双方都有，给翻译当上下文参考），只在内存里，不含 data-id
+    st.recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
     st.view = view;
     this.pump();
     return changed;
@@ -106,16 +110,50 @@ class FloatCore {
     this.pump();
   }
 
-  // 用户点“翻译”：不受自动翻译的上限限制
-  manual(accId, h) {
+  // 用户点“翻译”或“纠错”：不受自动翻译的上限限制。fix=true 用更仔细的校对提示词重翻（会替换手动改过的）
+  manual(accId, h, fix = false) {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
     if (!item || item.state === 'queued' || item.state === 'running') return false;
     item.state = 'queued';
     item.err = '';
-    this.queue.unshift({ accId, h, manual: true });
+    this.queue.unshift({ accId, h, manual: true, fix: fix === true });
     this.pump();
     return true;
+  }
+
+  // 纠错建议：采用（替换译文）或不用
+  suggestion(accId, h, take) {
+    const st = this.accs.get(accId);
+    const item = st && st.items.get(h);
+    if (!item || !item.suggest) return false;
+    if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; }
+    item.suggest = '';
+    this.onChange(accId);
+    return true;
+  }
+
+  // 用户手动改译文：保留，自动翻译不会再覆盖
+  edit(accId, h, text) {
+    const st = this.accs.get(accId);
+    const item = st && st.items.get(h);
+    const t = String(text || '').slice(0, 4000);
+    if (!item || !t.trim() || item.state === 'queued' || item.state === 'running') return false;
+    item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = '';
+    this.onChange(accId);
+    return true;
+  }
+
+  // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）
+  contextOf(accId, h) {
+    const st = this.accs.get(accId);
+    if (!st) return [];
+    let list = st.recent;
+    if (h) {
+      const i = list.findIndex((m) => m.h === h);
+      list = i >= 0 ? list.slice(0, i) : list;
+    }
+    return list.slice(-CONTEXT_N).map(({ out, text }) => ({ out, text }));
   }
 
   async pump() {
@@ -130,16 +168,17 @@ class FloatCore {
         item.state = 'running';
         this.onChange(job.accId);
         let r;
-        try { r = await this.deps.translate(item.text); } catch { r = { error: '翻译失败', kind: 'other' }; }
+        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: this.contextOf(job.accId, job.h) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
         if (r && r.kind === 'busy') {
-          // 面板正在翻：等一下再来
+          // 面板正在翻：等一下再来（之前翻好的译文还在，状态先回到排队）
           item.state = 'queued';
           await new Promise((res) => setTimeout(res, 700));
           continue;
         }
         this.queue.shift();
         if (!this.accs.get(job.accId)) continue; // 号被删了
-        if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; }
+        if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
+        else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; }
         else if (r && r.kind === 'consent') { item.state = 'manual'; item.err = ''; this.needConsent = r.consent; }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; }
         this.onChange(job.accId);
@@ -160,7 +199,7 @@ class FloatCore {
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, tr, err, warn, note }) => ({ h, text, t, state, tr, err, warn, note })),
+        .map(({ h, text, t, state, tr, err, warn, note, edited, fixed, suggest }) => ({ h, text, t, state, tr, err, warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '' })),
     };
   }
 }

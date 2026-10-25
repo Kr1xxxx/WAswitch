@@ -2285,12 +2285,16 @@ const TONES = {
   casual: '像当地人日常聊天一样自然、亲切。',
   short: '尽量简短，一两句话说清楚，不丢掉任何信息和数字。',
 };
-handleShell('tr:run', async ({ text, modeId, target, source, tone } = {}) => {
+handleShell('tr:run', async ({ text, modeId, target, source, tone, ctxAccount, fix, draft } = {}) => {
+  // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
+  const context = typeof ctxAccount === 'string' && ctxAccount === activeId && floatCore ? floatCore.contextOf(activeId) : undefined;
   // __back：回译成中文核对，用固定的忠实翻译提示词
+  // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改
+  if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft });
   let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
     : typeof modeId === 'string' ? modeStore.get(modeId) : null;
   if (mode && modeId !== '__back' && Object.hasOwn(TONES, tone)) mode = { ...mode, prompt: `${mode.prompt}\n${TONES[tone]}` };
-  return userTranslate({ text, mode, target, source });
+  return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
 });
 handleShell('tr:cancel', () => userCancel());
 // 只在用户点“翻译剪贴板”时读一次，从不轮询
@@ -2339,14 +2343,29 @@ function floatInMode() {
   const list = modeStore.list().filter((m) => m.direction === 'in' || m.direction === 'both');
   return list.find((m) => m.id === cfg.floatInMode) || list[0] || null;
 }
+// 纠错（AI 校对）的内置提示词：[原文] = <text>，[译文] = <draft>，[上下文] = <context>
+const FIX_IN = {
+  prompt: '你是翻译校对员。<text> 里是客户原文，<draft> 里是当前中文译文，<context> 里是最近聊天记录，只用来理解意思，不要翻译。'
+    + '对照原文和上下文检查译文：错译、漏译、多译、语气不对，人名、数字、金额、日期、型号是否正确，俚语、缩写、错别字是否理解对。'
+    + '只输出改好的中文译文，不要解释；如果已经正确，原样输出。',
+  temperature: 0.2,
+};
+const FIX_OUT = {
+  prompt: '你是{目标语言}母语的校对员。<text> 里是中文原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
+    + '检查译文是否准确表达原文、有没有漏译多译，修正语法和拼写，让说法自然、符合当地人聊天习惯，保持原来的语气。'
+    + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
+  temperature: 0.2,
+};
 function setupFloatCore() {
   floatCore = new FloatCore({
-    translate: (text) => {
-      const mode = floatInMode();
+    translate: (text, { fix, context, prev } = {}) => {
+      // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
+      const draft = fix && typeof prev === 'string' ? prev : '';
+      const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
       if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
       // 用户点的翻译在等：先让它
       if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-      return translator.translate({ text, mode, target: '中文' });
+      return translator.translate({ text, mode, target: '中文', context, draft });
     },
   });
   floatCore.onChange = (accId) => { if (accId === activeId) pushFloat(); };
@@ -2549,11 +2568,11 @@ onFloat('float:moveend', () => {
   const b = floatView.getBounds();
   translator.setFloat({ pos: { dx: floatArea.x + floatArea.width - b.width - b.x, dy: b.y - floatArea.y } });
 });
-function readerItem(h) {
+function readerItem(h, fix) {
   if (typeof h !== 'string' || !activeId) return null;
   const need = translator.needConsent();
   if (need.length) return { consent: need };
-  floatCore.manual(activeId, h);
+  floatCore.manual(activeId, h, fix === true);
   pushFloat();
   return { ok: true };
 }
@@ -2574,13 +2593,18 @@ function readerConsent({ kind, ids } = {}) {
   return true;
 }
 const readerInMode = (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; };
-handleFloat('float:item', readerItem);
+handleFloat('float:item', (h) => readerItem(h, false));
 handleFloat('float:auto', readerAuto);
 handleFloat('float:consent', readerConsent);
 handleFloat('float:inmode', readerInMode);
 // 面板“翻译”页用的同一套（只接受软件界面发来的）
 handleShell('dock:get', () => floatState());
-handleShell('dock:item', readerItem);
+handleShell('dock:item', ({ h, fix } = {}) => readerItem(h, fix));
+handleShell('dock:suggest', ({ accountId, h, take } = {}) => (accountId === activeId && typeof h === 'string' ? floatCore.suggestion(activeId, h, take === true) : false));
+handleShell('dock:edit', ({ accountId, h, text } = {}) => {
+  if (accountId !== activeId || typeof h !== 'string' || typeof text !== 'string') return false;
+  return floatCore.edit(activeId, h, text);
+});
 handleShell('dock:auto', readerAuto);
 handleShell('dock:consent', readerConsent);
 handleShell('dock:inmode', readerInMode);
@@ -2597,7 +2621,7 @@ handleShell('dock:lang', ({ accountId, title, lang } = {}) => {
 handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
   if (accountId !== activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
   const mode = typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return userTranslate({ text, mode, target });
+  return userTranslate({ text, mode, target, context: floatCore.contextOf(activeId) }); // 带上当前对话最近几条当上下文
 });
 handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
