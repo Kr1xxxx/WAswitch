@@ -76,6 +76,19 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(ms.list().length,200);
   assert.equal(R.KINDS.tmodes.clean({name:'x',prompt:'p',direction:'evil',temperature:'9'}).direction,'both');
   assert.equal(R.KINDS.tmodes.clean({name:'x',prompt:'p',temperature:9}).temperature,1.5);
+  // 目标语言跟着当前对话的客户
+  const { matchChatCustomer: mc } = require('../src/chatlang');
+  const cs=[{name:'Maria Lopez',phone:'+34 612 345 678',lang:'西班牙语',accountId:'a1'},{name:'Tom',phone:'',lang:'',accountId:'a1'},
+    {name:'Ali',phone:'+971501234567',lang:'阿拉伯语',accountId:''},{name:'Maria Lopez',phone:'',lang:'葡萄牙语',accountId:'a2'}];
+  assert.equal(mc(cs,'a1','  maria  lopez ').lang,'西班牙语');
+  assert.equal(mc(cs,'a2','Maria Lopez').lang,'葡萄牙语');
+  assert.equal(mc(cs,'a1','+34 612 34 56 78').lang,'西班牙语');
+  assert.equal(mc(cs,'a1','612 345 678').lang,'西班牙语');
+  assert.equal(mc(cs,'a3','+971 50 123 4567').lang,'阿拉伯语');
+  assert.equal(mc(cs,'a1','Tom'),null); // 没填语言的不算
+  assert.equal(mc(cs,'a1','Maria 2024'),null);
+  assert.equal(mc(cs,'a1',''),null);
+  assert.equal(mc(cs,'a3','Maria Lopez'),null); // 别的号的客户不算
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
