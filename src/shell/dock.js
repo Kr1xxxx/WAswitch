@@ -145,18 +145,33 @@ function dockConsentBox() {
       h('button', { class: 'pn-btn', onclick: () => { dk.consent = null; dk.pending = null; dockRender(true); } }, '取消')));
 }
 
-// 发出时翻成哪种语言：认出来或选过的会记在这个对话上
+// 发出时翻成哪种语言。默认“自动”：客户资料 > 从客户消息认出来的 > 英语；手动选的记在这个对话上
 function dockLangSel() {
   const st = dk.st;
-  const lang = h('select', { class: 'dk-lang', 'aria-label': '翻成哪种语言', title: { manual: '你给这个对话选的语言，已记住', detected: '从客户发来的消息认出来的，已记住', customer: `客户资料里「${st.targetFrom}」填的语言`, default: '这个号的默认语言' }[st.targetSrc] || null, onchange: async (e) => {
-    const v = e.target.value;
-    dk.st = await window.wa.dockLang(st.accountId, st.title, v === '__auto' ? '' : v);
-    dockRender(true);
-  } },
-    st.canRemember && st.targetSrc === 'manual' ? h('option', { value: '__auto' }, '自动识别') : null,
-    st.langs.map((l) => h('option', { value: l }, l)));
-  lang.value = st.target;
+  // 读不到对话（轻量模式等）时，手动选的语言记在号上
+  const manual = st.targetSrc === 'manual' || (!st.canRemember && !!st.accountLang);
+  const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的语言`, default: '认不出客户的语言，先用英语' };
+  const lang = h('select', { class: 'dk-lang', 'aria-label': '翻成哪种语言',
+    title: manual ? '你手动选的语言，已记住；选“自动”就跟着客户的语言' : (autoTip[st.targetSrc] || null), onchange: async (e) => {
+      const v = e.target.value;
+      dk.st = await window.wa.dockLang(st.accountId, st.title, v === '__auto' ? '' : v);
+      dockRender(true);
+    } },
+  h('option', { value: '__auto' }, `自动（${st.autoTarget || st.target}）`),
+  st.langs.map((l) => h('option', { value: l }, l)));
+  lang.value = manual ? st.target : '__auto';
   return lang;
+}
+
+// 翻译模型：选中就设为默认翻译服务商（和 设置 › 翻译、“收到的消息”旁边的下拉是同一个设置）
+function dockModelSel(cls, short = false) {
+  const st = dk.st;
+  const provs = st.providers || [];
+  if (!provs.length) return null;
+  const sel = h('select', { class: `${cls} dk-model`, 'aria-label': '翻译模型', title: '换翻译模型（和 设置 › 翻译 的默认服务商同步）', disabled: dk.busy || provs.length < 2,
+    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? (short ? p.model : `${p.name} · ${p.model}`) : p.name)));
+  sel.value = st.primaryId;
+  return sel;
 }
 
 // 收到消息的译文：纠错（用仔细校对的提示词重翻这一条）、编辑（直接改，改过的保留，不会被自动覆盖）
@@ -254,10 +269,7 @@ function dockInHead() {
   const inModes = st.modes.in;
   const inSel = inModes.length > 1 ? h('select', { class: 'dk-mini', 'aria-label': '收到用的模式', onchange: (e) => window.wa.dockInMode(e.target.value) }, inModes.map((m) => h('option', { value: m.id }, m.name))) : null;
   if (inSel) inSel.value = st.inModeId;
-  const provs = st.providers || [];
-  const modelSel = provs.length ? h('select', { class: 'dk-mini dk-model', 'aria-label': '翻译模型', title: '换翻译模型（和 设置 › 翻译 的默认服务商同步）', disabled: dk.busy || provs.length < 2,
-    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? `${p.name} · ${p.model}` : p.name))) : null;
-  if (modelSel) modelSel.value = st.primaryId;
+  const modelSel = dockModelSel('dk-mini');
   return h('div', { class: 'dk-head' },
     h('span', { class: 'dk-label' }, '收到的消息'),
     h('span', { class: 'grow' }),
@@ -315,7 +327,7 @@ function dockCompose() {
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
     dockField(input, () => input.value),
     h('div', { class: 'dk-outhead' },
-      h('span', { class: 'dk-label' }, '→'), dockLangSel(),
+      h('span', { class: 'dk-label' }, '→'), dockLangSel(), dockModelSel('dk-lang', true),
       h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改'),
       dk.fixed && !dk.edited ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
       stale ? h('span', { class: 'dk-dim' }, '中文改过了') : null,
