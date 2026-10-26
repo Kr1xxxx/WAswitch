@@ -17,7 +17,7 @@ const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(l
 const PRESETS = {
   // 混元只能选这两个翻译模型（shen 2026-10-26），走腾讯云 TokenHub 的 OpenAI 兼容接口
   hunyuan: { name: '腾讯混元', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-mt2-plus', models: ['hy-mt2-plus', 'hy-mt2-lite'] },
-  zhipu: { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.7-flash', models: ['glm-4.7-flash', 'glm-4-flash-250414', 'glm-4-flash'] },
+  zhipu: { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', models: ['glm-4-flash'] },
   openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: '' },
   custom: { name: '自定义', baseUrl: '', model: '' },
 };
