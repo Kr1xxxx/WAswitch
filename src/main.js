@@ -751,22 +751,46 @@ function checkFollowUps() {
   if (due.length > 3) notifier.notifyApp('WAswitch', `还有 ${due.length - 3} 条跟进提醒`, () => notifier.showWindow());
 }
 
+// 切换提速：切走的号会被降级（定时器节流、画面缓存释放），放久了再切回来要先补做积压的活、
+// 重新画整页，看起来像刷新了一遍。最近用过的 2 个号不降级，切回来马上就有；
+// 其余的号照旧降级省内存省电（省内存模式下全部降级）。不休眠，收消息和通知不受影响。
+const WARM_KEEP = 2;
+const recentIds = []; // 最近切走的网页号，最新的在前
+function noteRecent(id) {
+  const i = recentIds.indexOf(id);
+  if (i >= 0) recentIds.splice(i, 1);
+  if (id) recentIds.unshift(id);
+  if (recentIds.length > 10) recentIds.length = 10;
+}
+const throttled = new WeakMap(); // 账号页面 -> 现在是否允许后台节流（页面重建后重新设）
+let lastViewBounds = null;
 function layout() {
   if (!win) return;
   const { width, height } = win.getContentBounds();
   shellView.setBounds({ x: 0, y: 0, width, height });
   const side = sideWidth();
   const top = TOPBAR + (aiRequest ? AIBAR : 0);
-  const bounds = {
+  const onAccount = page === 'account';
+  // 不在账号页（设置、内存页等）时账号页面都藏着，保持原来的尺寸，回来时 WhatsApp 不用重新排版
+  const bounds = onAccount || !lastViewBounds ? {
     x: side,
     y: GAP + top,
     width: Math.max(0, width - side - GAP - (panelShown() ? PANEL_W : 0)),
     height: Math.max(0, height - GAP * 2 - top),
-  };
+  } : lastViewBounds;
+  if (onAccount) lastViewBounds = bounds;
+  const keep = startupLowMemory ? 0 : WARM_KEEP;
+  const warm = new Set(recentIds.filter((id) => id !== activeId && views.has(id)).slice(0, keep));
+  if (activeId) warm.add(activeId);
   for (const [id, view] of views) {
-    const current = page === 'account' && id === activeId;
+    const current = onAccount && id === activeId;
     view.setBounds(bounds);
     view.setVisible(current && !problems.has(id) && !locked);
+    const allow = !warm.has(id);
+    if (throttled.get(view) !== allow && !view.webContents.isDestroyed()) {
+      view.webContents.setBackgroundThrottling(allow);
+      throttled.set(view, allow);
+    }
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
   layoutFloat(bounds);
@@ -1618,6 +1642,7 @@ function liteStateForShell() {
 // MCP 引起的切换不给焦点，免得用户打的字落到别的号里。
 function activate(id, { focus = false } = {}) {
   if (activeId && activeId !== id) crmReadWeb(activeId, true); // 切走前把这个号打开的对话再读一次
+  if (activeId && activeId !== id && views.has(activeId)) noteRecent(activeId);
   activeId = id;
   // 记住在看哪个号，下次启动直接打开它
   if (id && settings.lastAccountId !== id) { settings.lastAccountId = id; memory.saveSettings(settings); }
