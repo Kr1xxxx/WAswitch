@@ -1,6 +1,6 @@
 {
   "name": "waswitch",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
   "main": "src/main.js",
   "scripts": {
