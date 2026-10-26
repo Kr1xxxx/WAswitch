@@ -100,6 +100,7 @@ class MemoryManager {
     this.baselineMB = new Map(); // id -> 打开或刷新 5 分钟后的占用
     this.measureFrom = new Map(); // id -> 从什么时候起可以量底数（第一次见到或刷新的时间）
     this.capReloads = []; // 因为总上限刷新的时间，用来限制每小时次数
+    this.recycleInfo = new Map(); // id -> { at, mb } 上次刷新回收的时间和当时的占用，给顶栏提示用
     this.capAdvice = 0; // 账号太多、上限达不到时，建议调到的上限（MB），0 表示没问题
   }
 
@@ -123,6 +124,7 @@ class MemoryManager {
     this.backgroundSince.delete(id);
     this.baselineMB.delete(id);
     this.measureFrom.delete(id);
+    this.recycleInfo.delete(id);
   }
 
   baseline(id) {
@@ -171,6 +173,7 @@ class MemoryManager {
   recycle(id, wc, why) {
     console.log(`账号 ${id} 占用 ${this.usageMB.get(id) || 0} MB，${why}，后台刷新回收内存`);
     this.lastRecycle.set(id, Date.now());
+    this.recycleInfo.set(id, { at: Date.now(), mb: this.usageMB.get(id) || 0 });
     this.measureFrom.set(id, Date.now()); // 刷新后重新量底数
     wc.reload();
   }

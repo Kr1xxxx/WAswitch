@@ -325,6 +325,38 @@ setInterval(() => {
   if (c && c.draw) c.draw();
 }, 20000);
 
+// 内存数字的说明：后台号涨到回收线会悄悄刷新一次，刷新后数字会一下变小，再慢慢涨回 300 MB 左右
+function memTitle(acc, lite) {
+  if (lite) return '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值';
+  const r = acc.lastRecycle;
+  const tip = '内存占用（近似值，只算这个号的页面进程）';
+  if (!r || !r.at) return tip;
+  const t = new Date(r.at);
+  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  return `${tip}\n${hm} 在后台自动刷新过一次（当时 ${r.mb} MB），刷新后数字会先变小，几分钟内涨回正常。登录和聊天记录都不受影响。`;
+}
+
+// 顶栏的缩放比例：点一下展开 − / + 自己调，再点比例或点别处收起
+let zoomOpenFor = '';
+function zoomChip(acc) {
+  const pct = `${Math.round((acc.zoom || 0.9) * 100)}%`;
+  const key = s.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+  const toggle = (e) => { e.stopPropagation(); zoomOpenFor = zoomOpenFor === acc.id ? '' : acc.id; renderTop(); };
+  if (zoomOpenFor !== acc.id) {
+    return h('button', { class: 'chip', type: 'button', title: `页面缩放 ${pct}，点一下调整（${key} + = / - / 0 也能调）`, onclick: toggle }, pct);
+  }
+  const step = (dir) => (e) => { e.stopPropagation(); window.wa.zoom(acc.id, dir); };
+  const z = acc.zoom || 0.9;
+  return h('span', { class: 'chip zoom-ctl', onclick: (e) => e.stopPropagation() },
+    h('button', { type: 'button', class: 'zbtn', title: '缩小', 'aria-label': '缩小', disabled: z <= 0.5, onclick: step(-1) }, '−'),
+    h('button', { type: 'button', class: 'zpct', title: '收起', onclick: toggle }, pct),
+    h('button', { type: 'button', class: 'zbtn', title: '放大', 'aria-label': '放大', disabled: z >= 2, onclick: step(1) }, '+'),
+    z !== 0.9 ? h('button', { type: 'button', class: 'zreset', title: '还原到默认 90%', onclick: step(0) }, '默认') : null);
+}
+const closeZoom = () => { if (zoomOpenFor) { zoomOpenFor = ''; renderTop(); } };
+document.addEventListener('click', closeZoom);
+window.addEventListener('blur', closeZoom); // 点进 WhatsApp 页面时也收起
+
 function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
@@ -336,10 +368,9 @@ function renderTop() {
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
     h('span', { class: 'grow' }),
     exitChip(acc),
-    // 缩放过的号显示比例，点一下还原到 100%
-    !lite && acc.zoom && acc.zoom !== 1 ? h('button', { class: 'chip', type: 'button', title: `这个号的页面缩放到了 ${Math.round(acc.zoom * 100)}%。点一下还原到 100%（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + = / - / 0 也能调）`, onclick: () => window.wa.zoom(acc.id, 0) }, `${Math.round(acc.zoom * 100)}%`) : null,
+    !lite ? zoomChip(acc) : null,
     clockChip(acc),
-    acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
+    acc.memMB ? h('span', { class: 'chip', title: memTitle(acc, lite) }, `${acc.memMB} MB`) : null,
     h('button', { class: `icon-btn${s.floatOpen ? ' on' : ''}`, title: '悬浮翻译：自动翻译当前对话收到的消息', 'aria-label': '悬浮翻译', 'aria-pressed': String(!!s.floatOpen), onclick: () => window.wa.floatToggle() }, icon('globe', 15)),
     h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
