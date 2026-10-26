@@ -21,6 +21,7 @@ const dk = {
   pending: null,
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
+  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认只显示译文，原文折叠成一条毛玻璃
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
   seenTitle: null,
   unread: 0,
@@ -205,6 +206,19 @@ function dockMeta(it) {
     h('span', { class: 'dk-time' }, it.t || ''));
 }
 
+// 有译文时原文默认折叠：只露一条模糊的原文，右边一个小按钮展开/收起；没译文就直接显示原文
+function dockOrig(key, text, hasTr) {
+  if (!hasTr) return h('span', { class: 'dk-orig' }, text);
+  const open = dk.openOrig.has(key);
+  const flip = () => { if (open) dk.openOrig.delete(key); else dk.openOrig.add(key); dockRender(true); };
+  const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), 'aria-label': open ? '收起原文' : '展开原文', title: open ? '收起原文' : '展开原文', onclick: flip });
+  // 按钮是个细线小箭头（收起时 <，展开后转成朝下）；放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
+  if (open) return h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text);
+  return h('span', { class: 'dk-fold' },
+    btn,
+    h('span', { class: 'dk-fold-glass', 'aria-hidden': 'true', onclick: flip }, h('span', { class: 'dk-fold-text' }, text)));
+}
+
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
@@ -222,7 +236,7 @@ function dockItemRow(it, last) {
           if (r && r.consent) { dk.consent = { kind: 'provider', list: r.consent }; dk.pending = { item: it.h }; dockRender(true); }
         } }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
   return h('div', { class: `${cls}${foot ? ' foot' : ''}` },
-    h('span', { class: 'dk-orig' }, it.text),
+    dockOrig(it.h, it.text, it.state === 'done' && !!it.tr),
     tr,
     warn,
     dockMeta(it));
