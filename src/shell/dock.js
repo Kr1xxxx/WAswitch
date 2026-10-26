@@ -4,6 +4,7 @@
 // 这个文件在 shell.js 之前加载，里面用到的 h、icon、kids、s、pn、tr、panelInsert 等都在 shell.js 里，运行时才调用。
 
 const dk = {
+  listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的中文
   out: '', // 译文（可以手动改）
@@ -16,10 +17,9 @@ const dk = {
   busy: false,
   msg: '',
   bad: false,
-  consent: null, // { kind: 'auto' | 'provider', list }
-  pending: null,
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
+  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认只显示译文，原文折叠成一条毛玻璃
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
   seenTitle: null,
   unread: 0,
@@ -42,7 +42,7 @@ function dockCountUnread() {
 }
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, consent: null, pending: null, unread: 0, seenTitle: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, unread: 0, seenTitle: null });
   dk.seen.clear();
 }
 
@@ -88,7 +88,6 @@ async function dockRun(p) {
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
-  if (r.kind === 'consent') { dk.consent = { kind: 'provider', list: r.consent }; dk.pending = p; return dockRender(true); }
   if (r.error) return dockSay(r.error, true);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
@@ -121,30 +120,6 @@ async function dockModel(id) {
 }
 
 // ---- 界面 ----
-function dockConsentBox() {
-  const c = dk.consent;
-  const st = dk.st;
-  const lines = c.kind === 'auto'
-    ? [`打开后，这个号当前对话里收到的消息会自动发到「${st.providerName}」翻译。客户的消息里可能有姓名、地址、电话等个人信息，服务商可能会记录这些文字。`,
-      `翻译时会带上这个对话最近几条消息作参考，翻得更准。只发消息文字，不发对话名、号码和群成员名字。每分钟最多 20 条，每天最多 ${st.dailyCap} 条。`]
-    : c.list.map((p) => `要翻译的文字（和当前对话最近几条消息，作上下文参考）会发到「${p.name}」（${p.host}）的服务器，对方可能会记录这些文字。${p.openrouter ? 'OpenRouter 会把文字转给第三方模型服务商处理（已要求只用不拿数据训练的服务商）。' : ''}`);
-  return h('div', { class: 'pn-form', style: { paddingTop: '10px' } },
-    h('div', { class: 'pn-item' },
-      h('span', { class: 't' }, c.kind === 'auto' ? '打开自动翻译' : '第一次用这个翻译服务'),
-      lines.map((t) => h('span', { class: 'x' }, t))),
-    h('div', { class: 'acts', style: { display: 'flex', gap: '4px' } },
-      h('button', { class: 'pn-btn primary', onclick: async () => {
-        if (c.kind === 'auto') { await window.wa.dockConsent('auto'); await window.wa.dockAuto(true); }
-        else await window.wa.dockConsent('provider', c.list.map((p) => p.id));
-        const again = dk.pending;
-        dk.consent = null; dk.pending = null;
-        if (again && again.item) await window.wa.dockItem(again.item, again.fix === true);
-        else if (again) return dockRun(again);
-        dockRender(true);
-      } }, '同意'),
-      h('button', { class: 'pn-btn', onclick: () => { dk.consent = null; dk.pending = null; dockRender(true); } }, '取消')));
-}
-
 // 发出时翻成哪种语言。默认“自动”：客户资料 > 从客户消息认出来的 > 英语；手动选的记在这个对话上
 function dockLangSel() {
   const st = dk.st;
@@ -189,7 +164,7 @@ function dockItemEdit(it) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
     if (e.key === 'Escape') { dk.editing = null; dockRender(true); }
   });
-  requestAnimationFrame(() => { if (box.isConnected && document.activeElement !== box) { box.focus(); box.selectionStart = box.selectionEnd = box.value.length; } });
+  requestAnimationFrame(() => { if (box.isConnected && document.activeElement !== box) { box.focus({ preventScroll: true }); box.selectionStart = box.selectionEnd = box.value.length; } });
   return h('div', { class: 'dk-edit' }, box,
     h('div', { class: 'dk-row' },
       h('button', { class: 'pn-btn primary', onclick: save }, '保存'),
@@ -204,10 +179,7 @@ function dockSuggestBox(text, take, drop) {
 }
 function dockItemActs(it) {
   return h('span', { class: 'dk-acts-mini' },
-    h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: async () => {
-      const r = await window.wa.dockItem(it.h, true);
-      if (r && r.consent) { dk.consent = { kind: 'provider', list: r.consent }; dk.pending = { item: it.h, fix: true }; dockRender(true); }
-    } }, '纠错'),
+    h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: () => window.wa.dockItem(it.h, true) }, '纠错'),
     h('button', { class: 'dk-link', title: '直接改译文，改过的不会被自动覆盖', onclick: () => { dk.editing = it.h; dk.editText = it.tr; dockRender(true); } }, '编辑'));
 }
 
@@ -219,24 +191,42 @@ function dockMeta(it) {
     h('span', { class: 'dk-time' }, it.t || ''));
 }
 
+// 有译文时原文默认折叠：只露一条模糊的原文，右边一个小按钮展开/收起；没译文就直接显示原文
+function dockOrig(key, text, hasTr) {
+  if (!hasTr) return h('span', { class: 'dk-orig' }, text);
+  const open = dk.openOrig.has(key);
+  const flip = () => { if (open) dk.openOrig.delete(key); else dk.openOrig.add(key); dockRender(true); };
+  const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), 'aria-label': open ? '收起原文' : '展开原文', title: open ? '收起原文' : '展开原文', onclick: flip });
+  // 按钮是个细线小箭头（收起时 <，展开后转成朝下）；放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
+  // 刚点过：箭头转过去，原文展开时淡入下滑、收起时毛玻璃条淡入
+  const moved = fxChanged(`fold:${key}`, open, false);
+  if (moved) btn.classList.add(open ? 'fx-fold-open' : 'fx-fold-close');
+  const el = open ? h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text) : dockFoldBar(btn, text, flip);
+  return moved ? fxPlay(el, open ? 'fx-unfold' : 'fx-fade') : el;
+}
+function dockFoldBar(btn, text, flip) {
+  return h('span', { class: 'dk-fold' },
+    btn,
+    h('span', { class: 'dk-fold-glass', 'aria-hidden': 'true', onclick: flip }, h('span', { class: 'dk-fold-text' }, text)));
+}
+
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
-    return h('div', { class: `${cls} wide foot` }, h('span', { class: 'dk-orig' }, it.text), dockItemEdit(it), dockMeta(it));
+    return h('div', { class: `${cls} wide foot` }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
   }
   const warn = it.warn && it.warn.length ? h('span', { class: 'tr-warn' }, `注意：译文里有原文没有的内容：${it.warn.slice(0, 3).join('、')}`) : null;
   const foot = !!(warn || (it.state === 'done' && it.suggest));
   const sp = foot ? null : dockSpacer();
-  const tr = it.state === 'done' ? [h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
-    it.suggest ? dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false)) : null]
+  // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
+  const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
+  const tr = it.state === 'done' ? [trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
+    it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, '翻译中…', sp)
       : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ', h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
-        : h('span', null, h('button', { class: 'dk-link', onclick: async () => {
-          const r = await window.wa.dockItem(it.h);
-          if (r && r.consent) { dk.consent = { kind: 'provider', list: r.consent }; dk.pending = { item: it.h }; dockRender(true); }
-        } }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
+        : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
   return h('div', { class: `${cls}${foot ? ' foot' : ''}` },
-    h('span', { class: 'dk-orig' }, it.text),
+    dockOrig(it.h, it.text, it.state === 'done' && !!it.tr),
     tr,
     warn,
     dockMeta(it));
@@ -245,6 +235,7 @@ function dockItemRow(it, last) {
 function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
+  if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
   if (st.lite) add(hint('轻量模式的号读不到收到的消息，这里不显示。'));
@@ -252,10 +243,22 @@ function dockIncoming() {
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
-  else st.items.forEach((it, i) => add(dockItemRow(it, i === st.items.length - 1)));
+  else st.items.forEach((it, i) => {
+    const last = i === st.items.length - 1;
+    const row = dockItemRow(it, last);
+    // 同一个对话里来了新消息：最后一条从下面浮上来（刚打开或换对话时不放）
+    if (last) fx(`dk-last:${st.accountId}|${st.title || ''}`, it.h, row, 'fx-in', false);
+    add(row);
+  });
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
-  requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  // 重画时保持滚动位置（点纠错/编辑不跳）；原来就在最底下或换了对话才滚到底，新消息照样跟上
+  const prev = $panel.querySelector('.dk-host .dk-list');
+  const key = `${st.accountId}|${st.title || ''}`;
+  const stay = prev && prev.isConnected && dk.listKey === key && prev.scrollHeight - prev.scrollTop - prev.clientHeight > 24;
+  const top = stay ? prev.scrollTop : 0;
+  dk.listKey = key;
+  requestAnimationFrame(() => { list.scrollTop = stay ? top : list.scrollHeight; });
   return list;
 }
 
@@ -263,7 +266,6 @@ function dockInHead() {
   const st = dk.st;
   const sw = h('input', { type: 'checkbox', class: 'dk-switch', role: 'switch', 'aria-label': '自动翻译收到的消息', checked: st.auto, disabled: st.lite || !st.accountId,
     onchange: async (e) => {
-      if (e.target.checked && !st.autoConsented) { e.target.checked = false; dk.consent = { kind: 'auto' }; return dockRender(true); }
       await window.wa.dockAuto(e.target.checked);
     } });
   const inModes = st.modes.in;
@@ -284,10 +286,7 @@ function dockField(box, getText) {
     const text = getText();
     if (!text) return;
     await window.wa.panelCopy(text);
-    copyBtn.replaceChildren(icon('check', 18));
-    copyBtn.title = '已复制';
-    copyBtn.classList.add('done');
-    setTimeout(() => { copyBtn.replaceChildren(icon('copy', 18)); copyBtn.title = '复制'; copyBtn.classList.remove('done'); }, 1200);
+    copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
     h('div', { class: 'dk-tools' }, copyBtn)));
@@ -358,9 +357,8 @@ function dockRender(force = false) {
       h('button', { class: 'pn-btn primary', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); } }, '去设置')));
     return;
   }
-  if (dk.consent) { host.replaceChildren(dockConsentBox()); return; }
   const root = host.querySelector('.dk');
-  const msg = dk.msg ? h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg) : null;
+  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块

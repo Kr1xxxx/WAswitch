@@ -39,6 +39,32 @@ function icon(name, size = 16) {
   return span;
 }
 
+// 复制成功：按钮原地换成绿色小对勾（同位置同大小，缩放+描线动画），约 1.5 秒后变回原样。不弹提示（shen 2026-10-26）
+function copyFlash(btn) {
+  if (btn._copyTimer) clearTimeout(btn._copyTimer);
+  else {
+    btn._copyOld = { kids: [...btn.childNodes], title: btn.title, minWidth: btn.style.minWidth, height: btn.style.height };
+    btn.style.minWidth = `${btn.offsetWidth}px`;
+    btn.style.height = `${btn.offsetHeight}px`;
+  }
+  const size = btn.classList.contains('dk-tool') ? 18 : 14;
+  btn.replaceChildren(icon('check', size));
+  btn.title = '已复制';
+  btn.classList.remove('copy-back');
+  btn.classList.add('copy-ok');
+  btn._copyTimer = setTimeout(() => {
+    const o = btn._copyOld;
+    btn.replaceChildren(...o.kids);
+    btn.title = o.title;
+    btn.style.minWidth = o.minWidth;
+    btn.style.height = o.height;
+    btn.classList.remove('copy-ok');
+    btn.classList.add('copy-back');
+    btn._copyTimer = null;
+    btn._copyOld = null;
+  }, 1500);
+}
+
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -56,6 +82,30 @@ function h(tag, attrs, ...children) {
   }
   return el;
 }
+
+// ---------- 过渡动画 ----------
+// 界面每次状态变化都整块重画，CSS transition 接不上。这里按“槽位”记住上次的值，值真的变了才给新元素放一次动画。
+// 动画只用 opacity/transform，时长在 shell.css 的 --fx-* 里统一改；系统开了“减少动态效果”就不动
+const fxLast = new Map();
+function fxChanged(slot, key, first = true) {
+  const had = fxLast.has(slot);
+  const prev = fxLast.get(slot);
+  if (fxLast.size > 3000) fxLast.clear();
+  fxLast.set(slot, key);
+  return had ? prev !== key : first;
+}
+// 给元素放一次动画；同一个元素再放时先摘掉 class 重排一下，才能重新开始
+function fxPlay(el, cls = 'fx-in') {
+  if (!el || !el.classList) return el;
+  if (el.classList.contains(cls)) { el.classList.remove(cls); void el.offsetWidth; }
+  el.classList.add(cls);
+  return el;
+}
+function fx(slot, key, el, cls = 'fx-in', first = true) {
+  if (el && fxChanged(slot, key, first)) fxPlay(el, cls);
+  return el;
+}
+const fxReduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // 去掉条件不成立时留下的 null，避免 append 把它当成文字 "null"
 const kids = (...xs) => xs.flat().filter((x) => x !== null && x !== undefined && x !== false);
@@ -139,7 +189,7 @@ function accountRow(acc) {
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
   const tip = [acc.name, acc.phone, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   const row = h('button', {
-    class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
+    class: `row${on ? ' on' : ''}${on && sideFx ? ' fx-on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
     oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
   },
@@ -170,6 +220,9 @@ function groupHead(g) {
     return h('div', { class: 'group-head editing' }, icon('down', 12), input);
   }
   const quiet = g && g.muted;
+  // 箭头一直是朝下的那个，折起来转 -90°；刚点过就放一次转动
+  const chev = g ? icon('down', 12) : null;
+  if (chev) { chev.classList.add('gchev'); fx(`grp:${g.id}`, !!g.collapsed, chev, g.collapsed ? 'fx-rot-close' : 'fx-rot-open', false); }
   const head = h('button', {
     class: `group-head${g && g.collapsed ? ' closed' : ''}`,
     title: g ? `${name} · ${g.count} 个号${g.muted ? ' · 整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
@@ -177,7 +230,7 @@ function groupHead(g) {
     onclick: () => { if (g) window.wa.groupToggle(g.id); },
     oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
   },
-  g ? icon(g.collapsed ? 'right' : 'down', 12) : null,
+  chev,
   h('span', { class: 'gname' }, g && g.collapsed ? `${name} · ${g.count}` : name),
   quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
   g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
@@ -193,17 +246,24 @@ function accountList() {
   for (const g of groups) {
     out.push(groupHead(g));
     // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
-    out.push(...s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow));
+    const rows = s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow);
+    // 刚展开的组：里面的号淡入
+    if (fxChanged(`grprows:${g.id}`, !!g.collapsed, false) && !g.collapsed) rows.forEach((r) => fxPlay(r));
+    out.push(...rows);
   }
   return out;
 }
 
+let sideFx = false;
 function renderSide() {
   if (dragId) { sideStale = true; return; }
   // 正在给分组改名：不重画，免得输入框被换掉
   const editing = document.activeElement && document.activeElement.classList.contains('group-name');
   if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
+  // 侧栏高亮换了（切账号、切设置页）：新高亮那一行淡入
+  sideFx = fxChanged('side-on', s.page === 'account' ? `a:${s.activeId}` : s.page === 'editor' ? `e:${s.editorId || ''}` : s.page, false);
+  const setFx = s.page === 'settings' && fxChanged('set-tab', settingsTab, false);
   $side.replaceChildren();
   $side.append(h('div', { class: 'win-drag' }));
   if (s.page === 'settings') {
@@ -211,7 +271,7 @@ function renderSide() {
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
       h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['translate', '翻译'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
-        h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+        h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
           id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))));
     return;
   }
@@ -224,7 +284,7 @@ function renderSide() {
       s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
     h('div', { class: 'list' },
       accountList(),
-      h('button', { class: `row${s.page === 'editor' && !s.editorId ? ' on' : ''}`, title: '添加账号', onclick: () => window.wa.add() },
+      h('button', { class: `row${s.page === 'editor' && !s.editorId ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
     h('div', { class: 'grow' })));
   const upd = updateCard();
@@ -379,10 +439,11 @@ function renderTop() {
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）
 function panelHead() {
+  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'replies', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
-    return h('button', { class: `tb-tab${on ? ' on' : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
+    return h('button', { class: `tb-tab${on ? ` on${tabFx ? ' fx-on' : ''}` : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
   };
   return h('div', { class: 'wb-tabs', role: 'tablist', 'aria-label': '工作台' },
     tab('customers', '客户资料'), tab('replies', '话术'), tab('translate', '翻译', 'translate'),
@@ -398,6 +459,7 @@ function refreshPanelHead() {
 function renderAi() {
   const r = s.aiRequest;
   $ai.hidden = !r;
+  if (fxChanged('ai', !!r, false) && r) fxPlay($ai, 'fx-down');
   if (!r) return;
   const what = r.kind === 'add'
     ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
@@ -428,7 +490,9 @@ function confirmDelete({ title, detail = '', ok = '删除', on } = {}) {
     }
     const done = (v) => {
       document.removeEventListener('keydown', onKey, true);
-      wrap.remove();
+      // 淡出后再拿掉；结果马上给，不等动画
+      wrap.classList.add('out');
+      setTimeout(() => wrap.remove(), fxReduced() ? 0 : 140);
       try { prevFocus?.focus?.(); } catch {}
       resolve(v);
     };
@@ -595,7 +659,7 @@ function replyItems() {
     h('span', { class: 'x' }, r.text),
     h('span', { class: 'acts' },
       h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
-      h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(r.text); panelSay('已复制'); } }, '复制'),
+      h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(r.text); copyFlash(b); } }, '复制'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除话术「${delName(r.title || r.text)}」？`, detail: '删除后不能恢复。' })) return; pn.data = await window.wa.replyDelete(r.id); panelSay('已删除'); } }, '删除'))));
 }
@@ -615,7 +679,7 @@ function customerItems() {
     c.note ? h('span', { class: 'x' }, c.note) : null,
     c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
     h('span', { class: 'acts' },
-      c.phone ? h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(c.phone); panelSay('电话已复制'); } }, '复制电话') : null,
+      c.phone ? h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(c.phone); copyFlash(b); } }, '复制电话') : null,
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除客户「${delName(c.name || c.phone)}」？`, detail: '会删掉这个客户的资料、标签、备注和跟进时间，不能恢复。WhatsApp 里的聊天不受影响。' })) return; pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
 }
@@ -796,6 +860,7 @@ function translatePage(page) {
 function renderPanel(force = false) {
   const show = !!s.panelOpen && !s.locked && s.page === 'account';
   $panel.hidden = !show;
+  if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
   const tab = s.panelTab || 'replies';
@@ -803,12 +868,19 @@ function renderPanel(force = false) {
   if (!force && sig === pn.sig && $panel.firstChild) return;
   if (!force && pn.tab === tab && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
   pn.sig = sig;
+  const tabChanged = fxChanged('wb-tab', tab, false);
   if (pn.tab !== tab) { pn.edit = null; pn.q = ''; pn.msg = ''; }
   pn.tab = tab;
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
   $panel.classList.toggle('dock', tab === 'translate');
   $panel.setAttribute('aria-label', '工作台');
-  if (tab === 'translate') { $panel.replaceChildren(panelHead(), h('div', { class: 'dk-host' })); dockRender(true); return; }
+  if (tab === 'translate') {
+    const host = h('div', { class: 'dk-host' });
+    $panel.replaceChildren(panelHead(), host);
+    dockRender(true);
+    if (tabChanged) fxPlay(host, 'fx-fade');
+    return;
+  }
   const replies = tab === 'replies';
   if (!tr.cfg) trLoad(); // 客户表单里的语言选项要用
   const search = h('input', { type: 'search', value: pn.q, placeholder: replies ? '搜索话术' : '搜索名字、电话、标签', 'aria-label': '搜索' });
@@ -831,13 +903,16 @@ function renderPanel(force = false) {
       h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
     !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: pn.all, onchange: (e) => { pn.all = e.target.checked; renderPanel(true); } }), '显示所有号的客户') : null,
-    pn.msg ? h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg) : null,
+    pn.msg ? fx('pn-msg', pn.msg, h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg)) : null,
     pn.edit ? (replies ? replyForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
     pn.edit ? null : h('div', { class: 'pn-foot' },
       h('button', { class: 'pn-btn', onclick: () => io('import') }, '导入'),
       h('button', { class: 'pn-btn', onclick: () => io('csv') }, '导出 CSV'),
       h('button', { class: 'pn-btn', onclick: () => io('json') }, '导出 JSON'),
       h('span', { class: 'hint', style: { width: '100%' } }, '只存在这台电脑上，不上传。“插入”会占用剪贴板，不会自动发送。'))));
+  // 切了页或打开/关掉编辑表单：下面的内容淡入
+  const editChanged = fxChanged('pn-edit', !!pn.edit, false);
+  if (tabChanged || editChanged) [...$panel.children].slice(1).forEach((el) => fxPlay(el, 'fx-fade'));
 }
 
 function welcomePage() {
@@ -1067,7 +1142,9 @@ function editorPage(id) {
 // ---------- 设置 ----------
 
 function sw(on, label, onchange) {
-  return h('button', { class: 'switch', role: 'switch', 'aria-checked': String(!!on), 'aria-label': label, onclick: () => onchange(!on) });
+  // 开关刚被拨过：小圆点从另一头滑过来
+  const flip = fxChanged(`sw:${label}`, !!on, false);
+  return h('button', { class: `switch${flip ? (on ? ' fx-sw-on' : ' fx-sw-off') : ''}`, role: 'switch', 'aria-checked': String(!!on), 'aria-label': label, onclick: () => onchange(!on) });
 }
 function setRow(title, desc, control, extra) {
   return h('div', { class: 'setrow' }, h('div', { class: 'meta' }, h('span', { class: 'title' }, title), h('span', { class: 'desc' }, desc), extra), control);
@@ -1444,6 +1521,7 @@ function renderLock() {
     const el = lockPage();
     if ($lock.firstChild !== el) $lock.replaceChildren(el);
     el.reset();
+    fxPlay(el, 'fx-fade');
   }
 }
 
@@ -1484,6 +1562,9 @@ function render(forceContent = false) {
   } else {
     $content.replaceChildren(acc && acc.problem ? problemPage(acc) : '');
   }
+  // 换了页面（设置里换了分页、切到别的号的出错页）：卡片内容淡入。WhatsApp 页面本身不动
+  const fxKey = s.page === 'settings' ? `${key}|${settingsTab}` : s.page === 'account' ? `${key}|${s.activeId}|${acc && acc.problem ? 'p' : acc && acc.mode === 'lite' ? 'l' : ''}` : key;
+  if (fxChanged('content', fxKey) && $content.firstElementChild) fxPlay($content.firstElementChild);
   liteForget(s.accounts.map((a) => a.id));
   shown = key;
 }
