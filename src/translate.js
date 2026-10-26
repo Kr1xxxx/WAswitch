@@ -9,6 +9,7 @@ const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
 const MAX_PROVIDERS = 10;
+const SEED_VER = 2; // 2：老用户没有智谱的也补上
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
@@ -17,6 +18,8 @@ const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(l
 // 深度思考：'' 默认（不传参数）| disabled | enabled。新服务商默认关（翻译用不上，关掉更快）；自定义和混元默认不传
 const THINKING = ['', 'disabled', 'enabled'];
 const defaultThinking = (preset) => (preset === 'zhipu' || preset === 'openrouter' ? 'disabled' : '');
+const newPreset = (preset) => ({ id: crypto.randomUUID(), preset, name: PRESETS[preset].name, baseUrl: PRESETS[preset].baseUrl, model: PRESETS[preset].model,
+  keyEnc: '', keyTail: '', updatedAt: 0, thinking: defaultThinking(preset) });
 const PRESETS = {
   // 混元只能选这两个翻译模型（shen 2026-10-26），走腾讯云 TokenHub 的 OpenAI 兼容接口
   hunyuan: { name: '腾讯混元', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-mt2-plus', models: ['hy-mt2-plus', 'hy-mt2-lite'] },
@@ -234,7 +237,7 @@ class Translator {
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
       // 出厂默认服务商只放一次；用户删光了也不再放回来
-      seeded: false };
+      seeded: false, seedVer: 0 };
     let migrated = false;
     const moved = [];
     try {
@@ -262,6 +265,7 @@ class Translator {
           for (const key of ['accountAuto', 'autoConsent']) if (raw[key] && typeof raw[key] === 'object') for (const [k, v] of Object.entries(raw[key])) if (v === true) base[key][k] = true;
           if (DAILY_CAPS.includes(raw.dailyCap)) base.dailyCap = raw.dailyCap;
           base.seeded = raw.seeded === true;
+          base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
@@ -277,7 +281,10 @@ class Translator {
       console.warn(`translate.json 无法读取（${e.message}），已备份`);
     }
     this.cfg = base;
-    if (!base.seeded && this.deps.seed !== false) { this.seedDefaults(base); migrated = true; }
+    if (this.deps.seed !== false) {
+      if (!base.seeded) { this.seedDefaults(base); migrated = true; }
+      else if ((base.seedVer || 0) < SEED_VER) { base.seedVer = SEED_VER; this.ensureZhipu(base); migrated = true; }
+    }
     if (migrated) {
       for (const id of moved) delete base.consented[id]; // 地址换了，之前的同意不算数
       try { this.save(); } catch {}
@@ -286,25 +293,41 @@ class Translator {
   }
 
   // 出厂默认：翻译用混元 hy-mt2-plus，备用和纠错用智谱 glm-4-flash，用户只要填两个密钥。
-  // 已经有服务商的：只在备用、纠错没设时补上智谱，别的不动。
+  // 已经有服务商的老用户：没有智谱就补一个（密钥空着），备用、纠错没设的设成智谱，别的不动。
   seedDefaults(c) {
     c.seeded = true;
+    c.seedVer = SEED_VER;
     if (!c.providers.length) {
-      const mk = (preset) => ({ id: crypto.randomUUID(), preset, name: PRESETS[preset].name, baseUrl: PRESETS[preset].baseUrl, model: PRESETS[preset].model,
-        keyEnc: '', keyTail: '', updatedAt: 0, thinking: defaultThinking(preset) });
-      const hy = mk('hunyuan');
-      const zp = mk('zhipu');
-      c.providers.push(hy, zp);
+      const hy = newPreset('hunyuan');
+      c.providers.push(hy);
       c.primaryId = hy.id;
-      c.fallbackId = zp.id;
-      c.fixId = zp.id;
-      return;
     }
-    const primary = c.providers.find((p) => p.id === c.primaryId);
-    const zp = c.providers.find((p) => p.preset === 'zhipu' && p.model === 'glm-4-flash');
-    if (!primary || !zp || !isMtModel(primary.model)) return;
-    if (!c.fallbackId) c.fallbackId = zp.id;
+    this.ensureZhipu(c);
+  }
+
+  // 补上智谱 glm-4-flash，并在备用、纠错没设时用它。只跑一次：之后用户删了不再放回来。
+  ensureZhipu(c, { roles = true } = {}) {
+    let zp = c.providers.find((p) => p.preset === 'zhipu' && p.model === 'glm-4-flash');
+    if (!zp) {
+      if (c.providers.length >= MAX_PROVIDERS) return null;
+      zp = newPreset('zhipu');
+      c.providers.push(zp);
+    }
+    if (!c.primaryId) c.primaryId = zp.id;
+    if (!roles) return zp;
+    if (!c.fallbackId && c.primaryId !== zp.id) c.fallbackId = zp.id;
     if (!c.fixId) c.fixId = zp.id;
+    return zp;
+  }
+
+  // 设置页“纠错服务商”下拉里选“添加智谱”：有就直接选上，没有就新建一个（密钥待填）并设为纠错
+  addZhipuForFix() {
+    const c = this.load();
+    const zp = this.ensureZhipu(c, { roles: false });
+    if (!zp) return { error: `最多 ${MAX_PROVIDERS} 个服务商` };
+    c.fixId = zp.id;
+    this.save();
+    return { ok: true, id: zp.id };
   }
 
   save() {

@@ -732,8 +732,13 @@ function translatePage(page) {
   const fb = h('select', { 'aria-label': '备用服务商', onchange: async (e) => apply(await window.wa.trRoles(c.primaryId, e.target.value)) },
     h('option', { value: '' }, '不用备用'), c.providers.filter((p) => p.id !== c.primaryId).map((p) => h('option', { value: p.id }, p.name)));
   fb.value = c.fallbackId || '';
-  const fixSel = h('select', { 'aria-label': '纠错服务商', onchange: async (e) => apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value)) },
-    h('option', { value: '' }, '用默认的'), c.providers.map((p) => h('option', { value: p.id }, `${p.name}（${p.model}）`)));
+  const hasZhipu = c.providers.some((p) => p.preset === 'zhipu' && p.model === 'glm-4-flash');
+  const fixSel = h('select', { 'aria-label': '纠错服务商', onchange: async (e) => {
+    if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
+    apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
+  } },
+    h('option', { value: '' }, '用默认的'), c.providers.map((p) => h('option', { value: p.id }, `${p.name}（${p.model}）`)),
+    hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
   const netSel = h('select', { 'aria-label': '翻译走的网络' }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
