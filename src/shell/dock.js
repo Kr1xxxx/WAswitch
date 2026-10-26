@@ -215,8 +215,8 @@ function dockOrig(key, text, hasTr) {
   if (!hasTr) return h('span', { class: 'dk-orig' }, text);
   const open = dk.openOrig.has(key);
   const flip = () => { if (open) dk.openOrig.delete(key); else dk.openOrig.add(key); dockRender(true); };
-  const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), title: open ? '收起原文' : '展开原文', onclick: flip }, open ? '收起' : '原文');
-  // 按钮放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
+  const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), 'aria-label': open ? '收起原文' : '展开原文', title: open ? '收起原文' : '展开原文', onclick: flip });
+  // 按钮是个细线小箭头（收起时 <，展开后转成朝下）；放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
   if (open) return h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text);
   return h('span', { class: 'dk-fold' },
     btn,
