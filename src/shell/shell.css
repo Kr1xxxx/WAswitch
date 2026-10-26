@@ -100,6 +100,13 @@ body.collapsed .foot { justify-content: center; }
 .chip.bad { background: #fdecee; color: var(--danger); }
 .chip.night { background: #fff4d6; color: #8a5a00; }
 button.chip { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
+.zoom-pop { gap: 2px; padding: 0 3px; background: #fff; box-shadow: 0 0 0 1px var(--line), 0 2px 8px rgba(0,0,0,.08); -webkit-app-region: no-drag; }
+.zoom-pop button { -webkit-app-region: no-drag; border: 0; background: transparent; font: inherit; color: var(--text); cursor: pointer; border-radius: 10px; height: 20px; }
+.zoom-pop .zoom-btn { width: 22px; font-size: 15px; line-height: 1; padding: 0; }
+.zoom-pop .zoom-reset { padding: 0 7px; font-size: 11px; color: var(--soft); }
+.zoom-pop button:hover:not(:disabled) { background: #eceef1; }
+.zoom-pop button:disabled { opacity: .35; cursor: default; }
+.zoom-pop .zoom-val { min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); }
 #content { flex: 1; min-height: 0; overflow-y: auto; user-select: text; }
 #content[hidden], #lock[hidden] { display: none; }
 #lock { flex: 1; min-height: 0; }

@@ -325,6 +325,28 @@ setInterval(() => {
   if (c && c.draw) c.draw();
 }, 20000);
 
+// 顶栏缩放：点比例数字，原地展开成 [− 90% + 默认]（WhatsApp 页面盖在顶栏下面，弹窗放不下去，所以在顶栏里展开）
+const ZOOM_MIN = 0.5, ZOOM_MAX = 2, ZOOM_DEF = 0.9;
+let zoomOpenId = null;
+function closeZoom() { if (zoomOpenId === null) return; zoomOpenId = null; renderTop(); }
+document.addEventListener('mousedown', (e) => { if (zoomOpenId !== null && !e.target.closest?.('.zoom-pop, .zoom-chip')) closeZoom(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && zoomOpenId !== null) closeZoom(); });
+window.addEventListener('blur', closeZoom); // 点进 WhatsApp 页面时收起
+function zoomChip(acc) {
+  const z = acc.zoom || ZOOM_DEF;
+  const pct = `${Math.round(z * 100)}%`;
+  const key = s.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+  if (zoomOpenId !== acc.id) {
+    return h('button', { class: 'chip zoom-chip', type: 'button', title: `页面缩放 ${pct}，点一下调整（${key} + = / - / 0 也能调）`, 'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: () => { zoomOpenId = acc.id; renderTop(); } }, pct);
+  }
+  const btn = (label, title, dir, disabled) => h('button', { class: 'zoom-btn', type: 'button', title, 'aria-label': title, disabled: disabled || null, onclick: () => window.wa.zoom(acc.id, dir) }, label);
+  return h('span', { class: 'chip zoom-pop', role: 'group', 'aria-label': '页面缩放' },
+    btn('−', `缩小（${key} + -）`, -1, z <= ZOOM_MIN),
+    h('span', { class: 'zoom-val' }, pct),
+    btn('+', `放大（${key} + =）`, 1, z >= ZOOM_MAX),
+    h('button', { class: 'zoom-reset', type: 'button', title: `还原到默认 90%（${key} + 0）`, disabled: z === ZOOM_DEF || null, onclick: () => window.wa.zoom(acc.id, 0) }, '默认'));
+}
+
 function renderTop() {
   const acc = active();
   $top.hidden = !(s.page === 'account' && acc);
@@ -336,8 +358,8 @@ function renderTop() {
     icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
     h('span', { class: 'grow' }),
     exitChip(acc),
-    // 缩放过的号显示比例，点一下还原到 100%
-    !lite && acc.zoom && acc.zoom !== 1 ? h('button', { class: 'chip', type: 'button', title: `这个号的页面缩放到了 ${Math.round(acc.zoom * 100)}%。点一下还原到 100%（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + = / - / 0 也能调）`, onclick: () => window.wa.zoom(acc.id, 0) }, `${Math.round(acc.zoom * 100)}%`) : null,
+    // 页面缩放：点比例展开 − / + 调整，只对这个号生效
+    lite ? null : zoomChip(acc),
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: lite ? '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值' : '内存占用（近似值）' }, `${acc.memMB} MB`) : null,
     h('button', { class: `icon-btn${s.floatOpen ? ' on' : ''}`, title: '悬浮翻译：自动翻译当前对话收到的消息', 'aria-label': '悬浮翻译', 'aria-pressed': String(!!s.floatOpen), onclick: () => window.wa.floatToggle() }, icon('globe', 15)),

@@ -289,7 +289,9 @@ function loadAccounts() {
     acc.muted = acc.muted === true;
     // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
     acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
-    acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
+    // 默认缩放 90%。老版本默认是 100%：没改过（还是 100%）的号换成 90%，自己调过的保留。zoomV 记下已经换过，之后用户再调回 100% 也不动
+    acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : ZOOM_DEFAULT;
+    if (acc.zoomV !== 2) { if (acc.zoom === 1) acc.zoom = ZOOM_DEFAULT; acc.zoomV = 2; }
     acc.spellcheck = acc.spellcheck === true;
     // 自定义下载文件夹：只能是用户在对话框里选的绝对路径，其他一律当没设
     acc.downloadDir = typeof acc.downloadDir === 'string' && path.isAbsolute(acc.downloadDir) ? acc.downloadDir : '';
@@ -841,7 +843,7 @@ function pushState() {
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
-        zoom: acc.zoom || 1,
+        zoom: acc.zoom || ZOOM_DEFAULT,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
         proxyLabel: proxyLabel(acc),
@@ -975,7 +977,7 @@ function createTeamSeat(seat) {
   const acc = {
     id: String(id), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
-    liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
+    liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false, zoom: ZOOM_DEFAULT, zoomV: 2,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
   };
   accounts.push(acc);
@@ -1131,18 +1133,20 @@ const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 // ---------- 缩放（每个号单独记） ----------
 // 和 Chrome 一样的几档；只对网页版号生效（轻量模式的界面跟着软件走）
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const ZOOM_DEFAULT = 0.9;
 function applyZoom(acc) {
   const view = views.get(acc.id);
-  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || 1);
+  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || ZOOM_DEFAULT);
 }
-// dir: 1 放大，-1 缩小，0 还原
+// dir: 1 放大，-1 缩小，0 还原到默认 90%
 function stepZoom(id, dir) {
   const acc = findAcc(id);
   if (!acc || isLite(acc)) return;
-  const i = ZOOM_STEPS.indexOf(acc.zoom || 1);
-  const next = dir === 0 ? 1 : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
+  const i = ZOOM_STEPS.indexOf(acc.zoom || ZOOM_DEFAULT);
+  const next = dir === 0 ? ZOOM_DEFAULT : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
   if (next === acc.zoom) return;
   acc.zoom = next;
+  acc.zoomV = 2; // 用户自己调的，下次启动不再按老默认换成 90%
   saveAccounts();
   applyZoom(acc);
   pushState();
@@ -2809,12 +2813,12 @@ onShell('context', (id) => {
       ],
     },
     {
-      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
+      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || ZOOM_DEFAULT) * 100)}%）`,
       enabled: !isLite(acc),
       submenu: [
         { label: '放大', accelerator: 'CmdOrCtrl+=', registerAccelerator: false, click: () => stepZoom(id, 1) },
         { label: '缩小', accelerator: 'CmdOrCtrl+-', registerAccelerator: false, click: () => stepZoom(id, -1) },
-        { label: '还原到 100%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || 1) !== 1, click: () => stepZoom(id, 0) },
+        { label: '还原到默认 90%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || ZOOM_DEFAULT) !== ZOOM_DEFAULT, click: () => stepZoom(id, 0) },
       ],
     },
     { type: 'separator' },
@@ -3042,7 +3046,7 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
   const teamFirstSave = !!(acc && acc.teamNeedsProxy);
   if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
   if (!acc) {
-    acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+    acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted, zoom: ZOOM_DEFAULT, zoomV: 2 };
     accounts.push(acc);
     if (tested) recordExit(acc, tested.ip);
     saveAccounts();
