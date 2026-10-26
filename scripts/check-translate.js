@@ -23,7 +23,7 @@ const ss={isEncryptionAvailable:()=>true,encryptString:(t)=>Buffer.from('E'+t),d
 let calls=[];
 let behave=[];
 const fake={fetch:async(url,opt)=>{calls.push({url,opt});const b=behave.shift();if(b==='net')throw new Error('x');if(b==='hang')return new Promise((res,rej)=>opt.signal.addEventListener('abort',()=>rej(new Error('ab'))));const st=b&&b.status||200;const body=b&&b.body||JSON.stringify({choices:[{message:{content:'Hola'}}]});return {ok:st<300,status:st,body:null,text:async()=>body};}};
-const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
+const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
 (async()=>{
   let r=tr.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y',key:'sk-secret1234'});
   assert(r.ok,JSON.stringify(r));
@@ -113,7 +113,7 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(dl('ok'),'');
   assert.equal(dl('👍👍'),'');
   // 对话记住的语言：认出来的不盖手动选的，键里没有号码
-  const t2=new T.Translator({dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  const t2=new T.Translator({seed:false,dir,safeStorage:{isEncryptionAvailable:()=>false}});
   const key='a1:0123456789abcdef';
   assert.equal(t2.setChatLang(key,'印尼语','detected'),true);
   assert.deepEqual(t2.chatLang(key),{lang:'印尼语',src:'detected'});
@@ -123,7 +123,7 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(t2.chatLang(key).lang,'马来语');
   assert.equal(t2.setChatLang('a1:+8613800000000','英语','manual'),false);
   assert.equal(t2.setChatLang(key,'火星语','manual'),false);
-  const t3=new T.Translator({dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  const t3=new T.Translator({seed:false,dir,safeStorage:{isEncryptionAvailable:()=>false}});
   assert.equal(t3.chatLang(key).lang,'马来语'); // 存盘读回
   t3.forgetAccount('a1');
   assert.equal(t3.chatLang(key),null);
@@ -135,7 +135,7 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   fs.writeFileSync(path.join(d2,'translate.json'),JSON.stringify({providers:[
     {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
     {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1',consented:{h1:true,h2:true}}));
-  const th=new T.Translator({dir:d2,safeStorage:ss,sessionFor:()=>fake});
+  const th=new T.Translator({seed:false,dir:d2,safeStorage:ss,sessionFor:()=>fake});
   const [h1,h2]=th.load().providers;
   assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
   assert.equal(h1.keyEnc,''); assert(!th.load().consented.h1); // 换地址：密钥和确认清掉
@@ -190,7 +190,7 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
     {id:'z1',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',keyEnc:Buffer.from('Ekz123').toString('base64'),keyTail:'z123'},
     {id:'z2',preset:'zhipu',name:'智谱2',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',keyEnc:'',keyTail:''},
     {id:'z3',preset:'zhipu',name:'智谱3',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1',consented:{z1:true}}));
-  const tz=new T.Translator({dir:d3,safeStorage:ss,sessionFor:()=>fake});
+  const tz=new T.Translator({seed:false,dir:d3,safeStorage:ss,sessionFor:()=>fake});
   const [z1,z2,z3]=tz.load().providers;
   assert.equal(z1.model,'glm-4-flash'); assert(z1.keyEnc); assert.equal(z2.model,'glm-4-flash'); assert.equal(z3.model,'glm-4-flash');
   calls=[]; r=await tz.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
@@ -206,7 +206,7 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   const rmt=T.buildMessages({prompt:'p'},'Hi',{target:'英语'},undefined,'','hy-mt2-plus','睫毛盘 = lash tray');
   assert.equal(rmt[0].content,'参考下面的翻译：\n睫毛盘 翻译成 lash tray\n\n把下面的文本翻译成英语，不要额外解释。\n\nHi');
   const d4=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  const t4=new T.Translator({dir:d4,safeStorage:ss,sessionFor:()=>fake});
+  const t4=new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake});
   r=t4.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'}); assert.equal(t4.provider(r.id).thinking,'disabled'); t4.deleteProvider(r.id);
   r=t4.saveProvider({preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',key:'kd',thinking:'disabled'}); const p4=r.id; t4.consent(p4);
   assert.equal(t4.provider(p4).thinking,'disabled');
@@ -222,8 +222,36 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   r=t4.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'deepseek/deepseek-chat',key:'ko'}); t4.consent(r.id); t4.setRoles({primaryId:r.id});
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
-  assert.equal(new T.Translator({dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
+  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
   fs.rmSync(d4,{recursive:true,force:true});
+  // 出厂默认：新装的直接有混元（默认）+ 智谱（备用、纠错），没有密钥；删光了不再放回来
+  const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  let t5=new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake});
+  let c5=t5.publicConfig();
+  assert.equal(c5.providers.length,2);
+  const hy5=c5.providers.find(p=>p.id===c5.primaryId), zp5=c5.providers.find(p=>p.id===c5.fallbackId);
+  assert.equal(hy5.preset,'hunyuan'); assert.equal(hy5.model,'hy-mt2-plus'); assert(!hy5.hasKey);
+  assert.equal(zp5.preset,'zhipu'); assert.equal(zp5.model,'glm-4-flash'); assert.equal(c5.fixId,zp5.id);
+  calls=[]; t5.consent(hy5.id); t5.consent(zp5.id);
+  q=await t5.translate({text:'你好',mode:{prompt:'p'}}); assert.equal(q.kind,'auth'); assert.equal(calls.length,0);
+  t5.deleteProvider(hy5.id); t5.deleteProvider(zp5.id);
+  assert.equal(new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake}).load().providers.length,0);
+  fs.rmSync(d5,{recursive:true,force:true});
+  // 老用户：已有服务商不动，只在备用/纠错没设、默认是混元 hy-mt 时补上智谱
+  const d6=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
+    {id:'h',preset:'hunyuan',name:'我的混元',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:'',keyTail:''},
+    {id:'z',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',keyEnc:'',keyTail:''}],primaryId:'h'}));
+  let c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
+  assert.equal(c6.providers.length,2); assert.equal(c6.providers[0].model,'hy-mt2-lite'); assert.equal(c6.providers[0].name,'我的混元');
+  assert.equal(c6.fallbackId,'z'); assert.equal(c6.fixId,'z'); assert.equal(c6.seeded,true);
+  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
+    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus'},
+    {id:'z',preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'},
+    {id:'o',preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y'}],primaryId:'h',fallbackId:'o',fixId:'h'}));
+  c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
+  assert.equal(c6.fallbackId,'o'); assert.equal(c6.fixId,'h'); // 用户自己设过的不改
+  fs.rmSync(d6,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
