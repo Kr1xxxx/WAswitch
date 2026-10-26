@@ -130,6 +130,31 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(t3.setChatLang(key,'英语','manual'),true);
   assert.equal(t3.setChatLang(key,'','manual'),true); // 回到自动
   assert.equal(t3.chatLang(key),null);
+  // 混元：只能选 hy-mt2-plus / hy-mt2-lite；旧配置迁移；hy-mt 模型用单条 user 消息
+  const d2=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  fs.writeFileSync(path.join(d2,'translate.json'),JSON.stringify({providers:[
+    {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
+    {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1',consented:{h1:true,h2:true}}));
+  const th=new T.Translator({dir:d2,safeStorage:ss,sessionFor:()=>fake});
+  const [h1,h2]=th.load().providers;
+  assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
+  assert.equal(h1.keyEnc,''); assert(!th.load().consented.h1); // 换地址：密钥和确认清掉
+  assert.equal(h2.model,'hy-mt2-lite'); assert(h2.keyEnc); assert(th.load().consented.h2);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(d2,'translate.json'),'utf8')).providers[0].model,'hy-mt2-plus');
+  assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hunyuan-turbos-latest'}).error);
+  assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hy-mt2-plus'}).ok);
+  assert(T.isMtModel('hy-mt2-lite')&&!T.isMtModel('glm-4-flash'));
+  const mt=T.buildMessages({prompt:'p'},'Hallo',{target:'中文'},[{out:false,text:'Preis?'},{out:true,text:'10 Euro'}],'草稿','hy-mt2-plus');
+  assert.equal(mt.length,1); assert.equal(mt[0].role,'user');
+  assert(mt[0].content.includes('客户：Preis?\n我：10 Euro\n参考上面的信息，把下面的文本翻译成中文')&&mt[0].content.endsWith('\nHallo'));
+  assert.equal(T.buildMessages({prompt:'p'},'Hi',{target:'德语'},undefined,'','hy-mt2-lite')[0].content,'把下面的文本翻译成德语，不要额外解释。\n\nHi');
+  calls=[]; th.consent('h2'); th.setRoles({primaryId:'h2'});
+  r=await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  const sent=JSON.parse(calls[0].opt.body);
+  assert.equal(sent.model,'hy-mt2-plus'); assert.equal(sent.messages.length,1);
+  assert.equal(calls[0].url,'https://tokenhub.tencentmaas.com/v1/chat/completions');
+  fs.rmSync(d2,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
