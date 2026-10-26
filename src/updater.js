@@ -232,6 +232,7 @@ class Updater {
       failures: 0,
       mac: this.mac,
       manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
+      userAsked: false, // 用户点了“检查并更新”：下好后马上重启安装，不等空闲、不用再点一次
     };
     this.updater = null;
     this.ops = hooks.macOps || macOps;
@@ -286,11 +287,20 @@ class Updater {
   fail(e) {
     const msg = String(e && e.message ? e.message : e).split('\n')[0].slice(0, 200);
     console.warn(`检查更新失败：${msg}`);
-    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${msg}`, failures: this.state.failures + 1, percent: 0 });
+    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${msg}`, failures: this.state.failures + 1, percent: 0, userAsked: false });
   }
 
   succeed(status, lastResult, patch = {}) {
-    this.set({ status, lastCheckAt: Date.now(), lastResult, failures: 0, ...patch });
+    this.set({ status, lastCheckAt: Date.now(), lastResult, failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
+  }
+
+  // 用户点“检查并更新”（或下载中点“下好后自动重启”）：一次点击 = 同意下好后马上重启安装
+  userUpdate() {
+    const s = this.state.status;
+    if (s === 'dev' || s === 'off') return;
+    if (s === 'downloaded') { this.install(); return; }
+    this.set({ userAsked: true });
+    if (s !== 'checking' && s !== 'downloading') this.check();
   }
 
   async check() {
@@ -361,9 +371,8 @@ class Updater {
   // 自动安装：只在用户肯定不在用的时候
   maybeAutoInstall() {
     if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
-    const reason = this.hooks.idleReason();
-    if (reason) return;
-    console.log(`自动安装新版本 ${this.state.version}`);
+    if (!this.state.userAsked && this.hooks.idleReason()) return;
+    console.log(`${this.state.userAsked ? '用户点了更新，' : ''}自动安装新版本 ${this.state.version}`);
     this.install();
   }
 
@@ -500,6 +509,7 @@ class Updater {
     this.macApp = await this.stageMac(version, zip);
     this.succeed('downloaded', `新版本 ${version} 已下载并校验通过`, { version, percent: 100 });
     if (this.macAuto) { this.maybeAutoInstall(); return; }
+    if (this.state.userAsked) { this.set({ userAsked: false }); this.openMacInstaller(); return; } // 不能自动替换：直接打开安装包
     this.hooks.notify('WAswitch 有新版本', `${version} 已下载。点这里打开，把新的 WAswitch 拖进“应用程序”替换旧版。`, () => this.openMacInstaller());
   }
 
