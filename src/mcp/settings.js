@@ -53,12 +53,18 @@ $('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target
 
 $('enabled').onchange = async (e) => render(await window.mcp.setEnabled(e.target.checked));
 $('regenerate').onclick = async () => render(await window.mcp.regenerate());
+// 复制成功：按钮原地换成绿色小对勾（同位置同大小），约 1.5 秒后变回，和主窗口一致
+const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 for (const b of document.querySelectorAll('[data-copy]')) {
+  const label = b.textContent;
   b.onclick = async () => {
     await window.mcp.copy(b.dataset.copy);
-    const old = b.textContent;
-    b.textContent = '已复制';
-    setTimeout(() => { b.textContent = old; }, 1500);
+    clearTimeout(b._t);
+    if (!b.classList.contains('copy-ok')) b.style.minWidth = `${b.offsetWidth}px`;  // 高度由 CSS 固定
+    b.innerHTML = CHECK_SVG;
+    b.title = '已复制';
+    b.classList.add('copy-ok');
+    b._t = setTimeout(() => { b.textContent = label; b.title = ''; b.style.minWidth = ''; b.classList.remove('copy-ok'); }, 1500);
   };
 }
 window.mcp.onUpdate(render);

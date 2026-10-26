@@ -89,6 +89,49 @@ async function core() {
   fc.forget('A');
   assert.strictEqual(fc.viewOf('A').items.length, 0);
   console.log('悬浮翻译逻辑自检通过');
+  await persisted();
+}
+
+// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号清掉
+async function persisted() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-'));
+  const sent = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  let { store, fc } = make();
+  const msgs = [msg(1, false, '555@c.us', 'hello'), msg(2, false, '555@c.us', 'bye')];
+  fc.ingest('P', { title: 'p', msgs }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['hello', 'bye']);
+  assert(fc.edit('P', hashOf('P', msgs[1].id), '再见（我改的）'));
+  store.flush();
+  const files = fs.readdirSync(path.join(dir, 'P'));
+  assert.strictEqual(files.length, 1);
+  const raw = fs.readFileSync(path.join(dir, 'P', files[0]), 'utf8');
+  assert(!raw.includes('"hello"') && !raw.includes('555'), '磁盘上不存原文和号码');
+  // 重启：同样的消息（编号变了也认得出）直接显示，不调模型
+  ({ store, fc } = make());
+  sent.length = 0;
+  const again = [{ ...msg(7, false, '555@c.us', 'hello') }, msg(2, false, '555@c.us', 'bye'), msg(3, false, '555@c.us', 'new one')];
+  fc.ingest('P', { title: 'p', msgs: again }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['new one']);
+  const items = fc.viewOf('P').items;
+  assert.deepStrictEqual(items.map((x) => [x.state, x.tr, x.edited]), [['done', '译:hello', false], ['done', '再见（我改的）', true], ['done', '译:new one', false]]);
+  // 别的对话里同样的话不串
+  fc.ingest('P', { title: 'q', msgs: [msg(1, false, '666@c.us', 'hello')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['new one', 'hello']);
+  fc.forget('P');
+  assert(!fs.existsSync(path.join(dir, 'P')), '删号清掉存的译文');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('译文存盘自检通过');
 }
 
 core().then(() => {
@@ -147,6 +190,20 @@ core().then(() => {
     assert(r6.ok, JSON.stringify(r6));
     assert.deepStrictEqual(r6.msgs.map((m) => [m.out, m.text]), [[false, 'Bonjour, merci'], [false, 'Bonjour, merci']]);
     assert.notStrictEqual(r6.msgs[0].id, r6.msgs[1].id, '同样的话两次要有不同编号');
+    // 没有 class，但带发送状态的勾：认成自己发的，翻译列表里不显示
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Marie">Marie</span></header>'
+      + '<div role="row"><div data-id="3EB0CC"><div data-pre-plain-text="[10:00, 26/10/2026] Marie: "><span dir="ltr">Bonjour</span></div></div></div>'
+      + '<div role="row"><div data-id="3EB0DD"><div data-pre-plain-text="[10:01, 26/10/2026] Moi: "><span dir="ltr">Merci à vous</span></div><span data-icon="msg-dblcheck"></span></div></div>'
+      + '<div role="row"><div data-id="3EB0EE"><div role="button"><span data-icon="msg-dblcheck"></span>quoted</div><div data-pre-plain-text="[10:03, 26/10/2026] Marie: "><span dir="ltr">Super</span></div></div></div>'; 1`);
+    const r7 = await waPage.readOpenChat(w.webContents);
+    assert(r7.ok, JSON.stringify(r7));
+    assert.deepStrictEqual(r7.msgs.map((m) => [m.out, m.text]), [[false, 'Bonjour'], [true, 'Merci à vous'], [false, 'Super']]);
+    // 没有 data-id 只剩正文块时也一样
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Marie">Marie</span></header>'
+      + '<div role="row"><div><div data-pre-plain-text="[10:01, 26/10/2026] Marie: ">Salut</div></div></div>'
+      + '<div role="row"><div><div data-pre-plain-text="[10:02, 26/10/2026] Moi: ">Bonne journée</div><span data-icon="msg-check"></span></div></div>'; 1`);
+    const r8 = await waPage.readOpenChat(w.webContents);
+    assert.deepStrictEqual(r8.msgs.map((m) => [m.out, m.text]), [[false, 'Salut'], [true, 'Bonne journée']]);
     // 有消息行但一条都认不出：才算读不到
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');

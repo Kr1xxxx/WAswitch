@@ -252,6 +252,24 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
     {id:'o',preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y'}],primaryId:'h',fallbackId:'o',fixId:'h'}));
   c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
   assert.equal(c6.fallbackId,'o'); assert.equal(c6.fixId,'h'); // 用户自己设过的不改
+  // 0.5.2 老用户（seeded 过，只有混元）：升级后补上智谱，设为备用和纠错；删了以后不再补
+  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
+    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus'}],primaryId:'h',seeded:true}));
+  let t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
+  c6=t6.publicConfig();
+  const zp6=c6.providers.find(p=>p.preset==='zhipu');
+  assert(zp6); assert.equal(zp6.model,'glm-4-flash'); assert(!zp6.hasKey);
+  assert.equal(c6.primaryId,'h'); assert.equal(c6.fallbackId,zp6.id); assert.equal(c6.fixId,zp6.id);
+  t6.deleteProvider(zp6.id);
+  t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(t6.publicConfig().providers.length,1);
+  // 纠错下拉里“添加智谱”：新建并只设纠错，备用不动
+  t6.setRoles({fallbackId:''});
+  assert.equal(t6.addZhipuForFix().ok,true);
+  c6=t6.publicConfig();
+  const zp7=c6.providers.find(p=>p.preset==='zhipu');
+  assert.equal(c6.fixId,zp7.id); assert.equal(c6.fallbackId,''); assert.equal(c6.providers.length,2);
+  assert.equal(t6.addZhipuForFix().ok,true); assert.equal(t6.publicConfig().providers.length,2); // 有了就不重复加
   fs.rmSync(d6,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));

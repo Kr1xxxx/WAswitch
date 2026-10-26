@@ -9,6 +9,14 @@
   --field: #d5d9df;
   --danger: #b42318;
   --ok: #05603a;
+  /* 过渡动画统一时长：短、ease-out，只动 opacity/transform */
+  --fx-fast: 120ms;
+  --fx: 160ms;
+  --fx-slow: 200ms;
+  --fx-ease: cubic-bezier(.2, .8, .2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --fx-fast: 0ms; --fx: 0ms; --fx-slow: 0ms; }
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -367,9 +375,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 /* 右侧工作台顶部的切页：客户资料 / 话术 / 翻译 */
 .wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: 1px solid var(--line); background: #fff; }
 .wb-tabs .icon-btn { align-self: center; }
-.tb-tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
+.tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .tb-tab:hover { color: var(--text); background: rgba(0,0,0,.03); }
-.tb-tab.on { color: var(--text); font-weight: 600; border-bottom-color: #15803D; }
+.tb-tab.on { color: var(--text); font-weight: 600; }
+/* 选中下划线单独画一层，切页时能从中间展开 */
+.tb-tab::after { content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: #15803D; opacity: 0; transform: scaleX(.4); pointer-events: none; }
+.tb-tab.on::after { opacity: 1; transform: none; }
 .tb-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #15803D; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* 右侧面板的“翻译”页：上面状态条，中间收到的消息，下面写回复 */
@@ -389,12 +400,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-switch:disabled { opacity: .5; cursor: default; }
 .dk-switch:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; }
 .dk-mini { max-width: 104px; color: var(--soft); }
+.dk-model { max-width: 150px; }
 /* 收到的消息：照 WhatsApp 收到的气泡。紧凑，时间小号灰字在右下角，纠错/编辑悬停才显示 */
 .dk-list { flex: 1; min-height: 80px; overflow-y: auto; padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
 .dk-item { position: relative; align-self: flex-start; max-width: 92%; min-width: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px 6px 9px; border-radius: 8px; background: #f0f2f5; box-shadow: 0 1px .5px rgba(11,20,26,.13); }
 .dk-item.wide { align-self: stretch; max-width: none; }
 .dk-item.foot { padding-bottom: 20px; }
-.dk-item.clip { background: #f6f7f9; margin-bottom: 2px; }
 .dk-meta { position: absolute; right: 8px; bottom: 4px; display: flex; align-items: center; gap: 5px; line-height: 15px; pointer-events: none; }
 .dk-time { font-size: 11px; color: #667781; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dk-item.last .dk-time { color: #15803D; }
@@ -402,6 +413,14 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: 10px; padding: 0 4px; line-height: 15px; }
 .dk-item:has(.dk-edited, .dk-fixed) .dk-spacer { width: 112px; }
 .dk-orig { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
+.dk-fold { display: flex; align-items: center; gap: 6px; align-self: stretch; min-width: 0; margin-bottom: 1px; }
+.dk-fold-glass { position: relative; flex: 1 1 0; min-width: 40px; max-width: 220px; height: 15px; overflow: hidden; border-radius: 4px; cursor: pointer; }
+.dk-fold-text { display: block; font-size: 12px; line-height: 15px; color: var(--muted); white-space: nowrap; overflow: hidden; filter: blur(3.5px); opacity: .75; user-select: none; }
+.dk-fold-glass::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(255,255,255,.35), rgba(255,255,255,.15) 60%, rgba(240,242,245,.9)); }
+.dk-fold-btn { flex: none; position: relative; display: inline-block; width: 16px; height: 15px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; vertical-align: -2px; }
+.dk-fold-btn::before { content: ''; position: absolute; left: 6px; top: 4px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.dk-fold-btn[aria-expanded="true"]::before { left: 5px; top: 3px; transform: rotate(-45deg); }
+.dk-fold-btn:hover { color: var(--text); background: rgba(0,0,0,.05); }
 .dk-tr { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
 .dk-tr.bad { color: var(--danger); font-size: 12px; }
 .dk-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #15803D; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -420,13 +439,13 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 /* 紧凑：外层卡片只留一圈细边（shen 2026-10-26），里面的文本区不挤 */
 .dk-card { background: #f7f7f7; border-radius: 9px; padding: 3px; box-shadow: 0 0 6px rgba(0,0,0,.12); }
 .dk-field { background: #ebebeb; border-radius: 7px; padding: 9px 10px 5px; display: flex; flex-direction: column; gap: 3px; }
-.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; min-height: 56px; line-height: 1.5; color: #111; }
+/* 默认两行高，字多自动加高，最多四行，再多框内滚动；不能手动拖（shen 2026-10-26） */
+.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; line-height: 1.5; color: #111; field-sizing: content; min-height: calc(2em * 1.5); max-height: calc(4em * 1.5); overflow-y: auto; }
 .dk-card .dk-in:focus, .dk-card .dk-out:focus { outline: none; }
 .dk-tools { display: flex; }
 .dk-tool { width: 18px; height: 18px; margin-left: 1px; border: 0; background: transparent; color: #111; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 .dk-tool svg { stroke-width: 1.6; }
 .dk-tool:hover { color: #000; opacity: .65; }
-.dk-tool.done { color: #15803D; opacity: 1; }
 .dk-tool:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; border-radius: 4px; }
 .dk-outhead { display: flex; align-items: center; gap: 8px; }
 .dk-edited { font-size: 11px; color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 0 6px; }
@@ -440,7 +459,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-acts-mini { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
 /* 气泡里的纠错/编辑：平时藏起来，鼠标移上去或键盘聚焦时浮在右上角 */
 .dk-item > .dk-acts-mini { position: absolute; top: 3px; right: 4px; margin: 0; gap: 8px; padding: 1px 6px 1px 14px; border-radius: 6px; background: linear-gradient(to right, rgba(240,242,245,0), #f0f2f5 12px); opacity: 0; transition: opacity .12s; }
-.dk-item.clip > .dk-acts-mini { background: linear-gradient(to right, rgba(246,247,249,0), #f6f7f9 12px); }
 .dk-item:hover > .dk-acts-mini, .dk-item:focus-within > .dk-acts-mini { opacity: 1; }
 .dk-item > .dk-acts-mini .dk-link { font-size: 11px; text-decoration: none; }
 .dk-item > .dk-acts-mini .dk-link:hover { text-decoration: underline; }
@@ -456,3 +474,62 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .cfm-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 .cfm-btns .btn { height: 36px; padding: 0 16px; }
 .btn.danger-fill { border: none; background: var(--danger); color: #fff; font-weight: 600; }
+
+/* 复制成功的小对勾：原位置弹出并描出对勾，1.5 秒后图标淡回 */
+.copy-ok, .copy-ok:hover { color: #15803D; opacity: 1; }
+.pn-btn.copy-ok { border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; justify-content: center; align-items: center; vertical-align: middle; }
+.copy-ok svg { animation: copy-pop .34s cubic-bezier(.2, .9, .3, 1.35); }
+.copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw .28s .06s ease-out forwards; }
+.copy-back > * { animation: copy-back .2s ease-out; }
+@keyframes copy-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes copy-draw { to { stroke-dashoffset: 0; } }
+@keyframes copy-back { from { transform: scale(.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .copy-ok svg, .copy-ok svg path, .copy-back > * { animation: none; stroke-dashoffset: 0; } }
+
+/* ---------- 过渡动画（时长看 :root 的 --fx-*） ---------- */
+/* 悬停、按下：颜色渐变，按钮按下轻轻缩一下 */
+button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease-out, border-color var(--fx-fast) ease-out, color var(--fx-fast) ease-out, box-shadow var(--fx-fast) ease-out, opacity var(--fx-fast) ease-out, transform var(--fx-fast) ease-out; }
+.btn:active:not(:disabled), .pn-btn:active, .dk-chip:active, .preset:active, .icon-btn:active, .updbtns button:active, .tb-tab:active { transform: scale(.97); }
+@keyframes fx-rise { from { opacity: 0; transform: translateY(4px); } }
+@keyframes fx-fade { from { opacity: 0; } }
+@keyframes fx-down { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes fx-pop { from { opacity: 0; transform: scale(.96); } }
+@keyframes fx-out { to { opacity: 0; } }
+@keyframes fx-pop-out { to { opacity: 0; transform: scale(.97); } }
+@keyframes fx-slide-l { from { opacity: 0; transform: translateX(10px); } }
+@keyframes fx-bar { from { opacity: 0; transform: scaleX(.4); } }
+@keyframes fx-hl { from { opacity: .4; transform: scale(.98); } }
+/* 页面、面板内容、新消息：淡入并上浮一点 */
+.fx-in { animation: fx-rise var(--fx-slow) var(--fx-ease) backwards; }
+.fx-fade { animation: fx-fade var(--fx) ease-out backwards; }
+/* AI 请求条从上面落下来；工作台从右边滑进来 */
+.fx-down { animation: fx-down var(--fx) var(--fx-ease) backwards; }
+.fx-panel { animation: fx-slide-l var(--fx-slow) var(--fx-ease) backwards; }
+/* 侧栏切账号 / 设置换分页：新高亮的那一行轻轻弹出 */
+.row.fx-on, .tab.fx-on { animation: fx-hl var(--fx-slow) var(--fx-ease) backwards; }
+/* 工作台切页：下划线从中间展开 */
+.tb-tab.fx-on::after { animation: fx-bar var(--fx) var(--fx-ease) backwards; }
+/* 分组折叠箭头：转 90° */
+.group-head .gchev { display: flex; }
+.group-head.closed .gchev { transform: rotate(-90deg); }
+@keyframes fx-rot-close { from { transform: rotate(0); } }
+@keyframes fx-rot-open { from { transform: rotate(-90deg); } }
+.gchev.fx-rot-close { animation: fx-rot-close var(--fx) var(--fx-ease) backwards; }
+.gchev.fx-rot-open { animation: fx-rot-open var(--fx) var(--fx-ease) backwards; }
+/* 设置里的开关：小圆点滑过去 */
+@keyframes fx-knob-on { from { transform: translateX(-18px); } }
+@keyframes fx-knob-off { from { transform: translateX(18px); } }
+.switch.fx-sw-on::after { animation: fx-knob-on var(--fx) var(--fx-ease) backwards; }
+.switch.fx-sw-off::after { animation: fx-knob-off var(--fx) var(--fx-ease) backwards; }
+/* 确认框：背景淡入、框从 96% 放大；关掉时淡出 */
+.cfm { animation: fx-fade var(--fx-fast) ease-out backwards; }
+.cfm-box { animation: fx-pop var(--fx) var(--fx-ease) backwards; }
+.cfm.out { pointer-events: none; animation: fx-out var(--fx-fast) ease-in forwards; }
+.cfm.out .cfm-box { animation: fx-pop-out var(--fx-fast) ease-in forwards; }
+/* 原文折叠：箭头转 90°，展开的原文从上面淡入 */
+@keyframes fx-fold-open { from { transform: rotate(45deg); } }
+@keyframes fx-fold-close { from { transform: rotate(-45deg); } }
+@keyframes fx-unfold { from { opacity: 0; transform: translateY(-3px); } }
+.dk-fold-btn.fx-fold-open::before { animation: fx-fold-open var(--fx) var(--fx-ease) backwards; }
+.dk-fold-btn.fx-fold-close::before { animation: fx-fold-close var(--fx) var(--fx-ease) backwards; }
+.fx-unfold { animation: fx-unfold var(--fx) var(--fx-ease) backwards; }

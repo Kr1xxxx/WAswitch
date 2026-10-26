@@ -20,6 +20,7 @@ const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
+const { TrStore } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const memory = require('./memory');
@@ -2098,7 +2099,8 @@ app.whenReady().then(async () => {
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
     title: 'WAswitch', backgroundColor: '#E6E9ED',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } } : {}),
+    // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
+    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
   });
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
@@ -2333,9 +2335,10 @@ async function applyTranslateNet() {
 }
 const trState = () => ({ config: translator.publicConfig(), modes: modeStore.list() });
 handleShell('tr:config', () => trState());
-handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), ...trState() }));
-handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
-handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
+handleShell('tr:provider:save', (data) => { const r = translator.saveProvider(data); pushFloat(); return { ...r, ...trState() }; });
+handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); pushFloat(); return trState(); });
+handleShell('tr:fix:zhipu', () => ({ ...translator.addZhipuForFix(), ...trState() }));
+handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); pushFloat(); return trState(); });
 handleShell('tr:role', (text) => ({ ...translator.setRolePrompt(text), ...trState() }));
 handleShell('tr:network', async (net) => {
   // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
@@ -2391,8 +2394,6 @@ handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, dr
   return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
 });
 handleShell('tr:cancel', () => userCancel());
-// 只在用户点“翻译剪贴板”时读一次，从不轮询
-handleShell('tr:clipboard', async () => { const t = await clipboard.readText(); return typeof t === 'string' ? t.slice(0, 4000) : ''; });
 // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
 const chatCustomer = (accId, title) => matchChatCustomer(customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
 handleShell('tr:chatlang', async (accountId) => {
@@ -2428,6 +2429,7 @@ let floatFails = 0;
 let floatReadable = 'loading'; // ok | nochat | unreadable | loading
 let floatArea = null; // 账号视图的位置（layout 算出来的）
 let floatCore = null;
+let trStore = null; // 收到的消息的译文，永久存在磁盘上
 // 自动翻译默认开，只有手动关掉的号是 false
 const floatAuto = (id) => !!id && translator.load().accountAuto[id] !== false;
 // 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
@@ -2452,7 +2454,9 @@ const FIX_OUT = {
   temperature: 0.2,
 };
 function setupFloatCore() {
+  trStore = new TrStore(path.join(app.getPath('userData'), 'translations'));
   floatCore = new FloatCore({
+    store: trStore,
     translate: (text, { fix, context, prev } = {}) => {
       // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
       const draft = fix && typeof prev === 'string' ? prev : '';
@@ -2553,6 +2557,9 @@ function floatState() {
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
     providerName: primary ? primary.name : '',
+    primaryId: primary ? primary.id : '',
+    fallbackId: cfg.fallbackId || '',
+    providers: (cfg.providers || []).map((p) => ({ id: p.id, name: p.name, model: p.model || '' })), // 翻译页的“换模型”下拉，不带密钥
     engine: primary ? (primary.model || primary.name) : '',
     collapsed: cfg.float.collapsed,
     modes: {
@@ -3221,6 +3228,7 @@ app.on('before-quit', (event) => {
   quitting = true;
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
+  if (trStore) trStore.flush(); // 还没写盘的译文
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
