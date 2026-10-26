@@ -613,20 +613,33 @@ function trProviderForm() {
   preset.value = e.preset || 'hunyuan';
   const name = h('input', { value: e.name || '', maxlength: '40', placeholder: '显示名称（可不填）' });
   const base = h('input', { value: e.baseUrl || '', placeholder: 'https://…/v1' });
-  const model = h('input', { value: e.model || '', placeholder: '模型名，例如 glm-4-flash' });
+  const modelIn = h('input', { value: e.model || '', placeholder: '模型名，例如 glm-4-flash' });
+  // 有固定模型列表的服务商（腾讯混元）只能下拉选，不能手填
+  const modelSel = h('select', { 'aria-label': '模型' });
+  const listFor = (id) => (presets.find((x) => x.id === id) || {}).models || null;
+  const model = { get value() { return listFor(preset.value) ? modelSel.value : modelIn.value; } };
+  const modelBox = h('span', { style: { display: 'contents' } });
+  const showModel = (want) => {
+    const list = listFor(preset.value);
+    if (list) {
+      modelSel.replaceChildren(...list.map((m) => h('option', { value: m }, m)));
+      modelSel.value = list.includes(want) ? want : list[0];
+      modelBox.replaceChildren(h('label', { class: 'inline' }, '模型', modelSel));
+    } else { modelIn.value = want || ''; modelBox.replaceChildren(modelIn); }
+  };
   const key = h('input', { type: 'password', value: '', autocomplete: 'off', placeholder: e.hasKey ? `已设置（尾号 ${e.keyTail}），不改就留空` : 'API 密钥' });
   preset.addEventListener('change', () => {
     const p = presets.find((x) => x.id === preset.value);
-    if (p && p.id !== 'custom') { base.value = p.baseUrl; if (p.model) model.value = p.model; else model.value = ''; }
+    if (p && p.id !== 'custom') { base.value = p.baseUrl; showModel(p.model || ''); } else showModel(modelIn.value);
   });
-  if (!e.id && !e.baseUrl) { const p = presets.find((x) => x.id === preset.value); base.value = p.baseUrl; model.value = p.model; }
+  if (!e.id && !e.baseUrl) { const p = presets.find((x) => x.id === preset.value); base.value = p.baseUrl; showModel(p.model); } else showModel(e.model || '');
   // 状态推送会重画设置页：填到一半的内容先记在 trEdit 里（密钥除外，密钥不留在界面状态里）
   const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value });
-  for (const el of [preset, name, base, model]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
+  for (const el of [preset, name, base, modelIn, modelSel]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
   return h('div', { class: 'box tr-form', style: { gap: '8px' } },
     h('b', null, e.id ? '修改服务商' : '添加服务商'),
-    h('label', { class: 'inline' }, '类型', preset), name, base, model, key,
-    h('span', { class: 'hint' }, 'OpenRouter 的模型名在它网站上复制，例如 deepseek/deepseek-chat。密钥用系统加密保存，界面上只显示尾号。'),
+    h('label', { class: 'inline' }, '类型', preset), name, base, modelBox, key,
+    h('span', { class: 'hint' }, '腾讯混元用腾讯云 TokenHub 的 API 密钥，海外账号把地址换成 https://tokenhub-intl.tencentcloudmaas.com/v1。OpenRouter 的模型名在它网站上复制，例如 deepseek/deepseek-chat。密钥用系统加密保存，界面上只显示尾号。'),
     h('div', { class: 'hstack' },
       h('button', { class: 'btn primary', onclick: async () => {
         const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value });
