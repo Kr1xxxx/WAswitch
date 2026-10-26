@@ -2787,6 +2787,22 @@ function setGroup(gid, patch) {
   notifier.refresh();
   refresh();
 }
+// 解散分组前先问一下（和删除账号一样用系统确认框，默认是“取消”）
+async function confirmDeleteGroup(gid) {
+  const g = findGroup(gid);
+  if (!g) return;
+  const n = accounts.filter((a) => a.groupId === gid).length;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['取消', '解散'],
+    defaultId: 0,
+    cancelId: 0,
+    title: '解散分组',
+    message: `解散「${g.name}」？`,
+    detail: n ? `组里的 ${n} 个号会移到“未分组”，号本身和登录状态都不受影响。` : '这个分组是空的。',
+  });
+  if (response === 1) deleteGroup(gid);
+}
 function deleteGroup(gid) {
   if (!findGroup(gid)) return;
   // 组里的号挪到“未分组”最后，保持原来的先后
@@ -2823,7 +2839,7 @@ onShell('group:context', (id) => {
       click: () => setGroup(id, { muted: !g.muted }),
     },
     { type: 'separator' },
-    { label: `解散「${g.name}」（号不会删）`, click: () => deleteGroup(id) },
+    { label: `解散「${g.name}」…（号不会删）`, click: () => confirmDeleteGroup(id) },
   ]).popup({ window: win });
 });
 
