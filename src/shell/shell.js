@@ -665,15 +665,27 @@ function trProviderForm() {
   });
   if (!e.id && !e.baseUrl) { const p = presets.find((x) => x.id === preset.value); base.value = p.baseUrl; showModel(p.model); } else showModel(e.model || '');
   // 状态推送会重画设置页：填到一半的内容先记在 trEdit 里（密钥除外，密钥不留在界面状态里）
-  const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value });
-  for (const el of [preset, name, base, modelIn, modelSel]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
-  return h('div', { class: 'box tr-form', style: { gap: '8px' } },
+  // 深度思考：默认 = 不传参数。智谱、OpenRouter 新加的默认禁用
+  const think = h('select', { 'aria-label': '深度思考' }, [['', '默认'], ['disabled', '禁用思考'], ['enabled', '启用思考']].map(([v, l]) => h('option', { value: v }, l)));
+  const thinkDefault = (id) => (id === 'zhipu' || id === 'openrouter' ? 'disabled' : '');
+  think.value = typeof e.thinking === 'string' ? e.thinking : thinkDefault(preset.value);
+  preset.addEventListener('change', () => { think.value = thinkDefault(preset.value); });
+  const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, thinking: think.value });
+  for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
+  for (const el of [name, base, key]) el.style.width = '260px';
+  const isMt = /^hy-mt/i.test(model.value);
+  return h('div', { class: 'box tr-form' },
     h('b', null, e.id ? '修改服务商' : '添加服务商'),
-    h('label', { class: 'inline' }, '类型', preset), name, base, modelBox, key,
-    h('span', { class: 'hint' }, '腾讯混元用腾讯云 TokenHub 的 API 密钥，海外账号把地址换成 https://tokenhub-intl.tencentcloudmaas.com/v1。OpenRouter 的模型名在它网站上复制，例如 deepseek/deepseek-chat。密钥用系统加密保存，界面上只显示尾号。'),
-    h('div', { class: 'hstack' },
+    setRow('类型', '选好类型会自动填地址和默认模型。', preset),
+    setRow('名称', '显示在列表里，可不填。', name),
+    setRow('接口地址', '腾讯混元海外账号换成 https://tokenhub-intl.tencentcloudmaas.com/v1。', base),
+    setRow('模型', listFor(preset.value) ? '这个服务商只能选这几个模型。' : 'OpenRouter 的模型名在它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
+    setRow('API 密钥', '腾讯混元用腾讯云 TokenHub 的密钥。密钥用系统加密保存，界面上只显示尾号。', key),
+    setRow('深度思考', isMt ? '混元 hy-mt 翻译模型没有思考模式，这项不起作用。'
+      : '仅部分模型支持，主要用于同时支持思考和非思考模式的模型（比如 DeepSeek、Qwen3）。翻译用不上思考，禁用会更快。选“默认”时不传这个参数，由服务商决定。', think),
+    h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
-        const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value });
+        const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value });
         tr.cfg = r.config; tr.modes = r.modes;
         if (r.error) { trSay = r.error; } else { trSay = '已保存'; trEdit = null; }
         render(true);
@@ -701,6 +713,19 @@ function trModeForm() {
         render(true);
       } }, '保存'),
       h('button', { class: 'btn', onclick: () => { trModeEdit = null; render(true); } }, '取消')));
+}
+let trRoleDraft = null; // 没保存的角色设定（重画时不丢）
+function trRoleBox(c, apply) {
+  const ta = h('textarea', { maxlength: '4000', 'aria-label': '角色设定', style: { minHeight: '160px' },
+    placeholder: '例如：\n你是睫毛产品的外贸业务员，翻译要专业、礼貌。\n这些词固定这样翻译：\n睫毛盘 = lash tray\n贴牌 = private label' },
+  trRoleDraft ?? (c.rolePrompt || ''));
+  ta.addEventListener('input', () => { trRoleDraft = ta.value; });
+  return h('div', { class: 'col', style: { gap: '8px' } }, ta,
+    h('div', { class: 'hstack' }, h('button', { class: 'btn primary', onclick: async () => {
+      const r = await window.wa.trRole(ta.value);
+      if (!r.error) { trRoleDraft = null; trSay = '角色设定已保存'; }
+      apply(r);
+    } }, '保存角色设定')));
 }
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
@@ -743,6 +768,13 @@ function translatePage(page) {
         h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
     setRow('悬浮翻译：每个号每天最多自动翻几条', '顶栏的地球按钮打开悬浮翻译窗。超过这个数自动翻译暂停到第二天，手动点“翻译”不受影响。每分钟最多自动翻 20 条。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
+    h('h2', { class: 'ov-h2' }, '角色设定'),
+    h('div', { class: 'box tr-form' },
+      trRoleBox(c, apply),
+      h('span', { class: 'desc', style: { fontSize: '13px', lineHeight: '1.6', color: 'var(--muted)', whiteSpace: 'pre-line' } },
+        '每次翻译和纠错都会带上这段话，用来指定 AI 的角色和固定译法，可以不填。写成“睫毛盘 = lash tray”这样一行一个，就是固定译法（左边中文，右边外语），翻成中文时反过来用。\n'
+        + '可以用的变量：{原文语言} 原文的语言，比如 英语；{目标语言} 要翻译成的语言，比如 德语。\n'
+        + '混元 hy-mt 翻译模型只认“A = B”这样的固定译法，其他文字不起作用。')),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
     h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用在“翻译剪贴板”。'),
     trModeEdit ? trModeForm() : null,

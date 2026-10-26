@@ -2327,6 +2327,7 @@ handleShell('tr:config', () => trState());
 handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), ...trState() }));
 handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
 handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
+handleShell('tr:role', (text) => ({ ...translator.setRolePrompt(text), ...trState() }));
 handleShell('tr:network', async (net) => {
   // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
   if (net && net.mode === 'proxy') {
