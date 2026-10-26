@@ -92,7 +92,7 @@ async function core() {
   await persisted();
 }
 
-// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号清掉
+// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留
 async function persisted() {
   const fs = require('fs');
   const os = require('os');
@@ -129,7 +129,7 @@ async function persisted() {
   await sleep(20);
   assert.deepStrictEqual(sent, ['new one', 'hello']);
   fc.forget('P');
-  assert(!fs.existsSync(path.join(dir, 'P')), '删号清掉存的译文');
+  assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).length, 2, '删号不删存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('译文存盘自检通过');
 }
