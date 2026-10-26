@@ -682,7 +682,7 @@ function trProviderForm() {
     setRow('模型', listFor(preset.value) ? '这个服务商只能选这几个模型。' : 'OpenRouter 的模型名在它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
     setRow('API 密钥', '腾讯混元用腾讯云 TokenHub 的密钥。密钥用系统加密保存，界面上只显示尾号。', key),
     setRow('深度思考', isMt ? '混元 hy-mt 翻译模型没有思考模式，这项不起作用。'
-      : '仅部分模型支持，主要用于同时支持思考和非思考模式的模型（比如 GLM-4.7、DeepSeek）。翻译用不上思考，禁用会更快。选“默认”时不传这个参数，由服务商决定。', think),
+      : '仅部分模型支持，主要用于同时支持思考和非思考模式的模型（比如 DeepSeek、Qwen3）。翻译用不上思考，禁用会更快。选“默认”时不传这个参数，由服务商决定。', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
         const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value });
