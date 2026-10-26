@@ -1,7 +1,7 @@
 // 轻量模式的联网通道：WebSocket（收发消息）和 HTTP（下载聊天记录同步包）都只走账号自己的代理。
 //   socks5h://127.0.0.1:7891  域名交给代理解析，本机不做 DNS 查询
 //   http://user:pass@1.2.3.4:8080
-// 不提供直连：没有代理就不启动。
+// 直连的号用 makeDirectTransport，只在直连专用的后台进程里用（见 guard.mjs）。
 import tls from 'node:tls';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
@@ -50,4 +50,9 @@ export function makeTransport(proxyUrl) {
     };
   }
   throw new Error(`轻量模式不支持这种代理：${u.protocol}`);
+}
+
+// 直连：用这台电脑自己的网络（和网页版直连号一样）
+export function makeDirectTransport() {
+  return { agent: undefined, dispatcher: new Agent() };
 }

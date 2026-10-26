@@ -5,7 +5,8 @@
 //   2. 网络：独立代理（proxy.js），代理不通时不回落直连，并禁止 WebRTC 绕过代理
 //   3. 环境：独立的浏览器标识、语言、时区（fingerprint.js），只用官方接口设置
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
-// 主号只能用网页版。轻量模式必须走代理，后台进程里有网络护栏，任何直连都会被拦下。
+// 主号只能用网页版。轻量小号可以走代理，也可以直连（用户自己选，有风险提示）。
+// 走代理的轻量号在带网络护栏的后台进程里，任何直连都会被拦下；直连的轻量号在另一个单独的进程里。
 const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -492,12 +493,12 @@ const isParkedId = (id) => accounts.some((a) => a.id === String(id) && isParked(
 
 const memoryManager = new memory.MemoryManager(settings, {
   views,
-  // 轻量模式账号共用一个后台进程，占用平均分给每个轻量账号（近似值）
+  // 轻量模式账号共用后台进程（走代理的一个、直连的一个），占用平均分给每个轻量账号（近似值）
   extraUsage: (byPid) => {
     const lite = accounts.filter(isLite);
-    const pid = liteHost && liteHost.pid();
+    const pids = liteHost ? liteHost.pids() : [];
     if (!lite.length) return [];
-    const each = Math.round((pid ? byPid.get(pid) || 0 : 0) / lite.length);
+    const each = Math.round(pids.reduce((sum, pid) => sum + (byPid.get(pid) || 0), 0) / lite.length);
     return lite.map((a) => [a.id, each]);
   },
   isBackground: (id) => id !== activeId || page !== 'account' || !win || !win.isVisible(),
@@ -1378,10 +1379,12 @@ function liteKeyOf(acc) {
 
 const LITE_SCHEMES = ['socks5', 'http', 'https'];
 
-// 后台进程用的代理地址：socks5 一律用 socks5h（域名交给代理解析）；http 代理带上解密后的密码
+// 后台进程用的代理地址：socks5 一律用 socks5h（域名交给代理解析）；http 代理带上解密后的密码。
+// 直连返回 ''，代理设置有误返回 null
 function liteProxyUrl(acc) {
   const p = proxy.parse(acc.proxy);
-  if (!p || p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
+  if (!p) return '';
+  if (p.error || p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
   if (p.scheme === 'socks5') return `socks5h://${p.host}:${p.port}`;
   const pass = proxy.decryptPassword(acc.proxyPassword) || p.password;
   const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(pass)}@` : '';
@@ -1390,12 +1393,12 @@ function liteProxyUrl(acc) {
 
 function startLite(acc) {
   const url = liteProxyUrl(acc);
-  if (!url) {
+  if (url === null) {
     setProblem(acc.id, {
       kind: 'config',
-      title: '轻量模式必须设置代理，这个账号已暂停联网',
+      title: '代理设置有误，这个账号已暂停联网',
       short: '代理设置有误',
-      text: '轻量模式只能通过 socks5 或 http 代理联网，不会直连。请在编辑里填写代理并测试。',
+      text: '轻量模式只支持 socks5 或 http 代理，代理设置有误时不会改用直连。请在编辑里改好代理并测试，或者清空代理改成直连。',
       config: true,
     });
     return;
@@ -2919,10 +2922,10 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
   if (mode === 'lite') {
     if (primary === true) return { error: '主号只能用网页版，不能用轻量模式' };
     if (!acc && liteConfirm !== true) return { error: '请先勾选下面的风险确认' };
-    if (!parsed) return { error: '轻量模式必须设置代理，不能直连' };
-    if (!LITE_SCHEMES.includes(parsed.scheme)) return { error: '轻量模式只支持 socks5 和 http 代理' };
+    // 直连可以（用户自己选，编辑页有风险提示）；设了代理就要测试通过、出口不能和主号相同
+    if (parsed && !LITE_SCHEMES.includes(parsed.scheme)) return { error: '轻量模式只支持 socks5 和 http 代理' };
     const proxyChanged = !acc || acc.proxy !== proxyStored || !!String(password || '');
-    if (proxyChanged) {
+    if (parsed && proxyChanged) {
       if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
       const pe = await primaryExit(id);
       if (pe.error) return { error: pe.error };
@@ -3107,10 +3110,11 @@ handleShell('check:run', async () => {
   for (const [ip, names] of byIp) {
     if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 的出口 IP 相同`, detail: `${ip}。在 WhatsApp 看来这几个号在同一个地方。` });
   }
-  if (accounts.some(isLite)) {
+  // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
+  if (accounts.some((a) => isLite(a) && proxy.parse(a.proxy))) {
     items.push(liteGuardHits
       ? { level: 'bad', title: `轻量模式：网络护栏拦下了 ${liteGuardHits} 次直连`, detail: '这些请求没有发出去，真实 IP 没有暴露。日志里有详细记录，请把日志发给我们排查。' }
-      : { level: 'ok', title: '轻量模式：后台进程只连代理，没有出现直连' });
+      : { level: 'ok', title: '轻量模式：走代理的号只连代理，没有出现直连' });
   }
   // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
   const webrtcBad = accounts.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));

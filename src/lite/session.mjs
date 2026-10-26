@@ -1,6 +1,7 @@
 // 一个轻量模式账号的连接：扫码登录、收发文字、断线重连。
 // 规则（审计要求）：
-//   - 只走账号自己的代理，没有直连兜底；连不上代理就等着重试
+//   - 设了代理就只走账号自己的代理，没有直连兜底；连不上代理就等着重试
+//   - 没设代理（用户选了直连）就用本机网络，这种号在单独的后台进程里
 //   - 不向 GitHub 查 Baileys 版本；版本号只经账号自己的代理向 web.whatsapp.com 查（version.mjs）
 //   - 上线时不发“在线”状态；已读回执只在用户打开对话时发
 //   - 每个号每分钟最多发 10 条
@@ -9,7 +10,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import makeWASocket, { Browsers, DisconnectReason } from 'baileys';
 import QRCode from 'qrcode';
-import { makeTransport } from './transport.mjs';
+import { makeTransport, makeDirectTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
 import { ChatStore } from './store.mjs';
 import { waVersion, resetVersionCache } from './version.mjs';
@@ -115,15 +116,17 @@ export class Session {
         this.setStatus('authError', { detail: scrub(e.message) });
         return;
       }
-      const u = new URL(this.cfg.proxy);
-      if (!(await probe(u.hostname, Number(u.port)))) {
-        if (this.stopped) return;
-        this.setStatus('proxyDown');
-        this.scheduleRetry();
-        return;
+      if (this.cfg.proxy) {
+        const u = new URL(this.cfg.proxy);
+        if (!(await probe(u.hostname, Number(u.port)))) {
+          if (this.stopped) return;
+          this.setStatus('proxyDown');
+          this.scheduleRetry();
+          return;
+        }
       }
       if (this.stopped) return;
-      if (!this.transport) this.transport = makeTransport(this.cfg.proxy);
+      if (!this.transport) this.transport = this.cfg.proxy ? makeTransport(this.cfg.proxy) : makeDirectTransport();
       this.version = await waVersion(this.transport.dispatcher, (m) => this.log(m), this.fetchVersion);
       if (this.stopped || this.sock) return;
       this.connect();

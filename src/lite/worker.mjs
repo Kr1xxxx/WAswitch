@@ -1,11 +1,15 @@
 // 轻量模式后台进程（Electron utilityProcess）。所有轻量模式账号共用这一个进程。
 // 先装网络护栏，再加载 Baileys，保证从第一行代码开始就不可能直连。
-import { installGuard, setAllowedHosts } from './guard.mjs';
+// 带 --direct 启动的是直连号专用的进程：只放行 TCP 和 DNS，只接没设代理的号。
+import { installGuard, setAllowedHosts, setAllowAll } from './guard.mjs';
+
+const DIRECT = process.argv.includes('--direct');
 
 const port = process.parentPort;
 const post = (m) => port.postMessage(m);
 
 installGuard(({ what, host }) => post({ type: 'guard', what, host }));
+if (DIRECT) setAllowAll(true);
 
 const { Session } = await import('./session.mjs');
 const { proxyHost } = await import('./transport.mjs');
@@ -13,6 +17,7 @@ const { proxyHost } = await import('./transport.mjs');
 const sessions = new Map();
 
 function refreshAllowed() {
+  if (DIRECT) return;
   setAllowedHosts([...sessions.values()].map((s) => proxyHost(s.cfg.proxy)));
 }
 
@@ -20,6 +25,8 @@ async function handle(m) {
   const s = sessions.get(m.id);
   switch (m.type) {
     case 'start': {
+      // 走代理的号和直连号不混在一个进程里
+      if (DIRECT ? m.proxy : !m.proxy) throw new Error(DIRECT ? '直连进程不接走代理的号' : '没有代理的号不能在这个进程里运行');
       if (s) { s.stop(); sessions.delete(m.id); }
       const session = new Session({ id: m.id, proxy: m.proxy, dir: m.dir, key: m.key, os: m.os, crm: m.crm }, post);
       sessions.set(m.id, session);
