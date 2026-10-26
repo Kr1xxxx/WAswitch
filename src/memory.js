@@ -20,17 +20,17 @@ const fs = require('fs');
 // settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
   lowMemoryMode: false, // 关闭显卡加速
-  recycleMB: 1500, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
+  recycleMB: 1024, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
   closeToTray: true, // 关闭窗口时缩到托盘
   openAtLogin: false, // 开机自动启动（启动后缩在托盘）
   sidebarCollapsed: false, // 侧栏只显示图标
-  recycleLastMB: 1500, // 关掉自动回收后再打开时，用上次选的值
+  recycleLastMB: 1024, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
   capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
   memDefaults: 2, // 第几版内存默认值；老设置里没有这个字段时，把还停在旧默认值的项改成新默认值
   lockMinutes: 5, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
 };
-const RECYCLE_CHOICES = [600, 800, 1000, 1500, 2000];
+const RECYCLE_CHOICES = [600, 800, 1024, 1500, 2000];
 const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096, 6144];
 const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
 const CHECK_EVERY_MS = 60 * 1000;
