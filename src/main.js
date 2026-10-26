@@ -7,7 +7,7 @@
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
 // 主号只能用网页版。轻量小号可以走代理，也可以直连（用户自己选，有风险提示）。
 // 走代理的轻量号在带网络护栏的后台进程里，任何直连都会被拦下；直连的轻量号在另一个单独的进程里。
-const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard, net: electronNet } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard, screen, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -2090,8 +2090,12 @@ app.whenReady().then(async () => {
   session.defaultSession.setSpellCheckerEnabled(false);
 
   const mac = process.platform === 'darwin';
+  // 默认窗口按 1520×960 打开（右侧会话区够宽），屏幕放不下就按工作区 92% 缩小，居中
+  const wa = screen.getPrimaryDisplay().workAreaSize;
+  const winW = Math.max(900, Math.min(1520, Math.round(wa.width * 0.92)));
+  const winH = Math.max(600, Math.min(960, Math.round(wa.height * 0.92)));
   win = new BaseWindow({
-    width: 1280, height: 820, minWidth: 900, minHeight: 600, show: false,
+    width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
     title: 'WAswitch', backgroundColor: '#E6E9ED',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } } : {}),
