@@ -2354,7 +2354,6 @@ handleShell('tr:network', async (net) => {
   return { ...r, ...trState() };
 });
 handleShell('tr:test', (id) => (typeof id === 'string' ? translator.test(id) : { error: '找不到这个服务商' }));
-handleShell('tr:consent', (ids) => { if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id); return trState(); });
 // 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
 // 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
 const userTr = { waiting: 0, running: false, gen: 0 };
@@ -2431,7 +2430,8 @@ let floatReadable = 'loading'; // ok | nochat | unreadable | loading
 let floatArea = null; // 账号视图的位置（layout 算出来的）
 let floatCore = null;
 let trStore = null; // 收到的消息的译文，永久存在磁盘上
-const floatAuto = (id) => !!translator.load().accountAuto[id];
+// 自动翻译默认开，只有手动关掉的号是 false
+const floatAuto = (id) => !!id && translator.load().accountAuto[id] !== false;
 // 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
 const readerOn = () => (floatOpen && !!floatView) || panelShown();
 let floatBusy = false;
@@ -2494,7 +2494,7 @@ async function floatTick() {
       const was = floatReadable;
       floatReadable = 'ok';
       const cfg = translator.load();
-      let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id) && !!cfg.autoConsent[target.acc.id], dailyCap: cfg.dailyCap });
+      let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id), dailyCap: cfg.dailyCap });
       if (changed) changed = rememberDetected(target.acc.id) || changed;
       if (changed || was !== 'ok') pushFloat();
     } else if (r.why === 'nochat') {
@@ -2553,8 +2553,7 @@ function floatState() {
     items: v.items,
     paused: floatAuto(acc && acc.id) ? v.paused : '',
     today: v.today || 0,
-    auto: !!(acc && floatAuto(acc.id) && cfg.autoConsent[acc.id]),
-    autoConsented: !!(acc && cfg.autoConsent[acc.id]),
+    auto: !!(acc && floatAuto(acc.id)),
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
     providerName: primary ? primary.name : '',
@@ -2673,8 +2672,6 @@ onFloat('float:moveend', () => {
 });
 function readerItem(h, fix) {
   if (typeof h !== 'string' || !activeId) return null;
-  const need = translator.needConsent(fix === true);
-  if (need.length) return { consent: need };
   floatCore.manual(activeId, h, fix === true);
   pushFloat();
   return { ok: true };
@@ -2683,22 +2680,14 @@ function readerAuto(on) {
   const acc = findAcc(activeId);
   if (!acc) return null;
   const cfg = translator.load();
-  if (on && !cfg.autoConsent[acc.id]) return { error: '需要先确认' };
   translator.setFloat({ accId: acc.id, auto: on === true });
   if (on) floatCore.backfill(acc.id, { dailyCap: cfg.dailyCap });
   pushFloat();
   return { ok: true };
 }
-function readerConsent({ kind, ids } = {}) {
-  if (kind === 'auto' && activeId) translator.setFloat({ accId: activeId, autoConsent: true });
-  if (kind === 'provider' && Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') translator.consent(id);
-  pushFloat();
-  return true;
-}
 const readerInMode = (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; };
 handleFloat('float:item', (h) => readerItem(h, false));
 handleFloat('float:auto', readerAuto);
-handleFloat('float:consent', readerConsent);
 handleFloat('float:inmode', readerInMode);
 // 面板“翻译”页用的同一套（只接受软件界面发来的）
 handleShell('dock:get', () => floatState());
@@ -2709,7 +2698,6 @@ handleShell('dock:edit', ({ accountId, h, text } = {}) => {
   return floatCore.edit(activeId, h, text);
 });
 handleShell('dock:auto', readerAuto);
-handleShell('dock:consent', readerConsent);
 handleShell('dock:inmode', readerInMode);
 // 手动选这个对话的客户语言，记住；lang 为空 = 忘掉，回到自动。对话已经换了就不记
 handleShell('dock:lang', ({ accountId, title, lang } = {}) => {

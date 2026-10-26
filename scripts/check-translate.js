@@ -34,9 +34,6 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   assert(!fs.readFileSync(path.join(dir,'translate.json'),'utf8').includes('sk-secret'));
   const mode={prompt:'to {目标语言}'};
   r=await tr.translate({text:'你好',mode,target:'西班牙语'});
-  assert.equal(r.kind,'consent');
-  tr.consent(pid);
-  r=await tr.translate({text:'你好',mode,target:'西班牙语'});
   assert.equal(r.text,'Hola');
   const body=JSON.parse(calls[0].opt.body);
   assert.deepEqual(body.provider,{data_collection:'deny'});
@@ -46,11 +43,8 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   // fallback
   r=tr.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k2'});
   tr.setRoles({primaryId:pid,fallbackId:r.id});
-  let q=await tr.translate({text:'你好',mode});
-  assert.equal(q.kind,'consent'); assert.equal(q.consent.length,1);
-  tr.consent(r.id);
   behave=['net',null]; calls=[];
-  q=await tr.translate({text:'你好',mode});
+  let q=await tr.translate({text:'你好',mode});
   assert(q.fallback && q.text==='Hola', JSON.stringify(q));
   behave=[{status:401,body:'{"error":{"message":"invalid"}}'}]; calls=[];
   q=await tr.translate({text:'你好',mode});
@@ -64,10 +58,10 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   behave=['hang']; calls=[];
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);
   q=await p; assert.equal(q.kind,'cancel', JSON.stringify(q)); assert.equal(calls.length,1);
-  // url change clears consent & key
+  // url change clears key
   tr.saveProvider({id:pid,preset:'custom',baseUrl:'https://evil.example/v1',model:'m'});
   const pp=tr.publicConfig().providers.find(x=>x.id===pid);
-  assert(!pp.hasKey && !pp.consented);
+  assert(!pp.hasKey);
   // 翻译模式：默认 4 个，最多 200 个
   const ms=new R.Records(dir,'tmodes');
   ms.seed(T.DEFAULT_MODES);
@@ -143,12 +137,12 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   const d2=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(d2,'translate.json'),JSON.stringify({providers:[
     {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
-    {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1',consented:{h1:true,h2:true}}));
+    {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1'}));
   const th=new T.Translator({seed:false,dir:d2,safeStorage:ss,sessionFor:()=>fake});
   const [h1,h2]=th.load().providers;
   assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
-  assert.equal(h1.keyEnc,''); assert(!th.load().consented.h1); // 换地址：密钥和确认清掉
-  assert.equal(h2.model,'hy-mt2-lite'); assert(h2.keyEnc); assert(th.load().consented.h2);
+  assert.equal(h1.keyEnc,''); // 换地址：密钥清掉
+  assert.equal(h2.model,'hy-mt2-lite'); assert(h2.keyEnc);
   assert.equal(JSON.parse(fs.readFileSync(path.join(d2,'translate.json'),'utf8')).providers[0].model,'hy-mt2-plus');
   assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hunyuan-turbos-latest'}).error);
   assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hy-mt2-plus'}).ok);
@@ -157,7 +151,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(mt.length,1); assert.equal(mt[0].role,'user');
   assert(mt[0].content.includes('客户：Preis?\n我：10 Euro\n参考上面的信息，把下面的文本翻译成中文')&&mt[0].content.endsWith('\nHallo'));
   assert.equal(T.buildMessages({prompt:'p'},'Hi',{target:'德语'},undefined,'','hy-mt2-lite')[0].content,'把下面的文本翻译成德语，不要额外解释。\n\nHi');
-  calls=[]; th.consent('h2'); th.setRoles({primaryId:'h2'});
+  calls=[]; th.setRoles({primaryId:'h2'});
   r=await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   assert.equal(r.text,'Hola',JSON.stringify(r));
   const sent=JSON.parse(calls[0].opt.body);
@@ -173,9 +167,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   calls=[]; r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',fix:true});
   assert.equal(JSON.parse(calls[0].opt.body).model,'hy-mt2-plus'); // 没设纠错服务商：照旧
   th.setRoles({fixId:zid}); assert.equal(th.publicConfig().fixId,zid); assert.equal(th.load().primaryId,'h2');
-  r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',fix:true});
-  assert.equal(r.kind,'consent'); assert.deepEqual(r.consent.map((x)=>x.id),[zid]);
-  th.consent(zid); calls=[];
+  calls=[];
   r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',context:[{out:false,text:'Preis?'}],fix:true});
   assert.equal(r.text,'Hola',JSON.stringify(r));
   const fx=JSON.parse(calls[0].opt.body);
@@ -198,7 +190,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   fs.writeFileSync(path.join(d3,'translate.json'),JSON.stringify({providers:[
     {id:'z1',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',keyEnc:Buffer.from('Ekz123').toString('base64'),keyTail:'z123'},
     {id:'z2',preset:'zhipu',name:'智谱2',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',keyEnc:'',keyTail:''},
-    {id:'z3',preset:'zhipu',name:'智谱3',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1',consented:{z1:true}}));
+    {id:'z3',preset:'zhipu',name:'智谱3',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1'}));
   const tz=new T.Translator({seed:false,dir:d3,safeStorage:ss,sessionFor:()=>fake});
   const [z1,z2,z3]=tz.load().providers;
   assert.equal(z1.model,'glm-4-flash'); assert(z1.keyEnc); assert.equal(z2.model,'glm-4-flash'); assert.equal(z3.model,'glm-4-flash');
@@ -217,7 +209,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   const d4=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   const t4=new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake});
   r=t4.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'}); assert.equal(t4.provider(r.id).thinking,'disabled'); t4.deleteProvider(r.id);
-  r=t4.saveProvider({preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',key:'kd',thinking:'disabled'}); const p4=r.id; t4.consent(p4);
+  r=t4.saveProvider({preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',key:'kd',thinking:'disabled'}); const p4=r.id;
   assert.equal(t4.provider(p4).thinking,'disabled');
   assert(t4.setRolePrompt('贴牌 = private label').ok); assert(t4.setRolePrompt('x'.repeat(5000)).error);
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
@@ -228,7 +220,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   t4.saveProvider({id:p4,preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',thinking:''});
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   assert(!('thinking' in JSON.parse(calls[0].opt.body)));
-  r=t4.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'deepseek/deepseek-chat',key:'ko'}); t4.consent(r.id); t4.setRoles({primaryId:r.id});
+  r=t4.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'deepseek/deepseek-chat',key:'ko'}); t4.setRoles({primaryId:r.id});
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
@@ -241,7 +233,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   const hy5=c5.providers.find(p=>p.id===c5.primaryId), zp5=c5.providers.find(p=>p.id===c5.fallbackId);
   assert.equal(hy5.preset,'hunyuan'); assert.equal(hy5.model,'hy-mt2-plus'); assert(!hy5.hasKey);
   assert.equal(zp5.preset,'zhipu'); assert.equal(zp5.model,'glm-4-flash'); assert.equal(c5.fixId,zp5.id);
-  calls=[]; t5.consent(hy5.id); t5.consent(zp5.id);
+  calls=[];
   q=await t5.translate({text:'你好',mode:{prompt:'p'}}); assert.equal(q.kind,'auth'); assert.equal(calls.length,0);
   t5.deleteProvider(hy5.id); t5.deleteProvider(zp5.id);
   assert.equal(new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake}).load().providers.length,0);
@@ -279,6 +271,18 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(c6.fixId,zp7.id); assert.equal(c6.fallbackId,''); assert.equal(c6.providers.length,2);
   assert.equal(t6.addZhipuForFix().ok,true); assert.equal(t6.publicConfig().providers.length,2); // 有了就不重复加
   fs.rmSync(d6,{recursive:true,force:true});
+  // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
+  const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  fs.writeFileSync(path.join(d7,'translate.json'),JSON.stringify({accountAuto:{a:true},autoConsent:{a:true,b:true},consented:{x:true}}));
+  let t7=new T.Translator({seed:false,dir:d7,safeStorage:ss,sessionFor:()=>fake});
+  assert.deepEqual(t7.load().accountAuto,{b:false}); assert.equal(t7.load().autoDefaultOn,true);
+  t7.setFloat({accId:'c',auto:false}); t7.setFloat({accId:'b',auto:true});
+  const raw7=JSON.parse(fs.readFileSync(path.join(d7,'translate.json'),'utf8'));
+  assert.deepEqual(raw7.accountAuto,{c:false}); assert(!('autoConsent' in raw7) && !('consented' in raw7));
+  t7=new T.Translator({seed:false,dir:d7,safeStorage:ss,sessionFor:()=>fake});
+  assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
+  t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
+  fs.rmSync(d7,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
