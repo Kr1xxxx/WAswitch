@@ -20,7 +20,7 @@ const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
-const { TrStore } = require('./trstore');
+const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const memory = require('./memory');
@@ -2454,7 +2454,10 @@ const FIX_OUT = {
   temperature: 0.2,
 };
 function setupFloatCore() {
-  trStore = new TrStore(path.join(app.getPath('userData'), 'translations'));
+  const oldTrDir = path.join(app.getPath('userData'), 'translations');
+  const trDir = pickTrDir(oldTrDir);
+  migrateTr(oldTrDir, trDir);
+  trStore = new TrStore(trDir);
   floatCore = new FloatCore({
     store: trStore,
     translate: (text, { fix, context, prev } = {}) => {
