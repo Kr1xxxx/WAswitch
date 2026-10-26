@@ -155,8 +155,9 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(sent.model,'hy-mt2-plus'); assert.equal(sent.messages.length,1);
   assert.equal(calls[0].url,'https://tokenhub.tencentmaas.com/v1/chat/completions');
   // 纠错专用服务商：fix 时先用它（完整校对提示词 + draft），平时不用；没设时 fix 用默认的
-  // 智谱只能选 glm-4.7-flash / glm-4-flash-250414 / glm-4-flash
-  assert.equal(T.PRESETS.zhipu.model,'glm-4.7-flash');
+  // 智谱只能选 glm-4-flash（4.7-flash 免费版常限流，250414 效果差）
+  assert.equal(T.PRESETS.zhipu.model,'glm-4-flash'); assert.deepEqual(T.PRESETS.zhipu.models,['glm-4-flash']);
+  assert(th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',key:'kz'}).error);
   assert(th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',key:'kz'}).error);
   r=th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'});
   const zid=r.id;
@@ -183,18 +184,19 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   th.deleteProvider(zid); assert.equal(th.load().fixId,'');
   th.setRoles({fixId:'nope'}); assert.equal(th.load().fixId,'');
   fs.rmSync(d2,{recursive:true,force:true});
-  // 智谱旧配置里的其他模型名改成 glm-4.7-flash；glm-4.7 关掉思考
+  // 智谱旧配置里的其他模型名（含 glm-4.7-flash、250414）都改成 glm-4-flash
   const d3=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(d3,'translate.json'),JSON.stringify({providers:[
     {id:'z1',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',keyEnc:Buffer.from('Ekz123').toString('base64'),keyTail:'z123'},
-    {id:'z2',preset:'zhipu',name:'智谱2',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1',consented:{z1:true}}));
+    {id:'z2',preset:'zhipu',name:'智谱2',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',keyEnc:'',keyTail:''},
+    {id:'z3',preset:'zhipu',name:'智谱3',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1',consented:{z1:true}}));
   const tz=new T.Translator({dir:d3,safeStorage:ss,sessionFor:()=>fake});
-  const [z1,z2]=tz.load().providers;
-  assert.equal(z1.model,'glm-4.7-flash'); assert(z1.keyEnc); assert.equal(z2.model,'glm-4-flash-250414');
+  const [z1,z2,z3]=tz.load().providers;
+  assert.equal(z1.model,'glm-4-flash'); assert(z1.keyEnc); assert.equal(z2.model,'glm-4-flash'); assert.equal(z3.model,'glm-4-flash');
   calls=[]; r=await tz.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   assert.equal(r.text,'Hola',JSON.stringify(r));
   const zb=JSON.parse(calls[0].opt.body);
-  assert.equal(zb.model,'glm-4.7-flash'); assert.deepEqual(zb.thinking,{type:'disabled'});
+  assert.equal(zb.model,'glm-4-flash'); assert(!zb.thinking);
   fs.rmSync(d3,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');

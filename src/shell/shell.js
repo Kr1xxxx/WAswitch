@@ -735,7 +735,7 @@ function translatePage(page) {
       : h('span', { class: 'hint' }, '还没有。')),
     trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'hunyuan' }; trSay = ''; render(true); } }, '+ 添加服务商')),
     c.providers.length > 1 ? setRow('备用服务商', '默认的连不上、超时或服务商出错时，自动用备用的再试一次。密钥错、没余额时不换。', fb) : null,
-    c.providers.length ? setRow('纠错服务商', '点“纠错”时用这个服务商，按内置的校对提示词对照原文、译文和上下文改。混元的 hy-mt 翻译模型不会校对，只会重翻，建议另加一个通用聊天模型，比如智谱 glm-4.7-flash。没设就用默认的。',
+    c.providers.length ? setRow('纠错服务商', '点“纠错”时用这个服务商，按内置的校对提示词对照原文、译文和上下文改。混元的 hy-mt 翻译模型不会校对，只会重翻，建议另加一个通用聊天模型，比如智谱 glm-4-flash。没设就用默认的。',
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
         fixP && /^hy-mt/i.test(fixP.model) ? h('span', { class: 'hint' }, '这是翻译专用模型，纠错只会重翻一遍。') : null)) : null,
     setRow('翻译走的网络', '翻译用单独的网络连接，和任何 WhatsApp 账号都不共用代理。OpenRouter 在国内一般要选代理。本机模型（localhost）总是直连。',
