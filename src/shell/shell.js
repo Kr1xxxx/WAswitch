@@ -271,7 +271,7 @@ function updateCard() {
 
 // 鼠标停在线路上：出口 IP 和上次测到的时间
 function exitTitle(acc) {
-  if (acc.direct) return '网络线路：直连（这台电脑的真实 IP）';
+  if (acc.direct) return acc.mode === 'lite' ? '网络线路：直连（这台电脑的真实 IP）' : '网络线路：直连（跟随电脑的系统代理）';
   if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
   const lat = acc.latency ? `\n最近一次巡检用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
@@ -984,7 +984,7 @@ function editorPage(id) {
 
     testBtn.onclick = async () => {
       if (!proxyInput.value.trim()) {
-        result.replaceChildren(h('div', { class: 'note plain' }, '直连不需要测试，这个账号会用你电脑当前的网络。'));
+        result.replaceChildren(h('div', { class: 'note plain' }, mode === 'lite' ? '直连不需要测试，轻量号会直接用这台电脑的网络（不经过系统代理，Clash 要开 TUN 模式）。' : '直连不需要测试，这个账号会跟随电脑的系统代理：Clash 开着系统代理时走 Clash，关了就是本机网络。'));
         return;
       }
       testBtn.disabled = true;
