@@ -154,6 +154,31 @@ const tr=new T.Translator({dir,safeStorage:ss,sessionFor:()=>fake});
   const sent=JSON.parse(calls[0].opt.body);
   assert.equal(sent.model,'hy-mt2-plus'); assert.equal(sent.messages.length,1);
   assert.equal(calls[0].url,'https://tokenhub.tencentmaas.com/v1/chat/completions');
+  // 纠错专用服务商：fix 时先用它（完整校对提示词 + draft），平时不用；没设时 fix 用默认的
+  r=th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'});
+  const zid=r.id;
+  calls=[]; r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',fix:true});
+  assert.equal(JSON.parse(calls[0].opt.body).model,'hy-mt2-plus'); // 没设纠错服务商：照旧
+  th.setRoles({fixId:zid}); assert.equal(th.publicConfig().fixId,zid); assert.equal(th.load().primaryId,'h2');
+  r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',fix:true});
+  assert.equal(r.kind,'consent'); assert.deepEqual(r.consent.map((x)=>x.id),[zid]);
+  th.consent(zid); calls=[];
+  r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',context:[{out:false,text:'Preis?'}],fix:true});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  const fx=JSON.parse(calls[0].opt.body);
+  assert.equal(fx.model,'glm-4-flash'); assert(calls[0].url.startsWith('https://open.bigmodel.cn/'));
+  assert(fx.messages[0].content.startsWith('校对')&&fx.messages[1].content.includes('<draft>\n你好')&&fx.messages[1].content.includes('客户：Preis?'));
+  calls=[]; await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert.equal(JSON.parse(calls[0].opt.body).model,'hy-mt2-plus'); // 平时翻译不用纠错服务商
+  // 纠错服务商连不上：换备用（备用逻辑不变）
+  th.setRoles({primaryId:'h2',fallbackId:'h2'}); // 和默认一样的备用会被清掉
+  assert.equal(th.load().fallbackId,'');
+  th.setRoles({primaryId:zid,fallbackId:'h2',fixId:zid}); behave=['net',null]; calls=[];
+  r=await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文',draft:'x',fix:true});
+  assert(r.fallback&&calls.length===2,JSON.stringify(r));
+  th.setRoles({primaryId:'h2',fallbackId:'',fixId:zid});
+  th.deleteProvider(zid); assert.equal(th.load().fixId,'');
+  th.setRoles({fixId:'nope'}); assert.equal(th.load().fixId,'');
   fs.rmSync(d2,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');

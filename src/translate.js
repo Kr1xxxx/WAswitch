@@ -195,7 +195,8 @@ class Translator {
 
   load() {
     if (this.cfg) return this.cfg;
-    const base = { providers: [], primaryId: '', fallbackId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {},
+    // fixId：纠错专用服务商（空 = 纠错也用默认的）
+    const base = { providers: [], primaryId: '', fallbackId: '', fixId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {},
       // 悬浮窗：哪些号开了自动翻译、哪些号确认过自动翻译、每个号每天最多自动翻几条、收到用的模式、窗口位置
       accountAuto: {}, autoConsent: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
@@ -218,6 +219,7 @@ class Translator {
           }
           base.primaryId = typeof raw.primaryId === 'string' ? raw.primaryId : '';
           base.fallbackId = typeof raw.fallbackId === 'string' ? raw.fallbackId : '';
+          base.fixId = typeof raw.fixId === 'string' && base.providers.some((p) => p.id === raw.fixId) ? raw.fixId : '';
           if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200) };
           if (raw.consented && typeof raw.consented === 'object') for (const [k, v] of Object.entries(raw.consented)) if (v === true) base.consented[k] = true;
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
@@ -259,6 +261,7 @@ class Translator {
       providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc, consented: !!c.consented[p.id] })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
+      fixId: c.fixId,
       network: { ...c.network },
       accountLang: { ...c.accountLang },
       accountAuto: { ...c.accountAuto },
@@ -309,14 +312,16 @@ class Translator {
     delete c.consented[id];
     if (c.primaryId === id) c.primaryId = c.providers[0] ? c.providers[0].id : '';
     if (c.fallbackId === id || c.fallbackId === c.primaryId) c.fallbackId = '';
+    if (c.fixId === id) c.fixId = '';
     this.save();
   }
 
-  setRoles({ primaryId, fallbackId } = {}) {
+  setRoles({ primaryId, fallbackId, fixId } = {}) {
     const c = this.load();
     if (typeof primaryId === 'string' && this.provider(primaryId)) c.primaryId = primaryId;
     if (typeof fallbackId === 'string') c.fallbackId = fallbackId && this.provider(fallbackId) && fallbackId !== c.primaryId ? fallbackId : '';
     if (c.fallbackId === c.primaryId) c.fallbackId = '';
+    if (typeof fixId === 'string') c.fixId = fixId && this.provider(fixId) ? fixId : '';
     this.save();
   }
 
@@ -399,10 +404,17 @@ class Translator {
     this.save();
   }
 
-  // 这次翻译会用到的服务商（默认 + 备用），哪个还没同意过
-  needConsent() {
+  // 这次翻译先用哪个服务商：纠错有专用的就用它，否则用默认的
+  firstFor(fix) {
     const c = this.load();
-    return [c.primaryId, c.fallbackId].filter(Boolean).map((id) => this.provider(id)).filter((p) => p && !c.consented[p.id])
+    return (fix && this.provider(c.fixId)) || this.provider(c.primaryId);
+  }
+
+  // 这次翻译会用到的服务商（第一个 + 备用），哪个还没同意过
+  needConsent(fix) {
+    const c = this.load();
+    const first = this.firstFor(fix);
+    return [...new Set([first && first.id, c.fallbackId].filter(Boolean))].map((id) => this.provider(id)).filter((p) => p && !c.consented[p.id])
       .map((p) => ({ id: p.id, name: p.name, host: (() => { try { return new URL(p.baseUrl).host; } catch { return ''; } })(), openrouter: p.preset === 'openrouter' }));
   }
 
@@ -453,14 +465,15 @@ class Translator {
   }
 
   // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind, consent[] }
-  async translate({ text, mode, target, source, context, draft } = {}) {
+  // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
+  async translate({ text, mode, target, source, context, draft, fix } = {}) {
     const c = this.load();
     if (typeof text !== 'string' || !text.trim()) return { error: '先放一段要翻译的文字', kind: 'input' };
     if (text.length > MAX_INPUT) return { error: `一次最多 ${MAX_INPUT} 个字`, kind: 'input' };
     if (!mode || typeof mode.prompt !== 'string') return { error: '先选一个翻译模式', kind: 'input' };
-    const primary = this.provider(c.primaryId);
+    const primary = this.firstFor(fix === true);
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
-    const consent = this.needConsent();
+    const consent = this.needConsent(fix === true);
     if (consent.length) return { error: '需要先确认', kind: 'consent', consent };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
@@ -470,7 +483,8 @@ class Translator {
     const controller = new AbortController(); // 用户点“取消”
     this.busy = { controller };
     const started = Date.now();
-    const chain = [primary, this.provider(c.fallbackId)].filter(Boolean);
+    const fb = this.provider(c.fallbackId);
+    const chain = [primary, fb && fb.id !== primary.id ? fb : null].filter(Boolean);
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
