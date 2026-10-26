@@ -278,10 +278,7 @@ function dockField(box, getText) {
     const text = getText();
     if (!text) return;
     await window.wa.panelCopy(text);
-    copyBtn.replaceChildren(icon('check', 18));
-    copyBtn.title = '已复制';
-    copyBtn.classList.add('done');
-    setTimeout(() => { copyBtn.replaceChildren(icon('copy', 18)); copyBtn.title = '复制'; copyBtn.classList.remove('done'); }, 1200);
+    copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
     h('div', { class: 'dk-tools' }, copyBtn)));

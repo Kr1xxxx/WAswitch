@@ -39,6 +39,32 @@ function icon(name, size = 16) {
   return span;
 }
 
+// 复制成功：按钮原地换成绿色小对勾（同位置同大小，缩放+描线动画），约 1.5 秒后变回原样。不弹提示（shen 2026-10-26）
+function copyFlash(btn) {
+  if (btn._copyTimer) clearTimeout(btn._copyTimer);
+  else {
+    btn._copyOld = { kids: [...btn.childNodes], title: btn.title, minWidth: btn.style.minWidth, height: btn.style.height };
+    btn.style.minWidth = `${btn.offsetWidth}px`;
+    btn.style.height = `${btn.offsetHeight}px`;
+  }
+  const size = btn.classList.contains('dk-tool') ? 18 : 14;
+  btn.replaceChildren(icon('check', size));
+  btn.title = '已复制';
+  btn.classList.remove('copy-back');
+  btn.classList.add('copy-ok');
+  btn._copyTimer = setTimeout(() => {
+    const o = btn._copyOld;
+    btn.replaceChildren(...o.kids);
+    btn.title = o.title;
+    btn.style.minWidth = o.minWidth;
+    btn.style.height = o.height;
+    btn.classList.remove('copy-ok');
+    btn.classList.add('copy-back');
+    btn._copyTimer = null;
+    btn._copyOld = null;
+  }, 1500);
+}
+
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -595,7 +621,7 @@ function replyItems() {
     h('span', { class: 'x' }, r.text),
     h('span', { class: 'acts' },
       h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
-      h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(r.text); panelSay('已复制'); } }, '复制'),
+      h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(r.text); copyFlash(b); } }, '复制'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除话术「${delName(r.title || r.text)}」？`, detail: '删除后不能恢复。' })) return; pn.data = await window.wa.replyDelete(r.id); panelSay('已删除'); } }, '删除'))));
 }
@@ -615,7 +641,7 @@ function customerItems() {
     c.note ? h('span', { class: 'x' }, c.note) : null,
     c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
     h('span', { class: 'acts' },
-      c.phone ? h('button', { class: 'pn-btn', onclick: async () => { await window.wa.panelCopy(c.phone); panelSay('电话已复制'); } }, '复制电话') : null,
+      c.phone ? h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(c.phone); copyFlash(b); } }, '复制电话') : null,
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除客户「${delName(c.name || c.phone)}」？`, detail: '会删掉这个客户的资料、标签、备注和跟进时间，不能恢复。WhatsApp 里的聊天不受影响。' })) return; pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
 }
