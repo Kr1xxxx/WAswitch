@@ -4,6 +4,7 @@
 // 这个文件在 shell.js 之前加载，里面用到的 h、icon、kids、s、pn、tr、panelInsert 等都在 shell.js 里，运行时才调用。
 
 const dk = {
+  listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的中文
   out: '', // 译文（可以手动改）
@@ -179,7 +180,7 @@ function dockItemEdit(it) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
     if (e.key === 'Escape') { dk.editing = null; dockRender(true); }
   });
-  requestAnimationFrame(() => { if (box.isConnected && document.activeElement !== box) { box.focus(); box.selectionStart = box.selectionEnd = box.value.length; } });
+  requestAnimationFrame(() => { if (box.isConnected && document.activeElement !== box) { box.focus({ preventScroll: true }); box.selectionStart = box.selectionEnd = box.value.length; } });
   return h('div', { class: 'dk-edit' }, box,
     h('div', { class: 'dk-row' },
       h('button', { class: 'pn-btn primary', onclick: save }, '保存'),
@@ -250,7 +251,13 @@ function dockIncoming() {
   else st.items.forEach((it, i) => add(dockItemRow(it, i === st.items.length - 1)));
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
-  requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  // 重画时保持滚动位置（点纠错/编辑不跳）；原来就在最底下或换了对话才滚到底，新消息照样跟上
+  const prev = $panel.querySelector('.dk-host .dk-list');
+  const key = `${st.accountId}|${st.title || ''}`;
+  const stay = prev && prev.isConnected && dk.listKey === key && prev.scrollHeight - prev.scrollTop - prev.clientHeight > 24;
+  const top = stay ? prev.scrollTop : 0;
+  dk.listKey = key;
+  requestAnimationFrame(() => { list.scrollTop = stay ? top : list.scrollHeight; });
   return list;
 }
 
