@@ -1097,10 +1097,10 @@ function settingsPage() {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
     const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
       s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
-    select.value = String(st.recycleMB || st.recycleLastMB || 800);
+    select.value = String(st.recycleMB || st.recycleLastMB || 1500);
     const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
-      (s.capChoices || [0, 2048]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
-    capSelect.value = String(st.capMB ?? 2048);
+      (s.capChoices || [0, 4096]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
+    capSelect.value = String(st.capMB ?? 4096);
     const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
@@ -1129,12 +1129,12 @@ function settingsPage() {
           render(true);
         } }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
-      setRow('总内存上限', '所有账号加起来超过上限时，从涨得最多的后台账号开始悄悄刷新，直到降回上限以内。同一个号至少隔 1 小时，全部每小时最多 6 次。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
+      setRow('总内存上限', '所有账号加起来超过上限时，从涨得最多的后台账号开始悄悄刷新，直到降回上限以内。在后台待满 30 分钟才动，同一个号至少隔 1 小时，全部每小时最多 3 次。正在看的和有未读的账号不动，所以偶尔会短暂超过。',
         capSelect,
         st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
           `账号较多，刚打开时加起来就接近 ${mb(st.capMB)}，这个上限达不到，已暂停按上限刷新。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
-      setRow('自动回收', '后台账号超过设定值、没有未读、在后台 5 分钟以上时，悄悄刷新一次。同一个号至少隔 30 分钟。',
-        sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 800 : 0)),
+      setRow('自动回收', '后台账号超过设定值、没有未读、在后台 30 分钟以上时，悄悄刷新一次。同一个号至少隔 1 小时。',
+        sw(st.recycleMB > 0, '自动回收', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 1500 : 0)),
         st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时回收') : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '关闭显卡加速，整体再省一些内存。代价是滚动和动画没那么顺滑。',
         h('span', { class: 'hstack', style: { gap: '10px' } },

@@ -50,14 +50,14 @@ assert.ok(!t.reloads.includes('a0'), '不能刷新正在看的账号');
 assert.strictEqual(new Set(t.reloads).size, t.reloads.length, '同一个号一小时内只能刷一次');
 console.log('✓ 超上限时只刷后台涨得多的号，一小时', t.reloads.length, '次');
 
-// 3. 涨了也一直超（刷新后又涨回去）：每小时总共不超过 6 次
+// 3. 涨了也一直超（刷新后又涨回去）：每小时总共不超过 3 次
 usage.clear();
 t = setup(12, 150, { recycleMB: 0 });
 for (let i = 0; i < 6; i += 1) { t.m.check(); minutes(1); }
 for (let p = 2; p <= 12; p += 1) usage.set(p, 600);
 for (let i = 0; i < 60; i += 1) { t.m.check(); minutes(1); }
-assert.ok(t.reloads.length <= 6, `每小时最多 6 次，实际 ${t.reloads.length}`);
-console.log('✓ 每小时总共', t.reloads.length, '次（上限 6）');
+assert.ok(t.reloads.length <= 3, `每小时最多 3 次，实际 ${t.reloads.length}`);
+console.log('✓ 每小时总共', t.reloads.length, '次（上限 3）');
 
 // 4. 立即清理：刚切走 30 秒内的不动，没涨的不动
 (async () => {
