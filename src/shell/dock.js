@@ -3,7 +3,6 @@
 // 下：写中文回复，选语气，翻好的译文可以直接改，改过就不会被自动覆盖。只“放进输入框”，永远不按发送。
 // 这个文件在 shell.js 之前加载，里面用到的 h、icon、kids、s、pn、tr、panelInsert 等都在 shell.js 里，运行时才调用。
 
-const TONE_LIST = [['biz', '商务'], ['casual', '口语'], ['short', '简短']];
 const dk = {
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的中文
@@ -14,7 +13,6 @@ const dk = {
   suggest: '', // 手动改过之后再纠错：结果只当建议
   forTitle: null, // 译文是给哪个对话翻的
   warn: [],
-  tone: '',
   busy: false,
   msg: '',
   bad: false,
@@ -28,7 +26,6 @@ const dk = {
   unread: 0,
   acc: null,
 };
-try { dk.tone = localStorage.getItem('dk.tone') || 'biz'; } catch { dk.tone = 'biz'; }
 
 const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !s.locked && s.page === 'account');
 
@@ -83,7 +80,7 @@ async function dockTranslate(insert = false) {
   if (!text) return dockSay('先写要发的话', true);
   const modeId = outModeId();
   if (!modeId) return dockSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
-  const req = { text: dk.text, modeId, target: dk.st.target, tone: dk.tone, ctxAccount: dk.st.accountId };
+  const req = { text: dk.text, modeId, target: dk.st.target, ctxAccount: dk.st.accountId };
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
@@ -296,17 +293,15 @@ function dockField(box, getText, lang) {
 
 function dockCompose() {
   const st = dk.st;
-  const tones = TONE_LIST.map(([id, label]) => h('button', { class: `dk-chip${dk.tone === id ? ' on' : ''}`, 'aria-pressed': String(dk.tone === id), onclick: () => {
-    if (dk.tone === id) return;
-    dk.tone = id;
-    try { localStorage.setItem('dk.tone', id); } catch {}
-    // 换语气：没手动改过译文就按新语气重翻
+  // 发出模式直接做成按钮（原来的下拉框 + 语气按钮重复了，shen 2026-10-26）
+  const curMode = outModeId();
+  const modeChips = st.modes.out.length > 1 ? st.modes.out.map((m) => h('button', { class: `dk-chip${curMode === m.id ? ' on' : ''}`, 'aria-pressed': String(curMode === m.id), title: m.name, onclick: () => {
+    if (curMode === m.id) return;
+    tr.outMode = m.id; LS('tr.outMode', m.id);
+    // 换模式：没手动改过译文就按新模式重翻
     if (dk.out && !dk.edited && dk.text.trim()) return dockTranslate(false);
     dockRender(true);
-  } }, label));
-  const outModes = st.modes.out;
-  const modeSel = outModes.length > 1 ? h('select', { class: 'dk-mini', 'aria-label': '发出用的模式', onchange: (e) => { tr.outMode = e.target.value; LS('tr.outMode', e.target.value); } }, outModes.map((m) => h('option', { value: m.id }, m.name))) : null;
-  if (modeSel) modeSel.value = outModeId();
+  } }, m.name)) : [];
   const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', placeholder: '用中文写要回的话。Enter 翻译，Shift+Enter 换行', 'aria-label': '要回的话（中文）' }, dk.text);
   input.addEventListener('input', () => { dk.text = input.value; });
   input.addEventListener('keydown', (e) => {
@@ -327,7 +322,7 @@ function dockCompose() {
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
   const mac = s.platform === 'darwin';
   return h('div', { class: 'dk-compose' },
-    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), modeSel, ...tones),
+    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
     dockField(input, () => input.value, () => '中文'),
     h('div', { class: 'dk-outhead' },
       h('span', { class: 'dk-label' }, '→'), dockLangSel(),

@@ -173,30 +173,69 @@ const READ_CHAT_CODE = `(() => {
   if (!main) return { ok: false, why: 'nochat' };
   const t = first(main, S.title);
   const title = t ? String(t.getAttribute('title') || t.textContent || '').trim().slice(0, 100) : '';
-  // 方向：编号前缀 true_/false_，没有就看气泡 class；都认不出就不是消息
+  // 能读就读：方向先看编号前缀 true_/false_，再看气泡 class，都认不出就当成收到的
   const dirOf = (n, id) => {
     if (/^(true|false)_/.test(id)) return id.startsWith('true_');
     if (n.matches(S.mOut) || n.querySelector(S.mOut) || n.closest(S.mOut)) return true;
     if (n.matches(S.mIn) || n.querySelector(S.mIn) || n.closest(S.mIn)) return false;
     return null;
   };
-  const all = main.querySelectorAll(S.msg);
+  // 正文：先找文字 span；找不到就拿正文块的文字（复制一份再去掉引用/链接预览，不碰页面）
+  const textOf = (n) => {
+    const body = first(n, S.body) || (n.matches('[data-pre-plain-text]') ? n : null);
+    const t = body ? parsePre(body.getAttribute('data-pre-plain-text')) : null;
+    const root = body || n;
+    for (const sel of S.text) {
+      for (const sp of root.querySelectorAll(sel)) {
+        if (sp.closest(S.skip)) continue;
+        const v = String(sp.textContent || '');
+        if (v.trim()) return { text: v, t, pre: body ? body.getAttribute('data-pre-plain-text') || '' : '' };
+      }
+    }
+    let text = '';
+    if (body) {
+      const c = body.cloneNode(true);
+      for (const x of c.querySelectorAll(S.skip)) x.remove();
+      text = String(c.textContent || '').trim();
+    }
+    return { text, t, pre: body ? body.getAttribute('data-pre-plain-text') || '' : '' };
+  };
+  const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0; return h.toString(36); };
+  const chatPart = 'chat:' + title.replace(/_/g, ' ');
   const top = [];
+  // 第一遍：带 data-id 的消息
+  const all = main.querySelectorAll(S.msg);
   for (const n of all) {
     const id = n.getAttribute('data-id') || '';
     if (!id) continue;
     if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
-    const out = dirOf(n, id);
-    if (out === null) continue;
+    let out = dirOf(n, id);
+    if (out === null) {
+      if (!n.querySelector('[data-pre-plain-text]')) continue; // 既认不出方向也没有正文，多半不是消息
+      out = false;
+    }
     // 新格式编号没有 true_/false_ 前缀：补成同样的形状，悬浮窗靠中间那段认出换了对话
-    const full = /^(true|false)_/.test(id) ? id : (out ? 'true_' : 'false_') + 'chat:' + title.replace(/_/g, ' ') + '_' + id;
+    const full = /^(true|false)_/.test(id) ? id : (out ? 'true_' : 'false_') + chatPart + '_' + id;
     top.push({ n, id: full, out });
   }
-  // 打开了对话但一条消息都认不出：没有标题也没有消息行，多半是没点开对话（右边是空白页）
+  // 第二遍：没有 data-id 时，按正文块或气泡读，编号用内容算出来（同样的话出现几次就加序号）
+  if (!top.length) {
+    const seen = new Map();
+    for (const n of main.querySelectorAll('[data-pre-plain-text], ' + S.mIn + ', ' + S.mOut)) {
+      if (n.parentElement && n.parentElement.closest('[data-pre-plain-text], ' + S.mIn + ', ' + S.mOut)) continue;
+      const out = dirOf(n, '') === true;
+      const { text, pre } = textOf(n);
+      const key = (out ? 'o' : 'i') + pre + '|' + text;
+      const k = (seen.get(key) || 0) + 1;
+      seen.set(key, k);
+      top.push({ n, id: (out ? 'true_' : 'false_') + chatPart + '_h' + hash(key) + '.' + k, out });
+    }
+  }
+  // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;
     if (!t && !rows) return { ok: false, why: 'nochat' };
-    if (!rows && !all.length) return { ok: true, title, msgs: [] };
+    if (!rows) return { ok: true, title, msgs: [] };
     return { ok: false, why: 'nomatch' };
   }
   const msgs = [];
@@ -204,23 +243,11 @@ const READ_CHAT_CODE = `(() => {
   // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
   for (const { n, id: rawId, out } of top.slice(-${MAX_MSGS}).reverse()) {
     const id = rawId.slice(0, 300);
-    let text = '';
-    const body = first(n, S.body);
-    const t = body ? parsePre(body.getAttribute('data-pre-plain-text')) : null;
-    if (body) {
-      for (const sel of S.text) {
-        for (const sp of body.querySelectorAll(sel)) {
-          if (sp.closest(S.skip)) continue;
-          text = String(sp.textContent || '');
-          break;
-        }
-        if (text) break;
-      }
-    }
-    text = text.slice(0, 4000);
+    const r = textOf(n);
+    const text = r.text.slice(0, 4000);
     if (size + text.length > 20000) break;
     size += text.length;
-    msgs.push({ id, out, text, t });
+    msgs.push({ id, out, text, t: r.t });
   }
   msgs.reverse();
   return { ok: true, title, msgs };

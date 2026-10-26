@@ -141,6 +141,12 @@ core().then(() => {
     // 右边空白（没点开聊天）：提示先点开一个聊天
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<div>WhatsApp</div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nochat');
+    // 没有 data-id 也没有 class，只剩正文块：照样读，当成收到的
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Marie">Marie</span></header><div role="row"><div><div data-pre-plain-text="[10:00, 26/10/2026] Marie: ">Bonjour, <b>merci</b></div></div></div><div role="row"><div><div data-pre-plain-text="[10:01, 26/10/2026] Marie: ">Bonjour, <b>merci</b></div></div></div>'; 1`);
+    const r6 = await waPage.readOpenChat(w.webContents);
+    assert(r6.ok, JSON.stringify(r6));
+    assert.deepStrictEqual(r6.msgs.map((m) => [m.out, m.text]), [[false, 'Bonjour, merci'], [false, 'Bonjour, merci']]);
+    assert.notStrictEqual(r6.msgs[0].id, r6.msgs[1].id, '同样的话两次要有不同编号');
     // 有消息行但一条都认不出：才算读不到
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');
