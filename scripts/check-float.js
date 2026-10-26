@@ -114,7 +114,8 @@ async function persisted() {
   const files = fs.readdirSync(path.join(dir, 'P'));
   assert.strictEqual(files.length, 1);
   const raw = fs.readFileSync(path.join(dir, 'P', files[0]), 'utf8');
-  assert(!raw.includes('"hello"') && !raw.includes('555'), '磁盘上不存原文和号码');
+  // 只查号码本身（555@），时间戳里碰巧有 555 不算
+  assert(!raw.includes('"hello"') && !raw.includes('555@'), '磁盘上不存原文和号码');
   // 重启：同样的消息（编号变了也认得出）直接显示，不调模型
   ({ store, fc } = make());
   sent.length = 0;
