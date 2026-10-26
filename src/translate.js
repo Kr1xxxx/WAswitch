@@ -17,7 +17,7 @@ const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(l
 const PRESETS = {
   // 混元只能选这两个翻译模型（shen 2026-10-26），走腾讯云 TokenHub 的 OpenAI 兼容接口
   hunyuan: { name: '腾讯混元', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-mt2-plus', models: ['hy-mt2-plus', 'hy-mt2-lite'] },
-  zhipu: { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  zhipu: { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.7-flash', models: ['glm-4.7-flash', 'glm-4-flash-250414', 'glm-4-flash'] },
   openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: '' },
   custom: { name: '自定义', baseUrl: '', model: '' },
 };
@@ -211,10 +211,11 @@ class Translator {
             id: p.id, preset: PRESETS[p.preset] ? p.preset : 'custom', name: line(p.name, 40), baseUrl: line(p.baseUrl, 300), model: line(p.model, 120),
             keyEnc: typeof p.keyEnc === 'string' ? p.keyEnc : '', keyTail: line(p.keyTail, 4), updatedAt: Number(p.updatedAt) || 0,
           })) : [];
-          // 混元只留两个模型：别的模型名改成默认的；旧地址换成 TokenHub（换地址时密钥清掉，要重新填 TokenHub 的密钥）
+          // 混元、智谱只能用固定的几个模型：别的模型名改成默认的；混元旧地址换成 TokenHub（换地址时密钥清掉，要重新填 TokenHub 的密钥）
           for (const p of base.providers) {
+            const fixed = PRESETS[p.preset] && PRESETS[p.preset].models;
+            if (fixed && !fixed.includes(p.model)) { p.model = PRESETS[p.preset].model; migrated = true; }
             if (p.preset !== 'hunyuan') continue;
-            if (!PRESETS.hunyuan.models.includes(p.model)) { p.model = PRESETS.hunyuan.model; migrated = true; }
             if (p.baseUrl === OLD_HUNYUAN_URL) { p.baseUrl = PRESETS.hunyuan.baseUrl; p.keyEnc = ''; p.keyTail = ''; moved.push(p.id); migrated = true; }
           }
           base.primaryId = typeof raw.primaryId === 'string' ? raw.primaryId : '';
@@ -284,7 +285,7 @@ class Translator {
     if (chk.error) return { error: chk.error };
     const model = line(data.model, 120);
     if (!model) return { error: '请填模型名' };
-    if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join(' 或 ')}` };
+    if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join('、')}` };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
     if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
     let p = typeof data.id === 'string' ? c.providers.find((x) => x.id === data.id) : null;
@@ -436,6 +437,8 @@ class Translator {
       body.provider = { data_collection: 'deny' }; // 只用不拿数据训练的上游
       headers['X-Title'] = 'WAswitch';
     }
+    // 智谱 GLM-4.7 默认会先“思考”，翻译用不上，关掉省时间
+    if (p.preset === 'zhipu' && /^glm-4\.[5-9]/i.test(p.model)) body.thinking = { type: 'disabled' };
     const ses = this.deps.sessionFor(chk.local);
     let res;
     try {
