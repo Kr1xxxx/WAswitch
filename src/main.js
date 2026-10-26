@@ -7,10 +7,11 @@
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
 // 主号只能用网页版。轻量小号可以走代理，也可以直连（用户自己选，有风险提示）。
 // 走代理的轻量号在带网络护栏的后台进程里，任何直连都会被拦下；直连的轻量号在另一个单独的进程里。
-const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
 const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
@@ -1026,6 +1027,66 @@ async function retryNow(id) {
   if (isLite(acc)) { problems.delete(id); startLite(acc); refresh(); return; }
   if (!views.has(id)) { await createView(acc); refresh(); return; }
   reconnect(id);
+}
+
+// 把连不上的账号马上重连一次（不清登录、不清聊天）
+function reconnectStuck() {
+  for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
+  // 轻量账号：代理断开、正在连、正在重连或停止重连的，马上重试一次
+  for (const acc of visibleAccounts().filter(isLite)) {
+    if (['proxyDown', 'connecting', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
+  }
+}
+
+// ---------- 切换 VPN / 网络后尽快重连 ----------
+// 换 Clash 节点、开关系统代理、开关 TUN、换 Wi-Fi 后，旧连接常常已经断了却还挂着，
+// WhatsApp 要等心跳超时、再按越来越长的间隔重试，看起来就是“一直连不上”。
+// 每 5 秒看一眼网卡地址和系统代理有没有变，变了就：重新读代理设置、断开旧连接、重连连不上的号。
+const NET_POLL_MS = 5000;
+let netSig = null;
+let netBusy = false;
+async function networkSignature() {
+  const ifs = Object.entries(os.networkInterfaces())
+    .flatMap(([name, list]) => (list || [])
+      // 只看 IPv4：IPv6 临时地址会定时轮换，不代表换了网络
+      .filter((a) => !a.internal && (a.family === 'IPv4' || a.family === 4)).map((a) => `${name}=${a.address}`))
+    .sort().join(',');
+  let sys = '';
+  try {
+    // 默认会话跟随系统代理，用它看系统代理现在指向哪里（只算规则，不联网）
+    await session.defaultSession.forceReloadProxyConfig();
+    sys = await session.defaultSession.resolveProxy(WA_URL);
+  } catch {}
+  return `${electronNet.isOnline()}|${ifs}|${sys}`;
+}
+async function onNetworkChange() {
+  console.log('检测到网络或系统代理变化，重新连接');
+  for (const acc of visibleAccounts()) {
+    if (isLite(acc)) continue;
+    const ses = session.fromPartition(`persist:wa-${acc.id}`);
+    await ses.forceReloadProxyConfig().catch(() => {});
+    // 断开旧连接，WhatsApp 网页会立刻用新线路重连，登录和聊天都不受影响
+    await ses.closeAllConnections().catch(() => {});
+  }
+  const tr = translateSession(false); // 翻译可能跟随系统代理
+  await tr.forceReloadProxyConfig().catch(() => {});
+  await tr.closeAllConnections().catch(() => {});
+  reconnectStuck();
+  // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
+  setTimeout(reconnectStuck, 30000);
+}
+function watchNetwork() {
+  setInterval(async () => {
+    if (netBusy) return;
+    netBusy = true;
+    try {
+      const sig = await networkSignature();
+      const changed = netSig !== null && sig !== netSig;
+      netSig = sig;
+      // 等 2 秒让 VPN 稳定下来再重连
+      if (changed) setTimeout(() => onNetworkChange().catch((e) => console.warn('网络切换后重连失败', e)), 2000);
+    } finally { netBusy = false; }
+  }, NET_POLL_MS);
 }
 
 // ---------- 掉线检测 ----------
@@ -2068,14 +2129,9 @@ app.whenReady().then(async () => {
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
     crmQueue?.sweep();
-    setTimeout(() => {
-      for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
-      // 轻量账号：代理断开、正在重连或停止重连的，马上重试一次
-      for (const acc of visibleAccounts().filter(isLite)) {
-        if (['proxyDown', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
-      }
-    }, 5000);
+    setTimeout(reconnectStuck, 5000);
   });
+  watchNetwork();
 
   // 分批启动：先打开当前账号，其他账号每隔 2.5 秒打开一个，避免同时加载卡顿
   const order = visibleAccounts().sort((a, b) => (b.id === activeId) - (a.id === activeId)); // 正在看的号先开
