@@ -10,7 +10,9 @@ button, select, textarea, input { font: inherit; color: inherit; }
 .icon:hover { background: rgba(255,255,255,.15); opacity: 1; }
 .bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid #eceef1; flex: none; }
 .auto { display: flex; align-items: center; gap: 4px; font-weight: 600; margin-right: auto; cursor: pointer; }
-select { border: 1px solid #d5d9df; border-radius: 6px; padding: 2px 4px; background: #fff; min-width: 0; }
+/* 下拉框和主窗口一个风格：圆角浅边框 + 自画箭头 */
+select { -webkit-appearance: none; appearance: none; height: 26px; min-width: 0; padding: 0 22px 0 8px; border: 1px solid #d5d9df; border-radius: 7px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%234a505a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 7px center / 10px 10px; line-height: normal; cursor: pointer; text-overflow: ellipsis; }
+select:hover:not(:disabled) { border-color: #b9bfc8; }
 select.mini { max-width: 120px; font-size: 12px; }
 .body { flex: 1; min-height: 60px; display: flex; flex-direction: column; overflow: hidden; }
 .list { flex: 1; overflow-y: auto; }
