@@ -316,7 +316,7 @@ function updateCard() {
   if (!u || s.collapsed || !['downloading', 'downloaded'].includes(u.status)) return null;
   if (u.status === 'downloaded' && updateHidden === u.version) return null;
   if (u.status === 'downloading') {
-    return h('button', { class: 'updcard busy', title: '下载好后会提示你；也可以在 设置 › 关于 里看', onclick: openAbout },
+    return h('button', { class: 'updcard busy', title: u.userAsked ? '下载完会自动重启并安装' : '下载好后会提示你；也可以在 设置 › 关于 里看', onclick: openAbout },
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
@@ -523,7 +523,7 @@ function problemButtons(acc) {
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
-    case 'outdated': return [btn('检查更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
+    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     default: return [acc.direct ? null : btn('修改代理', () => window.wa.edit(acc.id)), retry(acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接')];
@@ -1451,7 +1451,7 @@ function updateBox(u) {
     idle: ['自动更新已开启', '每 6 小时自动检查一次。', 'idle'],
     checking: ['正在检查更新…', '', 'busy'],
     none: ['已是最新版本', '有新版会自动下载，好了提醒你。', 'ok'],
-    downloading: [`正在下载 ${u.version}`, '不影响收发消息。', 'busy'],
+    downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完会自动重启并安装，账号和聊天都在。') : '不影响收发消息。', 'busy'],
     downloaded: u.manual
       ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, '空闲时会自动安装，也可以现在重启。账号和聊天都在。', 'new'],
@@ -1460,10 +1460,11 @@ function updateBox(u) {
   const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
   const mark = t === 'ok' ? icon('check', 18) : t === 'warn' ? icon('warn', 18) : t === 'busy' ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : icon('update', 18);
-  const action = u.status === 'dev' || u.status === 'off' || u.status === 'downloading' ? null
+  const action = u.status === 'dev' || u.status === 'off' || (u.status === 'downloading' && u.userAsked) ? null
+    : u.status === 'downloading' ? h('button', { class: 'btn', onclick: () => window.wa.updateCheck() }, '下好后自动重启')
     : u.status === 'downloaded'
       ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '现在重启并更新')
-      : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, busy ? '检查中…' : '检查更新');
+      : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, busy ? '检查中…' : '检查并更新');
   return h('div', { class: `update-box ${t}`, role: 'status' },
     h('div', { class: 'upd-main' },
       h('span', { class: 'upd-mark' }, mark),

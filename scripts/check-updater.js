@@ -281,6 +281,52 @@ const updatesDir = path.join(home, 'updates');
   const l = launched[0];
   check(launched.length === 1 && quits === 1 && l && l.args[0] === String(process.pid) && l.args[1] === bundle && l.args[2] === staged && /install-failed/.test(l.args[3]), `Mac 自动：空闲时启动替换脚本并退出（${JSON.stringify(l && l.args)}）`);
   check(l && fs.readFileSync(l.script, 'utf8') === MAC_INSTALL_SCRIPT, 'Mac 自动：替换脚本写到数据目录');
+  // 用户点“检查并更新”：下好后不等空闲，马上重启安装（一次点击就够）
+  fs.rmSync(path.join(updatesDir, 'staging'), { recursive: true, force: true });
+  launched.length = 0;
+  quits = 0;
+  idle = '窗口开着';
+  u = make();
+  u.setupMac();
+  u.userUpdate();
+  check(u.state.userAsked, '点“检查并更新”后记下用户要更新');
+  for (let i = 0; i < 50 && !launched.length; i += 1) await new Promise((r) => setTimeout(r, 20));
+  check(launched.length === 1 && quits === 1, `Mac：用户点了更新，下好后窗口开着也直接重启安装（${u.state.status} ${u.state.lastResult}）`);
+  idle = null;
+  // 已是最新版：用户的“要更新”不留着
+  serve({ tag: 'v0.2.0' });
+  u = make();
+  u.userUpdate();
+  for (let i = 0; i < 50 && u.state.status === 'checking'; i += 1) await new Promise((r) => setTimeout(r, 20));
+  check(u.state.status === 'none' && !u.state.userAsked, '已是最新版时清掉“用户要更新”');
+  serve();
+  // 已经下好：点一下直接装
+  {
+    const w = make();
+    w.mac = false;
+    let installs = 0;
+    w.updater = { quitAndInstall: () => { installs += 1; } };
+    w.set({ status: 'downloaded', version: '0.3.0', manual: false });
+    idle = '窗口开着';
+    w.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 0, 'Windows：没点更新、用户在用时不自动装');
+    w.userUpdate();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 1, 'Windows：已下好时点一下就重启安装');
+    // 下载中点了：下好事件一到就装
+    const w2 = make();
+    w2.mac = false;
+    let installs2 = 0;
+    w2.updater = { quitAndInstall: () => { installs2 += 1; } };
+    w2.set({ status: 'downloading', version: '0.3.0', manual: false });
+    w2.userUpdate();
+    w2.succeed('downloaded', 'ok', { version: '0.3.0', percent: 100 });
+    w2.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs2 === 1, 'Windows：下载中点了更新，下好后直接重启安装');
+    idle = null;
+  }
   // 上次替换失败：这次改成手动
   fs.writeFileSync(u.macResultFile(), '放入新版本失败');
   u = make();
