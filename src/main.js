@@ -3138,11 +3138,11 @@ handleShell('check:run', async () => {
     const key = `${p.host}:${p.port}`;
     byPort.set(key, [...(byPort.get(key) || []), acc.name]);
     if (isLite(acc)) {
-      if (!LITE_SCHEMES.includes(p.scheme)) items.push({ level: 'bad', title: `${acc.name}：轻量模式不支持 ${p.scheme} 代理`, detail: '请改用 socks5 或 http 代理。' });
+      if (!LITE_SCHEMES.includes(p.scheme)) items.push({ level: 'bad', title: `${acc.name}：轻量模式不支持这种代理`, detail: '请换成 socks5:// 或 http:// 开头的代理地址。' });
     } else {
       // 会话里的代理规则不能带“直连”兜底
       const rule = await session.fromPartition(`persist:wa-${acc.id}`).resolveProxy(WA_URL);
-      if (/DIRECT/i.test(rule)) items.push({ level: 'bad', title: `${acc.name}：代理规则里有直连兜底`, detail: rule });
+      if (/DIRECT/i.test(rule)) items.push({ level: 'bad', title: `${acc.name}：代理可能漏走本机网络`, detail: '请重启 WAswitch 后再检查。' });
     }
     const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
     if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error }); continue; }
@@ -3152,7 +3152,7 @@ handleShell('check:run', async () => {
     const tz = fingerprint.resolve(acc.fingerprint).timezone;
     const place = [acc.exitLabel, res.city].filter(Boolean).join(' · ');
     // 轻量模式没有浏览器环境，不涉及时区
-    if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：出口 ${res.ip}（${place}）`, detail: '域名由代理解析，本机不查 DNS。' }); continue; }
+    if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：IP ${res.ip}（${place}）` }); continue; }
     // 跟随本机时，实际时区就是本机时区
     const effTz = tz || localTz;
     const fixRegion = regionForTimezone(res.timezone);
@@ -3160,18 +3160,18 @@ handleShell('check:run', async () => {
     if (effTz !== res.timezone) {
       items.push({
         level: 'warn',
-        title: `${acc.name}：出口 ${res.ip}（${place}）`,
+        title: `${acc.name}：IP ${res.ip}（${place}）`,
         detail: tz
-          ? `出口时区是 ${res.timezone}，账号设置的是 ${tz}。${fix ? '' : '出口时区无法识别，请在编辑里选最接近的。'}`
-          : `地区是“跟随本机”（${localTz}），但出口在 ${res.timezone}。在 WhatsApp 看来时区和 IP 对不上。${fix ? '' : '出口时区无法识别，请在编辑里选最接近的。'}`,
+          ? `IP 在 ${res.timezone} 时区，账号设的是 ${tz}，对不上。${fix ? '' : '请在编辑账号里选一个最接近的地区。'}`
+          : `时区跟随本机（${localTz}），但 IP 在 ${res.timezone}，对不上。${fix ? '' : '请在编辑账号里选一个最接近的地区。'}`,
         fix,
       });
     } else {
-      items.push({ level: 'ok', title: `${acc.name}：出口 ${res.ip}（${place}）`, detail: tz ? `时区 ${tz}，和出口一致。` : `时区跟随本机（${localTz}），和出口一致。` });
+      items.push({ level: 'ok', title: `${acc.name}：IP ${res.ip}（${place}）`, detail: '时区和 IP 一致。' });
     }
   }
   for (const [key, names] of byPort) {
-    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 共用同一个代理端口`, detail: `${key}。这几个号会从同一个 IP 上网，建议每个号一个端口。` });
+    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 共用同一个代理端口`, detail: `${key}。它们会用同一个 IP，建议每个号一个端口。` });
   }
   for (const [ip, names] of byIp) {
     if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 的出口 IP 相同`, detail: `${ip}。在 WhatsApp 看来这几个号在同一个地方。` });
@@ -3179,19 +3179,19 @@ handleShell('check:run', async () => {
   // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
   if (accounts.some((a) => isLite(a) && proxy.parse(a.proxy))) {
     items.push(liteGuardHits
-      ? { level: 'bad', title: `轻量模式：网络护栏拦下了 ${liteGuardHits} 次直连`, detail: '这些请求没有发出去，真实 IP 没有暴露。日志里有详细记录，请把日志发给我们排查。' }
-      : { level: 'ok', title: '轻量模式：走代理的号只连代理，没有出现直连' });
+      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。请把日志发给我们看看。' }
+      : { level: 'ok', title: '轻量模式：都走代理，没有漏' });
   }
   // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
   const webrtcBad = accounts.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));
   const proxied = accounts.filter((a) => !isLite(a) && a.proxy);
-  if (webrtcBad.length) items.push({ level: 'bad', title: `${webrtcBad.map((a) => a.name).join('、')}：WebRTC 设置和账号不一致`, detail: '请重启 WAswitch 后再检查。' });
-  else if (proxied.length) items.push({ level: 'ok', title: '走代理的号：WebRTC 只走代理，不泄露本机 IP' });
+  if (webrtcBad.length) items.push({ level: 'bad', title: `${webrtcBad.map((a) => a.name).join('、')}：通话的网络设置没生效`, detail: '请重启 WAswitch 后再检查。' });
+  else if (proxied.length) items.push({ level: 'ok', title: '走代理的号：通话也走代理，不暴露本机 IP' });
   for (const a of accounts.filter((x) => !isLite(x) && !x.proxy && x.allowCalls)) {
-    items.push({ level: 'warn', title: `${a.name}：允许通话（直连）`, detail: '通话的 UDP 走这台电脑的真实 IP。如果 Clash 开着系统代理（不是 TUN 模式），网页和通话会显示两个不同的 IP。不需要打电话请在编辑里关掉。' });
+    items.push({ level: 'warn', title: `${a.name}：允许通话（直连）`, detail: '通话会用本机 IP，可能和聊天的 IP 不一样。不打电话就在编辑账号里关掉。' });
   }
   const uaOk = accounts.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
-  items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识里没有 Electron 或软件名' });
+  items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识正常，看不出是多开软件' });
   saveAccounts();
   pushState();
   return { items, time: new Date().toLocaleString('zh-CN') };
