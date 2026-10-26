@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('wa', {
   trProviderSave: (data) => ipcRenderer.invoke('tr:provider:save', data),
   trProviderDelete: (id) => ipcRenderer.invoke('tr:provider:delete', id),
   trRoles: (primaryId, fallbackId, fixId) => ipcRenderer.invoke('tr:roles', { primaryId, fallbackId, fixId }),
+  trRole: (text) => ipcRenderer.invoke('tr:role', text),
   trNetwork: (mode, proxyUrl) => ipcRenderer.invoke('tr:network', { mode, proxyUrl }),
   trTest: (id) => ipcRenderer.invoke('tr:test', id),
   trConsent: (ids) => ipcRenderer.invoke('tr:consent', ids),
