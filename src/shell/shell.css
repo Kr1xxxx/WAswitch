@@ -294,7 +294,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .bad-text { color: var(--danger); }
 .memrow.netrow { grid-template-columns: 130px 1fr 130px 90px; }
 
-#body { flex: 1; min-height: 0; display: flex; }
+#body { position: relative; flex: 1; min-height: 0; display: flex; }
 #body > #content, #body > #lock { flex: 1; min-width: 0; }
 #panel { flex: none; width: 380px; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: #fbfbfc; font-size: 13px; }
 #panel[hidden] { display: none; }
@@ -400,3 +400,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-fixed { font-size: 11px; color: var(--ok); background: #e8f5ec; border-radius: 4px; padding: 0 6px; }
 .dk-edit { display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 2px; }
 .dk-suggest { display: flex; flex-direction: column; gap: 4px; width: 100%; margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: #fff8e6; border: 1px solid #f0d58a; }
+
+/* ---------- 删除确认框 ---------- */
+.cfm { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(22,24,29,.28); user-select: none; }
+.cfm-box { width: 100%; max-width: 360px; background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.18); display: flex; flex-direction: column; gap: 8px; }
+.cfm-title { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.cfm-detail { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.cfm-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
+.cfm-btns .btn { height: 36px; padding: 0 16px; }
+.btn.danger-fill { border: none; background: var(--danger); color: #fff; font-weight: 600; }
