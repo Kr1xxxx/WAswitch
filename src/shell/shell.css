@@ -387,8 +387,8 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-hint { padding: 6px 6px; margin: 0; }
 .dk-msg { padding: 6px 12px 0; }
 .dk-compose { border-top: 1px solid var(--line); padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 6px; background: #fbfbfc; }
-.dk-compose .dk-head { padding: 8px 0 0; }
-.dk-chip { height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--field); background: #fff; font: inherit; font-size: 12px; color: var(--soft); cursor: pointer; }
+.dk-compose .dk-head { padding: 8px 0 0; flex-wrap: wrap; row-gap: 6px; }
+.dk-chip { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--field); background: #fff; font: inherit; font-size: 12px; color: var(--soft); cursor: pointer; }
 .dk-chip:hover { color: var(--text); }
 .dk-chip.on { background: var(--text); border-color: var(--text); color: #fff; }
 .dk-in, .dk-out { width: 100%; resize: vertical; border: 1px solid var(--field); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; background: #fff; user-select: text; min-height: 58px; }
