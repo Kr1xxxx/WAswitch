@@ -2527,13 +2527,17 @@ function rememberDetected(accId) {
 }
 // 发出的目标语言和它的来源：手动选的 > 客户名单里填的 > 认出来的 > 这个号的默认语言
 function outTarget(acc, v) {
-  const cfg = translator.load();
   const key = acc && v.chatKey ? `${acc.id}:${v.chatKey}` : '';
   const kept = key ? translator.chatLang(key) : null;
   const chat = acc && v.title ? chatCustomer(acc.id, v.title) : null;
-  if (kept && kept.src === 'manual') return { lang: kept.lang, from: 'manual', name: chat ? chat.name : '' };
+  if (kept && kept.src === 'manual') return { lang: kept.lang, from: 'manual', name: chat ? chat.name : '', auto: autoTarget(acc, chat, null) };
+  return { ...autoTarget(acc, chat, kept), auto: null };
+}
+// “自动”会翻成哪种：客户名单里填的 > 从客户消息认出来的 > 这个号的默认语言 > 英语
+function autoTarget(acc, chat, kept) {
+  const cfg = translator.load();
   if (chat) return { lang: chat.lang, from: 'customer', name: chat.name };
-  if (kept) return { lang: kept.lang, from: 'detected', name: '' };
+  if (kept && kept.src === 'detected') return { lang: kept.lang, from: 'detected', name: '' };
   return { lang: (acc && cfg.accountLang[acc.id]) || '英语', from: 'default', name: '' };
 }
 function floatState() {
@@ -2570,6 +2574,8 @@ function floatState() {
     langs: translator.publicConfig().langs,
     target: out.lang,
     targetSrc: out.from, // manual | customer | detected | default
+    autoTarget: (out.auto || out).lang, // 下拉里“自动（…）”显示的语言
+    accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
     canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
     // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话
     targetFrom: out.from === 'default' ? '' : (out.name || '这个对话'),
@@ -2705,7 +2711,7 @@ handleShell('dock:lang', ({ accountId, title, lang } = {}) => {
   if (!acc || accountId !== activeId) return floatState();
   const v = floatCore.viewOf(acc.id);
   if (v.chatKey && v.title === title) translator.setChatLang(`${acc.id}:${v.chatKey}`, lang || '', 'manual');
-  else if (!v.chatKey && lang) translator.setAccountLang(acc.id, lang); // 读不到对话（轻量模式等）：改这个号的默认语言
+  else if (!v.chatKey) translator.setAccountLang(acc.id, lang || ''); // 读不到对话（轻量模式等）：改这个号的默认语言，空 = 回到自动
   pushFloat();
   return floatState();
 });

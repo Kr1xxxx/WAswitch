@@ -390,7 +390,8 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-label { font-size: 11px; color: var(--muted); letter-spacing: .02em; white-space: nowrap; }
 .dk-mono { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dk-dim { color: var(--muted); font-size: 12px; }
-.dk-lang { min-width: 0; max-width: 96px; font-size: 13px; }
+.dk-lang { min-width: 0; max-width: 124px; font-size: 13px; }
+.dk-outhead .dk-model { max-width: 120px; color: var(--soft); }
 .dk-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
 .dk-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--soft); white-space: nowrap; cursor: pointer; }
 .dk-switch { appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--field); position: relative; margin: 0; cursor: pointer; transition: background .15s; }
