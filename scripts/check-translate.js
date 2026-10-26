@@ -68,10 +68,19 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   tr.saveProvider({id:pid,preset:'custom',baseUrl:'https://evil.example/v1',model:'m'});
   const pp=tr.publicConfig().providers.find(x=>x.id===pid);
   assert(!pp.hasKey && !pp.consented);
-  // 翻译模式：默认 5 个，最多 200 个
+  // 翻译模式：默认 4 个，最多 200 个
   const ms=new R.Records(dir,'tmodes');
   ms.seed(T.DEFAULT_MODES);
-  assert.equal(ms.list().length,5);
+  assert.equal(ms.list().length,4);
+  assert(!ms.list().some((m)=>m.name==='口语亲切'));
+  // 老用户：没改过的「口语亲切」删掉一次，改过的留着，做过就不再删
+  const dir2=require('fs').mkdtempSync(require('path').join(require('os').tmpdir(),'tm-')); const ms2=new R.Records(dir2,'tmodes');
+  const old1=ms2.upsert({name:'口语亲切',direction:'out',prompt:T.RETIRED_MODES[0].prompt});
+  const old2=ms2.upsert({name:'口语亲切',direction:'out',prompt:'我改过的'});
+  assert.equal(T.retireModes(ms2,false),1);
+  assert(!ms2.get(old1.id) && ms2.get(old2.id));
+  ms2.upsert({name:'口语亲切',direction:'out',prompt:T.RETIRED_MODES[0].prompt});
+  assert.equal(T.retireModes(ms2,true),0);
   for(let i=0;i<300;i++) ms.upsert({name:'m'+i,prompt:'p'},{save:false});
   assert.equal(ms.list().length,200);
   assert.equal(R.KINDS.tmodes.clean({name:'x',prompt:'p',direction:'evil',temperature:'9'}).direction,'both');
