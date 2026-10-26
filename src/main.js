@@ -19,7 +19,7 @@ const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
-const { Translator, DEFAULT_MODES } = require('./translate');
+const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const memory = require('./memory');
@@ -2144,6 +2144,11 @@ app.whenReady().then(async () => {
   customerStore = new records.Records(app.getPath('userData'), 'customers');
   modeStore = new records.Records(app.getPath('userData'), 'tmodes');
   try { modeStore.seed(DEFAULT_MODES); } catch (e) { console.warn(`翻译模式初始化失败：${e.message}`); }
+  try {
+    const flag = path.join(app.getPath('userData'), 'tmodes-retired-1');
+    retireModes(modeStore, fs.existsSync(flag));
+    fs.writeFileSync(flag, '1');
+  } catch (e) { console.warn(`旧翻译模式清理失败：${e.message}`); }
   translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: translateSession });
   applyTranslateNet().catch(() => {});
   setupFloatCore();

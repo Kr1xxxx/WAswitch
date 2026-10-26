@@ -31,10 +31,23 @@ const LANGS = ['英语', '西班牙语', '葡萄牙语', '法语', '德语', '�
 const DEFAULT_MODES = [
   { name: '标准', direction: 'out', prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。' },
   { name: '商务正式', direction: 'out', prompt: '把用户的文字翻译成{目标语言}，语气礼貌、专业，适合报价、合同和正式沟通。保留数字、链接和换行。' },
-  { name: '口语亲切', direction: 'out', prompt: '把用户的文字翻译成{目标语言}，像当地人日常聊天一样自然，句子简短，可以适当用表情。保留数字和链接。' },
   { name: '销售跟进', direction: 'out', prompt: '把用户的文字翻译成{目标语言}，语气热情但不夸大，不编造任何承诺；如果原文有下一步安排，译文结尾要清楚说出来。保留数字和链接。' },
   { name: '看懂客户', direction: 'in', prompt: '把用户的文字翻译成中文。译文之后另起一行，用一句话写出对方的语气和主要要求，以“【要点】”开头。' },
 ];
+
+// 以前默认带的「口语亲切」（shen 2026-10-26 默认去掉）。老用户没改过的话启动时删一次
+const RETIRED_MODES = [
+  { name: '口语亲切', prompt: '把用户的文字翻译成{目标语言}，像当地人日常聊天一样自然，句子简短，可以适当用表情。保留数字和链接。' },
+];
+// 只删名字和提示词都没改过的；flag 记住做过，之后用户自己再建的不会被删
+function retireModes(store, done) {
+  if (done) return 0;
+  let n = 0;
+  for (const m of store.list()) {
+    if (RETIRED_MODES.some((r) => r.name === m.name && r.prompt === m.prompt) && store.remove(m.id)) n++;
+  }
+  return n;
+}
 
 // 本机地址允许 http（给本机模型用），其他必须 https
 function isLocalHost(host) {
@@ -600,5 +613,5 @@ class Translator {
   }
 }
 
-module.exports = { THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 
