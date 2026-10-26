@@ -36,6 +36,10 @@ const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
 
+// 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
+const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const DEFAULT_ZOOM = 0.9;
+
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
 const isPrimary = app.requestSingleInstanceLock();
@@ -289,7 +293,9 @@ function loadAccounts() {
     acc.muted = acc.muted === true;
     // 分组：指向不存在的分组时显示成未分组，但不清掉（groups.json 坏了、从备份恢复后还能回到原来的组）
     acc.groupId = typeof acc.groupId === 'string' ? acc.groupId.slice(0, 40) : '';
-    acc.zoom = ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : 1;
+    // 网页默认缩放 90%。zoomSet：用户自己调过。老版本没有这个字段：停在 100% 的当作没调过，改成 90%
+    if (acc.zoomSet !== true) acc.zoomSet = ZOOM_STEPS.includes(acc.zoom) && acc.zoom !== 1;
+    acc.zoom = acc.zoomSet && ZOOM_STEPS.includes(acc.zoom) ? acc.zoom : DEFAULT_ZOOM;
     acc.spellcheck = acc.spellcheck === true;
     // 自定义下载文件夹：只能是用户在对话框里选的绝对路径，其他一律当没设
     acc.downloadDir = typeof acc.downloadDir === 'string' && path.isAbsolute(acc.downloadDir) ? acc.downloadDir : '';
@@ -841,9 +847,10 @@ function pushState() {
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
-        zoom: acc.zoom || 1,
+        zoom: acc.zoom || DEFAULT_ZOOM,
         unread: notifier.unread.get(acc.id) || 0,
         memMB: memoryManager.usageMB.get(acc.id) || 0,
+        lastRecycle: memoryManager.recycleInfo.get(acc.id) || null, // 上次自动/手动刷新回收：{ at, mb }
         proxyLabel: proxyLabel(acc),
         regionLabel: regionLabel(acc.fingerprint.region),
         // 顶栏的“当地时间”：账号的时区；跟随本机时为 null
@@ -1129,20 +1136,20 @@ const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
 // ---------- 缩放（每个号单独记） ----------
-// 和 Chrome 一样的几档；只对网页版号生效（轻量模式的界面跟着软件走）
-const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+// 和 Chrome 一样的几档（ZOOM_STEPS 在文件开头）；只对网页版号生效（轻量模式的界面跟着软件走）
 function applyZoom(acc) {
   const view = views.get(acc.id);
-  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || 1);
+  if (view && !view.webContents.isDestroyed()) view.webContents.setZoomFactor(acc.zoom || DEFAULT_ZOOM);
 }
 // dir: 1 放大，-1 缩小，0 还原
 function stepZoom(id, dir) {
   const acc = findAcc(id);
   if (!acc || isLite(acc)) return;
-  const i = ZOOM_STEPS.indexOf(acc.zoom || 1);
-  const next = dir === 0 ? 1 : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
+  const i = ZOOM_STEPS.indexOf(acc.zoom || DEFAULT_ZOOM);
+  const next = dir === 0 ? DEFAULT_ZOOM : ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))];
   if (next === acc.zoom) return;
   acc.zoom = next;
+  acc.zoomSet = next !== DEFAULT_ZOOM;
   saveAccounts();
   applyZoom(acc);
   pushState();
@@ -2809,12 +2816,12 @@ onShell('context', (id) => {
       ],
     },
     {
-      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || 1) * 100)}%）`,
+      label: isLite(acc) ? '缩放（轻量模式不支持）' : `缩放（${Math.round((acc.zoom || DEFAULT_ZOOM) * 100)}%）`,
       enabled: !isLite(acc),
       submenu: [
         { label: '放大', accelerator: 'CmdOrCtrl+=', registerAccelerator: false, click: () => stepZoom(id, 1) },
         { label: '缩小', accelerator: 'CmdOrCtrl+-', registerAccelerator: false, click: () => stepZoom(id, -1) },
-        { label: '还原到 100%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || 1) !== 1, click: () => stepZoom(id, 0) },
+        { label: '还原到默认 90%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || DEFAULT_ZOOM) !== DEFAULT_ZOOM, click: () => stepZoom(id, 0) },
       ],
     },
     { type: 'separator' },
