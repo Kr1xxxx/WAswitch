@@ -65,7 +65,8 @@
             "arm64"
           ]
         }
-      ]
+      ],
+      "icon": "assets/icon-mac.png"
     },
     "dmg": {
       "background": "build/background.png",
