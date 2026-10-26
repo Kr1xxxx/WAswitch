@@ -1,15 +1,19 @@
 // 主进程这边的轻量模式管理：按需启动后台进程（utilityProcess），转发命令和事件。
 // 没有轻量模式账号时不启动后台进程，不占内存；最后一个轻量账号删掉后关掉它。
+// 走代理的号和直连号分在两个后台进程里：走代理的进程只许连代理（网络护栏），
+// 直连进程放行本机网络。没有直连轻量号时直连进程不启动。
 const { utilityProcess } = require('electron');
 const { EventEmitter } = require('events');
 const path = require('path');
 
 const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 500);
 
-class LiteHost extends EventEmitter {
-  constructor({ dataDir }) {
-    super();
+// 一个后台进程
+class LiteProc {
+  constructor({ dataDir, direct, bus }) {
     this.dataDir = dataDir;
+    this.direct = !!direct;
+    this.bus = bus; // 事件都发到 LiteHost 上
     this.proc = null;
     this.ready = false;
     this.queue = [];
@@ -33,7 +37,7 @@ class LiteHost extends EventEmitter {
   ensure() {
     if (this.proc) return;
     this.ready = false;
-    const proc = utilityProcess.fork(path.join(__dirname, 'worker.mjs'), [], { serviceName: 'WAswitch 轻量模式', stdio: 'pipe' });
+    const proc = utilityProcess.fork(path.join(__dirname, 'worker.mjs'), this.direct ? ['--direct'] : [], { serviceName: this.direct ? 'WAswitch 轻量模式（直连）' : 'WAswitch 轻量模式', stdio: 'pipe' });
     this.proc = proc;
     const pipe = (stream, level) => stream && stream.on('data', (d) => {
       for (const line of String(d).split('\n')) if (line.trim()) console[level](`[轻量模式] ${scrub(line)}`);
@@ -54,10 +58,10 @@ class LiteHost extends EventEmitter {
       this.crashes = this.crashes.filter((t) => now - t < 10 * 60 * 1000);
       this.crashes.push(now);
       console.warn(`轻量模式后台进程意外退出（${code}）`);
-      for (const id of this.sessions.keys()) this.emit('state', { id, status: 'crashed' });
+      for (const id of this.sessions.keys()) this.bus.emit('state', { id, status: 'crashed' });
       if (this.crashes.length > 3) {
         // 反复崩溃：不再自动恢复，让用户手动点“重新连接”
-        for (const id of this.sessions.keys()) this.emit('state', { id, status: 'crashLoop' });
+        for (const id of this.sessions.keys()) this.bus.emit('state', { id, status: 'crashLoop' });
         return;
       }
       setTimeout(() => {
@@ -86,7 +90,7 @@ class LiteHost extends EventEmitter {
     }
     if (m.type === 'log') { console.warn(`[轻量模式${m.id ? ` ${m.id}` : ''}] ${scrub(m.msg)}`); return; }
     if (m.type === 'guard') { console.warn(`[轻量模式] 网络护栏拦下了${m.what} ${scrub(m.host)}`); }
-    this.emit(m.type, m);
+    this.bus.emit(m.type, m);
   }
 
   // 有请求（比如发消息）还没回来
@@ -196,6 +200,53 @@ class LiteHost extends EventEmitter {
   resume() {
     this.shuttingDown = false;
   }
+}
+
+// 主进程用的入口：按账号有没有代理分到两个后台进程，对外用法和一个进程时一样
+class LiteHost extends EventEmitter {
+  constructor({ dataDir }) {
+    super();
+    this.proxied = new LiteProc({ dataDir, direct: false, bus: this });
+    this.directProc = new LiteProc({ dataDir, direct: true, bus: this });
+  }
+
+  procs() { return [this.proxied, this.directProc]; }
+
+  procOf(id) { return this.procs().find((p) => p.sessions.has(id)) || null; }
+
+  // 没有代理（proxy 为空）的号进直连进程；号从直连改成代理（或反过来）时先从原来的进程里停掉
+  start(id, cfg) {
+    const target = cfg.proxy ? this.proxied : this.directProc;
+    for (const p of this.procs()) if (p !== target) p.stop(id);
+    target.start(id, { ...cfg, proxy: cfg.proxy || null });
+  }
+
+  stop(id) { for (const p of this.procs()) p.stop(id); }
+
+  async logout(id) { await Promise.all(this.procs().map((p) => p.logout(id))); }
+
+  // 两个进程都告诉：不在这个进程里的号，进程里所有号都会变成“没在看”
+  setWatch(id, jid) { for (const p of this.procs()) p.setWatch(id, jid); }
+
+  setCrm(id, since) { for (const p of this.procs()) p.setCrm(id, since); }
+
+  read(id, jid) { for (const p of this.procs()) p.read(id, jid); }
+
+  sendText(id, jid, text) {
+    const p = this.procOf(id);
+    return p ? p.sendText(id, jid, text) : Promise.reject(new Error('这个号没有在运行'));
+  }
+
+  // 两个后台进程的 pid（内存统计用）
+  pids() { return this.procs().map((p) => p.pid()).filter(Boolean); }
+
+  busy() { return this.procs().some((p) => p.busy()); }
+
+  running() { return this.procs().some((p) => p.running()); }
+
+  async shutdown() { await Promise.all(this.procs().map((p) => p.shutdown())); }
+
+  resume() { for (const p of this.procs()) p.resume(); }
 }
 
 module.exports = { LiteHost };

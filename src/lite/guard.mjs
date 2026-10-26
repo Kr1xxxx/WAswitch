@@ -1,5 +1,7 @@
 // 轻量模式后台进程的网络护栏：这个进程只允许连代理本身，其他任何直连一律拦下。
 // 这样即使 Baileys 或它的依赖哪天多了一个不走代理的请求，也只会失败，不会暴露真实 IP。
+// 直连的轻量号在另一个单独的后台进程里（setAllowAll）：那里 TCP 和 DNS 放行，UDP、子进程、新线程照样禁止。
+// 两种号不会在同一个进程里，走代理的号的护栏不受影响。
 //
 // 拦的是最底层：所有 TCP 连接（包括 http、https、WebSocket、fetch）最后都走 net.Socket.prototype.connect；
 // DNS 查询也拦（socks5h 由代理解析域名，本机不需要查任何 WhatsApp 域名）；UDP 直接禁用。
@@ -11,6 +13,7 @@ import workerThreads from 'node:worker_threads';
 import { syncBuiltinESMExports } from 'node:module';
 
 const allowed = new Set(); // 允许连接的代理主机（小写）
+let allowAll = false; // 直连进程：放行 TCP 和 DNS
 let onBlock = () => {};
 let installed = false;
 
@@ -21,8 +24,13 @@ export function setAllowedHosts(hosts) {
   for (const h of hosts) allowed.add(norm(h));
 }
 
+// 只在直连号专用的后台进程里调用
+export function setAllowAll(on) {
+  allowAll = !!on;
+}
+
 export function isAllowed(host) {
-  return allowed.has(norm(host));
+  return allowAll || allowed.has(norm(host));
 }
 
 // 从 connect() 的各种参数写法里取出目标主机。path（本机管道）不经过网络，放行。
@@ -74,7 +82,8 @@ export function installGuard(report) {
   };
   // dns.resolve*、dns.reverse、dns.lookupService，以及 Resolver 实例上的同名方法（走 c-ares 自己发 UDP，不经过 dgram）
   const isQuery = (name) => /^(resolve|reverse|lookupService$)/.test(name);
-  const blockQuery = (isPromise) => function guardedResolve(hostname, ...rest) {
+  const blockQuery = (isPromise, original) => function guardedResolve(hostname, ...rest) {
+    if (allowAll) return original.call(this, hostname, ...rest);
     const err = blocked('DNS 查询', hostname);
     if (isPromise) return Promise.reject(err);
     const cb = rest.find((x) => typeof x === 'function');
@@ -90,7 +99,7 @@ export function installGuard(report) {
   for (const [target, isPromise] of targets) {
     for (const name of Object.getOwnPropertyNames(target)) {
       if (!isQuery(name) || typeof target[name] !== 'function') continue;
-      target[name] = blockQuery(isPromise);
+      target[name] = blockQuery(isPromise, target[name]);
     }
   }
 

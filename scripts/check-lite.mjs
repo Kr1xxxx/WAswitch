@@ -197,6 +197,26 @@ try {
   s3.stop();
   check('代理不通时显示“代理连不上”并等待重试，不改用直连', proxyDown, statusOf('3'));
 
+  // 5a. 直连号：走代理的进程里一定连不出去（分错进程也不会漏 IP）；直连进程（setAllowAll）放行 TCP 和 DNS，UDP 照样禁止
+  deliberate = true;
+  const connectsBefore = connects.length;
+  const sd = new Session({ id: 'd', proxy: null, dir: path.join(tmp, 'd'), key: newKey(), os: 'win32' }, post);
+  await sd.start();
+  const directBlocked = await until(() => blocked.some((b) => b.deliberate && /whatsapp/i.test(b.host)), 8000);
+  sd.stop();
+  check('没设代理的号在走代理的进程里会被护栏拦下', directBlocked, blocked.filter((b) => b.deliberate).map((b) => b.host).slice(-2).join(', '));
+  const { setAllowAll } = await import('../src/lite/guard.mjs');
+  const { makeDirectTransport } = await import('../src/lite/transport.mjs');
+  setAllowAll(true);
+  const dnsErr = await new Promise((r) => { dns.lookup('localhost', (e) => r(e)); });
+  const udpErr = (() => { try { (require('node:dgram')).createSocket('udp4'); return null; } catch (e) { return e; } })();
+  setAllowAll(false);
+  const dnsErr2 = await new Promise((r) => { dns.lookup('localhost', (e) => r(e)); });
+  check('直连进程放行 DNS，UDP 仍然禁止；关掉后恢复拦截', !dnsErr && udpErr?.code === 'EWASWITCHBLOCKED' && dnsErr2?.code === 'EWASWITCHBLOCKED', `${dnsErr?.code || 'ok'} / ${udpErr?.code} / ${dnsErr2?.code}`);
+  check('直连 transport 不带代理', !makeDirectTransport().agent);
+  connects.length = connectsBefore;
+  deliberate = false;
+
   // 汇总：真实连接过程里没有任何直连和本机 DNS
   check('全程没有尝试查询 WhatsApp 相关域名', !lookups.some(isWa), lookups.filter(isWa).join(', '));
   const nonProxy = connects.filter((c) => !c.startsWith('127.0.0.1:'));

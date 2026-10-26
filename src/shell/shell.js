@@ -834,7 +834,7 @@ function editorPage(id) {
       onclick: () => { color = c; liveColor = c; document.body.style.background = tint(c); drawSwatches(); },
     })));
     const drawPresets = () => presets.replaceChildren(...PRESETS.map(([label, v]) => h('button', {
-      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button', hidden: mode === 'lite' && !v,
+      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button',
       onclick: () => {
         proxyInput.value = v;
         onProxyChange();
@@ -853,7 +853,11 @@ function editorPage(id) {
         h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：用本机真实 IP'));
     };
+    // 轻量小号选直连：提醒一句，不拦
+    const liteDirectHint = h('span', { class: 'hint', style: { color: '#B54708' } }, '直连有风险：轻量小号会用这台电脑的真实 IP，和主号或别的直连号在 WhatsApp 看来是同一个地方，容易被关联。');
+    const drawLiteDirect = () => { liteDirectHint.hidden = !(mode === 'lite' && !proxyInput.value.trim()); };
     const onProxyChange = () => {
+      drawLiteDirect();
       passwordRow.hidden = !/^https?:\/\/[^/@]+@/i.test(proxyInput.value.trim());
       callsRow.hidden = mode === 'lite' || !!proxyInput.value.trim();
       result.replaceChildren();
@@ -874,15 +878,15 @@ function editorPage(id) {
       }
       liteReason.textContent = !d.liteAvailable || !primary.checked ? ''
         : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的“这是主号”后可以选轻量模式。';
-      proxyInput.placeholder = lite ? '必填，例如 socks5://127.0.0.1:7891' : '留空表示直连，例如 socks5://127.0.0.1:7891';
+      proxyInput.placeholder = '留空表示直连，例如 socks5://127.0.0.1:7891';
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
       callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
-        ? ['必须走代理并先“测试”通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
+        ? ['填了代理要先“测试”通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
         : ['代理连不上时这个号会暂停联网，不会改用直连。带密码的代理请用 http://。']));
-      for (const b of presets.children) if (b.textContent === '直连') b.hidden = lite;
+      drawLiteDirect();
       sidePanel.replaceChildren(...sideText());
     };
     primary.addEventListener('change', () => { if (primary.checked && mode === 'lite') mode = 'web'; onModeChange(); });
@@ -952,7 +956,7 @@ function editorPage(id) {
         primaryRow,
         h('div', { class: 'field' },
           h('span', { class: 'field-head' }, '网络线路（代理）', h('a', { href: '#', class: 'help', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, '怎么在 Clash 里开端口？')),
-          presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint),
+          presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint, liteDirectHint),
         passwordRow,
         callsRow,
         regionRow,
