@@ -204,7 +204,7 @@ function renderSide() {
   if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
   $side.replaceChildren();
-  $side.append(h('div', { class: 'drag' }));
+  $side.append(h('div', { class: 'win-drag' }));
   if (s.page === 'settings') {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
