@@ -778,7 +778,7 @@ function translatePage(page) {
         '告诉 AI 你是谁、哪些词怎么翻，可以不填。一行一个“中文 = 外语”就是固定译法。\n'
         + '混元翻译模型只认固定译法，其他文字不起作用。')),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
-    h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用在“翻译剪贴板”。'),
+    h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用来翻客户发来的消息。'),
     trModeEdit ? trModeForm() : null,
     h('div', { class: 'box' }, tr.modes.map((m) => h('div', { class: 'tr-prow' },
       h('b', null, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
