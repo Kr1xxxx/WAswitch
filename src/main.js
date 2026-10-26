@@ -3157,7 +3157,7 @@ handleShell('check:run', async () => {
   const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   for (const acc of accounts) {
     const p = proxy.parse(acc.proxy);
-    if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，用的是这台电脑的真实 IP。' }); continue; }
+    if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' }); continue; }
     if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
     const key = `${p.host}:${p.port}`;
     byPort.set(key, [...(byPort.get(key) || []), acc.name]);

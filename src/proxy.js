@@ -2,7 +2,7 @@
 //   socks5://127.0.0.1:7891          Clash 本地端口（推荐，DNS 也走代理）
 //   http://127.0.0.1:7890
 //   http://用户名:密码@1.2.3.4:8080  带密码的代理（Chromium 只支持 http 代理的密码验证）
-// 留空表示直连。
+// 留空表示直连：网页号跟随电脑的系统代理（Clash 开系统代理时走 Clash，关了就是本机网络）。
 //
 // 安全原则：代理配置了就必须走代理。代理连不上时请求直接失败，绝不悄悄改成直连，
 // 否则会在用户不知情的情况下暴露真实 IP。
@@ -72,7 +72,8 @@ async function apply(ses, raw) {
   const p = parse(raw);
   try {
     if (!p) {
-      await ses.setProxy({ mode: 'direct' });
+      // 直连号跟随系统代理：Clash 只开“系统代理”（没开 TUN）时也能连上 WhatsApp
+      await ses.setProxy({ mode: 'system' });
     } else if (p.error) {
       await ses.setProxy({ mode: 'fixed_servers', proxyRules: BLACKHOLE });
       return { error: p.error };
