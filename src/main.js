@@ -2098,7 +2098,8 @@ app.whenReady().then(async () => {
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
     title: 'WAswitch', backgroundColor: '#E6E9ED',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } } : {}),
+    // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
+    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
   });
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
