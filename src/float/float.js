@@ -104,8 +104,8 @@ function body() {
   if (ui.consent) return [consentBox()];
   const parts = [];
   if (s.lite) parts.push(h('p', { class: 'hint pad' }, '轻量模式的号请用右侧面板里的“翻译”。'));
-  else if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '在左边打开一个对话。'));
-  else if (s.readable === 'unreadable') parts.push(h('p', { class: 'hint pad bad' }, '读不到消息（WhatsApp 可能改版了），可以继续用面板里的“翻译剪贴板”。'));
+  else if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '先在左边点开一个聊天，这里就会显示客户的消息。'));
+  else if (s.readable === 'unreadable') parts.push(h('p', { class: 'hint pad bad' }, '打开的聊天里认不出消息（可能是 WhatsApp 改版了）。可以先复制客户的话，用面板里的“翻译剪贴板”。'));
   else if (!s.items.length) parts.push(h('p', { class: 'hint pad' }, '这个对话最近没有收到文字消息。'));
   else {
     const list = h('div', { class: 'list' }, s.items.map(itemRow));
