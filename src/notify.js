@@ -22,10 +22,19 @@ class Notifier {
 
   init() {
     if (process.platform === 'win32') app.setAppUserModelId('com.waswitch.app');
-    const trayIcon = nativeImage.createFromPath(asset(process.platform === 'darwin' ? 'tray16.png' : 'tray.png'));
-    this.tray = new Tray(trayIcon);
+    this.tray = new Tray(this.trayImage(false));
+    this.trayHasUnread = false;
     this.tray.on('click', () => this.showWindow());
     this.refresh();
+  }
+
+  // Mac 菜单栏用黑白模板图（系统按深浅色自动变色），有未读时换成带圆点的那张；
+  // Windows 托盘不变
+  trayImage(unread) {
+    if (process.platform !== 'darwin') return nativeImage.createFromPath(asset('tray.png'));
+    const img = nativeImage.createFromPath(asset(unread ? 'trayUnreadTemplate.png' : 'trayTemplate.png'));
+    img.setTemplateImage(true);
+    return img;
   }
 
   total() {
@@ -112,6 +121,14 @@ class Notifier {
     if (win) win.setTitle(total ? `(${total}) WAswitch` : 'WAswitch');
 
     if (!this.tray) return;
+    // Mac 菜单栏：有未读时图标带圆点，旁边显示未读数；没有未读就恢复普通图标
+    if (process.platform === 'darwin') {
+      if (!!total !== this.trayHasUnread) {
+        this.trayHasUnread = !!total;
+        this.tray.setImage(this.trayImage(this.trayHasUnread));
+      }
+      this.tray.setTitle(total ? String(total) : '', { fontType: 'monospacedDigit' });
+    }
     const mem = this.hooks.totalMemory ? this.hooks.totalMemory() : 0;
     const memText = mem ? ` · 共占用 ${mem} MB` : '';
     const upd = this.hooks.trayText ? this.hooks.trayText() : '';

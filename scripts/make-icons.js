@@ -5,7 +5,10 @@
 // - icon.png       1024，铺满（Windows 程序图标、通知、关于页、安装向导）
 // - icon-mac.png   1024，按苹果图标网格：圆角方块 824 居中、四周留透明边、带轻阴影，
 //                  这样在程序坞里和其他 App 一样大
-// - tray*.png      托盘小图，去掉气泡里的三个点，小尺寸更清楚
+// - tray*.png      托盘小图，去掉气泡里的三个点，小尺寸更清楚（Windows 用）
+// - trayTemplate*.png / trayUnreadTemplate*.png
+//                  Mac 菜单栏用的黑白模板图，系统按深浅色自动变白/变黑；
+//                  Unread 版右上角多一个圆点，有未读时换上
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
@@ -21,6 +24,24 @@ const jobs = [
   { out: 'tray16@2x.png', size: 32, tray: true },
 ];
 
+// Mac 菜单栏黑白图：两个气泡，后面的半透明，前面的实心，中间留一圈空隙
+const bubbles = `M32 20h28a12 12 0 0 1 12 12v16a12 12 0 0 1-12 12H30l-10 8V32a12 12 0 0 1 12-12z`;
+const front = `M42 38h28a12 12 0 0 1 12 12v36l-10-8H42a12 12 0 0 1-12-12V50a12 12 0 0 1 12-12z`;
+const macTray = (dot) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 17 72 72">
+  <mask id="m"><rect x="0" y="0" width="100" height="100" fill="#fff"/>
+    <path d="${front}" fill="#000" stroke="#000" stroke-width="10" stroke-linejoin="round"/>
+    ${dot ? '<circle cx="73" cy="30" r="17" fill="#000"/>' : ''}</mask>
+  <mask id="m2"><rect x="0" y="0" width="100" height="100" fill="#fff"/>
+    ${dot ? '<circle cx="73" cy="30" r="17" fill="#000"/>' : ''}</mask>
+  <path d="${bubbles}" fill="#000" fill-opacity=".55" mask="url(#m)"/>
+  <path d="${front}" fill="#000" mask="url(#m2)"/>
+  ${dot ? '<circle cx="73" cy="30" r="12" fill="#000"/>' : ''}
+</svg>`;
+for (const [name, dot] of [['trayTemplate', false], ['trayUnreadTemplate', true]]) {
+  jobs.push({ out: `${name}.png`, size: 16, svg: macTray(dot) });
+  jobs.push({ out: `${name}@2x.png`, size: 32, svg: macTray(dot) });
+}
+
 (async () => {
   const browser = await chromium.launch();
   for (const j of jobs) {
@@ -32,7 +53,7 @@ const jobs = [
       svg{width:100%;height:100%;display:block}
       ${j.mac ? '.wrap{filter:drop-shadow(0 10px 14px rgba(0,0,0,.28))}' : ''}
       ${j.tray ? '.dots{display:none}' : ''}`;
-    await page.setContent(`<style>${css}</style><div class="wrap">${svg}</div>`);
+    await page.setContent(`<style>${css}</style><div class="wrap">${j.svg || svg}</div>`);
     await page.screenshot({ path: path.join(assets, j.out), omitBackground: true });
     await page.close();
     console.log(`✓ ${j.out}`);
