@@ -20,6 +20,7 @@ const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
+const { TrStore } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const memory = require('./memory');
@@ -2098,7 +2099,8 @@ app.whenReady().then(async () => {
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
     title: 'WAswitch', backgroundColor: '#E6E9ED',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } } : {}),
+    // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
+    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
   });
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
@@ -2428,6 +2430,7 @@ let floatFails = 0;
 let floatReadable = 'loading'; // ok | nochat | unreadable | loading
 let floatArea = null; // 账号视图的位置（layout 算出来的）
 let floatCore = null;
+let trStore = null; // 收到的消息的译文，永久存在磁盘上
 const floatAuto = (id) => !!translator.load().accountAuto[id];
 // 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
 const readerOn = () => (floatOpen && !!floatView) || panelShown();
@@ -2451,7 +2454,9 @@ const FIX_OUT = {
   temperature: 0.2,
 };
 function setupFloatCore() {
+  trStore = new TrStore(path.join(app.getPath('userData'), 'translations'));
   floatCore = new FloatCore({
+    store: trStore,
     translate: (text, { fix, context, prev } = {}) => {
       // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
       const draft = fix && typeof prev === 'string' ? prev : '';
@@ -3235,6 +3240,7 @@ app.on('before-quit', (event) => {
   quitting = true;
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
+  if (trStore) trStore.flush(); // 还没写盘的译文
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);

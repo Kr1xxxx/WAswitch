@@ -1,6 +1,7 @@
 // 悬浮翻译的核心逻辑（不碰界面和页面，方便单独测试）：
 // 记下读到的“收到的消息”，决定哪些自动翻、哪些等用户点，排队调用翻译，控制每分钟和每天的上限。
-// 消息的 data-id 里有对方号码，只留在主进程：对外（悬浮窗、大模型）只用 hash。全部只在内存里。
+// 消息的 data-id 里有对方号码，只留在主进程：对外（悬浮窗、大模型）只用 hash。
+// 译文另外永久存到磁盘（deps.store，见 trstore.js）：切回对话、重启都直接显示，不再调模型。
 const crypto = require('crypto');
 
 const KEEP_PER_ACCOUNT = 200;
@@ -20,7 +21,7 @@ const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d
 const hhmm = (t) => (t && Number.isInteger(t.h) && Number.isInteger(t.mi) ? `${String(t.h).padStart(2, '0')}:${String(t.mi).padStart(2, '0')}` : '');
 
 class FloatCore {
-  // deps: { translate(text, modeId) -> Promise<result>, now?() }
+  // deps: { translate(text, modeId) -> Promise<result>, now?(), store?: TrStore }
   constructor(deps) {
     this.deps = deps;
     this.accs = new Map(); // accId -> state
@@ -42,6 +43,7 @@ class FloatCore {
 
   forget(accId) {
     this.accs.delete(accId);
+    if (this.deps.store) this.deps.store.forgetAccount(accId);
     this.queue = this.queue.filter((q) => q.accId !== accId);
   }
 
@@ -82,7 +84,10 @@ class FloatCore {
       if (m.out || !String(m.text || '').trim()) continue;
       const h = hashOf(accId, m.id);
       if (st.items.has(h)) continue;
-      const item = { h, text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
+      const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
+      // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
+      const saved = this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
+      if (saved) { item.state = 'done'; item.tr = saved.tr; item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
       st.items.set(h, item);
       fresh.push(item);
     }
@@ -127,7 +132,7 @@ class FloatCore {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
     if (!item || !item.suggest) return false;
-    if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; }
+    if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; this.save(accId, item); }
     item.suggest = '';
     this.onChange(accId);
     return true;
@@ -140,8 +145,14 @@ class FloatCore {
     const t = String(text || '').slice(0, 4000);
     if (!item || !t.trim() || item.state === 'queued' || item.state === 'running') return false;
     item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = '';
+    this.save(accId, item);
     this.onChange(accId);
     return true;
+  }
+
+  // 译文写到磁盘（手动改的、纠错采用的也存）
+  save(accId, item) {
+    if (this.deps.store && item.ck) this.deps.store.put(accId, item.ck, item.text, { tr: item.tr, edited: item.edited, fixed: item.fixed });
   }
 
   // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）
@@ -178,7 +189,7 @@ class FloatCore {
         this.queue.shift();
         if (!this.accs.get(job.accId)) continue; // 号被删了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
-        else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; }
+        else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
         else if (r && r.kind === 'consent') { item.state = 'manual'; item.err = ''; this.needConsent = r.consent; }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; }
         this.onChange(job.accId);
