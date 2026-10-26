@@ -123,6 +123,27 @@ core().then(() => {
     const r3 = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r3.msgs[r3.msgs.length - 1].text, 'newest', '最新消息不能被字数上限挤掉');
     assert(r3.msgs.reduce((n, m) => n + m.text.length, 0) <= 20000);
+    // 新版页面：编号没有 true_/false_ 前缀、标题不带 title 属性，靠气泡 class 认方向
+    await w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><span dir="auto">Anna Müller</span></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0AA" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] Anna: "><span dir="ltr"><span>Guten Morgen, ist das Paket schon unterwegs?</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0BB" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Ja, heute verschickt.</span></span></div></div></div></div>';
+      return 1; })()`);
+    const r4 = await waPage.readOpenChat(w.webContents);
+    assert(r4.ok, JSON.stringify(r4));
+    assert.strictEqual(r4.title, 'Anna Müller');
+    assert.deepStrictEqual(r4.msgs.map((m) => [m.out, m.text]), [[false, 'Guten Morgen, ist das Paket schon unterwegs?'], [true, 'Ja, heute verschickt.']]);
+    assert(r4.msgs.every((m) => /^(true|false)_chat:Anna Müller_/.test(m.id)), '补出的编号要能认出是哪个对话');
+    // 刚点开、还没有消息的对话：算读到了，只是没有消息
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Lucas">Lucas</span></header><div role="application"></div>'; 1`);
+    const r5 = await waPage.readOpenChat(w.webContents);
+    assert(r5.ok && r5.msgs.length === 0, JSON.stringify(r5));
+    // 右边空白（没点开聊天）：提示先点开一个聊天
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<div>WhatsApp</div>'; 1`);
+    assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nochat');
+    // 有消息行但一条都认不出：才算读不到
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
+    assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');
     const empty = await w.webContents.executeJavaScript('document.querySelector("#main").remove(); 1');
     assert(empty);
     const r2 = await waPage.readOpenChat(w.webContents);

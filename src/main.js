@@ -2482,7 +2482,8 @@ async function floatTick() {
     let r;
     try { r = await waPage.readOpenChat(target.wc); } finally { floatBusy = false; }
     if (!readerOn() || target.acc.id !== activeId) { scheduleFloat(500); return; }
-    if (r.ok && r.msgs.length) {
+    if (r.ok) {
+      // 打开的对话里还没有消息也算读到了（悬浮窗会提示没有文字消息）
       floatFails = 0;
       const was = floatReadable;
       floatReadable = 'ok';
@@ -2496,7 +2497,7 @@ async function floatTick() {
       delay = 3000;
       if (floatReadable !== 'nochat') { floatReadable = 'nochat'; pushFloat(); }
     } else {
-      // 读不到或打开的对话里一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
+      // 读不到，或对话里有消息行但一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
       floatFails += 1;
       if (floatFails >= 3) {
         delay = 30000;

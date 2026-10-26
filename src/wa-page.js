@@ -26,13 +26,16 @@ const SELECTORS = {
   filterTab: '#side [role="tab"], #side [role="tablist"] button',
   // 悬浮翻译：当前打开的对话（右侧 #main）
   chatMain: '#main',
-  chatTitle: '#main header span[title]',
+  chatTitle: ['#main header span[title]', '#main header [title]', '#main header span[dir="auto"]'],
   // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
   message: '[data-id]',
   // 消息正文：带 data-pre-plain-text 的 copyable-text 里的 selectable-text。
   // data-pre-plain-text 本身含时间和群发送人，不读它
-  messageBody: '.copyable-text[data-pre-plain-text]',
-  messageText: 'span.selectable-text',
+  messageBody: ['.copyable-text[data-pre-plain-text]', '[data-pre-plain-text]'],
+  messageText: ['span.selectable-text', '[data-testid*="selectable-text"]', 'span[dir]'],
+  // 没有 true_/false_ 前缀时，用气泡的 class 认方向
+  messageIn: '.message-in',
+  messageOut: '.message-out',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
   messageSkip: '[role="button"], .quoted-mention',
 };
@@ -164,38 +167,60 @@ function parsePre(raw) {
 const MAX_MSGS = 20;
 const READ_CHAT_CODE = `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut })};
+  const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   if (!main) return { ok: false, why: 'nochat' };
-  const t = main.querySelector(S.title);
-  const title = t ? String(t.getAttribute('title') || '').slice(0, 100) : '';
+  const t = first(main, S.title);
+  const title = t ? String(t.getAttribute('title') || t.textContent || '').trim().slice(0, 100) : '';
+  // 方向：编号前缀 true_/false_，没有就看气泡 class；都认不出就不是消息
+  const dirOf = (n, id) => {
+    if (/^(true|false)_/.test(id)) return id.startsWith('true_');
+    if (n.matches(S.mOut) || n.querySelector(S.mOut) || n.closest(S.mOut)) return true;
+    if (n.matches(S.mIn) || n.querySelector(S.mIn) || n.closest(S.mIn)) return false;
+    return null;
+  };
   const all = main.querySelectorAll(S.msg);
   const top = [];
   for (const n of all) {
     const id = n.getAttribute('data-id') || '';
-    if (!/^(true|false)_/.test(id)) continue;
+    if (!id) continue;
     if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
-    top.push(n);
+    const out = dirOf(n, id);
+    if (out === null) continue;
+    // 新格式编号没有 true_/false_ 前缀：补成同样的形状，悬浮窗靠中间那段认出换了对话
+    const full = /^(true|false)_/.test(id) ? id : (out ? 'true_' : 'false_') + 'chat:' + title.replace(/_/g, ' ') + '_' + id;
+    top.push({ n, id: full, out });
+  }
+  // 打开了对话但一条消息都认不出：没有标题也没有消息行，多半是没点开对话（右边是空白页）
+  if (!top.length) {
+    const rows = main.querySelectorAll('[role="row"]').length;
+    if (!t && !rows) return { ok: false, why: 'nochat' };
+    if (!rows && !all.length) return { ok: true, title, msgs: [] };
+    return { ok: false, why: 'nomatch' };
   }
   const msgs = [];
   let size = 0;
   // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
-  for (const n of top.slice(-${MAX_MSGS}).reverse()) {
-    const id = n.getAttribute('data-id').slice(0, 300);
+  for (const { n, id: rawId, out } of top.slice(-${MAX_MSGS}).reverse()) {
+    const id = rawId.slice(0, 300);
     let text = '';
-    const body = n.querySelector(S.body);
+    const body = first(n, S.body);
     const t = body ? parsePre(body.getAttribute('data-pre-plain-text')) : null;
     if (body) {
-      for (const sp of body.querySelectorAll(S.text)) {
-        if (sp.closest(S.skip)) continue;
-        text = String(sp.textContent || '');
-        break;
+      for (const sel of S.text) {
+        for (const sp of body.querySelectorAll(sel)) {
+          if (sp.closest(S.skip)) continue;
+          text = String(sp.textContent || '');
+          break;
+        }
+        if (text) break;
       }
     }
     text = text.slice(0, 4000);
     if (size + text.length > 20000) break;
     size += text.length;
-    msgs.push({ id, out: id.startsWith('true_'), text, t });
+    msgs.push({ id, out, text, t });
   }
   msgs.reverse();
   return { ok: true, title, msgs };

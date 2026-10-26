@@ -237,9 +237,9 @@ function dockIncoming() {
   }
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
   if (st.lite) add(hint('轻量模式的号读不到网页里的消息：在聊天里复制客户的话，再点上面的“翻译剪贴板”。'));
-  else if (st.readable === 'nochat') add(hint('在左边打开一个对话。'));
+  else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天，这里就会显示客户的消息。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
-  else if (st.readable === 'unreadable') add(hint('读不到消息（WhatsApp 可能改版了），可以用“翻译剪贴板”。', true));
+  else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。可以先复制客户的话，点上面的“翻译剪贴板”。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
   else st.items.forEach((it, i) => add(dockItemRow(it, i === st.items.length - 1)));
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
