@@ -2335,6 +2335,7 @@ const trState = () => ({ config: translator.publicConfig(), modes: modeStore.lis
 handleShell('tr:config', () => trState());
 handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), ...trState() }));
 handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
+handleShell('tr:fix:zhipu', () => ({ ...translator.addZhipuForFix(), ...trState() }));
 handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
 handleShell('tr:role', (text) => ({ ...translator.setRolePrompt(text), ...trState() }));
 handleShell('tr:network', async (net) => {
