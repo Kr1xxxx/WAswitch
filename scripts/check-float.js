@@ -89,6 +89,49 @@ async function core() {
   fc.forget('A');
   assert.strictEqual(fc.viewOf('A').items.length, 0);
   console.log('悬浮翻译逻辑自检通过');
+  await persisted();
+}
+
+// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号清掉
+async function persisted() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-'));
+  const sent = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  let { store, fc } = make();
+  const msgs = [msg(1, false, '555@c.us', 'hello'), msg(2, false, '555@c.us', 'bye')];
+  fc.ingest('P', { title: 'p', msgs }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['hello', 'bye']);
+  assert(fc.edit('P', hashOf('P', msgs[1].id), '再见（我改的）'));
+  store.flush();
+  const files = fs.readdirSync(path.join(dir, 'P'));
+  assert.strictEqual(files.length, 1);
+  const raw = fs.readFileSync(path.join(dir, 'P', files[0]), 'utf8');
+  assert(!raw.includes('"hello"') && !raw.includes('555'), '磁盘上不存原文和号码');
+  // 重启：同样的消息（编号变了也认得出）直接显示，不调模型
+  ({ store, fc } = make());
+  sent.length = 0;
+  const again = [{ ...msg(7, false, '555@c.us', 'hello') }, msg(2, false, '555@c.us', 'bye'), msg(3, false, '555@c.us', 'new one')];
+  fc.ingest('P', { title: 'p', msgs: again }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['new one']);
+  const items = fc.viewOf('P').items;
+  assert.deepStrictEqual(items.map((x) => [x.state, x.tr, x.edited]), [['done', '译:hello', false], ['done', '再见（我改的）', true], ['done', '译:new one', false]]);
+  // 别的对话里同样的话不串
+  fc.ingest('P', { title: 'q', msgs: [msg(1, false, '666@c.us', 'hello')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['new one', 'hello']);
+  fc.forget('P');
+  assert(!fs.existsSync(path.join(dir, 'P')), '删号清掉存的译文');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('译文存盘自检通过');
 }
 
 core().then(() => {
