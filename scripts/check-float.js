@@ -131,6 +131,27 @@ async function persisted() {
   fc.forget('P');
   assert(!fs.existsSync(path.join(dir, 'P')), '删号清掉存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
+  // 存哪：Windows 优先 D 盘，写不进去回到 C（userData）；Mac 不变；旧文件搬过去一次，不覆盖新位置已有的
+  const { pickDir, migrate } = require('../src/trstore');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trdir-'));
+  const oldDir = path.join(base, 'old');
+  const dDir = path.join(base, 'D', 'WAswitch', 'translations');
+  assert.strictEqual(pickDir(oldDir, { platform: 'darwin', preferred: dDir }), oldDir);
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', preferred: dDir }), dDir);
+  fs.writeFileSync(path.join(base, 'file'), '');
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', preferred: path.join(base, 'file', 'x') }), oldDir, '写不进去就用 C');
+  fs.mkdirSync(path.join(oldDir, 'A'), { recursive: true });
+  fs.writeFileSync(path.join(oldDir, 'A', 'c1.json'), '{"k":1}');
+  fs.writeFileSync(path.join(oldDir, 'A', 'c2.json'), '{"k":"old"}');
+  fs.mkdirSync(path.join(dDir, 'A'), { recursive: true });
+  fs.writeFileSync(path.join(dDir, 'A', 'c2.json'), '{"k":"new"}');
+  assert.strictEqual(migrate(oldDir, dDir), 1);
+  assert.strictEqual(fs.readFileSync(path.join(dDir, 'A', 'c1.json'), 'utf8'), '{"k":1}');
+  assert.strictEqual(fs.readFileSync(path.join(dDir, 'A', 'c2.json'), 'utf8'), '{"k":"new"}');
+  assert(!fs.existsSync(oldDir), '搬完删掉旧的');
+  assert.strictEqual(migrate(oldDir, dDir), 0);
+  assert.strictEqual(migrate(dDir, dDir), 0);
+  fs.rmSync(base, { recursive: true, force: true });
   console.log('译文存盘自检通过');
 }
 

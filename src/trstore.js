@@ -81,4 +81,40 @@ class TrStore {
   }
 }
 
-module.exports = { TrStore, textKey };
+// 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；没有 D 盘或写不进去才放 C（userData 里）。
+// 不放桌面。Mac 不变。opts 只给自检用。
+function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations' } = {}) {
+  if (platform !== 'win32') return fallback;
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    const probe = path.join(preferred, `.probe-${process.pid}`);
+    fs.writeFileSync(probe, '');
+    fs.rmSync(probe, { force: true });
+    return preferred;
+  } catch { return fallback; }
+}
+
+// 旧位置的译文搬到新位置（一次性；之后旧文件夹没了就什么都不做）。跨盘不能 rename，所以复制再删。
+// 新位置已有同名文件的不覆盖（新的为准）。
+function migrate(from, to) {
+  if (!from || !to || path.resolve(from) === path.resolve(to)) return 0;
+  let accs;
+  try { accs = fs.readdirSync(from, { withFileTypes: true }).filter((d) => d.isDirectory() && safe(d.name)); } catch { return 0; }
+  let n = 0;
+  for (const a of accs) {
+    try {
+      fs.mkdirSync(path.join(to, a.name), { recursive: true });
+      for (const f of fs.readdirSync(path.join(from, a.name))) {
+        if (!f.endsWith('.json')) continue;
+        const dst = path.join(to, a.name, f);
+        if (fs.existsSync(dst)) continue;
+        fs.copyFileSync(path.join(from, a.name, f), dst);
+        n++;
+      }
+    } catch (err) { console.warn(`译文搬家失败：${err.message}`); return n; } // 出错就留着旧的，下次再搬
+  }
+  try { fs.rmSync(from, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  return n;
+}
+
+module.exports = { TrStore, textKey, pickDir, migrate };
