@@ -2333,10 +2333,10 @@ async function applyTranslateNet() {
 }
 const trState = () => ({ config: translator.publicConfig(), modes: modeStore.list() });
 handleShell('tr:config', () => trState());
-handleShell('tr:provider:save', (data) => ({ ...translator.saveProvider(data), ...trState() }));
-handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); return trState(); });
+handleShell('tr:provider:save', (data) => { const r = translator.saveProvider(data); pushFloat(); return { ...r, ...trState() }; });
+handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); pushFloat(); return trState(); });
 handleShell('tr:fix:zhipu', () => ({ ...translator.addZhipuForFix(), ...trState() }));
-handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); return trState(); });
+handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); pushFloat(); return trState(); });
 handleShell('tr:role', (text) => ({ ...translator.setRolePrompt(text), ...trState() }));
 handleShell('tr:network', async (net) => {
   // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
@@ -2393,8 +2393,6 @@ handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, dr
   return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
 });
 handleShell('tr:cancel', () => userCancel());
-// 只在用户点“翻译剪贴板”时读一次，从不轮询
-handleShell('tr:clipboard', async () => { const t = await clipboard.readText(); return typeof t === 'string' ? t.slice(0, 4000) : ''; });
 // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
 const chatCustomer = (accId, title) => matchChatCustomer(customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
 handleShell('tr:chatlang', async (accountId) => {
@@ -2555,6 +2553,9 @@ function floatState() {
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
     providerName: primary ? primary.name : '',
+    primaryId: primary ? primary.id : '',
+    fallbackId: cfg.fallbackId || '',
+    providers: (cfg.providers || []).map((p) => ({ id: p.id, name: p.name, model: p.model || '' })), // 翻译页的“换模型”下拉，不带密钥
     engine: primary ? (primary.model || primary.name) : '',
     collapsed: cfg.float.collapsed,
     modes: {

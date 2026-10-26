@@ -53,7 +53,6 @@ contextBridge.exposeInMainWorld('wa', {
   trConsent: (ids) => ipcRenderer.invoke('tr:consent', ids),
   trRun: (data) => ipcRenderer.invoke('tr:run', data),
   trCancel: () => ipcRenderer.invoke('tr:cancel'),
-  trClipboard: () => ipcRenderer.invoke('tr:clipboard'),
   trChatLang: (accountId) => ipcRenderer.invoke('tr:chatlang', accountId),
   trLang: (accountId, lang) => ipcRenderer.invoke('tr:lang', { accountId, lang }),
   tmodeSave: (data) => ipcRenderer.invoke('tmode:save', data),
