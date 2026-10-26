@@ -219,7 +219,9 @@ class Translator {
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
-      rolePrompt: '' };
+      rolePrompt: '',
+      // 出厂默认服务商只放一次；用户删光了也不再放回来
+      seeded: false };
     let migrated = false;
     const moved = [];
     try {
@@ -246,6 +248,7 @@ class Translator {
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
           for (const key of ['accountAuto', 'autoConsent']) if (raw[key] && typeof raw[key] === 'object') for (const [k, v] of Object.entries(raw[key])) if (v === true) base[key][k] = true;
           if (DAILY_CAPS.includes(raw.dailyCap)) base.dailyCap = raw.dailyCap;
+          base.seeded = raw.seeded === true;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
@@ -261,11 +264,34 @@ class Translator {
       console.warn(`translate.json 无法读取（${e.message}），已备份`);
     }
     this.cfg = base;
+    if (!base.seeded && this.deps.seed !== false) { this.seedDefaults(base); migrated = true; }
     if (migrated) {
       for (const id of moved) delete base.consented[id]; // 地址换了，之前的同意不算数
       try { this.save(); } catch {}
     }
     return base;
+  }
+
+  // 出厂默认：翻译用混元 hy-mt2-plus，备用和纠错用智谱 glm-4-flash，用户只要填两个密钥。
+  // 已经有服务商的：只在备用、纠错没设时补上智谱，别的不动。
+  seedDefaults(c) {
+    c.seeded = true;
+    if (!c.providers.length) {
+      const mk = (preset) => ({ id: crypto.randomUUID(), preset, name: PRESETS[preset].name, baseUrl: PRESETS[preset].baseUrl, model: PRESETS[preset].model,
+        keyEnc: '', keyTail: '', updatedAt: 0, thinking: defaultThinking(preset) });
+      const hy = mk('hunyuan');
+      const zp = mk('zhipu');
+      c.providers.push(hy, zp);
+      c.primaryId = hy.id;
+      c.fallbackId = zp.id;
+      c.fixId = zp.id;
+      return;
+    }
+    const primary = c.providers.find((p) => p.id === c.primaryId);
+    const zp = c.providers.find((p) => p.preset === 'zhipu' && p.model === 'glm-4-flash');
+    if (!primary || !zp || !isMtModel(primary.model)) return;
+    if (!c.fallbackId) c.fallbackId = zp.id;
+    if (!c.fixId) c.fixId = zp.id;
   }
 
   save() {
