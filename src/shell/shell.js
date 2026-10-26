@@ -26,6 +26,7 @@ const ICONS = {
   right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   update: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.9-3.9L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.9L21 15"/><path d="M21 20v-5h-5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   copy: '<rect x="4" y="8" width="12" height="12" rx="2.5"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
@@ -302,8 +303,27 @@ function renderSide() {
   $side.append(h('div', { class: 'foot' },
     h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17),
       updateReady() ? h('span', { class: 'dot new', 'aria-hidden': 'true' }) : null),
+    s.settings?.showUpdateButton ? checkUpdateBtn() : null,
     bell));
   document.body.classList.toggle('mac', mac);
+}
+
+// 侧栏底部的“检查更新”按钮（设置里打开才显示）：点了只是立刻检查一次，下载和安装照旧走更新卡片
+function checkUpdateBtn() {
+  const u = s.update;
+  const st = u ? u.status : 'dev';
+  const busy = st === 'checking' || st === 'downloading';
+  const title = {
+    dev: '检查更新 · 开发版不检查更新',
+    off: '检查更新 · 这种安装方式不能自动更新',
+    checking: '正在检查更新…',
+    downloading: `正在下载 ${u && u.version}`,
+    downloaded: `新版本 ${u && u.version} 已就绪`,
+    none: '检查更新 · 已是最新版本',
+    error: '检查更新 · 上次没检查成功',
+  }[st] || '检查更新';
+  return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
+    onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheck(); } }, icon('sync', 16));
 }
 
 // ---------- 侧栏里的更新提示 ----------
@@ -1297,6 +1317,8 @@ function settingsPage() {
           sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null,
         setRow('侧栏只显示图标', '给聊天留更多空间。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
+        setRow('显示检查更新按钮', '在侧栏底部设置和通知中间，点一下立刻检查新版本。',
+          sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
         setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),

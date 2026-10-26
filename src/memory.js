@@ -24,6 +24,7 @@ const DEFAULTS = {
   closeToTray: true, // 关闭窗口时缩到托盘
   openAtLogin: false, // 开机自动启动（启动后缩在托盘）
   sidebarCollapsed: false, // 侧栏只显示图标
+  showUpdateButton: false, // 侧栏底部显示“检查更新”按钮
   recycleLastMB: 1024, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
   capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
@@ -72,6 +73,7 @@ function loadSettings() {
       closeToTray: bool('closeToTray'),
       openAtLogin: bool('openAtLogin'),
       sidebarCollapsed: bool('sidebarCollapsed'),
+      showUpdateButton: bool('showUpdateButton'),
       recycleLastMB: nearestRecycle(raw.recycleLastMB) || DEFAULTS.recycleLastMB,
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
       capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,

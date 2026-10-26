@@ -1825,7 +1825,7 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed'].includes(key)) {
+  } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
