@@ -23,7 +23,7 @@ const ss={isEncryptionAvailable:()=>true,encryptString:(t)=>Buffer.from('E'+t),d
 let calls=[];
 let behave=[];
 const fake={fetch:async(url,opt)=>{calls.push({url,opt});const b=behave.shift();if(b==='net')throw new Error('x');if(b==='hang')return new Promise((res,rej)=>opt.signal.addEventListener('abort',()=>rej(new Error('ab'))));const st=b&&b.status||200;const body=b&&b.body||JSON.stringify({choices:[{message:{content:'Hola'}}]});return {ok:st<300,status:st,body:null,text:async()=>body};}};
-const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
+const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
 (async()=>{
   let r=tr.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y',key:'sk-secret1234'});
   assert(r.ok,JSON.stringify(r));
@@ -54,6 +54,19 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake});
   q=await tr.translate({text:'你好',mode}); assert(!q.error.includes('secret1234'), q.error);
   behave=[{status:503},{status:200}]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert(q.fallback);
+  // 429 太忙：先原地重试一次，成功就不换备用
+  const busy={status:429,body:'{"error":{"message":"The model service is currently busy or has reached its serving capacity limit."}}'};
+  behave=[busy,null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(!q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
+  // 还忙就换备用
+  behave=[busy,busy,null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===3, JSON.stringify(q));
+  // 全都忙：中文提示，不带英文原话
+  behave=[busy,busy,busy,busy]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert(!/busy|capacity/i.test(q.error) && /忙/.test(q.error), q.error);
+  // 429 但说的是余额不足：不重试
+  behave=[{status:429,body:'{"error":{"message":"余额不足"}}'}]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,1);
   // cancel
   behave=['hang']; calls=[];
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);

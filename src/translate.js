@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
+const RETRY_MS = 1500; // 服务商太忙时，等多久再试一次
 const MAX_PROVIDERS = 10;
 const SEED_VER = 2; // 2：老用户没有智谱的也补上
 const MAX_CHAT_LANGS = 1000;
@@ -541,6 +542,10 @@ class Translator {
     if (!res.ok) {
       const err = statusError(res.status);
       const detail = providerDetail(text, key);
+      // 429 多半是“服务繁忙/限流”（混元 hy-mt2-plus 常见），不是没钱：不带英文原话，交给上层重试和换备用
+      if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
+        throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
+      }
       throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
     }
     let out = '';
@@ -581,7 +586,19 @@ class Translator {
         controller.signal.addEventListener('abort', onCancel);
         const timer = setTimeout(() => attempt.abort('timeout'), TIMEOUT_MS);
         try {
-          const out = await this.call(p, messagesFor(p), { temperature, maxTokens, signal: attempt.signal });
+          let out;
+          try {
+            out = await this.call(p, messagesFor(p), { temperature, maxTokens, signal: attempt.signal });
+          } catch (e) {
+            // 服务商太忙：等一下再试一次，还忙就换备用
+            if (!(e && e.kind === 'overload') || attempt.signal.aborted) throw e;
+            await new Promise((ok) => {
+              const t = setTimeout(ok, this.deps.retryMs ?? RETRY_MS);
+              attempt.signal.addEventListener('abort', () => { clearTimeout(t); ok(); }, { once: true });
+            });
+            if (attempt.signal.aborted) throw { kind: attempt.signal.reason === 'timeout' ? 'timeout' : 'cancel', text: attempt.signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' };
+            out = await this.call(p, messagesFor(p), { temperature, maxTokens, signal: attempt.signal });
+          }
           this.stats.ok += 1;
           return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
         } catch (e) {
@@ -590,9 +607,10 @@ class Translator {
           clearTimeout(timer);
           controller.signal.removeEventListener('abort', onCancel);
         }
-        // 只有网络、超时和服务商 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
-        if (controller.signal.aborted || !['network', 'timeout', 'server'].includes(lastErr.kind)) break;
+        // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
+        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
       }
+      if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
       return { error: lastErr.text, kind: lastErr.kind };
