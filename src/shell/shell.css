@@ -418,7 +418,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-fold-text { display: block; font-size: 12px; line-height: 15px; color: var(--muted); white-space: nowrap; overflow: hidden; filter: blur(3.5px); opacity: .75; user-select: none; }
 .dk-fold-glass::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(255,255,255,.35), rgba(255,255,255,.15) 60%, rgba(240,242,245,.9)); }
 .dk-fold-btn { flex: none; position: relative; display: inline-block; width: 16px; height: 15px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; vertical-align: -2px; }
-.dk-fold-btn::before { content: ''; position: absolute; left: 6px; top: 4px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); transition: transform .15s; }
+.dk-fold-btn::before { content: ''; position: absolute; left: 6px; top: 4px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
 .dk-fold-btn[aria-expanded="true"]::before { left: 5px; top: 3px; transform: rotate(-45deg); }
 .dk-fold-btn:hover { color: var(--text); background: rgba(0,0,0,.05); }
 .dk-tr { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
@@ -526,3 +526,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .cfm-box { animation: fx-pop var(--fx) var(--fx-ease) backwards; }
 .cfm.out { pointer-events: none; animation: fx-out var(--fx-fast) ease-in forwards; }
 .cfm.out .cfm-box { animation: fx-pop-out var(--fx-fast) ease-in forwards; }
+/* 原文折叠：箭头转 90°，展开的原文从上面淡入 */
+@keyframes fx-fold-open { from { transform: rotate(45deg); } }
+@keyframes fx-fold-close { from { transform: rotate(-45deg); } }
+@keyframes fx-unfold { from { opacity: 0; transform: translateY(-3px); } }
+.dk-fold-btn.fx-fold-open::before { animation: fx-fold-open var(--fx) var(--fx-ease) backwards; }
+.dk-fold-btn.fx-fold-close::before { animation: fx-fold-close var(--fx) var(--fx-ease) backwards; }
+.fx-unfold { animation: fx-unfold var(--fx) var(--fx-ease) backwards; }
