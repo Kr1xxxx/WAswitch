@@ -2956,6 +2956,8 @@ handleShell('editor:load', (id) => {
     // 新账号：还没有主号时默认就是主号
     primary: acc ? acc.primary : !accounts.some((a) => a.primary),
     primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
+    // 别的直连号（编辑页选直连时提醒一句同一出口 IP）
+    otherDirect: accounts.filter((a) => a.id !== id && !a.proxy).map((a) => a.name),
     liteAvailable: canEncrypt(safeStorage),
     platform: process.platform,
   };
@@ -3021,23 +3023,8 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
     }
   }
 
-  // 后台分来的号第一次保存：填了代理必须测试通过；不填代理要员工明确同意直连
-  if (acc && acc.teamNeedsProxy && mode === 'web') {
-    if (parsed) {
-      if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
-    } else {
-      const { response } = await dialog.showMessageBox(win, {
-        type: 'warning',
-        buttons: ['取消', '确定直连'],
-        defaultId: 0,
-        cancelId: 0,
-        title: '不用代理？',
-        message: '这个号是管理员分给你的，确定不用代理、直接用这台电脑的网络连 WhatsApp 吗？',
-        detail: '直连会让 WhatsApp 看到这台电脑的真实 IP。几个号都直连，在 WhatsApp 看来就是同一个地方。一般应该填管理员给你的代理。',
-      });
-      if (response !== 1) return { error: '没有保存。请填好代理并测试通过后再保存。' };
-    }
-  }
+  // 后台分来的号第一次保存：填了代理必须测试通过；不填就是直连（编辑页有一行风险提示，不拦）
+  if (acc && acc.teamNeedsProxy && mode === 'web' && parsed && !testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
 
   // 密码：新填的优先；地址里带的其次；都没有则保留原来的（地址变了用户名也变了就清掉）
   let encPassword = acc ? acc.proxyPassword : '';
@@ -3122,16 +3109,6 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
     refresh();
   }
   notifier.refresh();
-  // 第二个直连号：提醒，不拦。几个直连号在 WhatsApp 看来是同一个 IP、同一个地方
-  const otherDirect = !parsed && accounts.filter((a) => a.id !== acc.id && !a.proxy).map((a) => `「${a.name}」`);
-  if (otherDirect && otherDirect.length) {
-    dialog.showMessageBox(win, {
-      type: 'warning',
-      title: '这个号和别的号共用本机真实 IP',
-      message: `「${name}」和${otherDirect.join('、')}都是直连`,
-      detail: '直连的号都用这台电脑的真实 IP 上网，在 WhatsApp 看来它们在同一个地方，容易被关联。建议在 Clash 里给每个号开一个端口，在编辑里填上代理。',
-    }).catch(() => {});
-  }
   if (remindCheck) {
     dialog.showMessageBox(win, {
       type: 'info',
@@ -3151,7 +3128,8 @@ handleShell('check:run', async () => {
   const byPort = new Map();
   const byIp = new Map();
   const direct = accounts.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
-  if (direct.length > 1) items.push({ level: 'bad', title: `${direct.join('、')} 共用本机真实 IP`, detail: '这几个号都是直连，在 WhatsApp 看来在同一个地方。建议每个号在 Clash 里开一个端口，填上代理。' });
+  // 多个号直连是允许的，只提醒一句（黄色，不算出错）
+  if (direct.length > 1) items.push({ level: 'warn', title: `${direct.join('、')} 都是直连`, detail: '这几个号用同一个出口 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
   const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   for (const acc of accounts) {
     const p = proxy.parse(acc.proxy);
