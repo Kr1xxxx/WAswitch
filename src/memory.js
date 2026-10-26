@@ -4,11 +4,12 @@
 //    在后台刷新一次。刷新只要几秒，期间收到的消息会从手机同步过来，不会丢。
 // 2. 后台降级：不在看的账号设为“隐藏”，Chromium 会降低它的优先级、节流定时器、释放画面缓存。
 //    WhatsApp 的消息是服务器推送的，节流不会耽误收消息。
-// 1b. 总上限：所有账号加起来超过上限（默认 2 GB）时，从占用最大的后台账号开始刷新，直到降回上限以内。
+// 1b. 总上限：所有账号加起来超过上限（默认 4 GB）时，从占用最大的后台账号开始刷新，直到降回上限以内。
 //     同样不碰正在看的账号、有未读的账号和正在加载的账号。
-//     每个账号打开或刷新 5 分钟后记一个“底数”，只有比底数涨了 250 MB 以上才刷新；
+//     每个账号打开或刷新 5 分钟后记一个“底数”，只有比底数涨了 400 MB 以上才刷新；
 //     所有账号底数加起来就超过上限时（账号太多），不再为上限刷新，只在内存页提示调高上限。
-//     同一个号至少隔 60 分钟，全部加起来每小时最多 6 次，不会反复重连。
+//     要在后台待满 30 分钟，同一个号至少隔 60 分钟，全部加起来每小时最多 3 次，不会反复重连。
+// 默认值故意放宽（2026-10 起）：宁可多占一点内存，也不要频繁刷新带来意想不到的问题。
 // 1c. 立即清理：用户手动点，把所有没有未读的后台账号刷新一遍，不退出登录、不丢消息。
 // 3. 省内存模式：关闭显卡加速，整体再省一些内存，代价是动画没那么顺滑。需要重启生效。
 // 4. 统计每个账号占用的内存，显示在托盘菜单里。只统计主页面进程，是近似值，略低于实际。
@@ -19,28 +20,29 @@ const fs = require('fs');
 // settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
   lowMemoryMode: false, // 关闭显卡加速
-  recycleMB: 800, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
+  recycleMB: 1500, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
   closeToTray: true, // 关闭窗口时缩到托盘
   openAtLogin: false, // 开机自动启动（启动后缩在托盘）
   sidebarCollapsed: false, // 侧栏只显示图标
-  recycleLastMB: 800, // 关掉自动回收后再打开时，用上次选的值
+  recycleLastMB: 1500, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
-  capMB: 2048, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
+  capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
+  memDefaults: 2, // 第几版内存默认值；老设置里没有这个字段时，把还停在旧默认值的项改成新默认值
   lockMinutes: 5, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
 };
-const RECYCLE_CHOICES = [600, 800, 1000, 1500];
-const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096];
+const RECYCLE_CHOICES = [600, 800, 1000, 1500, 2000];
+const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096, 6144];
 const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
 const CHECK_EVERY_MS = 60 * 1000;
-const MIN_RECYCLE_GAP_MS = 30 * 60 * 1000; // 同一个账号两次刷新至少间隔 30 分钟
-const BACKGROUND_FOR_MS = 5 * 60 * 1000; // 至少在后台待了 5 分钟才回收
+const MIN_RECYCLE_GAP_MS = 60 * 60 * 1000; // 同一个账号两次刷新至少间隔 60 分钟
+const BACKGROUND_FOR_MS = 30 * 60 * 1000; // 至少在后台待了 30 分钟才回收
 const CAP_GAP_MS = 60 * 60 * 1000; // 超总上限时，同一个账号两次刷新至少隔 60 分钟
-const CAP_BACKGROUND_MS = 2 * 60 * 1000; // 超总上限时，在后台待了 2 分钟就可以回收
-const CAP_MAX_PER_CHECK = 2; // 每分钟最多刷新 2 个，免得一下子全部重新加载
-const CAP_MAX_PER_HOUR = 6; // 因为总上限刷新的，全部账号加起来每小时最多 6 次
+const CAP_BACKGROUND_MS = 30 * 60 * 1000; // 超总上限时，也要在后台待满 30 分钟才回收
+const CAP_MAX_PER_CHECK = 1; // 每分钟最多刷新 1 个，免得一下子全部重新加载
+const CAP_MAX_PER_HOUR = 3; // 因为总上限刷新的，全部账号加起来每小时最多 3 次
 const FRESH_PAGE_MB = 300; // 还没量到时，假定刚打开的 WhatsApp 网页占这么多
 const BASELINE_AFTER_MS = 5 * 60 * 1000; // 打开或刷新 5 分钟后量一次，作为这个账号的“底数”
-const GROWTH_MB = 250; // 比底数多出这么多才值得刷新，否则刷了也省不下来
+const GROWTH_MB = 400; // 比底数多出这么多才值得刷新，否则刷了也省不下来
 const MANUAL_GROWTH_MB = 100; // 手动清理时，比底数多出这么多才刷新
 const MANUAL_BACKGROUND_MS = 30 * 1000; // 手动清理时，刚切走 30 秒内的账号不动（可能有没打完的字或正在上传）
 const MANUAL_GAP_MS = 2500; // 手动清理时，账号之间隔一会儿再刷新，避免卡顿
@@ -58,6 +60,12 @@ function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     const bool = (k) => (typeof raw[k] === 'boolean' ? raw[k] : DEFAULTS[k]);
+    // 老版本的默认值（800 MB 回收线、2 GB 总上限）压得太紧：还停在旧默认值的改成新默认值，用户自己选过别的值不动
+    if (raw.memDefaults !== DEFAULTS.memDefaults) {
+      if (raw.recycleMB === 800) raw.recycleMB = DEFAULTS.recycleMB;
+      if (raw.recycleLastMB === 800) raw.recycleLastMB = DEFAULTS.recycleLastMB;
+      if (raw.capMB === 2048) raw.capMB = DEFAULTS.capMB;
+    }
     return {
       lowMemoryMode: bool('lowMemoryMode'),
       recycleMB: nearestRecycle(raw.recycleMB),
@@ -68,6 +76,7 @@ function loadSettings() {
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
       capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,
       lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
+      memDefaults: DEFAULTS.memDefaults,
     };
   } catch {
     return { ...DEFAULTS };
