@@ -1,7 +1,7 @@
 // 收到的消息的译文永久存在本机磁盘上（shen 2026-10-26：切回对话、重启软件都直接显示，不再调模型、不耗额度）。
 // 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, edited, fixed, at } }。
 // 不存原文和号码，只存原文的 hash 和译文。按原文认（同一对话里同样的话只翻一次），消息编号变了也认得出。
-// 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时整个文件夹删掉。
+// 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时不删（shen 2026-10-26）。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -74,10 +74,13 @@ class TrStore {
     for (const [k, e] of this.mem) if (e.dirty) this.write(k, e);
   }
 
+  // 删号：磁盘上的译文保留，只把内存里的写盘后放掉
   forgetAccount(acc) {
-    for (const k of [...this.mem.keys()]) if (k.startsWith(`${acc}/`)) this.mem.delete(k);
-    if (!safe(acc)) return;
-    try { fs.rmSync(path.join(this.dir, acc), { recursive: true, force: true }); } catch { /* 忽略 */ }
+    for (const [k, e] of [...this.mem]) {
+      if (!k.startsWith(`${acc}/`)) continue;
+      if (e.dirty) this.write(k, e);
+      this.mem.delete(k);
+    }
   }
 }
 
