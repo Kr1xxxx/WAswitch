@@ -705,7 +705,7 @@ function trProviderForm() {
   const e = trEdit;
   const presets = tr.cfg.presets;
   const preset = h('select', { 'aria-label': '服务商' }, presets.map((p) => h('option', { value: p.id }, p.name)));
-  preset.value = e.preset || 'hunyuan';
+  preset.value = e.preset || 'zhipu';
   const name = h('input', { value: e.name || '', maxlength: '40', placeholder: '显示名称（可不填）' });
   const base = h('input', { value: e.baseUrl || '', placeholder: 'https://…/v1' });
   const modelIn = h('input', { value: e.model || '', placeholder: '模型名，例如 gpt-4o-mini' });
@@ -738,14 +738,17 @@ function trProviderForm() {
   for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
   for (const el of [name, base, key]) el.style.width = '260px';
   const isMt = /^hy-mt/i.test(model.value);
+  // DeepL 是机器翻译：没有地址、模型、深度思考可选，换类型时重画表单
+  const deepl = preset.value === 'deepl';
+  preset.addEventListener('change', () => { if (deepl !== (preset.value === 'deepl')) render(true); });
   return h('div', { class: 'box tr-form' },
     h('b', null, e.id ? '修改服务商' : '添加服务商'),
-    setRow('类型', '选好会自动填地址和模型。', preset),
+    setRow('类型', deepl ? 'DeepL 只做翻译，不会按“模式”改语气，也不会纠错。适合当备用。' : '选好会自动填地址和模型。', preset),
     setRow('名称', '可不填。', name),
-    setRow('接口地址', '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。', base),
-    setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', '腾讯混元填腾讯云 TokenHub 的密钥。会加密保存。', key),
-    setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '翻译用不上，选“禁用”更快。', think),
+    deepl ? null : setRow('接口地址', '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。', base),
+    deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
+    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : '腾讯混元填腾讯云 TokenHub 的密钥。会加密保存。', key),
+    deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '翻译用不上，选“禁用”更快。', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
         const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value });
@@ -801,7 +804,7 @@ function translatePage(page) {
     if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
     apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
   } },
-    h('option', { value: '' }, '用默认的'), c.providers.map((p) => h('option', { value: p.id }, `${p.name}（${p.model}）`)),
+    h('option', { value: '' }, '用默认的'), c.providers.map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
@@ -817,7 +820,7 @@ function translatePage(page) {
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
         p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
-      h('span', { class: 'hint' }, `${p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
+      h('span', { class: 'hint' }, `${p.preset === 'deepl' ? '机器翻译' : p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
       h('span', { class: 'hint' }, trTestRes[p.id] || ''),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         h('button', { class: 'pn-btn', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试'),
@@ -825,11 +828,11 @@ function translatePage(page) {
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
         h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除服务商「${delName(p.name)}」？`, detail: `保存的密钥也会一起删掉。${p.id === c.primaryId ? '它是现在的默认服务商，删了以后要重新选一个。' : ''}` })) return; apply(await window.wa.trProviderDelete(p.id)); } }, '删除'))))
       : h('span', { class: 'hint' }, '还没有。')),
-    trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'hunyuan' }; trSay = ''; render(true); } }, '+ 添加服务商')),
+    trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'zhipu' }; trSay = ''; render(true); } }, '+ 添加服务商')),
     c.providers.length > 1 ? setRow('备用服务商', '默认的连不上或出错时，自动换这个再试一次。', fb) : null,
-    c.providers.length ? setRow('纠错服务商', '点“纠错”时用这个。混元翻译模型不会纠错，建议用智谱 glm-4-flash。',
+    c.providers.length ? setRow('纠错服务商', '点“纠错”时用这个。混元翻译模型和 DeepL 不会纠错，建议用智谱 glm-4-flash。',
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
-        fixP && /^hy-mt/i.test(fixP.model) ? h('span', { class: 'hint' }, '这个模型不会纠错，只会重翻一遍。') : null)) : null,
+        fixP && (/^hy-mt/i.test(fixP.model) || fixP.preset === 'deepl') ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
     setRow('翻译的网络', '和 WhatsApp 账号分开。OpenRouter 在国内一般要选代理。',
       h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
         h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),

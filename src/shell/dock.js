@@ -116,7 +116,7 @@ async function dockModel(id) {
   if (!r || !r.config) return dockSay('没换成，去设置 › 翻译里看一下', true);
   if (typeof tr !== 'undefined') { tr.cfg = r.config; tr.modes = r.modes; }
   const p = st.providers.find((x) => x.id === id);
-  dockSay(p ? `翻译模型换成了 ${p.name}（${p.model || p.name}）` : '');
+  dockSay(p ? `翻译模型换成了 ${p.model ? `${p.name}（${p.model}）` : p.name}` : '');
 }
 
 // ---- 界面 ----

@@ -10,7 +10,7 @@ const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
 const RETRY_MS = 1500; // 服务商太忙时，等多久再试一次
 const MAX_PROVIDERS = 10;
-const SEED_VER = 2; // 2：老用户没有智谱的也补上
+const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成智谱，DeepL 当备用（只改还在用出厂设置的）
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
@@ -25,6 +25,9 @@ const PRESETS = {
   // 混元只能选这两个翻译模型（shen 2026-10-26），走腾讯云 TokenHub 的 OpenAI 兼容接口
   hunyuan: { name: '腾讯混元', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-mt2-plus', models: ['hy-mt2-plus', 'hy-mt2-lite'] },
   zhipu: { name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', models: ['glm-4-flash'] },
+  // DeepL 是机器翻译，不是大模型：走它自己的接口，没有模型、模式、深度思考，不会纠错。
+  // 免费版密钥以 :fx 结尾，走 api-free.deepl.com；其他走 api.deepl.com（地址按密钥自动选，这里的地址只用来显示）
+  deepl: { name: 'DeepL', baseUrl: 'https://api.deepl.com/v2', model: '', fixedUrl: true },
   openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: '' },
   custom: { name: '自定义', baseUrl: '', model: '' },
 };
@@ -99,6 +102,28 @@ function contextBlock(context) {
     lines.unshift(`${m.out ? '我' : '客户'}：${escTags(t)}`);
   }
   return lines.length ? `<context>\n${lines.join('\n')}\n</context>\n\n` : '';
+}
+
+// DeepL：中文语言名 -> DeepL 语言代码。目标语言要带地区的用带地区的；DeepL 不支持的没列（会提示换服务商）
+const DEEPL_LANGS = {
+  英语: ['EN', 'EN-US'], 西班牙语: ['ES', 'ES'], 葡萄牙语: ['PT', 'PT-PT'], 法语: ['FR', 'FR'], 德语: ['DE', 'DE'], 意大利语: ['IT', 'IT'],
+  俄语: ['RU', 'RU'], 阿拉伯语: ['AR', 'AR'], 土耳其语: ['TR', 'TR'], 印尼语: ['ID', 'ID'], 泰语: ['TH', 'TH'], 越南语: ['VI', 'VI'],
+  日语: ['JA', 'JA'], 韩语: ['KO', 'KO'], 中文: ['ZH', 'ZH-HANS'],
+};
+const deeplUrl = (key) => (/:fx$/i.test(key) ? 'https://api-free.deepl.com/v2/translate' : 'https://api.deepl.com/v2/translate');
+// 给 DeepL 的上下文：不用标签，直接最近几条消息的原文（DeepL 只拿它理解，不翻译、不计费）
+function deeplContext(context) {
+  if (!Array.isArray(context)) return '';
+  const out = [];
+  let total = 0;
+  for (const m of context.slice(-CONTEXT_MAX_ITEMS).reverse()) {
+    if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
+    const t = m.text.replace(/\s+/g, ' ').trim().slice(0, CONTEXT_ITEM_CHARS);
+    if (total + t.length > CONTEXT_MAX_CHARS) break;
+    total += t.length;
+    out.unshift(t);
+  }
+  return out.join('\n');
 }
 
 // 混元的旧地址（换成 TokenHub 之前）
@@ -255,6 +280,7 @@ class Translator {
           for (const p of base.providers) {
             const fixed = PRESETS[p.preset] && PRESETS[p.preset].models;
             if (fixed && !fixed.includes(p.model)) { p.model = PRESETS[p.preset].model; migrated = true; }
+            if (p.preset === 'deepl') { p.baseUrl = PRESETS.deepl.baseUrl; p.model = ''; p.thinking = ''; }
             if (p.preset !== 'hunyuan') continue;
             if (p.baseUrl === OLD_HUNYUAN_URL) { p.baseUrl = PRESETS.hunyuan.baseUrl; p.keyEnc = ''; p.keyTail = ''; migrated = true; }
           }
@@ -292,24 +318,47 @@ class Translator {
     this.cfg = base;
     if (this.deps.seed !== false) {
       if (!base.seeded) { this.seedDefaults(base); migrated = true; }
-      else if ((base.seedVer || 0) < SEED_VER) { base.seedVer = SEED_VER; this.ensureZhipu(base); migrated = true; }
+      else if ((base.seedVer || 0) < SEED_VER) {
+        if ((base.seedVer || 0) < 2) this.ensureZhipu(base);
+        this.switchToZhipuDeepl(base);
+        base.seedVer = SEED_VER;
+        migrated = true;
+      }
     }
     if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
     if (migrated) { try { this.save(); } catch {} }
     return base;
   }
 
-  // 出厂默认：翻译用混元 hy-mt2-plus，备用和纠错用智谱 glm-4-flash，用户只要填两个密钥。
+  // 出厂默认（shen 2026-10-26）：翻译和纠错用智谱 glm-4-flash，太忙时换 DeepL。用户只要填两个密钥。混元还能自己加。
   // 已经有服务商的老用户：没有智谱就补一个（密钥空着），备用、纠错没设的设成智谱，别的不动。
   seedDefaults(c) {
     c.seeded = true;
     c.seedVer = SEED_VER;
     if (!c.providers.length) {
-      const hy = newPreset('hunyuan');
-      c.providers.push(hy);
-      c.primaryId = hy.id;
+      const zp = newPreset('zhipu');
+      const dl = newPreset('deepl');
+      c.providers.push(zp, dl);
+      Object.assign(c, { primaryId: zp.id, fallbackId: dl.id, fixId: zp.id });
+      return;
     }
     this.ensureZhipu(c);
+  }
+
+  // 0.5.4 升级：还是出厂那套（默认混元 hy-mt2-plus、备用和纠错都是同一个智谱 glm-4-flash）的，
+  // 改成默认智谱、备用 DeepL（没有就加一个，密钥空着）。混元留在列表里。用户自己改过的不动。只跑一次。
+  switchToZhipuDeepl(c) {
+    const pri = c.providers.find((p) => p.id === c.primaryId);
+    const zp = c.providers.find((p) => p.id === c.fallbackId);
+    if (!pri || pri.preset !== 'hunyuan' || pri.model !== 'hy-mt2-plus') return;
+    if (!zp || zp.preset !== 'zhipu' || zp.model !== 'glm-4-flash' || c.fixId !== zp.id) return;
+    let dl = c.providers.find((p) => p.preset === 'deepl');
+    if (!dl) {
+      if (c.providers.length >= MAX_PROVIDERS) return;
+      dl = newPreset('deepl');
+      c.providers.push(dl);
+    }
+    Object.assign(c, { primaryId: zp.id, fallbackId: dl.id });
   }
 
   // 补上智谱 glm-4-flash，并在备用、纠错没设时用它。只跑一次：之后用户删了不再放回来。
@@ -371,10 +420,11 @@ class Translator {
     const c = this.load();
     if (!data || typeof data !== 'object') return { error: '数据不对' };
     const preset = PRESETS[data.preset] ? data.preset : 'custom';
-    const chk = checkBaseUrl(data.baseUrl);
+    const deepl = preset === 'deepl';
+    const chk = checkBaseUrl(deepl ? PRESETS.deepl.baseUrl : data.baseUrl);
     if (chk.error) return { error: chk.error };
-    const model = line(data.model, 120);
-    if (!model) return { error: '请填模型名' };
+    const model = deepl ? '' : line(data.model, 120);
+    if (!model && !deepl) return { error: '请填模型名' };
     if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join('、')}` };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
     if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
@@ -385,7 +435,7 @@ class Translator {
       c.providers.push(p);
     }
     const oldUrl = p.baseUrl;
-    const thinking = THINKING.includes(data.thinking) ? data.thinking : defaultThinking(preset);
+    const thinking = deepl ? '' : THINKING.includes(data.thinking) ? data.thinking : defaultThinking(preset);
     Object.assign(p, { preset, name: line(data.name, 40) || PRESETS[preset].name, baseUrl: chk.url, model, thinking, updatedAt: Date.now() });
     // 地址变了：之前的同意不再算数，密钥也不能带去新地址
     if (oldUrl && oldUrl !== chk.url && !newKey) { p.keyEnc = ''; p.keyTail = ''; }
@@ -506,6 +556,53 @@ class Translator {
     return false;
   }
 
+  // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }
+  async callDeepl(p, { text, target, source, context }, signal) {
+    const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
+    if (!key) throw { kind: 'auth', text: '还没填密钥' };
+    const to = DEEPL_LANGS[target];
+    if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
+    const body = { text: [text], target_lang: to[1], preserve_formatting: true };
+    if (DEEPL_LANGS[source]) body.source_lang = DEEPL_LANGS[source][0];
+    const ctx = deeplContext(context);
+    if (ctx) body.context = ctx;
+    const res = await this.post(deeplUrl(key), { 'Content-Type': 'application/json', Authorization: `DeepL-Auth-Key ${key}` }, body, false, signal);
+    const raw = res.text;
+    if (!res.ok) {
+      const detail = providerDetail(raw, key);
+      if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
+      if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
+      if (res.status === 403) throw { kind: 'auth', text: 'DeepL 密钥不对（免费版密钥以 :fx 结尾）', status: 403 };
+      const err = statusError(res.status);
+      throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
+    }
+    let out = '';
+    try {
+      const j = JSON.parse(raw);
+      out = j && Array.isArray(j.translations) && j.translations[0] && j.translations[0].text;
+    } catch { out = ''; }
+    if (typeof out !== 'string' || !out.trim()) throw { kind: 'empty', text: '服务商没有返回译文' };
+    return out.trim();
+  }
+
+  // 发请求并读回文字：{ ok, status, text }；连不上、超时、取消、太大都抛出 { kind, text }
+  async post(url, headers, body, local, signal) {
+    const ses = this.deps.sessionFor(local);
+    const stopped = () => ({ kind: signal.reason === 'timeout' ? 'timeout' : 'cancel', text: signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' });
+    let res;
+    try {
+      res = await ses.fetch(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal });
+    } catch (e) {
+      if (signal.aborted) throw stopped();
+      throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）' };
+    }
+    try { return { ok: res.ok, status: res.status, text: await readCapped(res) }; } catch (e) {
+      if (e && e.kind === 'big') throw { kind: 'big', text: '服务商返回的内容太大，已丢弃' };
+      if (signal.aborted) throw stopped();
+      throw { kind: 'network', text: '连接中断' };
+    }
+  }
+
   // 一次调用；失败时抛出 { kind, text }
   async call(p, messages, { temperature, maxTokens, signal }) {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
@@ -525,20 +622,8 @@ class Translator {
       if (p.preset === 'openrouter') body.reasoning = { enabled: think === 'enabled' };
       else body.thinking = { type: think };
     }
-    const ses = this.deps.sessionFor(chk.local);
-    let res;
-    try {
-      res = await ses.fetch(`${chk.url}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal });
-    } catch (e) {
-      if (signal.aborted) throw { kind: signal.reason === 'timeout' ? 'timeout' : 'cancel', text: signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' };
-      throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）' };
-    }
-    let text;
-    try { text = await readCapped(res); } catch (e) {
-      if (e && e.kind === 'big') throw { kind: 'big', text: '服务商返回的内容太大，已丢弃' };
-      if (signal.aborted) throw { kind: signal.reason === 'timeout' ? 'timeout' : 'cancel', text: signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' };
-      throw { kind: 'network', text: '连接中断' };
-    }
+    const res = await this.post(`${chk.url}/chat/completions`, headers, body, chk.local, signal);
+    const { text } = res;
     if (!res.ok) {
       const err = statusError(res.status);
       const detail = providerDetail(text, key);
@@ -569,6 +654,9 @@ class Translator {
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
     const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, c.rolePrompt);
+    // DeepL 只管翻译：没设目标语言时，“收到”的模式翻成中文，其他翻成英语
+    const deeplReq = { text, target: langs.target || (mode.direction === 'in' ? '中文' : '英语'), source: langs.source, context };
+    const once = (p, signal) => (p.preset === 'deepl' ? this.callDeepl(p, deeplReq, signal) : this.call(p, messagesFor(p), { temperature, maxTokens, signal }));
     const temperature = Number.isFinite(mode.temperature) ? Math.min(1.5, Math.max(0, mode.temperature)) : 0.3;
     const maxTokens = Math.min(8000, Math.max(256, Math.ceil(text.length * 3)));
     const controller = new AbortController(); // 用户点“取消”
@@ -588,7 +676,7 @@ class Translator {
         try {
           let out;
           try {
-            out = await this.call(p, messagesFor(p), { temperature, maxTokens, signal: attempt.signal });
+            out = await once(p, attempt.signal);
           } catch (e) {
             // 服务商太忙：等一下再试一次，还忙就换备用
             if (!(e && e.kind === 'overload') || attempt.signal.aborted) throw e;
@@ -597,7 +685,7 @@ class Translator {
               attempt.signal.addEventListener('abort', () => { clearTimeout(t); ok(); }, { once: true });
             });
             if (attempt.signal.aborted) throw { kind: attempt.signal.reason === 'timeout' ? 'timeout' : 'cancel', text: attempt.signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' };
-            out = await this.call(p, messagesFor(p), { temperature, maxTokens, signal: attempt.signal });
+            out = await once(p, attempt.signal);
           }
           this.stats.ok += 1;
           return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
@@ -629,7 +717,7 @@ class Translator {
     const timer = setTimeout(() => controller.abort('timeout'), TIMEOUT_MS);
     const started = Date.now();
     try {
-      const out = await this.call(p, buildMessages({ prompt: '把用户的文字翻译成{目标语言}。' }, 'Hello', { target: '中文' }, undefined, '', p.model), { temperature: 0, maxTokens: 64, signal: controller.signal });
+      const out = p.preset === 'deepl' ? await this.callDeepl(p, { text: 'Hello', target: '中文' }, controller.signal) : await this.call(p, buildMessages({ prompt: '把用户的文字翻译成{目标语言}。' }, 'Hello', { target: '中文' }, undefined, '', p.model), { temperature: 0, maxTokens: 64, signal: controller.signal });
       return { ok: true, ms: Date.now() - started, sample: out.slice(0, 40) };
     } catch (e) {
       return { error: (e && e.text) || '测试失败' };
@@ -640,5 +728,5 @@ class Translator {
   }
 }
 
-module.exports = { THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

@@ -238,13 +238,13 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
   fs.rmSync(d4,{recursive:true,force:true});
-  // 出厂默认：新装的直接有混元（默认）+ 智谱（备用、纠错），没有密钥；删光了不再放回来
+  // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
   const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   let t5=new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake});
   let c5=t5.publicConfig();
   assert.equal(c5.providers.length,2);
-  const hy5=c5.providers.find(p=>p.id===c5.primaryId), zp5=c5.providers.find(p=>p.id===c5.fallbackId);
-  assert.equal(hy5.preset,'hunyuan'); assert.equal(hy5.model,'hy-mt2-plus'); assert(!hy5.hasKey);
+  const hy5=c5.providers.find(p=>p.id===c5.fallbackId), zp5=c5.providers.find(p=>p.id===c5.primaryId);
+  assert.equal(hy5.preset,'deepl'); assert.equal(hy5.model,''); assert(!hy5.hasKey);
   assert.equal(zp5.preset,'zhipu'); assert.equal(zp5.model,'glm-4-flash'); assert.equal(c5.fixId,zp5.id);
   calls=[];
   q=await t5.translate({text:'你好',mode:{prompt:'p'}}); assert.equal(q.kind,'auth'); assert.equal(calls.length,0);
@@ -265,15 +265,16 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
     {id:'o',preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y'}],primaryId:'h',fallbackId:'o',fixId:'h'}));
   c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
   assert.equal(c6.fallbackId,'o'); assert.equal(c6.fixId,'h'); // 用户自己设过的不改
-  // 0.5.2 老用户（seeded 过，只有混元）：升级后补上智谱，设为备用和纠错；删了以后不再补
+  // 0.5.2 老用户（seeded 过，只有混元）：升级后补上智谱；还是出厂那套，再改成默认智谱、备用 DeepL；删了以后不再补
   fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
     {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus'}],primaryId:'h',seeded:true}));
   let t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
   c6=t6.publicConfig();
-  const zp6=c6.providers.find(p=>p.preset==='zhipu');
-  assert(zp6); assert.equal(zp6.model,'glm-4-flash'); assert(!zp6.hasKey);
-  assert.equal(c6.primaryId,'h'); assert.equal(c6.fallbackId,zp6.id); assert.equal(c6.fixId,zp6.id);
-  t6.deleteProvider(zp6.id);
+  const zp6=c6.providers.find(p=>p.preset==='zhipu'), dl6=c6.providers.find(p=>p.preset==='deepl');
+  assert(zp6); assert.equal(zp6.model,'glm-4-flash'); assert(!zp6.hasKey); assert(dl6);
+  assert.equal(c6.primaryId,zp6.id); assert.equal(c6.fallbackId,dl6.id); assert.equal(c6.fixId,zp6.id);
+  assert(c6.providers.some(p=>p.id==='h')); // 混元还在列表里
+  t6.deleteProvider(zp6.id); t6.deleteProvider(dl6.id);
   t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(t6.publicConfig().providers.length,1);
   // 纠错下拉里“添加智谱”：新建并只设纠错，备用不动
@@ -284,6 +285,51 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   assert.equal(c6.fixId,zp7.id); assert.equal(c6.fallbackId,''); assert.equal(c6.providers.length,2);
   assert.equal(t6.addZhipuForFix().ok,true); assert.equal(t6.publicConfig().providers.length,2); // 有了就不重复加
   fs.rmSync(d6,{recursive:true,force:true});
+  // 0.5.3 出厂设置（seedVer 2：混元默认、智谱备用+纠错）-> 智谱默认、DeepL 备用；自己改过的不动
+  const d8=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const v2=(extra)=>JSON.stringify({providers:[
+    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus',keyEnc:'x',keyTail:'1111'},
+    {id:'z',preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'}],primaryId:'h',fallbackId:'z',fixId:'z',seeded:true,seedVer:2,...extra});
+  fs.writeFileSync(path.join(d8,'translate.json'),v2({}));
+  let c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
+  const dl8=c8.providers.find(p=>p.preset==='deepl');
+  assert(dl8); assert.equal(c8.primaryId,'z'); assert.equal(c8.fallbackId,dl8.id); assert.equal(c8.fixId,'z'); assert.equal(c8.seedVer,3);
+  assert.equal(c8.providers.find(p=>p.id==='h').keyTail,'1111');
+  fs.writeFileSync(path.join(d8,'translate.json'),v2({fixId:'h'}));
+  c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
+  assert.equal(c8.primaryId,'h'); assert(!c8.providers.some(p=>p.preset==='deepl')); assert.equal(c8.seedVer,3);
+  fs.writeFileSync(path.join(d8,'translate.json'),JSON.stringify({...JSON.parse(v2({})),primaryId:'z',fallbackId:'h'}));
+  c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
+  assert.equal(c8.primaryId,'z'); assert.equal(c8.fallbackId,'h');
+  fs.rmSync(d8,{recursive:true,force:true});
+  // DeepL：免费密钥走 api-free，付费走 api；目标语言代码、上下文、太忙时智谱 -> DeepL
+  const d9=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const t9=new T.Translator({seed:false,dir:d9,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
+  const zid9=t9.saveProvider({preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',key:'zk'}).id;
+  let dr=t9.saveProvider({preset:'deepl',baseUrl:'https://evil.example.com',model:'x',key:'abc-123:fx',thinking:'enabled'});
+  assert(dr.ok,JSON.stringify(dr));
+  const dp=t9.provider(dr.id);
+  assert.equal(dp.baseUrl,T.PRESETS.deepl.baseUrl); assert.equal(dp.model,''); assert.equal(dp.thinking,'');
+  t9.setRoles({primaryId:zid9,fallbackId:dr.id});
+  calls=[]; behave=[{status:429,body:'{"error":{"message":"busy"}}'},{status:429,body:'{}'},{body:JSON.stringify({translations:[{text:'Hallo'}]})}];
+  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'德语',source:'中文',context:[{text:'Wie geht es?'},{out:true,text:'好'}]});
+  assert.equal(q.text,'Hallo'); assert.equal(q.fallback,true); assert.equal(q.provider,'DeepL');
+  assert.equal(calls[2].url,'https://api-free.deepl.com/v2/translate');
+  assert.equal(calls[2].opt.headers.Authorization,'DeepL-Auth-Key abc-123:fx');
+  const db=JSON.parse(calls[2].opt.body);
+  assert.deepEqual(db.text,['你好']); assert.equal(db.target_lang,'DE'); assert.equal(db.source_lang,'ZH'); assert.equal(db.context,'Wie geht es?\n好');
+  t9.saveProvider({id:dr.id,preset:'deepl',key:'paid-key'});
+  t9.setRoles({primaryId:dr.id,fallbackId:''});
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
+  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'英语'});
+  assert.equal(calls[0].url,'https://api.deepl.com/v2/translate'); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'EN-US');
+  calls=[]; q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'菲律宾语'});
+  assert.equal(q.kind,'lang'); assert.equal(calls.length,0);
+  calls=[]; behave=[{status:456,body:'{"message":"Quota exceeded"}'}];
+  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'英语'}); assert.equal(q.kind,'quota');
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'你好'}]})}];
+  q=await t9.test(dr.id); assert(q.ok); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'ZH-HANS');
+  fs.rmSync(d9,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(d7,'translate.json'),JSON.stringify({accountAuto:{a:true},autoConsent:{a:true,b:true},consented:{x:true}}));
