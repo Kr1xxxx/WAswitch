@@ -19,7 +19,6 @@ const dk = {
   bad: false,
   consent: null, // { kind: 'auto' | 'provider', list }
   pending: null,
-  clip: null, // 翻译剪贴板的结果 { text, tr }
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
@@ -44,7 +43,7 @@ function dockCountUnread() {
 }
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, consent: null, pending: null, clip: null, unread: 0, seenTitle: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, consent: null, pending: null, unread: 0, seenTitle: null });
   dk.seen.clear();
 }
 
@@ -110,20 +109,16 @@ function dockInsertKey() {
   if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
 }
-async function dockClipboard() {
-  const text = await window.wa.trClipboard();
-  if (!text || !text.trim()) return dockSay('剪贴板是空的：先在聊天里复制一条消息', true);
-  const list = (dk.st && dk.st.modes.in) || [];
-  const m = list.find((x) => x.id === dk.st.inModeId) || list[0];
-  if (!m) return dockSay('没有“收到”方向的模式，去设置 › 翻译里加一个', true);
-  dk.busy = true; dockRender(true);
+// 换默认翻译模型（和 设置 › 翻译 的“设为默认”是同一个设置）。选的是现在的备用，就把两个对调
+async function dockModel(id) {
+  const st = dk.st;
+  if (!st || !id || id === st.primaryId) return;
   let r;
-  try { r = await window.wa.trRun({ text, modeId: m.id, target: '中文' }); } catch { r = { error: '翻译失败' }; }
-  dk.busy = false;
-  if (r.kind === 'consent') { dk.consent = { kind: 'provider', list: r.consent }; return dockRender(true); }
-  if (r.error) return dockSay(r.error, true);
-  dk.clip = { text, tr: r.text };
-  dockSay('');
+  try { r = await window.wa.trRoles(id, st.fallbackId === id ? st.primaryId : undefined); } catch { r = null; }
+  if (!r || !r.config) return dockSay('没换成，去设置 › 翻译里看一下', true);
+  if (typeof tr !== 'undefined') { tr.cfg = r.config; tr.modes = r.modes; }
+  const p = st.providers.find((x) => x.id === id);
+  dockSay(p ? `翻译模型换成了 ${p.name}（${p.model || p.name}）` : '');
 }
 
 // ---- 界面 ----
@@ -237,16 +232,11 @@ function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
   const add = (...x) => list.append(...kids(x));
-  if (dk.clip) {
-    add(h('div', { class: 'dk-item clip' }, h('span', { class: 'dk-orig' }, dk.clip.text), h('span', { class: 'dk-tr' }, dk.clip.tr, dockSpacer()),
-      h('span', { class: 'dk-acts-mini' }, h('button', { class: 'dk-link', onclick: () => { dk.clip = null; dockRender(true); } }, '收起')),
-      h('span', { class: 'dk-meta' }, h('span', { class: 'dk-time' }, '剪贴板'))));
-  }
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
-  if (st.lite) add(hint('轻量模式的号读不到网页里的消息：在聊天里复制客户的话，再点上面的“翻译剪贴板”。'));
+  if (st.lite) add(hint('轻量模式的号读不到收到的消息，这里不显示。'));
   else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天，这里就会显示客户的消息。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
-  else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。可以先复制客户的话，点上面的“翻译剪贴板”。', true));
+  else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
   else st.items.forEach((it, i) => add(dockItemRow(it, i === st.items.length - 1)));
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
@@ -271,11 +261,15 @@ function dockInHead() {
   const inModes = st.modes.in;
   const inSel = inModes.length > 1 ? h('select', { class: 'dk-mini', 'aria-label': '收到用的模式', onchange: (e) => window.wa.dockInMode(e.target.value) }, inModes.map((m) => h('option', { value: m.id }, m.name))) : null;
   if (inSel) inSel.value = st.inModeId;
+  const provs = st.providers || [];
+  const modelSel = provs.length ? h('select', { class: 'dk-mini dk-model', 'aria-label': '翻译模型', title: '换翻译模型（和 设置 › 翻译 的默认服务商同步）', disabled: dk.busy || provs.length < 2,
+    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? `${p.name} · ${p.model}` : p.name))) : null;
+  if (modelSel) modelSel.value = st.primaryId;
   return h('div', { class: 'dk-head' },
     h('span', { class: 'dk-label' }, '收到的消息'),
     h('span', { class: 'grow' }),
     inSel,
-    h('button', { class: 'pn-btn', disabled: dk.busy, title: '先在聊天里复制客户的消息，再点这里翻成中文', onclick: dockClipboard }, '翻译剪贴板'),
+    modelSel,
     h('label', { class: 'dk-auto', title: '自动翻译这个号当前对话里新收到的消息' }, '自动翻译', sw));
 }
 
