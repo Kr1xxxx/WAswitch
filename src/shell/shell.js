@@ -846,7 +846,7 @@ function welcomePage() {
       h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区跟着线路走，WhatsApp 界面统一中文。')),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色', '比如“客服号”“店铺号”。颜色会铺满窗口背景，一眼认出在用哪个号。'),
-      step(2, '选网络线路', ['第一个号可以直连；从第二个号起，在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
+      step(2, '选网络线路', ['可以直连（几个号都直连也行，只是出口 IP 相同）；想分开 IP，就在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
       step(3, '手机扫码登录', 'WhatsApp › 设置 › 已关联的设备 › 关联新设备。')),
     h('div', null, h('button', { class: 'btn primary', style: { height: '46px', padding: '0 26px' }, onclick: () => window.wa.add() }, '添加第一个账号'))));
 }
@@ -937,9 +937,14 @@ function editorPage(id) {
         h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：用本机真实 IP'));
     };
-    // 轻量小号选直连：提醒一句，不拦
-    const liteDirectHint = h('span', { class: 'hint', style: { color: '#B54708' } }, '直连有风险：轻量小号会用这台电脑的真实 IP，和主号或别的直连号在 WhatsApp 看来是同一个地方，容易被关联。');
-    const drawLiteDirect = () => { liteDirectHint.hidden = !(mode === 'lite' && !proxyInput.value.trim()); };
+    // 选直连：轻量号、或已经有别的直连号时提醒一句（同一出口 IP），不拦
+    const others = (d.otherDirect || []).map((n) => `「${n}」`).join('、');
+    const liteDirectHint = h('span', { class: 'hint', style: { color: '#B54708' } });
+    const drawLiteDirect = () => {
+      const direct = !proxyInput.value.trim();
+      liteDirectHint.hidden = !(direct && (mode === 'lite' || others));
+      liteDirectHint.textContent = others ? `提示：和${others}都是直连，用同一个出口 IP，有被关联的风险。` : '提示：轻量小号直连会用这台电脑的真实 IP，有被关联的风险。';
+    };
     const onProxyChange = () => {
       drawLiteDirect();
       passwordRow.hidden = !/^https?:\/\/[^/@]+@/i.test(proxyInput.value.trim());
