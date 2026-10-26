@@ -371,7 +371,6 @@ function renderTop() {
     !lite ? zoomChip(acc) : null,
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: memTitle(acc, lite) }, `${acc.memMB} MB`) : null,
-    h('button', { class: `icon-btn${s.floatOpen ? ' on' : ''}`, title: '悬浮翻译：自动翻译当前对话收到的消息', 'aria-label': '悬浮翻译', 'aria-pressed': String(!!s.floatOpen), onclick: () => window.wa.floatToggle() }, icon('globe', 15)),
     h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
     h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
@@ -766,7 +765,7 @@ function translatePage(page) {
     setRow('翻译走的网络', '翻译用单独的网络连接，和任何 WhatsApp 账号都不共用代理。OpenRouter 在国内一般要选代理。本机模型（localhost）总是直连。',
       h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
         h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
-    setRow('悬浮翻译：每个号每天最多自动翻几条', '顶栏的地球按钮打开悬浮翻译窗。超过这个数自动翻译暂停到第二天，手动点“翻译”不受影响。每分钟最多自动翻 20 条。',
+    setRow('自动翻译：每个号每天最多自动翻几条', '超过这个数自动翻译暂停到第二天，手动点“翻译”不受影响。每分钟最多自动翻 20 条。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
     h('div', { class: 'box tr-form' },
