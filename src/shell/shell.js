@@ -940,6 +940,8 @@ function editorPage(id) {
     const drawLiteDirect = () => {
       const direct = !proxyInput.value.trim();
       liteDirectHint.hidden = !(direct && (mode === 'lite' || others));
+      // 轻量号直连不用测试，“填了代理要先测试”那句只在填了代理时显示
+      proxyHint.hidden = direct && mode === 'lite';
       liteDirectHint.textContent = others ? `提示：和${others}都是直连，用同一个出口 IP，有被关联的风险。` : '提示：轻量小号直连会用这台电脑的真实 IP，有被关联的风险。';
     };
     const onProxyChange = () => {
@@ -1014,7 +1016,8 @@ function editorPage(id) {
       if (!name.value.trim()) { error.textContent = '请填写名称'; name.focus(); return; }
       saveBtn.disabled = true;
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
-      if (mode === 'lite' && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
+      // 直连不用测试；填了代理的轻量号仍要先测试通过
+      if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
       const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
