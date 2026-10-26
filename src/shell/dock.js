@@ -213,7 +213,13 @@ function dockOrig(key, text, hasTr) {
   const flip = () => { if (open) dk.openOrig.delete(key); else dk.openOrig.add(key); dockRender(true); };
   const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), 'aria-label': open ? '收起原文' : '展开原文', title: open ? '收起原文' : '展开原文', onclick: flip });
   // 按钮是个细线小箭头（收起时 <，展开后转成朝下）；放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
-  if (open) return h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text);
+  // 刚点过：箭头转过去，原文展开时淡入下滑、收起时毛玻璃条淡入
+  const moved = fxChanged(`fold:${key}`, open, false);
+  if (moved) btn.classList.add(open ? 'fx-fold-open' : 'fx-fold-close');
+  const el = open ? h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text) : dockFoldBar(btn, text, flip);
+  return moved ? fxPlay(el, open ? 'fx-unfold' : 'fx-fade') : el;
+}
+function dockFoldBar(btn, text, flip) {
   return h('span', { class: 'dk-fold' },
     btn,
     h('span', { class: 'dk-fold-glass', 'aria-hidden': 'true', onclick: flip }, h('span', { class: 'dk-fold-text' }, text)));
@@ -222,13 +228,15 @@ function dockOrig(key, text, hasTr) {
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
-    return h('div', { class: `${cls} wide foot` }, h('span', { class: 'dk-orig' }, it.text), dockItemEdit(it), dockMeta(it));
+    return h('div', { class: `${cls} wide foot` }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
   }
   const warn = it.warn && it.warn.length ? h('span', { class: 'tr-warn' }, `注意：译文里有原文没有的内容：${it.warn.slice(0, 3).join('、')}`) : null;
   const foot = !!(warn || (it.state === 'done' && it.suggest));
   const sp = foot ? null : dockSpacer();
-  const tr = it.state === 'done' ? [h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
-    it.suggest ? dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false)) : null]
+  // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
+  const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
+  const tr = it.state === 'done' ? [trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
+    it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, '翻译中…', sp)
       : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ', h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: async () => {
@@ -245,6 +253,7 @@ function dockItemRow(it, last) {
 function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
+  if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
   if (st.lite) add(hint('轻量模式的号读不到收到的消息，这里不显示。'));
@@ -252,7 +261,13 @@ function dockIncoming() {
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
-  else st.items.forEach((it, i) => add(dockItemRow(it, i === st.items.length - 1)));
+  else st.items.forEach((it, i) => {
+    const last = i === st.items.length - 1;
+    const row = dockItemRow(it, last);
+    // 同一个对话里来了新消息：最后一条从下面浮上来（刚打开或换对话时不放）
+    if (last) fx(`dk-last:${st.accountId}|${st.title || ''}`, it.h, row, 'fx-in', false);
+    add(row);
+  });
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
   // 重画时保持滚动位置（点纠错/编辑不跳）；原来就在最底下或换了对话才滚到底，新消息照样跟上
@@ -366,7 +381,7 @@ function dockRender(force = false) {
   }
   if (dk.consent) { host.replaceChildren(dockConsentBox()); return; }
   const root = host.querySelector('.dk');
-  const msg = dk.msg ? h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg) : null;
+  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块
