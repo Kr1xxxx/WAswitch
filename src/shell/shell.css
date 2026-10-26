@@ -26,9 +26,13 @@ svg { flex: none; }
 /* ---------- 侧栏 ---------- */
 #side { flex: none; width: var(--side); display: flex; flex-direction: column; gap: 10px; padding: 12px 8px 12px 12px; }
 body.collapsed #side { padding: 12px 8px; }
-.drag { height: 22px; -webkit-app-region: drag; }
-body:not(.mac) .drag { display: none; }
+/* 按住侧栏顶部空白（含 Mac 红绿灯那一条）可以拖动窗口；里面的按钮照常点。双击行为交给系统 */
+.win-drag { height: 44px; margin: -12px -8px -10px -12px; -webkit-app-region: drag; }
+body.collapsed .win-drag { margin-left: -8px; }
+body:not(.mac) .win-drag { display: none; }
 .head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding-left: 6px; }
+.head, #side > .label { -webkit-app-region: drag; }
+.head button, #side > .label button { -webkit-app-region: no-drag; }
 body.collapsed .head { justify-content: center; padding: 0; }
 .brand { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
 .icon-btn { width: 30px; height: 30px; border: none; border-radius: 8px; background: transparent; color: var(--soft); display: flex; align-items: center; justify-content: center; }
@@ -83,6 +87,10 @@ body.collapsed .foot { justify-content: center; }
 #card { flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: #fff; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08); overflow: hidden; display: flex; flex-direction: column; }
 #topbar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--soft); }
 #topbar[hidden] { display: none; }
+/* 顶栏空白处可以拖动窗口；按钮、标签、输入框不拖，照常点 */
+#topbar, #aibar { -webkit-app-region: drag; }
+#topbar button, #topbar a, #topbar input, #topbar select, #topbar .chip,
+#aibar button, #aibar a, #aibar input, #aibar select { -webkit-app-region: no-drag; }
 #aibar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; background: #FEF9C3; border-bottom: 1px solid var(--line); font-size: 13px; color: #713F12; }
 #aibar[hidden] { display: none; }
 #aibar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
