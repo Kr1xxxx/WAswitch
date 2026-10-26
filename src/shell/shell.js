@@ -678,6 +678,10 @@ function translatePage(page) {
   const fb = h('select', { 'aria-label': '备用服务商', onchange: async (e) => apply(await window.wa.trRoles(c.primaryId, e.target.value)) },
     h('option', { value: '' }, '不用备用'), c.providers.filter((p) => p.id !== c.primaryId).map((p) => h('option', { value: p.id }, p.name)));
   fb.value = c.fallbackId || '';
+  const fixSel = h('select', { 'aria-label': '纠错服务商', onchange: async (e) => apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value)) },
+    h('option', { value: '' }, '不单独设置（用默认的）'), c.providers.map((p) => h('option', { value: p.id }, `${p.name}（${p.model}）`)));
+  fixSel.value = c.fixId || '';
+  const fixP = c.providers.find((p) => p.id === c.fixId);
   const netSel = h('select', { 'aria-label': '翻译走的网络' }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
   netSel.value = c.network.mode;
   const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
@@ -688,7 +692,8 @@ function translatePage(page) {
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
     h('h2', { class: 'ov-h2' }, '服务商'),
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
-      h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null),
+      h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
+        p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
       h('span', { class: 'hint' }, `${p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
       h('span', { class: 'hint' }, trTestRes[p.id] || ''),
       h('span', { class: 'hstack', style: { gap: '4px' } },
@@ -699,6 +704,9 @@ function translatePage(page) {
       : h('span', { class: 'hint' }, '还没有。')),
     trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'hunyuan' }; trSay = ''; render(true); } }, '+ 添加服务商')),
     c.providers.length > 1 ? setRow('备用服务商', '默认的连不上、超时或服务商出错时，自动用备用的再试一次。密钥错、没余额时不换。', fb) : null,
+    c.providers.length ? setRow('纠错服务商', '点“纠错”时用这个服务商，按内置的校对提示词对照原文、译文和上下文改。混元的 hy-mt 翻译模型不会校对，只会重翻，建议另加一个通用聊天模型，比如智谱 glm-4-flash。没设就用默认的。',
+      h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
+        fixP && /^hy-mt/i.test(fixP.model) ? h('span', { class: 'hint' }, '这是翻译专用模型，纠错只会重翻一遍。') : null)) : null,
     setRow('翻译走的网络', '翻译用单独的网络连接，和任何 WhatsApp 账号都不共用代理。OpenRouter 在国内一般要选代理。本机模型（localhost）总是直连。',
       h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
         h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),

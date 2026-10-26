@@ -2348,8 +2348,8 @@ handleShell('tr:run', async ({ text, modeId, target, source, tone, ctxAccount, f
   // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
   const context = typeof ctxAccount === 'string' && ctxAccount === activeId && floatCore ? floatCore.contextOf(activeId) : undefined;
   // __back：回译成中文核对，用固定的忠实翻译提示词
-  // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改
-  if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft });
+  // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
+  if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft, fix: true });
   let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
     : typeof modeId === 'string' ? modeStore.get(modeId) : null;
   if (mode && modeId !== '__back' && Object.hasOwn(TONES, tone)) mode = { ...mode, prompt: `${mode.prompt}\n${TONES[tone]}` };
@@ -2424,7 +2424,7 @@ function setupFloatCore() {
       if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
       // 用户点的翻译在等：先让它
       if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-      return translator.translate({ text, mode, target: '中文', context, draft });
+      return translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
     },
   });
   floatCore.onChange = (accId) => { if (accId === activeId) pushFloat(); };
@@ -2629,7 +2629,7 @@ onFloat('float:moveend', () => {
 });
 function readerItem(h, fix) {
   if (typeof h !== 'string' || !activeId) return null;
-  const need = translator.needConsent();
+  const need = translator.needConsent(fix === true);
   if (need.length) return { consent: need };
   floatCore.manual(activeId, h, fix === true);
   pushFloat();
