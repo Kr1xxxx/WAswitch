@@ -403,8 +403,8 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-link:disabled { color: var(--muted); cursor: default; }
 .dk-hint { padding: 6px 6px; margin: 0; }
 .dk-msg { padding: 6px 12px 0; }
-.dk-compose { border-top: 1px solid var(--line); padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 6px; background: #fbfbfc; }
-.dk-compose .dk-head { padding: 8px 0 0; flex-wrap: wrap; row-gap: 6px; }
+.dk-compose { border-top: 1px solid var(--line); padding: 0 10px 10px; display: flex; flex-direction: column; gap: 5px; background: #fbfbfc; }
+.dk-compose .dk-head { padding: 6px 0 0; flex-wrap: wrap; row-gap: 6px; }
 .dk-chip { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--field); background: #fff; font: inherit; font-size: 12px; color: var(--soft); cursor: pointer; }
 .dk-chip:hover { color: var(--text); }
 .dk-chip.on { background: var(--text); border-color: var(--text); color: #fff; }
@@ -412,9 +412,10 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-out { background: #f6f9f6; }
 .dk-in:focus, .dk-out:focus { outline: 2px solid #15803D; outline-offset: -1px; border-color: transparent; }
 /* 回复和译文框：照 shen 的参考图（2x 截图量的）。外层 #f7f7f7 卡片，内层 #ebebeb 输入区，复制图标在内层左下角，同一块灰底，无分隔线、无按钮底色 */
-.dk-card { background: #f7f7f7; border-radius: 9px; padding: 10px; box-shadow: 0 0 10px rgba(0,0,0,.16); }
-.dk-field { background: #ebebeb; border-radius: 8px; padding: 10px 10px 7px; display: flex; flex-direction: column; gap: 6px; }
-.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; min-height: 44px; line-height: 1.45; color: #111; }
+/* 紧凑：外层卡片只留一圈细边（shen 2026-10-26），里面的文本区不挤 */
+.dk-card { background: #f7f7f7; border-radius: 9px; padding: 3px; box-shadow: 0 0 6px rgba(0,0,0,.12); }
+.dk-field { background: #ebebeb; border-radius: 7px; padding: 9px 10px 5px; display: flex; flex-direction: column; gap: 3px; }
+.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; min-height: 56px; line-height: 1.5; color: #111; }
 .dk-card .dk-in:focus, .dk-card .dk-out:focus { outline: none; }
 .dk-tools { display: flex; }
 .dk-tool { width: 18px; height: 18px; margin-left: 1px; border: 0; background: transparent; color: #111; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
