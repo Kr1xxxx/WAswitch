@@ -179,7 +179,6 @@ class FloatCore {
         if (!this.accs.get(job.accId)) continue; // 号被删了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; }
-        else if (r && r.kind === 'consent') { item.state = 'manual'; item.err = ''; this.needConsent = r.consent; }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; }
         this.onChange(job.accId);
       }

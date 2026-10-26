@@ -226,17 +226,18 @@ class Translator {
   load() {
     if (this.cfg) return this.cfg;
     // fixId：纠错专用服务商（空 = 纠错也用默认的）
-    const base = { providers: [], primaryId: '', fallbackId: '', fixId: '', network: { mode: 'system', proxyUrl: '' }, consented: {}, accountLang: {},
-      // 悬浮窗：哪些号开了自动翻译、哪些号确认过自动翻译、每个号每天最多自动翻几条、收到用的模式、窗口位置
-      accountAuto: {}, autoConsent: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
+    const base = { providers: [], primaryId: '', fallbackId: '', fixId: '', network: { mode: 'system', proxyUrl: '' }, accountLang: {},
+      // 悬浮窗：自动翻译默认开，accountAuto 里只记手动关掉的号（false）；每个号每天最多自动翻几条、收到用的模式、窗口位置
+      accountAuto: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
       // 出厂默认服务商只放一次；用户删光了也不再放回来
-      seeded: false };
+      seeded: false,
+      // 自动翻译改成默认开之后迁移过一次老设置
+      autoDefaultOn: false };
     let migrated = false;
-    const moved = [];
     try {
       if (fs.existsSync(this.file)) {
         const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -251,15 +252,22 @@ class Translator {
             const fixed = PRESETS[p.preset] && PRESETS[p.preset].models;
             if (fixed && !fixed.includes(p.model)) { p.model = PRESETS[p.preset].model; migrated = true; }
             if (p.preset !== 'hunyuan') continue;
-            if (p.baseUrl === OLD_HUNYUAN_URL) { p.baseUrl = PRESETS.hunyuan.baseUrl; p.keyEnc = ''; p.keyTail = ''; moved.push(p.id); migrated = true; }
+            if (p.baseUrl === OLD_HUNYUAN_URL) { p.baseUrl = PRESETS.hunyuan.baseUrl; p.keyEnc = ''; p.keyTail = ''; migrated = true; }
           }
           base.primaryId = typeof raw.primaryId === 'string' ? raw.primaryId : '';
           base.fallbackId = typeof raw.fallbackId === 'string' ? raw.fallbackId : '';
           base.fixId = typeof raw.fixId === 'string' && base.providers.some((p) => p.id === raw.fixId) ? raw.fixId : '';
           if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200) };
-          if (raw.consented && typeof raw.consented === 'object') for (const [k, v] of Object.entries(raw.consented)) if (v === true) base.consented[k] = true;
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
-          for (const key of ['accountAuto', 'autoConsent']) if (raw[key] && typeof raw[key] === 'object') for (const [k, v] of Object.entries(raw[key])) if (v === true) base[key][k] = true;
+          if (raw.accountAuto && typeof raw.accountAuto === 'object') for (const [k, v] of Object.entries(raw.accountAuto)) if (v === false) base.accountAuto[k] = false;
+          base.autoDefaultOn = raw.autoDefaultOn === true;
+          // 老设置：只记开着的号（true），关掉就删掉。确认过自动翻译又没开着的号 = 手动关过，保留关；其他号改成默认开
+          if (!base.autoDefaultOn) {
+            const on = raw.accountAuto && typeof raw.accountAuto === 'object' ? raw.accountAuto : {};
+            const asked = raw.autoConsent && typeof raw.autoConsent === 'object' ? raw.autoConsent : {};
+            for (const [k, v] of Object.entries(asked)) if (v === true && on[k] !== true) base.accountAuto[k] = false;
+            migrated = true;
+          }
           if (DAILY_CAPS.includes(raw.dailyCap)) base.dailyCap = raw.dailyCap;
           base.seeded = raw.seeded === true;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
@@ -278,10 +286,8 @@ class Translator {
     }
     this.cfg = base;
     if (!base.seeded && this.deps.seed !== false) { this.seedDefaults(base); migrated = true; }
-    if (migrated) {
-      for (const id of moved) delete base.consented[id]; // 地址换了，之前的同意不算数
-      try { this.save(); } catch {}
-    }
+    if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
+    if (migrated) { try { this.save(); } catch {} }
     return base;
   }
 
@@ -319,14 +325,13 @@ class Translator {
   publicConfig() {
     const c = this.load();
     return {
-      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc, consented: !!c.consented[p.id] })),
+      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
       fixId: c.fixId,
       network: { ...c.network },
       accountLang: { ...c.accountLang },
       accountAuto: { ...c.accountAuto },
-      autoConsent: { ...c.autoConsent },
       dailyCap: c.dailyCap,
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
@@ -359,7 +364,7 @@ class Translator {
     const thinking = THINKING.includes(data.thinking) ? data.thinking : defaultThinking(preset);
     Object.assign(p, { preset, name: line(data.name, 40) || PRESETS[preset].name, baseUrl: chk.url, model, thinking, updatedAt: Date.now() });
     // 地址变了：之前的同意不再算数，密钥也不能带去新地址
-    if (oldUrl && oldUrl !== chk.url) { delete c.consented[p.id]; if (!newKey) { p.keyEnc = ''; p.keyTail = ''; } }
+    if (oldUrl && oldUrl !== chk.url && !newKey) { p.keyEnc = ''; p.keyTail = ''; }
     if (newKey) {
       p.keyEnc = this.deps.safeStorage.encryptString(newKey).toString('base64');
       p.keyTail = newKey.slice(-4);
@@ -372,7 +377,6 @@ class Translator {
   deleteProvider(id) {
     const c = this.load();
     c.providers = c.providers.filter((p) => p.id !== id);
-    delete c.consented[id];
     if (c.primaryId === id) c.primaryId = c.providers[0] ? c.providers[0].id : '';
     if (c.fallbackId === id || c.fallbackId === c.primaryId) c.fallbackId = '';
     if (c.fixId === id) c.fixId = '';
@@ -423,8 +427,8 @@ class Translator {
   forgetAccount(accId) {
     const c = this.load();
     const chats = Object.keys(c.chatLang).filter((k) => k.startsWith(`${accId}:`));
-    if (c.accountLang[accId] || c.accountAuto[accId] || c.autoConsent[accId] || chats.length) {
-      delete c.accountLang[accId]; delete c.accountAuto[accId]; delete c.autoConsent[accId];
+    if (c.accountLang[accId] || accId in c.accountAuto || chats.length) {
+      delete c.accountLang[accId]; delete c.accountAuto[accId];
       for (const k of chats) delete c.chatLang[k];
       this.save();
     }
@@ -456,11 +460,10 @@ class Translator {
   }
 
   // 悬浮窗的设置（只接受固定的几种值）
-  setFloat({ accId, auto, autoConsent, dailyCap, inMode, pos } = {}) {
+  setFloat({ accId, auto, dailyCap, inMode, pos } = {}) {
     const c = this.load();
     if (typeof accId === 'string' && accId) {
-      if (auto === true) c.accountAuto[accId] = true; else if (auto === false) delete c.accountAuto[accId];
-      if (autoConsent === true) c.autoConsent[accId] = true;
+      if (auto === true) delete c.accountAuto[accId]; else if (auto === false) c.accountAuto[accId] = false;
     }
     if (DAILY_CAPS.includes(dailyCap)) c.dailyCap = dailyCap;
     if (typeof inMode === 'string') c.floatInMode = inMode.slice(0, 64);
@@ -468,25 +471,10 @@ class Translator {
     this.save();
   }
 
-  consent(id) {
-    const c = this.load();
-    if (!this.provider(id)) return;
-    c.consented[id] = true;
-    this.save();
-  }
-
   // 这次翻译先用哪个服务商：纠错有专用的就用它，否则用默认的
   firstFor(fix) {
     const c = this.load();
     return (fix && this.provider(c.fixId)) || this.provider(c.primaryId);
-  }
-
-  // 这次翻译会用到的服务商（第一个 + 备用），哪个还没同意过
-  needConsent(fix) {
-    const c = this.load();
-    const first = this.firstFor(fix);
-    return [...new Set([first && first.id, c.fallbackId].filter(Boolean))].map((id) => this.provider(id)).filter((p) => p && !c.consented[p.id])
-      .map((p) => ({ id: p.id, name: p.name, host: (() => { try { return new URL(p.baseUrl).host; } catch { return ''; } })(), openrouter: p.preset === 'openrouter' }));
   }
 
   cancel() {
@@ -541,7 +529,7 @@ class Translator {
     return cleanOutput(out);
   }
 
-  // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind, consent[] }
+  // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind }
   // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
   async translate({ text, mode, target, source, context, draft, fix } = {}) {
     const c = this.load();
@@ -550,8 +538,6 @@ class Translator {
     if (!mode || typeof mode.prompt !== 'string') return { error: '先选一个翻译模式', kind: 'input' };
     const primary = this.firstFor(fix === true);
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
-    const consent = this.needConsent(fix === true);
-    if (consent.length) return { error: '需要先确认', kind: 'consent', consent };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
     const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, c.rolePrompt);

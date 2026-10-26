@@ -6,7 +6,6 @@ contextBridge.exposeInMainWorld('fl', {
   ready: () => ipcRenderer.send('float:ready'),
   translateItem: (h) => ipcRenderer.invoke('float:item', h),
   setAuto: (on) => ipcRenderer.invoke('float:auto', on === true),
-  consent: (kind, ids) => ipcRenderer.invoke('float:consent', { kind, ids }),
   compose: (data) => ipcRenderer.invoke('float:compose', data),
   cancel: () => ipcRenderer.invoke('float:cancel'),
   insert: (accountId, text) => ipcRenderer.invoke('float:insert', { accountId, text }),
