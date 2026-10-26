@@ -411,17 +411,17 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-in, .dk-out { width: 100%; resize: vertical; border: 1px solid var(--field); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; background: #fff; user-select: text; min-height: 58px; }
 .dk-out { background: #f6f9f6; }
 .dk-in:focus, .dk-out:focus { outline: 2px solid #15803D; outline-offset: -1px; border-color: transparent; }
-/* 回复和译文框：外层浅灰卡片，里面无边框灰色输入区，左下角朗读和复制 */
-.dk-card { background: #f5f5f5; border-radius: 14px; padding: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-.dk-field { background: #ebebeb; border-radius: 10px; padding: 8px 10px 4px; display: flex; flex-direction: column; }
-.dk-field:focus-within { box-shadow: inset 0 0 0 1.5px #15803D; }
-.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; min-height: 54px; line-height: 1.45; }
+/* 回复和译文框：照 shen 的参考图（2x 截图量的）。外层 #f7f7f7 卡片，内层 #ebebeb 输入区，复制图标在内层左下角，同一块灰底，无分隔线、无按钮底色 */
+.dk-card { background: #f7f7f7; border-radius: 9px; padding: 10px; box-shadow: 0 0 10px rgba(0,0,0,.16); }
+.dk-field { background: #ebebeb; border-radius: 8px; padding: 10px 10px 7px; display: flex; flex-direction: column; gap: 6px; }
+.dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; min-height: 44px; line-height: 1.45; color: #111; }
 .dk-card .dk-in:focus, .dk-card .dk-out:focus { outline: none; }
-.dk-tools { display: flex; gap: 4px; margin-top: 4px; }
-.dk-tool { width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #222; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
-.dk-tool:hover { background: rgba(0,0,0,.07); }
-.dk-tool.done { color: #15803D; }
-.dk-tool:focus-visible { outline: 2px solid #15803D; outline-offset: 1px; }
+.dk-tools { display: flex; }
+.dk-tool { width: 18px; height: 18px; margin-left: 1px; border: 0; background: transparent; color: #111; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.dk-tool svg { stroke-width: 1.6; }
+.dk-tool:hover { color: #000; opacity: .65; }
+.dk-tool.done { color: #15803D; opacity: 1; }
+.dk-tool:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; border-radius: 4px; }
 .dk-outhead { display: flex; align-items: center; gap: 8px; }
 .dk-edited { font-size: 11px; color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 0 6px; }
 .dk-edited[hidden] { display: none; }
