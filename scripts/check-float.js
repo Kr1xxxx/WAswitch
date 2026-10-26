@@ -190,6 +190,20 @@ core().then(() => {
     assert(r6.ok, JSON.stringify(r6));
     assert.deepStrictEqual(r6.msgs.map((m) => [m.out, m.text]), [[false, 'Bonjour, merci'], [false, 'Bonjour, merci']]);
     assert.notStrictEqual(r6.msgs[0].id, r6.msgs[1].id, '同样的话两次要有不同编号');
+    // 没有 class，但带发送状态的勾：认成自己发的，翻译列表里不显示
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Marie">Marie</span></header>'
+      + '<div role="row"><div data-id="3EB0CC"><div data-pre-plain-text="[10:00, 26/10/2026] Marie: "><span dir="ltr">Bonjour</span></div></div></div>'
+      + '<div role="row"><div data-id="3EB0DD"><div data-pre-plain-text="[10:01, 26/10/2026] Moi: "><span dir="ltr">Merci à vous</span></div><span data-icon="msg-dblcheck"></span></div></div>'
+      + '<div role="row"><div data-id="3EB0EE"><div role="button"><span data-icon="msg-dblcheck"></span>quoted</div><div data-pre-plain-text="[10:03, 26/10/2026] Marie: "><span dir="ltr">Super</span></div></div></div>'; 1`);
+    const r7 = await waPage.readOpenChat(w.webContents);
+    assert(r7.ok, JSON.stringify(r7));
+    assert.deepStrictEqual(r7.msgs.map((m) => [m.out, m.text]), [[false, 'Bonjour'], [true, 'Merci à vous'], [false, 'Super']]);
+    // 没有 data-id 只剩正文块时也一样
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Marie">Marie</span></header>'
+      + '<div role="row"><div><div data-pre-plain-text="[10:01, 26/10/2026] Marie: ">Salut</div></div></div>'
+      + '<div role="row"><div><div data-pre-plain-text="[10:02, 26/10/2026] Moi: ">Bonne journée</div><span data-icon="msg-check"></span></div></div>'; 1`);
+    const r8 = await waPage.readOpenChat(w.webContents);
+    assert.deepStrictEqual(r8.msgs.map((m) => [m.out, m.text]), [[false, 'Salut'], [true, 'Bonne journée']]);
     // 有消息行但一条都认不出：才算读不到
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');

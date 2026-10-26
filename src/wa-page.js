@@ -36,6 +36,8 @@ const SELECTORS = {
   // 没有 true_/false_ 前缀时，用气泡的 class 认方向
   messageIn: '.message-in',
   messageOut: '.message-out',
+  // 认不出方向时再看：只有自己发的消息才带发送状态的勾（单勾、双勾、发送中的钟）
+  messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
   messageSkip: '[role="button"], .quoted-mention',
 };
@@ -167,7 +169,7 @@ function parsePre(raw) {
 const MAX_MSGS = 20;
 const READ_CHAT_CODE = `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   if (!main) return { ok: false, why: 'nochat' };
@@ -178,6 +180,9 @@ const READ_CHAT_CODE = `(() => {
     if (/^(true|false)_/.test(id)) return id.startsWith('true_');
     if (n.matches(S.mOut) || n.querySelector(S.mOut) || n.closest(S.mOut)) return true;
     if (n.matches(S.mIn) || n.querySelector(S.mIn) || n.closest(S.mIn)) return false;
+    // 都没有：这一行里有发送状态的勾（不算引用块里的）就是自己发的
+    const row = n.closest('[role="row"]') || n;
+    for (const x of row.querySelectorAll(S.tick)) if (!x.closest(S.skip)) return true;
     return null;
   };
   // 正文：先找文字 span；找不到就拿正文块的文字（复制一份再去掉引用/链接预览，不碰页面）
