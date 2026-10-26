@@ -1,7 +1,9 @@
 // 自动更新。
 //
 // 只连 GitHub：github.com 和它放安装包的 objects.githubusercontent.com / release-assets.githubusercontent.com，
-// 重定向到别的地方一律当失败。走系统网络设置，不用任何账号的代理（这不是 WhatsApp 流量）。
+// 重定向到别的地方一律当失败。只走电脑本机网络直连：不用任何账号的代理，也不用系统代理设置
+// （Clash 等的“系统代理”）。系统级 VPN / TUN 模式在网卡层接管流量，软件绕不开。
+// 新版本刚发布时安装包还在打包上传（约 10 分钟），这时 latest*.yml 是 404：不算失败，过一会儿自己再查。
 // 启动 1 分钟后查一次，之后每 6 小时查一次，有新版就自动下载。
 //
 // Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
@@ -25,6 +27,22 @@ const FAIL_WARN_AT = 3; // 连续失败这么多次，关于页标黄
 const IDLE_TIMEOUT_MS = 60 * 1000; // Mac 下载：这么久没收到数据就算失败
 const STUCK_CHECKING_MS = 5 * 60 * 1000; // 检查超过 5 分钟没结果
 const STUCK_DOWNLOAD_MS = 30 * 60 * 1000; // 下载 30 分钟没有进度
+const PENDING_RETRY_MS = 10 * 60 * 1000; // 新版本还在上传时，过这么久再查
+const UPDATER_PARTITION = 'waswitch-updater'; // 更新专用的临时会话（不是 persist:，不碰账号）
+
+// 更新专用会话：强制直连，不读系统代理
+let directSession = null;
+async function updaterSession() {
+  if (!directSession) {
+    const ses = session.fromPartition(UPDATER_PARTITION, { cache: false });
+    await ses.setProxy({ mode: 'direct' });
+    directSession = ses;
+  }
+  return directSession;
+}
+
+// 最新版本的 latest*.yml 还没传上去（GitHub 404）
+class PendingError extends Error {}
 
 function allowedUrl(raw) {
   try {
@@ -76,10 +94,13 @@ function parseLatestYml(text) {
 }
 
 // 从 GitHub 下载：只用默认会话，手动跟重定向，每一跳都检查主机
-function request(url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS } = {}) {
+async function request(url, opts = {}) {
+  return requestWith(await updaterSession(), url, opts);
+}
+function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     if (!allowedUrl(url)) { reject(new Error(`不允许的下载地址：${safeHost(url)}`)); return; }
-    const req = net.request({ url, session: session.defaultSession, redirect: 'manual', useSessionCookies: false });
+    const req = net.request({ url, session: ses, redirect: 'manual', useSessionCookies: false });
     // 连接或下载中途挂住：idleMs 内没有任何数据就放弃
     let timer = null;
     let settled = false;
@@ -95,10 +116,16 @@ function request(url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idl
       clearTimeout(timer); // 下一跳有自己的超时
       req.abort();
       if (redirects <= 0) { bad(new Error('重定向次数太多')); return; }
-      request(next, { onData, maxBytes, redirects: redirects - 1, idleMs }).then(ok, bad);
+      requestWith(ses, next, { onData, maxBytes, redirects: redirects - 1, idleMs }).then(ok, bad);
     });
     req.on('response', (res) => {
-      if (res.statusCode !== 200) { res.resume?.(); bad(new Error(`GitHub 返回 ${res.statusCode}`)); return; }
+      if (res.statusCode !== 200) {
+        res.resume?.();
+        const e = new Error(`GitHub 返回 ${res.statusCode}`);
+        e.statusCode = res.statusCode;
+        bad(e);
+        return;
+      }
       arm();
       const total = Number(res.headers['content-length']) || 0;
       const chunks = [];
@@ -148,6 +175,7 @@ class Updater {
     this.installing = false;
     this.idleMs = hooks.idleMs || IDLE_TIMEOUT_MS; // 测试时调小
     this.busySince = 0; // 进入 checking / downloading，或下载进度最近一次变化的时间
+    this.pendingTimer = null;
   }
 
   start() {
@@ -205,14 +233,33 @@ class Updater {
     const failuresBefore = this.state.failures;
     try {
       if (this.mac) await this.checkMac();
-      else if (!(await this.updater.checkForUpdates())) {
-        // 这种安装方式 updater 不工作（比如 Linux 不是 AppImage），不当作失败
-        this.set({ status: 'off', lastCheckAt: Date.now(), lastResult: '这种安装方式不支持自动更新，请到 Releases 页面下载新版' });
+      else {
+        await this.useDirectWindows();
+        if (!(await this.updater.checkForUpdates())) {
+          // 这种安装方式 updater 不工作（比如 Linux 不是 AppImage），不当作失败
+          this.set({ status: 'off', lastCheckAt: Date.now(), lastResult: '这种安装方式不支持自动更新，请到 Releases 页面下载新版' });
+        }
       }
     } catch (e) {
+      if (isPending(e)) { this.pending(e.version); return; }
       // electron-updater 出错时既发 error 事件又让 checkForUpdates 失败，同一次只记一次
       if (this.state.failures === failuresBefore) this.fail(e);
     }
+  }
+
+  // 新版本已发布但安装包还在上传：不算失败，10 分钟后再查一次
+  pending(version) {
+    this.succeed('none', `新版本${version ? ` ${version}` : ''}正在上传，稍后自动再查`);
+    clearTimeout(this.pendingTimer);
+    this.pendingTimer = setTimeout(() => this.check(), PENDING_RETRY_MS);
+    this.pendingTimer.unref?.();
+  }
+
+  // Windows：electron-updater 自己的会话也强制直连。设不上就抛错，这次不查（不会退回走代理）
+  async useDirectWindows() {
+    if (this.directReady) return;
+    await this.updater.netSession.setProxy({ mode: 'direct' });
+    this.directReady = true;
   }
 
   // ---------- Windows：electron-updater ----------
@@ -241,7 +288,7 @@ class Updater {
       this.succeed('downloaded', `新版本 ${info.version} 已下载`, { version: info.version, percent: 100 });
       this.maybeAutoInstall();
     });
-    autoUpdater.on('error', (e) => this.fail(e));
+    autoUpdater.on('error', (e) => { if (!isPending(e)) this.fail(e); });
   }
 
   // 自动安装：只在用户肯定不在用的时候
@@ -284,7 +331,13 @@ class Updater {
     const tag = latestTagFromAtom(atom);
     if (!tag) throw new Error('没找到任何版本');
     if (compareVersions(tag, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
-    const yml = (await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/latest-mac.yml`, { maxBytes: 256 * 1024, idleMs })).toString('utf8');
+    let yml;
+    try {
+      yml = (await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/latest-mac.yml`, { maxBytes: 256 * 1024, idleMs })).toString('utf8');
+    } catch (e) {
+      if (e.statusCode === 404) { const p = new PendingError('新版本还在上传'); p.version = tag.replace(/^v/, ''); throw p; }
+      throw e;
+    }
     const info = parseLatestYml(yml);
     if (!info.version || compareVersions(info.version, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
     const file = info.files.find((f) => /\.dmg$/i.test(f.url) && /arm64/i.test(f.url)) || info.files.find((f) => /\.dmg$/i.test(f.url));
@@ -344,6 +397,11 @@ class Updater {
   }
 }
 
+// 新版本的 yml 还没传上去：Mac 是自己的 PendingError；Windows 是 electron-updater 找不到 latest.yml
+function isPending(e) {
+  return e instanceof PendingError || (e && e.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND');
+}
+
 function sha512Of(file) {
   return new Promise((resolve) => {
     const hash = crypto.createHash('sha512');
@@ -351,4 +409,4 @@ function sha512Of(file) {
   });
 }
 
-module.exports = { Updater, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };
+module.exports = { Updater, UPDATER_PARTITION, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };

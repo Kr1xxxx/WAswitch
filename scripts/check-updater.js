@@ -1,8 +1,8 @@
 // 自检：自动更新模块。
-// 1. 静态检查：updater 不碰任何账号的会话和代理。
+// 1. 静态检查：updater 不碰任何账号的会话；只走本机直连（不用账号代理，也不用系统代理）。
 // 2. 只允许 GitHub 的地址；版本比较；解析 releases.atom 和 latest-mac.yml。
 // 3. Mac 流程（自己下载 dmg）：用假的 electron.net 跑一遍——正常下载并校验通过、sha512 不对时删掉、
-//    重定向到别的主机时失败、已是最新版时不下载、连续失败 3 次标黄。
+//    重定向到别的主机时失败、已是最新版时不下载、连续失败 3 次标黄、新版本还在上传（404）时不算失败。
 // 运行：node scripts/check-updater.js（不需要 Electron，也不联网）
 const fs = require('fs');
 const os = require('os');
@@ -17,17 +17,21 @@ const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}
 // ---------- 1. 静态检查 ----------
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'updater.js'), 'utf8');
 const code = src.replace(/\/\/.*$/gm, ''); // 去掉注释再查
-check(!/fromPartition/.test(code), 'updater 不用 session.fromPartition（不碰账号会话）');
-check(!/persist:/.test(code), 'updater 不引用账号分区 persist:');
-check(!/require\(['"]\.\/proxy['"]\)/.test(code) && !/setProxy/.test(code), 'updater 不引用 proxy 模块、不设代理');
+check(!/persist:/.test(code) && !/wa-/.test(code), 'updater 不引用账号分区（persist: / wa-）');
+check(!/require\(['"]\.\/proxy['"]\)/.test(code), 'updater 不引用 proxy 模块');
+check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话跟随系统代理）');
+check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都只设直连，不设任何别的代理');
 check(/redirect:\s*'manual'/.test(code), 'Mac 下载手动跟重定向（每一跳都检查主机）');
 
 // ---------- 假的 electron ----------
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-upd-'));
 const routes = new Map(); // url -> { status, body, location }
 const requested = [];
+const proxies = []; // [分区名, mode]
+const usedSessions = new Set();
 const fakeNet = {
-  request({ url }) {
+  request({ url, session: ses }) {
+    usedSessions.add(ses && ses.name);
     const req = new EventEmitter();
     req.setHeader = () => {};
     req.abort = () => { req.aborted = true; };
@@ -55,7 +59,10 @@ const opened = [];
 const fakeElectron = {
   app: { isPackaged: true, getVersion: () => '0.2.0', getPath: () => home },
   net: fakeNet,
-  session: { defaultSession: {} },
+  session: {
+    defaultSession: { name: 'default' },
+    fromPartition(name) { return { name, async setProxy(c) { proxies.push([name, c.mode]); } }; },
+  },
   shell: { showItemInFolder: (f) => opened.push(f), openPath: async (f) => { opened.push(f); return ''; } },
 };
 const origLoad = Module._load;
@@ -65,7 +72,7 @@ Module._load = function load(request, ...rest) {
 };
 Object.defineProperty(process, 'platform', { value: 'darwin' });
 
-const { Updater, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml } = require('../src/updater');
+const { Updater, UPDATER_PARTITION, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml } = require('../src/updater');
 
 // ---------- 2. 小工具 ----------
 check(allowedUrl('https://github.com/Kr1xxxx/WAswitch/releases.atom'), '允许 github.com');
@@ -129,6 +136,9 @@ const updatesDir = path.join(home, 'updates');
   check(opened.includes(file), 'Mac：点通知在 Finder 里打开安装包');
   check(requested.every((x) => allowedUrl(x)), 'Mac：所有请求都是 GitHub 的地址');
 
+  check(proxies.length === 1 && proxies[0][0] === UPDATER_PARTITION && proxies[0][1] === 'direct', `Mac：更新专用会话设成直连（${JSON.stringify(proxies)}）`);
+  check(usedSessions.size === 1 && usedSessions.has(UPDATER_PARTITION), 'Mac：所有请求都走更新专用会话（不走默认会话）');
+
   // 已下载并校验过：不再下载
   requested.length = 0;
   u = make();
@@ -158,6 +168,40 @@ const updatesDir = path.join(home, 'updates');
   u = make();
   await u.check();
   check(u.state.status === 'none' && u.state.failures === 0, `已是最新版时不下载（${u.state.lastResult}）`);
+
+  // 新版本刚发布、latest-mac.yml 还没传上去（404）：不算失败，稍后自己再查
+  serve();
+  routes.set(`${base}/releases/download/v0.3.0/latest-mac.yml`, { status: 404 });
+  u = make();
+  u.set({ failures: 2 });
+  await u.check();
+  check(u.state.status === 'none' && u.state.failures === 0 && /0\.3\.0.*上传/.test(u.state.lastResult) && u.pendingTimer, `新版本还在上传时不算失败、稍后再查（${u.state.lastResult}）`);
+  clearTimeout(u.pendingTimer);
+  routes.set(`${base}/releases.atom`, { status: 404 });
+  u = make();
+  await u.check();
+  check(u.state.status === 'error' && /404/.test(u.state.lastResult), `别的地址 404 仍然算失败（${u.state.lastResult}）`);
+
+  // Windows：electron-updater 的会话设成直连；找不到 latest.yml 不算失败
+  {
+    const winProxy = [];
+    const w = make();
+    w.mac = false;
+    w.updater = {
+      netSession: { async setProxy(c) { winProxy.push(c.mode); } },
+      async checkForUpdates() { const e = new Error('Cannot find latest.yml'); e.code = 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'; throw e; },
+    };
+    await w.check();
+    check(winProxy.join() === 'direct', 'Windows：检查前把 electron-updater 的会话设成直连');
+    check(w.state.status === 'none' && w.state.failures === 0 && w.pendingTimer, `Windows：latest.yml 还没传上去时不算失败（${w.state.lastResult}）`);
+    clearTimeout(w.pendingTimer);
+    w.updater.netSession.setProxy = async () => { throw new Error('设不了'); };
+    w.directReady = false;
+    let called = false;
+    w.updater.checkForUpdates = async () => { called = true; return {}; };
+    await w.check();
+    check(!called && w.state.status === 'error', 'Windows：设不了直连就不检查（不会退回走代理）');
+  }
 
   // 请求挂住：超时算失败，状态不会一直停在“检查中”
   serve();
