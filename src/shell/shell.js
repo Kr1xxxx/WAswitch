@@ -1392,9 +1392,10 @@ function lockPage() {
   return lockEl;
 }
 
-// 锁着时盖住整个内容区（网页版、轻量模式、编辑页、设置页都盖），下面的内容原样保留，编辑页没保存的不会丢
+// 锁着时只盖住账号页面（网页版和轻量模式的聊天），设置、编辑、总览这些页面照常能打开使用。
+// 锁定状态一直保留：从设置页切回任何账号，看到的还是锁屏卡片，要右滑解锁才能看聊天
 function renderLock() {
-  const on = !!s.locked;
+  const on = !!s.locked && s.page === 'account';
   const was = !$lock.hidden;
   $lock.hidden = !on;
   $content.hidden = on;
