@@ -546,7 +546,7 @@ const notifier = new Notifier({
   updateMenu: () => {
     const u = updater?.state;
     if (!u || u.status !== 'downloaded') return [];
-    return u.mac
+    return u.manual
       ? [{ label: `打开新版本 ${u.version} 的安装包`, click: () => updater.openMacInstaller() }]
       : [{ label: `重启以更新到 ${u.version}`, click: () => updater.install() }];
   },
@@ -3248,7 +3248,7 @@ handleShell('check:fix', async ({ id, region } = {}) => {
 
 // 关于页：检查更新、重启以更新（Mac：打开安装包）
 onShell('update:check', () => updater?.check());
-onShell('update:install', () => { if (!updater) return; if (updater.mac) updater.openMacInstaller(); else updater.install(); });
+onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）
 let liteFlushed = false;

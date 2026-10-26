@@ -261,10 +261,10 @@ function updateCard() {
   }
   return h('div', { class: 'updcard ready', role: 'status' },
     h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('b', { class: 'grow' }, `新版本 ${u.version} 已就绪`)),
-    h('small', null, u.mac ? '打开安装包，把 WAswitch 拖进“应用程序”替换旧版。' : '重启后生效，账号和聊天记录都在。'),
+    h('small', null, u.manual ? '打开后把新的 WAswitch 拖进“应用程序”替换旧版。' : '重启后生效，账号和聊天记录都在。'),
     h('div', { class: 'updbtns' },
       h('button', { class: 'later', onclick: () => { updateHidden = u.version; render(); } }, '稍后'),
-      h('button', { class: 'go', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '重启更新')));
+      h('button', { class: 'go', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '重启更新')));
 }
 
 // ---------- 顶栏 ----------
@@ -1362,8 +1362,8 @@ function updateBox(u) {
     checking: ['正在检查更新…', '正在连接 GitHub。', 'busy'],
     none: ['已是最新版本', '有新版本时会自动下载，下载好后提醒你。', 'ok'],
     downloading: [`正在下载 ${u.version}`, '下载在后台进行，不影响收发消息。', 'busy'],
-    downloaded: u.mac
-      ? [`新版本 ${u.version} 已就绪`, '已下载并校验通过。打开安装包，把 WAswitch 拖进“应用程序”替换旧版。', 'new']
+    downloaded: u.manual
+      ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, '缩到托盘后，没有未读、10 分钟没有新消息时会自动安装并重启；也可以现在重启。账号和聊天记录都在。', 'new'],
     error: ['这次检查没成功', '会在 6 小时后自动再试。', 'idle'],
   }[u.status] || ['软件更新', '', 'idle'];
@@ -1372,7 +1372,7 @@ function updateBox(u) {
   const mark = t === 'ok' ? icon('check', 18) : t === 'warn' ? icon('warn', 18) : t === 'busy' ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : icon('update', 18);
   const action = u.status === 'dev' || u.status === 'off' || u.status === 'downloading' ? null
     : u.status === 'downloaded'
-      ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.mac ? '打开安装包' : '现在重启并更新')
+      ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '现在重启并更新')
       : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, busy ? '检查中…' : '检查更新');
   return h('div', { class: `update-box ${t}`, role: 'status' },
     h('div', { class: 'upd-main' },

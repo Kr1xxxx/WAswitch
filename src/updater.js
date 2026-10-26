@@ -10,9 +10,13 @@
 //   - 用户点“重启以更新”（关于页或托盘菜单）；
 //   - 窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
 //     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）。
-// macOS：没有签名证书，electron-updater 的 Mac 流程用不了。自己下载 dmg，按 latest-mac.yml 里的 sha512 校验，
-//   校验通过后提示用户打开安装包手动替换。
+// macOS：没有签名证书，electron-updater 的 Mac 流程（Squirrel.Mac）用不了，自己做：
+//   下载 zip，按 latest-mac.yml 里的 sha512 校验，用 ditto 解压，确认是 WAswitch.app、版本号对得上。
+//   App 在「应用程序」里且有写权限时，和 Windows 一样的安装时机：App 退出后由一个小脚本替换旧的 WAswitch.app、
+//   清掉“已损坏”标记（xattr -cr）、重新打开。替换失败会放回旧版并重新打开，下次改成手动安装。
+//   App 不在「应用程序」里、在安装盘里直接运行、或者没有写权限时，提示用户把新的 WAswitch.app 拖进「应用程序」。
 const { app, net, session, shell } = require('electron');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +32,8 @@ const IDLE_TIMEOUT_MS = 60 * 1000; // Mac 下载：这么久没收到数据就�
 const STUCK_CHECKING_MS = 5 * 60 * 1000; // 检查超过 5 分钟没结果
 const STUCK_DOWNLOAD_MS = 30 * 60 * 1000; // 下载 30 分钟没有进度
 const PENDING_RETRY_MS = 10 * 60 * 1000; // 新版本还在上传时，过这么久再查
+const MAC_QUIT_WAIT_S = 25; // 替换脚本最多等旧版本退出这么久
+const APP_ID = 'com.waswitch.app';
 const UPDATER_PARTITION = 'waswitch-updater'; // 更新专用的临时会话（不是 persist:，不碰账号）
 
 // 更新专用会话：强制直连，不读系统代理
@@ -40,6 +46,63 @@ async function updaterSession() {
   }
   return directSession;
 }
+
+// 正在运行的 WAswitch.app 的路径（/Applications/WAswitch.app/Contents/MacOS/WAswitch → /Applications/WAswitch.app）
+function appBundlePath(execPath = process.execPath) {
+  const m = String(execPath).match(/^(\/.*?\.app)\/Contents\/MacOS\/[^/]+$/);
+  return m ? m[1] : null;
+}
+
+// 不能自动替换的原因；null 表示可以
+function replaceBlocker(bundle, home) {
+  if (!bundle) return '找不到 WAswitch.app';
+  if (/\/AppTranslocation\//.test(bundle) || bundle.startsWith('/Volumes/')) return '是从安装盘或下载文件夹直接打开的';
+  const parent = path.dirname(bundle);
+  if (parent !== '/Applications' && parent !== path.join(home, 'Applications')) return '不在「应用程序」文件夹里';
+  try {
+    fs.accessSync(parent, fs.constants.W_OK);
+    fs.accessSync(bundle, fs.constants.W_OK);
+  } catch { return '没有「应用程序」文件夹的写入权限'; }
+  return null;
+}
+
+// App 退出后替换的脚本。参数：旧进程 pid、要替换的 WAswitch.app、新的 WAswitch.app、失败记录文件
+// 先把新版复制到同一文件夹，再两次改名对调，中途失败就把旧版放回去；最后都会重新打开 WAswitch
+const MAC_INSTALL_SCRIPT = `#!/bin/bash
+PID="$1"; OLD="$2"; NEW="$3"; RESULT="$4"
+PARENT="$(dirname "$OLD")"
+TMP="$PARENT/.WAswitch-new-$$.app"
+BAK="$PARENT/.WAswitch-old-$$.app"
+fail() { echo "$1" > "$RESULT"; rm -rf "$TMP"; /usr/bin/open "$OLD"; exit 1; }
+for i in $(seq 1 ${MAC_QUIT_WAIT_S * 2}); do kill -0 "$PID" 2>/dev/null || break; sleep 0.5; done
+if kill -0 "$PID" 2>/dev/null; then echo "旧版本没有退出" > "$RESULT"; exit 1; fi
+rm -rf "$TMP"
+/usr/bin/ditto "$NEW" "$TMP" || fail "复制新版本失败"
+/usr/bin/xattr -cr "$TMP" 2>/dev/null
+mv "$OLD" "$BAK" || fail "移走旧版本失败"
+if ! mv "$TMP" "$OLD"; then mv "$BAK" "$OLD"; fail "放入新版本失败"; fi
+rm -rf "$BAK" "$NEW"
+rm -f "$RESULT"
+/usr/bin/open "$OLD"
+`;
+
+function run(cmd, args) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 5 * 60 * 1000, maxBuffer: 1024 * 1024 }, (e, out) => (e ? reject(e) : resolve(String(out).trim())));
+  });
+}
+
+// Mac 上用到的系统命令（自检时换成假的）
+const macOps = {
+  bundle: () => appBundlePath(),
+  extract: (zip, dir) => run('/usr/bin/ditto', ['-x', '-k', zip, dir]),
+  plistValue: (plist, key) => run('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', plist]),
+  clearQuarantine: (target) => run('/usr/bin/xattr', ['-cr', target]),
+  launch: (script, args) => {
+    const child = spawn('/bin/bash', [script, ...args], { detached: true, stdio: 'ignore' });
+    child.unref();
+  },
+};
 
 // 最新版本的 latest*.yml 还没传上去（GitHub 404）
 class PendingError extends Error {}
@@ -168,9 +231,12 @@ class Updater {
       lastResult: '',
       failures: 0,
       mac: this.mac,
+      manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
     };
     this.updater = null;
-    this.macFile = '';
+    this.ops = hooks.macOps || macOps;
+    this.macAuto = false; // Mac 能自动替换
+    this.macApp = ''; // 解压好、校验过的新 WAswitch.app
     this.timers = [];
     this.installing = false;
     this.idleMs = hooks.idleMs || IDLE_TIMEOUT_MS; // 测试时调小
@@ -184,6 +250,7 @@ class Updater {
       return;
     }
     if (!this.mac) this.setupElectronUpdater();
+    else this.setupMac();
     this.timers.push(setTimeout(() => this.check(), FIRST_CHECK_MS));
     this.timers.push(setInterval(() => this.check(), CHECK_EVERY_MS));
     this.timers.push(setInterval(() => { this.watchdog(); this.maybeAutoInstall(); }, IDLE_POLL_MS));
@@ -212,7 +279,7 @@ class Updater {
   trayText() {
     const s = this.state;
     if (s.status === 'downloading') return `正在下载新版本 ${s.percent}%`;
-    if (s.status === 'downloaded') return this.mac ? `新版本 ${s.version} 已下载` : `新版本 ${s.version} 已下载，重启后生效`;
+    if (s.status === 'downloaded') return s.manual ? `新版本 ${s.version} 已下载` : `新版本 ${s.version} 已下载，重启后生效`;
     return '';
   }
 
@@ -293,7 +360,7 @@ class Updater {
 
   // 自动安装：只在用户肯定不在用的时候
   maybeAutoInstall() {
-    if (this.mac || this.state.status !== 'downloaded' || this.installing) return;
+    if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
     const reason = this.hooks.idleReason();
     if (reason) return;
     console.log(`自动安装新版本 ${this.state.version}`);
@@ -302,12 +369,14 @@ class Updater {
 
   // 用户点“重启以更新”，或空闲时自动调用
   async install() {
-    if (this.mac || this.state.status !== 'downloaded' || this.installing) return;
+    if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
     this.installing = true;
     try {
+      if (this.mac && (!this.macApp || !fs.existsSync(this.macApp))) throw new Error('解压好的新版本不见了');
       await this.hooks.beforeInstall();
+      if (this.mac) this.launchMacInstall();
       // isSilent: 不弹安装界面；isForceRunAfter: 装完自动重新打开
-      this.updater.quitAndInstall(true, true);
+      else this.updater.quitAndInstall(true, true);
       // 正常情况下软件马上就会退出；30 秒后还在，说明安装没启动（会另有 error 事件），恢复正常运行
       setTimeout(() => {
         if (!this.installing) return;
@@ -340,16 +409,16 @@ class Updater {
     }
     const info = parseLatestYml(yml);
     if (!info.version || compareVersions(info.version, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
-    const file = info.files.find((f) => /\.dmg$/i.test(f.url) && /arm64/i.test(f.url)) || info.files.find((f) => /\.dmg$/i.test(f.url));
+    const file = info.files.find((f) => /\.zip$/i.test(f.url) && /arm64/i.test(f.url)) || info.files.find((f) => /\.zip$/i.test(f.url));
     if (!file || !file.sha512) throw new Error('新版本里没有 Mac 安装包');
     const name = path.basename(file.url);
-    if (!/^[\w.-]+\.dmg$/i.test(name)) throw new Error('安装包文件名不对');
-    const dir = path.join(app.getPath('userData'), 'updates');
+    if (!/^[\w.-]+\.zip$/i.test(name)) throw new Error('安装包文件名不对');
+    const dir = this.macDir();
     fs.mkdirSync(dir, { recursive: true });
     const dest = path.join(dir, name);
     // 之前下好并校验过的不再下
     if (fs.existsSync(dest) && await sha512Of(dest) === file.sha512) {
-      this.macDownloaded(info.version, dest);
+      await this.macDownloaded(info.version, dest);
       return;
     }
     this.set({ status: 'downloading', version: info.version, percent: 0 });
@@ -378,22 +447,75 @@ class Updater {
       throw new Error('安装包校验不通过（sha512 不一致），已删除');
     }
     fs.renameSync(part, dest);
+    await this.macDownloaded(info.version, dest);
+  }
+
+  macDir() { return path.join(app.getPath('userData'), 'updates'); }
+  macResultFile() { return path.join(this.macDir(), 'install-failed.txt'); }
+
+  // 启动时：看能不能自动替换；上次自动替换失败过就这次改成手动；清掉已经装上的旧安装包
+  setupMac() {
+    const dir = this.macDir();
+    let lastFail = '';
+    try { lastFail = fs.readFileSync(this.macResultFile(), 'utf8').trim().slice(0, 100); } catch { /* 没失败过 */ }
+    fs.rmSync(this.macResultFile(), { force: true });
+    const blocker = lastFail ? `上次自动安装没成功（${lastFail}）` : replaceBlocker(this.ops.bundle(), app.getPath('home'));
+    this.macAuto = !blocker;
+    this.macBlocker = blocker || '';
+    this.state.manual = !this.macAuto;
+    if (blocker) console.warn(`Mac 不能自动更新：${blocker}`);
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        const v = (f.match(/^WAswitch-(\d[^-]*(?:-[a-z]+\.\d+)?)-/i) || [])[1];
+        if (f === 'staging' || f === 'install.sh' || /\.(dmg|part)$/.test(f) || (v && compareVersions(v, app.getVersion()) <= 0)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+      }
+    } catch { /* 还没有 updates 文件夹 */ }
+  }
+
+  // 解压、确认是 WAswitch.app 而且版本号对得上，再清掉隔离属性
+  async stageMac(version, zip) {
+    const dir = this.macDir();
     // 旧版本的安装包不再需要
-    for (const f of fs.readdirSync(dir)) if (f !== name) fs.rmSync(path.join(dir, f), { force: true });
-    this.macDownloaded(info.version, dest);
+    for (const f of fs.readdirSync(dir)) if (f !== path.basename(zip)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+    const staging = path.join(dir, 'staging');
+    fs.mkdirSync(staging, { recursive: true });
+    try {
+      await this.ops.extract(zip, staging);
+      const appDir = path.join(staging, 'WAswitch.app');
+      const plist = path.join(appDir, 'Contents', 'Info.plist');
+      if (!fs.existsSync(plist)) throw new Error('安装包里没有 WAswitch.app');
+      if (await this.ops.plistValue(plist, 'CFBundleIdentifier') !== APP_ID) throw new Error('安装包里的不是 WAswitch');
+      const v = await this.ops.plistValue(plist, 'CFBundleShortVersionString');
+      if (v !== version) throw new Error(`安装包版本不对（${v}）`);
+      await this.ops.clearQuarantine(appDir).catch(() => {});
+      return appDir;
+    } catch (e) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      fs.rmSync(zip, { force: true });
+      throw new Error(`解压安装包失败：${String(e.message || e).split('\n')[0]}`);
+    }
   }
 
-  macDownloaded(version, file) {
-    this.macFile = file;
+  async macDownloaded(version, zip) {
+    this.macApp = await this.stageMac(version, zip);
     this.succeed('downloaded', `新版本 ${version} 已下载并校验通过`, { version, percent: 100 });
-    this.hooks.notify('WAswitch 有新版本', `${version} 已下载。点这里打开安装包，把 WAswitch 拖进“应用程序”替换旧版。`, () => this.openMacInstaller());
+    if (this.macAuto) { this.maybeAutoInstall(); return; }
+    this.hooks.notify('WAswitch 有新版本', `${version} 已下载。点这里打开，把新的 WAswitch 拖进“应用程序”替换旧版。`, () => this.openMacInstaller());
   }
 
-  // 在 Finder 里打开下载好的 dmg
+  // 写好替换脚本，交给一个独立进程，然后退出。脚本等这个进程退出后替换并重新打开
+  launchMacInstall() {
+    const script = path.join(this.macDir(), 'install.sh');
+    fs.writeFileSync(script, MAC_INSTALL_SCRIPT, { mode: 0o700 });
+    this.ops.launch(script, [String(process.pid), this.ops.bundle(), this.macApp, this.macResultFile()]);
+    app.quit();
+  }
+
+  // 手动安装：在 Finder 里选中解压好的新 WAswitch.app，同时打开「应用程序」文件夹
   openMacInstaller() {
-    if (!this.macFile || !fs.existsSync(this.macFile)) return;
-    shell.showItemInFolder(this.macFile);
-    shell.openPath(this.macFile).catch(() => {});
+    if (!this.macApp || !fs.existsSync(this.macApp)) return;
+    shell.showItemInFolder(this.macApp);
+    shell.openPath('/Applications').catch(() => {});
   }
 }
 
@@ -409,4 +531,4 @@ function sha512Of(file) {
   });
 }
 
-module.exports = { Updater, UPDATER_PARTITION, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };
+module.exports = { Updater, UPDATER_PARTITION, MAC_INSTALL_SCRIPT, appBundlePath, replaceBlocker, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };
