@@ -266,6 +266,34 @@ function dockInHead() {
     h('label', { class: 'dk-auto', title: '自动翻译这个号当前对话里新收到的消息' }, '自动翻译', sw));
 }
 
+// 朗读用的语言代码（系统自带的语音，不联网）
+const SPEAK_LANG = { 英语: 'en-US', 西班牙语: 'es-ES', 葡萄牙语: 'pt-PT', 法语: 'fr-FR', 德语: 'de-DE', 意大利语: 'it-IT', 俄语: 'ru-RU', 阿拉伯语: 'ar-SA', 土耳其语: 'tr-TR', 印地语: 'hi-IN', 印尼语: 'id-ID', 马来语: 'ms-MY', 泰语: 'th-TH', 越南语: 'vi-VN', 菲律宾语: 'fil-PH', 日语: 'ja-JP', 韩语: 'ko-KR', 中文: 'zh-CN' };
+function dockSpeak(text, lang) {
+  const synth = window.speechSynthesis;
+  if (!synth) return dockSay('这台电脑不支持朗读', true);
+  if (synth.speaking) { synth.cancel(); return; } // 正在读就停下
+  if (!text.trim()) return;
+  const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
+  if (SPEAK_LANG[lang]) u.lang = SPEAK_LANG[lang];
+  synth.speak(u);
+}
+// 参考样式：灰色圆角框，左下角朗读和复制
+function dockField(box, getText, lang) {
+  const copyBtn = h('button', { class: 'dk-tool', title: '复制', 'aria-label': '复制', onclick: async () => {
+    const text = getText();
+    if (!text) return;
+    await window.wa.panelCopy(text);
+    copyBtn.replaceChildren(icon('check', 17));
+    copyBtn.title = '已复制';
+    copyBtn.classList.add('done');
+    setTimeout(() => { copyBtn.replaceChildren(icon('copy', 17)); copyBtn.title = '复制'; copyBtn.classList.remove('done'); }, 1200);
+  } }, icon('copy', 17));
+  return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
+    h('div', { class: 'dk-tools' },
+      h('button', { class: 'dk-tool', title: '朗读（再点一下停止）', 'aria-label': '朗读', onclick: () => dockSpeak(getText(), lang()) }, icon('speak', 17)),
+      copyBtn)));
+}
+
 function dockCompose() {
   const st = dk.st;
   const tones = TONE_LIST.map(([id, label]) => h('button', { class: `dk-chip${dk.tone === id ? ' on' : ''}`, 'aria-pressed': String(dk.tone === id), onclick: () => {
@@ -300,7 +328,7 @@ function dockCompose() {
   const mac = s.platform === 'darwin';
   return h('div', { class: 'dk-compose' },
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), modeSel, ...tones),
-    input,
+    dockField(input, () => input.value, () => '中文'),
     h('div', { class: 'dk-outhead' },
       h('span', { class: 'dk-label' }, '→'), dockLangSel(),
       h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改'),
@@ -311,13 +339,12 @@ function dockCompose() {
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-link', title: 'AI 对照中文原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
           h('button', { class: 'dk-link', title: '按现在的中文和语气重新翻，会替换下面的译文', onclick: () => dockTranslate(false) }, dk.out ? '重新翻译' : '翻译'))),
-    out,
+    dockField(out, () => out.value, () => dk.st && dk.st.target),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
     dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },
       h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey },
-        '放进输入框', h('span', { class: 'dk-key' }, mac ? '⌘ ⇧ ↵' : 'Ctrl+Shift+Enter')),
-      h('button', { class: 'btn', disabled: !dk.out, onclick: async () => { await window.wa.panelCopy(dk.out); dockSay('已复制'); } }, '复制')));
+        '放进输入框', h('span', { class: 'dk-key' }, mac ? '⌘ ⇧ ↵' : 'Ctrl+Shift+Enter'))));
 }
 
 // force=false：只刷新状态条和消息列表，正在写的回复不动
