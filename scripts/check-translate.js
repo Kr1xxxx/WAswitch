@@ -49,6 +49,8 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   behave=[{status:401,body:'{"error":{"message":"invalid"}}'}]; calls=[];
   q=await tr.translate({text:'你好',mode});
   assert.equal(q.kind,'auth'); assert.equal(calls.length,1);
+  // 服务商的英文原话不进正文，放进 detail（界面上收在“详细信息”里）
+  assert(!q.error.includes('invalid') && /invalid/.test(q.detail||''), JSON.stringify(q));
   // 密钥错：点名是哪个服务商，并带上它的 id（界面“去填密钥”打开它的表单）
   assert.equal(q.providerId,pid); assert(q.error.includes('密钥不对'), q.error);
   // 服务商把密钥原样写进错误里（智谱的密钥不是 sk- 开头）：要被遮住

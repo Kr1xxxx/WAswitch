@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { canEncrypt } = require('../secure-storage');
+const errtext = require('../errtext');
 
 const PROTOCOL = 1;
 const FILE = 'team.json';
@@ -47,6 +48,15 @@ function cleanServer(raw) {
   return u.origin;
 }
 
+
+// 连不上后台时给用户看的话。原话（fetch failed、ENOTFOUND 之类）另外放进 detail
+function unreachable(e) {
+  if (e && e.name === 'AbortError') return '团队后台没有响应（超时）：检查网络，稍后会自动再试';
+  const kind = errtext.netKind(errtext.rawOf(e));
+  if (kind === 'dns') return '连不上团队后台：找不到这个地址，问管理员后台地址对不对';
+  if (kind === 'cert') return '连不上团队后台：安全证书不对，问管理员后台地址对不对';
+  return '连不上团队后台：检查网络，或问管理员后台地址对不对';
+}
 class TeamSync {
   // hooks:
   //   accounts() -> 账号数组（同一份对象，模块直接改 teamId/teamHidden/teamNote 等字段）
@@ -134,6 +144,7 @@ class TeamSync {
       allowPrivate: this.state.allowPrivate,
       lastOkAt: this.state.lastOkAt,
       lastError: this.state.lastError,
+      lastErrorDetail: this.state.lastErrorDetail || '',
       offline: this.joined() && !this.state.revoked && this.failures > 0,
       held: this.state.held.length,
       teamCount: accs.filter((a) => a.teamId && !a.teamHidden).length,
@@ -199,13 +210,13 @@ class TeamSync {
         accounts: this.localList(Array.isArray(localIds) ? localIds : []),
       }, '', origin);
     } catch (e) {
-      return { error: `连不上后台：${e.name === 'AbortError' ? '超时' : e.message}` };
+      return { error: unreachable(e), detail: errtext.rawOf(e) };
     }
     if (r.status !== 200 || !r.data || typeof r.data.token !== 'string' || !UUID_RE.test(r.data.device_id)) {
       return { error: (r.data && r.data.error) || `登记失败（${r.status}）` };
     }
     this.state = { ...this.state, server: origin, deviceId: r.data.device_id, token: this.safe.encryptString(r.data.token).toString('base64'),
-      cursor: 0, revoked: false, held: [], events: [], allowPrivate: r.data.allow_private !== false, lastError: '', lastOkAt: this.now() };
+      cursor: 0, revoked: false, held: [], events: [], allowPrivate: r.data.allow_private !== false, lastError: '', lastErrorDetail: '', lastOkAt: this.now() };
     this.persist();
     this.mapTeamIds(r.data.accounts);
     this.hooks.refresh();
@@ -220,7 +231,7 @@ class TeamSync {
     try {
       r = await this.post('/api/device/join', { v: PROTOCOL, accounts: this.localList(Array.isArray(localIds) ? localIds : []) }, this.tokenPlain());
     } catch (e) {
-      return { error: `连不上后台：${e.message}` };
+      return { error: unreachable(e), detail: errtext.rawOf(e) };
     }
     if (r.status !== 200 || !r.data) return { error: (r.data && r.data.error) || `加入失败（${r.status}）` };
     this.mapTeamIds(r.data.accounts);
@@ -304,12 +315,13 @@ class TeamSync {
     try {
       r = await this.post('/api/device/sync', body, token);
     } catch (e) {
-      return this.offline(e.name === 'AbortError' ? '后台没有响应（超时）' : `连不上后台：${e.message}`);
+      return this.offline(unreachable(e), errtext.rawOf(e));
     }
     // 只有这一种情况才停用团队号：明确的 403、带 revoked、而且说的是本机
     if (r.status === 403 && r.data && r.data.revoked === true && r.data.device_id === this.state.deviceId) {
       this.state.revoked = true;
       this.state.lastError = '这台电脑已被管理员停用';
+      this.state.lastErrorDetail = '';
       this.persist();
       // 团队号全部标成隐藏：以后重新登记，也要等后台重新分配才显示
       for (const a of this.hooks.accounts()) if (a.teamId) { a.teamHidden = true; this.hooks.park(a); }
@@ -328,6 +340,7 @@ class TeamSync {
     this.failures = 0;
     this.state.lastOkAt = this.now();
     this.state.lastError = '';
+    this.state.lastErrorDetail = '';
     this.state.allowPrivate = r.data.allow_private !== false;
     this.applySeats(r.data.seats, r.data.confirm_hides === true);
     if (Number.isSafeInteger(r.data.cursor) && r.data.cursor >= this.state.cursor) this.state.cursor = r.data.cursor;
@@ -339,13 +352,14 @@ class TeamSync {
     return { ok: true };
   }
 
-  offline(why) {
+  offline(why, detail = '') {
     this.failures += 1;
     this.state.lastError = why;
+    this.state.lastErrorDetail = detail;
     this.persist();
     this.schedule(BACKOFF_MIN[Math.min(this.failures - 1, BACKOFF_MIN.length - 1)] * 60 * 1000);
     this.hooks.refresh();
-    return { offline: true, error: why };
+    return { offline: true, error: why, ...(detail ? { detail } : {}) };
   }
 
   // 后台关掉“允许私人号”时：私人号停着并隐藏（不删数据）；打开时恢复

@@ -47,7 +47,7 @@ function dockReset() {
   dk.seen.clear();
 }
 
-function dockSay(msg, bad = false, pid = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dockRender(true); }
+function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
 
 window.wa.onDock((st) => {
   if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
@@ -89,7 +89,7 @@ async function dockRun(p) {
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
-  if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '');
+  if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
   if (!p.insert) return dockSay(r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
@@ -371,7 +371,7 @@ function dockRender(force = false) {
   }
   const root = host.querySelector('.dk');
   const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
-  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn)) : null;
+  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块

@@ -90,7 +90,7 @@ function makeLitePage(id) {
     const res = await window.wa.liteSend(id, openJid, text);
     sending = false;
     sendBtn.disabled = false;
-    if (res && res.error) { err.textContent = res.error; return; }
+    if (res && res.error) { err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : [])); return; }
     input.value = '';
     input.style.height = '';
     input.focus();

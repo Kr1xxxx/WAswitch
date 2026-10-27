@@ -575,3 +575,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tr-krow .title { display: flex; align-items: center; }
 .tr-krow .desc { font-size: 13px; line-height: 1.6; color: var(--muted); }
 .tr-krow input { width: 240px; }
+
+/* 报错原话：默认收起，点“详细信息”展开 */
+.err-raw { margin-top: 6px; font-size: 12px; color: var(--muted); text-align: left; }
+.err-raw summary { cursor: pointer; user-select: none; width: fit-content; }
+.err-raw code, .pdetails code { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, .05); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; }
