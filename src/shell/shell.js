@@ -895,7 +895,7 @@ function translatePage(page) {
   const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
   page.append(...kids(
     h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。客户发来的消息会自动翻成中文；你的回复翻好后要自己按发送，不会自动发出。')),
+      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在下面关掉。你的回复翻好后要自己按发送，不会自动发出。')),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
     h('h2', { class: 'ov-h2' }, '服务商'),
@@ -918,6 +918,11 @@ function translatePage(page) {
     setRow('翻译的网络', '和 WhatsApp 账号分开。OpenRouter 在国内一般要选代理。',
       h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
         h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
+    s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
+      h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
+        h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
+          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
@@ -1679,6 +1684,9 @@ function render(forceContent = false) {
   renderTop();
   renderLock();
   renderPanel();
+  // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
+  const onTr = s.page === 'settings' && settingsTab === 'translate';
+  if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;
