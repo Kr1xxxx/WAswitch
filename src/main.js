@@ -36,6 +36,7 @@ const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
 const { problemCode } = require('./problem-codes');
 const { setupEditorIpc } = require('./editor-ipc');
+const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
 
@@ -999,10 +1000,8 @@ async function unparkAccount(acc) {
 
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
-  let id = Date.now();
-  while (accounts.some((a) => a.id === String(id))) id += 1;
   const acc = {
-    id: String(id), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,

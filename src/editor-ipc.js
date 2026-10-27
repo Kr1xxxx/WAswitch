@@ -6,6 +6,7 @@ const proxy = require('./proxy');
 const ports = require('./ports');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { canEncrypt } = require('./secure-storage');
+const { newAccountId } = require('./account-id');
 
 function setupEditorIpc(ctx) {
   const {
@@ -146,7 +147,7 @@ function setupEditorIpc(ctx) {
     const teamFirstSave = !!(acc && acc.teamNeedsProxy);
     if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
     if (!acc) {
-      acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+      acc = { id: newAccountId(ctx.accounts), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
       ctx.accounts.push(acc);
       if (tested) recordExit(acc, tested.ip);
       saveAccounts();
