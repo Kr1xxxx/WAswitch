@@ -487,6 +487,8 @@ function setupTranslateIpc(ctx) {
     setupFloatCore,
     pushFloat,
     layoutFloat,
+    // MCP translate_text 用：和用户点的翻译同一条队列
+    userTranslate,
     // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatOpen() { return floatOpen; },
