@@ -328,11 +328,14 @@ try {
     last.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: i % 2 ? 408 : 428 } } } });
     await sleep(10);
   }
-  check('网络类断开（408、428）连续 10 次仍然继续重连', statusOf('4') === 'reconnecting' && !!s4.retryTimer, statusOf('4'));
+  check('网络类断开（408、428）连续 10 次仍然继续重连', ['reconnecting', 'unreachable'].includes(statusOf('4')) && !!s4.retryTimer, statusOf('4'));
   s4.attempt = 30;
   s4.scheduleRetry();
+  check('连不上 WhatsApp 时最长 1 分钟重试一次（节点恢复后很快连上）', s4.retryTimer._idleTimeout === 60 * 1000, String(s4.retryTimer._idleTimeout));
+  s4.unreachable = false;
+  s4.scheduleRetry();
   const retryMs = s4.retryTimer._idleTimeout;
-  check('重连间隔最长 5 分钟', retryMs === 5 * 60 * 1000, String(retryMs));
+  check('其他断线重连间隔最长 5 分钟', retryMs === 5 * 60 * 1000, String(retryMs));
   // 会话坏了（500）连续 5 次：停止重连
   for (let i = 0; i < 5; i++) {
     clearTimeout(s4.retryTimer);
@@ -343,6 +346,63 @@ try {
   check('会话错误（500）连续 5 次后停止重连', statusOf('4') === 'stuck', statusOf('4'));
   s4.stop();
   socks2.server.close();
+
+  // 7a. 代理端口通但节点不通：几次失败或 30 秒后报原因（unreachable），一直重试，节点好了自动连上
+  const socks3 = await fakeSocks();
+  resetVersionCache();
+  let last6;
+  const s6 = new Session({ id: '6', proxy: `socks5h://127.0.0.1:${socks3.port}`, dir: path.join(tmp, '6'), key: newKey(), os: 'win32' }, post, {
+    makeSocket: () => { last6 = fake(); return last6; },
+    fetchVersion: async () => ({ isLatest: true, version: [2, 3000, 123456] }),
+  });
+  const stateOf = (id) => [...events].reverse().find((e) => e.type === 'state' && e.id === id);
+  const deadNode = { error: { message: 'WebSocket Error (Socks5 proxy rejected connection - HostUnreachable)', output: { statusCode: 500 } } };
+  await s6.start();
+  last6.ev.emit('connection.update', { connection: 'close', lastDisconnect: deadNode });
+  await sleep(10);
+  check('从没连上过的号断开时写“正在连接”（fresh），不写“连接断开”', statusOf('6') === 'reconnecting' && stateOf('6').fresh === true, JSON.stringify(stateOf('6')));
+  for (let i = 0; i < 2; i++) {
+    clearTimeout(s6.retryTimer);
+    await s6.start();
+    last6.ev.emit('connection.update', { connection: 'close', lastDisconnect: deadNode });
+    await sleep(10);
+  }
+  check('节点不通连续 3 次：报“连不上 WhatsApp”并带上原话', statusOf('6') === 'unreachable' && /HostUnreachable/.test(stateOf('6').detail || ''), JSON.stringify(stateOf('6')));
+  clearTimeout(s6.retryTimer);
+  await s6.start();
+  check('报了之后重试时不再闪回“正在连接”', statusOf('6') === 'unreachable');
+  for (let i = 0; i < 6; i++) {
+    last6.ev.emit('connection.update', { connection: 'close', lastDisconnect: deadNode });
+    await sleep(10);
+    clearTimeout(s6.retryTimer);
+    await s6.start();
+  }
+  check('节点不通带的 500 不算会话错误，不会停止重连', statusOf('6') === 'unreachable', statusOf('6'));
+  last6.ev.emit('connection.update', { connection: 'open' });
+  await sleep(10);
+  check('节点恢复后自动连上，问题清掉', statusOf('6') === 'open' && !s6.unreachable && s6.fails === 0);
+  last6.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'Connection Closed', output: { statusCode: 428 } } } });
+  await sleep(10);
+  check('连上过再断开才写“连接断开”', statusOf('6') === 'reconnecting' && stateOf('6').fresh === false, JSON.stringify(stateOf('6')));
+  s6.stop();
+  // 30 秒还没连上（这里改成 100 毫秒）：一次失败都没有也报原因
+  const s7 = new Session({ id: '7', proxy: `socks5h://127.0.0.1:${socks3.port}`, dir: path.join(tmp, '7'), key: newKey(), os: 'win32' }, post, {
+    makeSocket: () => fake(), fetchVersion: async () => ({ isLatest: true, version: [2, 3000, 123456] }), slowMs: 100,
+  });
+  await s7.start();
+  check('刚开始连接时显示“正在连接”', statusOf('7') === 'connecting');
+  await sleep(200);
+  check('一直没连上（30 秒）也报“连不上 WhatsApp”', statusOf('7') === 'unreachable', statusOf('7'));
+  s7.stop();
+  const s8 = new Session({ id: '8', proxy: `socks5h://127.0.0.1:${socks3.port}`, dir: path.join(tmp, '8'), key: newKey(), os: 'win32' }, post, {
+    makeSocket: () => { const x = fake(); setTimeout(() => x.ev.emit('connection.update', { qr: 'test-qr' }), 20); return x; },
+    fetchVersion: async () => ({ isLatest: true, version: [2, 3000, 123456] }), slowMs: 100,
+  });
+  await s8.start();
+  await sleep(250);
+  check('出了二维码（连上了 WhatsApp）就不报连不上', statusOf('8') === 'qr', statusOf('8'));
+  s8.stop();
+  socks3.server.close();
 
   // 8. 消息显示
   check('文字消息原样显示', textOf({ conversation: 'hi' }) === 'hi');

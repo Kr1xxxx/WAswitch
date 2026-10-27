@@ -951,13 +951,13 @@ function teamStatusOf(acc) {
   const health = proxyHealth.get(acc.id);
   let state;
   if (acc.teamNeedsProxy) state = 'needs_proxy';
-  else if (problem) state = problem.kind === 'proxy' || problem.kind === 'proxyDown' ? 'proxy_down' : problem.kind === 'banned' ? 'banned' : 'error';
+  else if (problem) state = ['proxy', 'proxyDown', 'unreachable'].includes(problem.kind) ? 'proxy_down' : problem.kind === 'banned' ? 'banned' : 'error';
   else if (loginStates.get(acc.id) === 'needs_qr') state = 'needs_qr';
   else state = accountStatus(acc.id) === 'ready' ? 'ready' : accountStatus(acc.id) === 'not_loaded' ? 'stopped' : 'loading';
   return {
     state,
     unread: notifier.unread.get(acc.id) || 0,
-    proxy_ok: acc.proxy ? (problem && (problem.kind === 'proxy' || problem.kind === 'proxyDown') ? false : health ? health.ok : null) : null,
+    proxy_ok: acc.proxy ? (problem && ['proxy', 'proxyDown', 'unreachable'].includes(problem.kind) ? false : health ? health.ok : null) : null,
     proxy_ms: acc.proxy && health ? health.ms : null,
     exit_ip: acc.proxy ? exitIps.get(acc.id) || '' : '',
     exit_country: acc.proxy && health ? health.country : '',
@@ -1063,7 +1063,7 @@ function reconnectStuck() {
   for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
   // 轻量账号：代理断开、正在连、正在重连或停止重连的，马上重试一次
   for (const acc of visibleAccounts().filter(isLite)) {
-    if (['proxyDown', 'connecting', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
+    if (['proxyDown', 'unreachable', 'connecting', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
   }
 }
 
@@ -1542,6 +1542,32 @@ const LITE_PROBLEMS = {
     text: `${acc.name} 设置的线路 ${acc.proxy} 没有响应。轻量模式不会改用直连。请检查 Clash 是否在运行、端口是否正确。`,
     retrying: true,
   }),
+  // 代理端口通，但 30 秒还没连上 WhatsApp（或连续失败 3 次）：多半是 Clash 当前节点挂了
+  unreachable: (acc, { detail } = {}) => {
+    const raw = detail ? `${detail}${acc.proxy ? ` · ${acc.proxy}` : ''}` : '';
+    if (!acc.proxy) {
+      return {
+        kind: 'network', // 直连号没有代理可改，用“连不上”的代码 N1
+        title: `${acc.name}连不上 WhatsApp`,
+        short: '连不上',
+        text: '这个号是直连轻量号，用这台电脑自己的网络，不经过系统代理。可能是电脑没联网，或者要把 Clash 改成 TUN 模式。',
+        detail: raw,
+        retrying: true,
+      };
+    }
+    const p = proxy.parse(acc.proxy);
+    const ok = p && !p.error;
+    const local = ok && errtext.isLocal(p.host);
+    return {
+      title: local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理连不上 WhatsApp`,
+      short: '节点不通',
+      text: local
+        ? `这个号先暂停联网，不会改用直连，手机上的消息不会丢。Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
+        : `这个号先暂停联网，不会改用直连，手机上的消息不会丢。代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
+      detail: raw,
+      retrying: true,
+    };
+  },
   loggedOut: () => ({
     title: '这个号已退出登录',
     short: '已退出登录',
@@ -1591,16 +1617,16 @@ function userIsReading(id, jid) {
 }
 
 function bindLiteEvents() {
-  liteHost.on('state', ({ id, status, qr, me }) => {
+  liteHost.on('state', ({ id, status, qr, me, detail, fresh }) => {
     const acc = findAcc(id);
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
-    liteStates.set(id, { status, qr: status === 'qr' ? qr : null });
+    liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
     const make = LITE_PROBLEMS[status];
-    if (make) problems.set(id, { kind: status, ...make(acc) });
+    if (make) problems.set(id, { kind: status, ...make(acc, { detail: typeof detail === 'string' ? detail.slice(0, 300) : '' }) });
     else if (status === 'open' || status === 'qr') problems.delete(id);
     // 掉线、被封：不管有没有关通知都提醒
     if (prev !== status && status === 'loggedOut') notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
@@ -1651,6 +1677,7 @@ function liteStateForShell() {
     id: acc.id,
     status: st.status || 'connecting',
     qr: st.qr || null,
+    fresh: st.fresh !== false, // 这次启动后还没连上过：写“正在连接”，不写“连接断开”
     openJid: liteOpen.get(acc.id) || null,
     view: view ? { rev: view.rev, chats: view.chats, jid: view.jid, title: view.title, messages: view.messages } : null,
   };
