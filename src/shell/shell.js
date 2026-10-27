@@ -1027,8 +1027,7 @@ function translatePage(page) {
     s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
         h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
-        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
-          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
+        sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),

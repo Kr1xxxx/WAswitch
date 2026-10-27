@@ -1619,6 +1619,7 @@ function bindLiteEvents() {
     if (!findAcc(v.id)) return;
     liteViews.set(v.id, v);
     pushState();
+    trIpc.liteChanged(v.id); // 面板“翻译”页马上显示新消息
   });
   liteHost.on('incoming', ({ id, jid }) => {
     notifier.lastNewAt = Date.now(); // 自动装更新要看 10 分钟内有没有新消息
@@ -2368,6 +2369,8 @@ const ctx = {
   get editorColor() { return editorColor; },
   get liteGuardHits() { return liteGuardHits; },
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
+  // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
+  liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),
   nextName, nextColor, cleanNote, cleanPhone, applyPhone, COLORS, LITE_SCHEMES, newLiteKey, WA_URL, webrtcPolicy,
   regionName, exitIps, exitChanges, recordExit, views, problems, notifier,
   saveAccounts, startAccount, startLite, createView, destroyView, refresh, pushState, layout, focusActive, lockLocalPage, insertText,
