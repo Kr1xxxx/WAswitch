@@ -119,6 +119,7 @@ body.collapsed .foot .upd-check { display: none; }
 #aibar[hidden] { display: none; }
 #aibar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #aibar .btn { height: 30px; padding: 0 14px; }
+#aibar .grow.bad { color: var(--danger); }
 #topbar .who { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #f2f4f6; font-size: 12px; color: var(--soft); white-space: nowrap; }
 .chip.bad { background: #fdecee; color: var(--danger); }

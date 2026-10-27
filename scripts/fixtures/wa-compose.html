@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WhatsApp</title></head><body>
+<!-- 仿 WhatsApp 网页版打开一个对话时的结构，给 MCP 起草回复的自检用（scripts/check-draft.js）。
+     记下所有按键、发送按钮的点击和 Enter，用来证明草稿只是放进输入框、没有发送。 -->
+<div id="side"><div id="search" contenteditable="true" role="textbox" aria-label="搜索"></div><div id="pane-side"></div></div>
+<div id="main">
+  <header><span dir="auto" title="Anna Müller">Anna Müller</span></header>
+  <div role="application">
+    <div role="row"><div data-id="false_4915123456789@c.us_AAA" class="message-in">
+      <div class="copyable-text" data-pre-plain-text="[09:40, 27/10/2026] Anna: "><span class="selectable-text copyable-text"><span>Is the M size still available?</span></span></div></div></div>
+  </div>
+  <footer><div id="compose" contenteditable="true" role="textbox"></div><button id="send" aria-label="发送">➤</button></footer>
+</div>
+<script>
+  window.__ev = { keys: 0, enter: 0, sendClicks: 0, sent: [] };
+  document.addEventListener('keydown', (e) => { window.__ev.keys += 1; if (e.key === 'Enter') window.__ev.enter += 1; }, true);
+  const send = () => { window.__ev.sent.push(document.getElementById('compose').innerText); document.getElementById('compose').textContent = ''; };
+  document.getElementById('send').addEventListener('click', () => { window.__ev.sendClicks += 1; send(); });
+  document.getElementById('compose').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+</script>
+</body></html>

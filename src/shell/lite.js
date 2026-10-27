@@ -154,7 +154,19 @@ function makeLitePage(id) {
     if (showConv && view && view.jid === openJid) drawMessages(view);
   }
 
-  return { el, update };
+  // MCP 起草回复：把草稿填进输入框，不发送。jid 必须是正开着的对话。
+  // force=false 时输入框里有字就不填；返回 'ok' | 'not_empty' | 'chat'
+  function fill(jid, text, { force = false, focus = false } = {}) {
+    if (!openJid || jid !== openJid || conv.hidden || main.hidden) return 'chat';
+    if (!force && input.value.trim()) return 'not_empty';
+    const at = input.selectionStart ?? input.value.length;
+    input.value = (input.value.slice(0, at) + text + input.value.slice(input.selectionEnd ?? at)).slice(0, 4000);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (focus) input.focus();
+    return 'ok';
+  }
+
+  return { el, update, fill };
 }
 
 // shell.js 调用：返回这个账号的聊天页（同一个元素），并更新内容
@@ -164,6 +176,18 @@ function litePage(acc, lite) {
   p.update(acc, lite && lite.id === acc.id ? lite : null);
   return p.el;
 }
+
+// 主进程请求填草稿（MCP 起草回复）。刚打开的对话可能还没画出来，最多等 1.5 秒
+async function liteFillDraft({ id, jid, text, force, focus }) {
+  for (let i = 0; i < 15; i += 1) {
+    const p = litePages.get(id);
+    const r = p && typeof text === 'string' ? p.fill(jid, text, { force, focus }) : 'none';
+    if (r !== 'chat' && r !== 'none') return r;
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return litePages.has(id) ? 'chat' : 'none';
+}
+if (window.wa.onLiteFill) window.wa.onLiteFill(async (req) => window.wa.liteFilled(req.n, await liteFillDraft(req)));
 
 // 账号删掉后释放页面
 function liteForget(ids) {
