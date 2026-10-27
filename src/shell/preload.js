@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld('wa', {
   updateInstall: () => ipcRenderer.send('update:install'),
   updateLater: () => ipcRenderer.send('update:later'),
   openLogs: () => ipcRenderer.send('open-logs'),
+  trDirInfo: () => ipcRenderer.invoke('trdir:info'),
+  openTrDir: () => ipcRenderer.send('trdir:open'),
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
   editorTest: (data) => ipcRenderer.invoke('editor:test', data),

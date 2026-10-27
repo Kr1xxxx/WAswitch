@@ -1565,6 +1565,7 @@ function settingsPage() {
     }
   } else {
     const a = s.about;
+    if (Date.now() - trDirAt > 10000) loadTrDir();
     page.append(
       h('div', { class: 'hstack', style: { gap: '18px' } },
         h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,.25)' } }),
@@ -1572,13 +1573,32 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
+        h('span', null, '译文位置'), h('div', { class: 'col', style: { gap: '2px' } },
+          h('div', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, trDir ? trDir.dir : '正在读取…'),
+          trDir ? h('div', { class: 'hint', style: { fontSize: '12px' } }, `共 ${fmtBytes(trDir.bytes)}，${trDir.files} 个对话`) : null),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
         ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
-      h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
+      h('div', { class: 'btns' },
+        h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹'),
+        h('button', { class: 'btn', onclick: () => window.wa.openTrDir() }, '打开译文文件夹')),
       h('span', { class: 'hint' }, '日志里记着出错原因和问题代码，没有聊天内容和号码。'));
   }
   return page;
+}
+
+// 关于页的「译文位置」：收到的消息的译文存在哪、占多大（每次打开关于页最多 10 秒读一次）
+let trDir = null;
+let trDirAt = 0;
+async function loadTrDir() {
+  trDirAt = Date.now();
+  try { trDir = await window.wa.trDirInfo(); } catch { trDir = null; }
+  if (s.page === 'settings' && settingsTab === 'about') render(true);
+}
+function fmtBytes(n) {
+  if (n < 1024 * 1024) return `${Math.max(n ? 1 : 0, Math.round(n / 1024))} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
 // ---------- 设置 › 团队 ----------
