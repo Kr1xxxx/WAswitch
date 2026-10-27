@@ -527,19 +527,7 @@ const notifier = new Notifier({
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
   settingsMenu: () => [
-    {
-      label: `后台账号超过 ${settings.recycleMB || settings.recycleLastMB} MB 时自动刷新回收内存`,
-      type: 'checkbox',
-      checked: settings.recycleMB > 0,
-      click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : settings.recycleLastMB),
-    },
     { label: '立即清理内存（刷新没有未读的后台账号）', click: () => { memoryManager.cleanNow(); } },
-    {
-      label: '省内存模式（关闭显卡加速，重启后生效）',
-      type: 'checkbox',
-      checked: settings.lowMemoryMode,
-      click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
-    },
     ...(visibleAccounts().length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
     { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
@@ -1829,7 +1817,7 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
+  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
@@ -1849,20 +1837,6 @@ function relaunchApp() {
   app.relaunch();
   quitting = true;
   app.quit();
-}
-
-// 托盘里切换了省内存模式：问一下要不要现在重启
-async function askRestart() {
-  if (settings.lowMemoryMode === startupLowMemory) return;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: ['稍后', '现在重启'],
-    defaultId: 1,
-    cancelId: 0,
-    message: '省内存模式要重启 WAswitch 才生效',
-    detail: '重启大约需要十几秒，账号不用重新登录。',
-  });
-  if (response === 1) relaunchApp();
 }
 
 // ---------- 编辑页没保存就离开 ----------
@@ -2733,6 +2707,15 @@ handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
+// 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
+handleShell('tr:auto', ({ accountId, on } = {}) => {
+  const acc = findAcc(accountId);
+  if (!acc) return trState();
+  translator.setFloat({ accId: acc.id, auto: on === true });
+  if (on === true) floatCore.backfill(acc.id, { dailyCap: translator.load().dailyCap });
+  pushFloat();
+  return trState();
+});
 handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));

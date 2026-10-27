@@ -936,7 +936,7 @@ function translatePage(page) {
     } });
   page.append(...kids(
     h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。客户发来的消息会自动翻成中文；你的回复翻好后要自己按发送，不会自动发出。')),
+      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在下面关掉。你的回复翻好后要自己按发送，不会自动发出。')),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
     h('h2', { class: 'ov-h2' }, '服务商'),
@@ -961,6 +961,11 @@ function translatePage(page) {
       h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px', marginTop: '-7px' } },
         h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
         trNetErr ? netSay : null)),
+    s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
+      h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
+        h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
+          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
@@ -1393,19 +1398,20 @@ function settingsPage() {
   const page = h('div', { class: 'page narrow' });
   if (settingsTab === 'memory') {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
-    const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
-      s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
-    select.value = String(st.recycleMB || st.recycleLastMB || 1024);
+    const autoOn = st.autoRecycle !== false;
+    const select = h('select', { 'aria-label': '单个账号刷新线', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
+      [0, ...s.recycleChoices].map((n) => h('option', { value: n }, n ? `${n} MB` : '不限')));
+    select.value = String(st.recycleMB ?? 1024);
     const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
       (s.capChoices || [0, 4096]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
     capSelect.value = String(st.capMB ?? 4096);
-    const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
+    const over = autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
         h('p', { class: 'lead' }, '账号不会休眠，一直在线收消息。')),
       h('div', { class: 'box' },
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
-          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
+          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
@@ -1427,13 +1433,14 @@ function settingsPage() {
           render(true);
         } }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
-      setRow('总内存上限', '所有账号加起来超过这个数，就自动刷新占用最多的后台账号。正在看的和有未读的不动。',
-        capSelect,
-        st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
-          `账号多，这个上限太低，暂时不起作用。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
-      setRow('单个账号超量自动刷新', '一个后台账号用的内存超过设定值，就自动刷新它。',
-        sw(st.recycleMB > 0, '单个账号超量自动刷新', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 1024 : 0)),
-        st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时刷新') : null),
+      setRow('自动回收后台账号', '后台账号内存涨多了，就自动刷新一下。不退出登录，不漏消息；正在看的和有未读的不动。',
+        sw(autoOn, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v)),
+        autoOn ? h('div', { class: 'col', style: { gap: '2px' } },
+          h('label', { class: 'inline' }, '单个后台账号超过', select, '时刷新它'),
+          h('label', { class: 'inline' }, '所有账号加起来超过', capSelect, '时刷新占用最多的'),
+          st.capMB > 0 && s.capAdvice ? h('span', { class: 'inline', role: 'status' },
+            h('span', { class: 'bad-text' }, '账号多，总上限够不着，现在不起作用。'),
+            h('button', { class: 'btn', style: { height: '28px', padding: '0 12px' }, onclick: () => window.wa.setSetting('capMB', 0) }, '改为不限')) : null) : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '再省一些内存，但滚动没那么顺滑。',
         h('span', { class: 'hstack', style: { gap: '10px' } },
           s.restartNeeded ? h('button', { class: 'btn primary', style: { height: '32px', padding: '0 14px' }, onclick: () => window.wa.restart() }, '立即重启') : null,
@@ -1720,6 +1727,9 @@ function render(forceContent = false) {
   renderTop();
   renderLock();
   renderPanel();
+  // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
+  const onTr = s.page === 'settings' && settingsTab === 'translate';
+  if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;
