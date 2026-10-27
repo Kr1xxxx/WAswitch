@@ -121,6 +121,12 @@ body.collapsed .foot .upd-check { display: none; }
 #aibar .btn { height: 30px; padding: 0 14px; }
 #aibar .grow.bad { color: var(--danger); }
 #topbar .who { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 窗口窄时：先缩账号名和备注，再缩时钟（省略号，鼠标停上去看全），右边三个按钮永远留在顶栏里 */
+#topbar > * { flex-shrink: 0; }
+#topbar > .who { flex-shrink: 10; min-width: 0; }
+#topbar > .grow { flex-shrink: 1; }
+#topbar > .chip.clock { flex-shrink: 1; min-width: 60px; overflow: hidden; }
+#topbar > .chip.clock > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #f2f4f6; font-size: 12px; color: var(--soft); white-space: nowrap; }
 .chip.bad { background: #fdecee; color: var(--danger); }
 .chip.night { background: #fff4d6; color: #8a5a00; }
@@ -147,6 +153,7 @@ button.chip { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .pdetails { font-size: 12px; color: var(--muted); }
 .pdetails summary { cursor: pointer; padding: 2px 0; }
 .pdetails p { font-size: 12px; margin-top: 4px; }
+.pdetails p a { white-space: nowrap; }
 .btn { height: 40px; padding: 0 18px; border-radius: 20px; border: 1px solid #e3e6ea; background: #fff; font-size: 14px; }
 .btn.primary { border: none; background: var(--text); color: #fff; font-weight: 600; }
 .btn.danger { border-color: #f3c2c6; color: var(--danger); }
@@ -163,7 +170,11 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .field select { height: 40px; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
 .hint { font-weight: 400; font-size: 12px; line-height: 1.6; color: var(--muted); }
-.swatches { display: flex; gap: 8px; align-items: center; height: 40px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 40px; }
+/* 名称 + 颜色：窗口窄时颜色整排换到名称下面，不被右边的说明卡片挡住 */
+.name-row { align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.name-row > .field:first-child { flex: 1 1 180px; }
+@media (max-width: 1060px) { .page:not(.narrow) { gap: 24px; padding: 32px 24px; } .side-panel { width: 210px; padding: 18px; } }
 .swatch { width: 26px; height: 26px; border-radius: 8px; border: none; padding: 0; }
 .swatch.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -247,7 +258,8 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .lite-qr ol { margin: 0; padding-left: 18px; line-height: 1.9; color: var(--soft); }
 .spinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #e3e6ea; border-top-color: var(--text); animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.lite-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
+/* 对话列表最宽 280px；窗口窄、右边又开着工作台时跟着变窄（最少 130px），不把右边聊天挤成一个字一行 */
+.lite-main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(130px, 36%, 280px) minmax(0, 1fr); }
 .lite-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .lite-search { padding: 10px; }
 .lite-search input { width: 100%; height: 34px; border: 1px solid var(--field); border-radius: 9px; padding: 0 10px; font-size: 13px; }
@@ -272,7 +284,9 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .lite-err { min-height: 0; padding: 0 16px; font-size: 12px; color: var(--danger); }
 .lite-err:not(:empty) { padding: 6px 16px 0; }
 .lite-compose { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
-.lite-compose textarea { flex: 1; resize: none; min-height: 40px; max-height: 140px; border: 1px solid var(--field); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 14px; line-height: 1.45; }
+.lite-compose .btn { flex: none; }
+.lite-compose textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lite-compose textarea { flex: 1; min-width: 0; resize: none; min-height: 40px; max-height: 140px; border: 1px solid var(--field); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 14px; line-height: 1.45; }
 .field .check-row input { height: auto; padding: 0; border: none; margin-top: 4px; }
 
 /* 关于页：软件更新 */
@@ -489,7 +503,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-tool svg { stroke-width: 1.6; }
 .dk-tool:hover { color: #000; opacity: .65; }
 .dk-tool:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; border-radius: 4px; }
-.dk-outhead { display: flex; align-items: center; gap: 8px; }
+.dk-outhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
+/* 窗口窄时先让两个下拉框变短（文字省略），按钮保持一行；实在放不下按钮整体换到下一行，不会一个字一个字地折 */
+.dk-outhead select { flex: 0 1 auto; min-width: 64px; }
+.dk-outhead .dk-row, .dk-outhead > .dk-link { flex: none; }
+.dk-status { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dk-status:empty { display: none; }
 .dk-edited { font-size: 11px; color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 0 6px; }
 .dk-edited[hidden] { display: none; }
 .dk-acts { display: flex; gap: 8px; }
@@ -587,3 +606,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .err-raw { margin-top: 6px; font-size: 12px; color: var(--muted); text-align: left; }
 .err-raw summary { cursor: pointer; user-select: none; width: fit-content; }
 .err-raw code, .pdetails code { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, .05); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; }
+
+/* 按钮、标签、页签里的中文不折行：空间不够时由外层收缩或换行，不把“重新翻译”挤成“重新翻/译”（shen 2026-10-27） */
+.btn, .dk-link, .link-btn, .dk-edited, .dk-fixed, .dk-status .dk-dim, .tag, .pn-tag, .pill, .crm-tag, .tab, .tb-tab, .back, .updbtns button, .dk-label { white-space: nowrap; }
