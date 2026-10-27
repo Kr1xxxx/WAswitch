@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('wa', {
   checkFix: (id, region) => ipcRenderer.invoke('check:fix', { id, region }),
   exitAck: (id) => ipcRenderer.invoke('exit:ack', { id }),
   updateCheck: () => ipcRenderer.send('update:check'),
+  updateCheckOnly: () => ipcRenderer.send('update:check-only'),
   updateInstall: () => ipcRenderer.send('update:install'),
   openLogs: () => ipcRenderer.send('open-logs'),
   openSource: () => ipcRenderer.send('open-source'),
