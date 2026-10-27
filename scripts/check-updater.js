@@ -325,6 +325,44 @@ const updatesDir = path.join(home, 'updates');
     w2.maybeAutoInstall();
     await new Promise((r) => setTimeout(r, 10));
     check(installs2 === 1, 'Windows：下载中点了更新，下好后直接重启安装');
+    // 下载中点了更新，下好时用户还在打字：先不重启，停手了再装
+    let busy = '正在打字';
+    let installs3 = 0;
+    const w3 = new Updater({
+      onChange() {}, idleReason: () => '窗口开着', busyReason: () => busy, beforeInstall: async () => {}, installFailed: async () => {},
+      notify: () => {}, idleMs: 200, waitPollMs: 20, macOps: fakeOps,
+    });
+    w3.mac = false;
+    w3.updater = { quitAndInstall: () => { installs3 += 1; } };
+    w3.set({ status: 'downloading', version: '0.3.0', manual: false });
+    w3.userUpdate();
+    w3.succeed('downloaded', 'ok', { version: '0.3.0', percent: 100 });
+    w3.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 60));
+    check(installs3 === 0 && w3.state.waitReason === '正在打字', `Windows：用户点了更新但还在打字，下好后先不重启（${w3.state.waitReason}）`);
+    busy = null;
+    await new Promise((r) => setTimeout(r, 60));
+    check(installs3 === 1 && !w3.state.waitReason, 'Windows：停手后自动重启安装');
+    // 等停手时点了“稍后”：不自动重启，改回空闲时再装
+    busy = '正在打字';
+    let installs4 = 0;
+    const w4 = new Updater({
+      onChange() {}, idleReason: () => '窗口开着', busyReason: () => busy, beforeInstall: async () => {}, installFailed: async () => {},
+      notify: () => {}, idleMs: 200, waitPollMs: 20, macOps: fakeOps,
+    });
+    w4.mac = false;
+    w4.updater = { quitAndInstall: () => { installs4 += 1; } };
+    w4.set({ status: 'downloading', version: '0.3.0', manual: false });
+    w4.userUpdate();
+    w4.succeed('downloaded', 'ok', { version: '0.3.0', percent: 100 });
+    w4.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 30));
+    w4.userLater();
+    busy = null;
+    await new Promise((r) => setTimeout(r, 60));
+    w4.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs4 === 0 && !w4.state.userAsked && !w4.state.waitReason, 'Windows：等停手时点“稍后”，窗口开着就不自动重启');
     idle = null;
   }
   // 上次替换失败：这次改成手动

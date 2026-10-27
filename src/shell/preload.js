@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld('wa', {
   exitAck: (id) => ipcRenderer.invoke('exit:ack', { id }),
   updateCheck: () => ipcRenderer.send('update:check'),
   updateInstall: () => ipcRenderer.send('update:install'),
+  updateLater: () => ipcRenderer.send('update:later'),
   openLogs: () => ipcRenderer.send('open-logs'),
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
