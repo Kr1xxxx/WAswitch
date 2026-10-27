@@ -15,6 +15,7 @@ const os = require('os');
 const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
+const ports = require('./ports');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
@@ -2970,6 +2971,13 @@ handleShell('editor:load', (id) => {
     liteAvailable: canEncrypt(safeStorage),
     platform: process.platform,
   };
+});
+
+// 编辑页的代理预设：本机 7890–7899 哪些端口开着、能不能用、被哪个号占了
+handleShell('editor:ports', async (id) => {
+  const list = await ports.probeAll();
+  const used = ports.usage(accounts.filter((a) => !isParked(a)), id);
+  return list.map((p) => ({ ...p, usedBy: used[p.port] || [] }));
 });
 
 // 主号的出口 IP（轻量小号不能和主号用同一个 IP）。主号没设代理时查本机直连的出口。
