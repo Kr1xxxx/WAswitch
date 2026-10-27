@@ -200,6 +200,15 @@ function extraContacts(source, output) {
   return [...pick(output)].filter((x) => !src.has(x));
 }
 
+// 这个服务商能不能直接用：有密钥，或是不用密钥的本机接口（DeepL 一定要密钥）
+function needsKey(p) {
+  if (!p || p.keyEnc) return false;
+  return p.preset === 'deepl' || !checkBaseUrl(p.baseUrl).local;
+}
+// 报错里点名是哪个服务商（“去填密钥”按钮靠 pid 打开它的表单）
+const provName = (p) => (p && p.name) || '翻译服务';
+const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}还没填密钥`, pid: p.id });
+
 // name：服务商名字（例如“智谱”“OpenRouter”），报错里写明是谁出的问题
 function statusError(status, name = '') {
   const who = name ? `${name}${/[A-Za-z0-9)]$/.test(name) ? ' ' : ''}` : '服务商';
@@ -212,9 +221,10 @@ function statusError(status, name = '') {
   return { kind: 'other', text: `${who}返回了错误（${status}）` };
 }
 // 服务商原话是中文就接在后面（例如“余额不足”）；英文的不放正文，放进 detail（界面上收在“详细信息”里）
-function withDetail(err, status, detail) {
-  if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status };
-  return { kind: err.kind, text: err.text, status, ...(detail ? { detail: `HTTP ${status} · ${detail}` } : { detail: `HTTP ${status}` }) };
+function withDetail(err, status, detail, p) {
+  const pid = err.kind === 'auth' && p ? { pid: p.id } : {};
+  if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status, ...pid };
+  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status} · ${detail}` : `HTTP ${status}` };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
 function providerDetail(body, key = '') {
@@ -566,7 +576,7 @@ class Translator {
   // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }
   async callDeepl(p, { text, target, source, context }, signal) {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
-    if (!key) throw { kind: 'auth', text: '还没填密钥' };
+    if (!key) throw noKey(p);
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
@@ -579,8 +589,8 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: 'DeepL 密钥不对（免费版密钥以 :fx 结尾）', status: 403, detail: detail ? `HTTP 403 · ${detail}` : '' };
-      throw withDetail(statusError(res.status, p.name || 'DeepL'), res.status, detail);
+      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403 · ${detail}` } : {}) };
+      throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
     let out = '';
     try {
@@ -614,7 +624,7 @@ class Translator {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
     const chk = checkBaseUrl(p.baseUrl);
     if (chk.error) throw { kind: 'config', text: chk.error };
-    if (!key && !chk.local) throw { kind: 'auth', text: '还没填密钥' };
+    if (!key && !chk.local) throw noKey(p);
     const body = { model: p.model, messages, temperature, max_tokens: maxTokens, stream: false };
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
@@ -631,13 +641,14 @@ class Translator {
     const res = await this.post(`${chk.url}/chat/completions`, headers, body, chk.local, signal);
     const { text } = res;
     if (!res.ok) {
-      const err = statusError(res.status, p.name);
+      const err = statusError(res.status, provName(p));
       const detail = providerDetail(text, key);
       // 429 多半是“服务繁忙/限流”（混元 hy-mt2-plus 常见），不是没钱：不带英文原话，交给上层重试和换备用
       if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
         throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
       }
-      throw withDetail(err, res.status, detail);
+      // 密钥错时带上服务商 id，界面给“去填密钥”按钮
+      throw withDetail(err, res.status, detail, p);
     }
     let out = '';
     try {
@@ -707,7 +718,8 @@ class Translator {
       if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
-      return { error: lastErr.text, kind: lastErr.kind, ...(lastErr.detail ? { detail: lastErr.detail } : {}) };
+      // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单；英文原话放 detail
+      return { error: lastErr.text, kind: lastErr.kind, ...(lastErr.kind === 'auth' && lastErr.pid ? { providerId: lastErr.pid } : {}), ...(lastErr.detail ? { detail: lastErr.detail } : {}) };
     } finally {
       this.busy = null;
     }
@@ -734,5 +746,5 @@ class Translator {
   }
 }
 
-module.exports = { DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

@@ -51,6 +51,8 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   assert.equal(q.kind,'auth'); assert.equal(calls.length,1);
   // 服务商的英文原话不进正文，放进 detail（界面上收在“详细信息”里）
   assert(!q.error.includes('invalid') && /invalid/.test(q.detail||''), JSON.stringify(q));
+  // 密钥错：点名是哪个服务商，并带上它的 id（界面“去填密钥”打开它的表单）
+  assert.equal(q.providerId,pid); assert(q.error.includes('密钥不对'), q.error);
   // 服务商把密钥原样写进错误里（智谱的密钥不是 sk- 开头）：要被遮住
   behave=[{status:401,body:'{"error":{"message":"key sk-secret1234 is invalid"}}'}];
   q=await tr.translate({text:'你好',mode}); assert(!q.error.includes('secret1234'), q.error);
@@ -250,6 +252,11 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   assert.equal(zp5.preset,'zhipu'); assert.equal(zp5.model,'glm-4-flash'); assert.equal(c5.fixId,zp5.id);
   calls=[];
   q=await t5.translate({text:'你好',mode:{prompt:'p'}}); assert.equal(q.kind,'auth'); assert.equal(calls.length,0);
+  // 没填密钥：报错写明是智谱，带上它的 id；needsKey 认得出两个都没密钥
+  assert.equal(q.error,'智谱还没填密钥'); assert.equal(q.providerId,zp5.id);
+  { const raw=t5.load(); assert(raw.providers.every(T.needsKey)); }
+  assert(!T.needsKey({preset:'custom',baseUrl:'http://127.0.0.1:11434/v1'}), '本机接口不用密钥');
+  assert(T.needsKey({preset:'deepl',baseUrl:'http://127.0.0.1:1'}), 'DeepL 一定要密钥');
   t5.deleteProvider(hy5.id); t5.deleteProvider(zp5.id);
   assert.equal(new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake}).load().providers.length,0);
   fs.rmSync(d5,{recursive:true,force:true});

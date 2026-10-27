@@ -59,6 +59,16 @@ for (let i = 0; i < 60; i += 1) { t.m.check(); minutes(1); }
 assert.ok(t.reloads.length <= 3, `每小时最多 3 次，实际 ${t.reloads.length}`);
 console.log('✓ 每小时总共', t.reloads.length, '次（上限 3）');
 
+// 3b. 总开关「自动回收后台账号」关掉：两条线都不起作用，也不提示调上限
+usage.clear();
+t = setup(10, 350, { autoRecycle: false });
+for (let i = 0; i < 6; i += 1) { t.m.check(); minutes(1); }
+for (let p = 2; p <= 10; p += 1) usage.set(p, 1600);
+for (let i = 0; i < 120; i += 1) { t.m.check(); minutes(1); }
+assert.strictEqual(t.reloads.length, 0, `总开关关掉后不应刷新，实际 ${t.reloads.length} 次`);
+assert.strictEqual(t.m.capAdvice, 0, '总开关关掉后不该建议调上限');
+console.log('✓ 总开关关掉后 0 次自动刷新');
+
 // 4. 立即清理：刚切走 30 秒内的不动，没涨的不动
 (async () => {
   usage.clear();

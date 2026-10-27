@@ -4,7 +4,26 @@
 
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
-const PRESETS = [['直连', ''], ['Clash 7891', 'socks5://127.0.0.1:7891'], ['Clash 7892', 'socks5://127.0.0.1:7892'], ['Clash 7893', 'socks5://127.0.0.1:7893'], ['带密码的 http', 'http://用户名@代理IP:端口']];
+// 代理预设：直连 + Clash 本机端口（7891–7893 一直显示，7890–7899 里别的端口开着或被别的号用着才显示）+ 带密码模板
+const PORT_DEFAULT = [7891, 7892, 7893];
+const PORT_RANGE = [7890, 7891, 7892, 7893, 7894, 7895, 7896, 7897, 7898, 7899];
+const portUrl = (port) => `socks5://127.0.0.1:${port}`;
+// 本机端口代理的端口号（socks5://127.0.0.1:7891 → { port: 7891, socks: true }），别的地址返回 null
+function localProxyPort(raw) {
+  const m = /^(socks5|socks4|https?):\/\/(?:127\.0\.0\.1|localhost):(\d{2,5})\/?$/i.exec(String(raw || '').trim());
+  return m ? { port: Number(m[2]), socks: m[1].toLowerCase().startsWith('socks') } : null;
+}
+// 名字太长时截短（完整的放在悬停提示里）
+const shortName = (n) => (n.length > 8 ? `${n.slice(0, 7)}…` : n);
+const usedText = (names) => `已被「${shortName(names[0])}」${names.length > 1 ? `等 ${names.length} 个号` : ''}使用`;
+// 一个端口在预设按钮上的状态：[class, 文字, 悬停说明]
+function portStatus(st) {
+  if (!st) return ['wait', '检测中…', '正在检测这个端口有没有开'];
+  if (st.usedBy.length) return ['used', usedText(st.usedBy), `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP。${st.open ? '' : '（端口现在也没开）'}`];
+  if (!st.open) return ['off', '没开', '这个端口现在没开：Clash 没开，或者还没在 Clash 里开这个端口'];
+  if (!st.socks) return ['bad', '不能用', '端口被别的程序占着，或者要密码，不能当 socks5 代理用'];
+  return ['ok', '能用', '端口开着，可以当代理用。点“测试”看出口 IP'];
+}
 let liveColor = null; // 编辑页里点了色块、还没保存的颜色（窗口背景先跟着变）
 
 // 固定的图标，不含任何外部数据
@@ -129,7 +148,7 @@ const $lock = document.getElementById('lock');
 const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
-let settingsTab = 'memory';
+let settingsTab = 'general';
 let checkResult = null;
 let checkRunning = false;
 // 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
@@ -281,9 +300,11 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['translate', '翻译'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
-        h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
-          id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))));
+      h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
+        i ? h('div', { class: 'tab-group' }, title) : null,
+        ...tabs.map(([id, label]) =>
+          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+            id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
   const label = s.collapsed ? '展开侧栏' : '收起侧栏';
@@ -340,6 +361,17 @@ function checkUpdateBtn() {
 // 下载中显示进度，下载好显示“重启更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
 let updateHidden = '';
 const updateReady = () => !!(s.update && s.update.status === 'downloaded');
+// 设置侧栏分组：常用设置在前，诊断和其他在后。
+// 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
+function settingsGroups() {
+  const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
+  return [
+    ['设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
+    ['诊断', [['check', '隔离自检'], ['net', '连接记录']]],
+    ['其他', [showTeam ? ['team', '团队'] : null, ['about', '关于']].filter(Boolean)],
+  ];
+}
+
 function openAbout() { settingsTab = 'about'; window.wa.showPage('settings'); render(true); }
 function updateCard() {
   const u = s.update;
@@ -556,6 +588,7 @@ function problemButtons(acc) {
     case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
+    case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
     default: return [acc.direct ? null : btn('修改代理', () => window.wa.edit(acc.id)), retry(acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接')];
   }
 }
@@ -565,9 +598,23 @@ function problemPage(acc) {
     h('div', { class: 'warnicon' }, icon('warn', 26)),
     h('h2', null, acc.problemTitle || '代理连不上，这个账号已暂停联网'),
     h('p', null, acc.problem),
-    rawDetail(acc.problemDetail),
     acc.retrying ? h('p', { class: 'hint' }, acc.direct ? '正在自动重试，网络恢复后会自动连上。' : '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
-    h('div', { class: 'btns' }, ...kids(...problemButtons(acc)))));
+    h('div', { class: 'btns' }, ...kids(...problemButtons(acc))),
+    problemDetails(acc)));
+}
+
+// 折起来的详细信息：问题代码（日志里也记着同一个代码）和日志文件夹。
+// 界面会整块重画，记住展开的是哪个号的哪个问题，重画后保持展开
+let detailsOpenKey = '';
+function problemDetails(acc) {
+  if (!acc.problemCode) return null;
+  const key = `${acc.id}|${acc.problemKind}`;
+  const logs = h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLogs(); } }, '打开日志文件夹');
+  return h('details', { class: 'pdetails', open: detailsOpenKey === key, ontoggle: (e) => { if (e.currentTarget.open) detailsOpenKey = key; else if (detailsOpenKey === key) detailsOpenKey = ''; } },
+    h('summary', null, `详细信息 · ${acc.problemCode}`),
+    // 系统的原话（英文错误码），排查时看
+    acc.problemDetail ? h('code', null, acc.problemDetail) : null,
+    h('p', null, `问题代码 ${acc.problemCode}，日志里也记着这个代码。`, ' ', logs));
 }
 
 // Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
@@ -733,6 +780,27 @@ let trModeEdit = null;
 let trSay = '';
 let trTestRes = {};
 let trTestRaw = {}; // 测试失败时服务商的原话
+let trNetDraft = null; // 选了“指定代理”但代理地址还没存好：{ url }
+let trNetSay = ''; // “翻译的网络”这一行的提示：已保存 / 出错原因
+let trNetErr = false;
+let trNetTimer = 0;
+let trNetBusy = false; // 正在存：重画时旧输入框的失焦不再存一次
+let trNetLastUrl = ''; // 上次存好的代理地址：切到直连再切回来时帮你填上
+let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
+// 翻译页默认是简单版：只填密钥。点“详细设置”才显示服务商、网络、纠错、模式这些（记在本机）
+let trAdvanced = LS('trAdvanced') === '1';
+let trKeyFocus = ''; // 简单版里“去填密钥”：光标放进这个服务商的密钥框
+const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
+// 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
+async function trOpenKey(pid) {
+  if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
+  const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
+  if (trAdvanced) { trEdit = p ? { ...p } : trEdit; trFocusKey = !!p; } else trKeyFocus = p ? p.id : '';
+  trSay = '';
+  settingsTab = 'translate';
+  window.wa.showPage('settings');
+  if (s.page === 'settings') render(true);
+}
 function trProviderForm() {
   const e = trEdit;
   const presets = tr.cfg.presets;
@@ -769,6 +837,8 @@ function trProviderForm() {
   const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, thinking: think.value });
   for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
   for (const el of [name, base, key]) el.style.width = '260px';
+  // 设置页可能连着重画几次：等画到页面上的那一次再把光标放进去
+  if (trFocusKey) requestAnimationFrame(() => { if (!trFocusKey || !key.isConnected) return; trFocusKey = false; key.scrollIntoView({ block: 'center' }); key.focus(); });
   const isMt = /^hy-mt/i.test(model.value);
   // DeepL 是机器翻译：没有地址、模型、深度思考可选；各类型的说明也不一样，换类型时重画表单
   const deepl = preset.value === 'deepl';
@@ -779,7 +849,8 @@ function trProviderForm() {
     setRow('名称', '可不填。', name),
     deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '一般不用改。', base),
     deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : `${{ hunyuan: '填腾讯云 TokenHub 的密钥。', zhipu: '智谱开放平台（bigmodel.cn）里的 API 密钥。' }[preset.value] || ''}会加密保存。`, key),
+    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : `${{ hunyuan: '填腾讯云 TokenHub 的密钥。', zhipu: '智谱开放平台（bigmodel.cn）里的 API 密钥。' }[preset.value] || ''}会加密保存。`, key,
+      preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '翻译用不上，选“禁用”更快。', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
@@ -824,6 +895,35 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
+// 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
+function trKeysBox(c, apply) {
+  if (!c.providers.length) return h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有翻译服务商，点上面的“详细设置”添加。'));
+  const order = (p) => (p.id === c.primaryId ? 0 : p.id === c.fallbackId ? 1 : p.id === c.fixId ? 2 : 3);
+  const tag = (t) => h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, t);
+  return h('div', { class: 'box tr-keys' }, [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => {
+    const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
+      placeholder: p.hasKey ? `已填（尾号 ${p.keyTail}），不改就留空` : '粘贴 API 密钥' });
+    const save = async () => {
+      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return; }
+      const r = await window.wa.trProviderSave({ id: p.id, preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, thinking: p.thinking });
+      if (!r.error) { trSay = `「${p.name}」的密钥已保存`; trTestRes[p.id] = ''; }
+      apply(r);
+    };
+    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
+    const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
+    const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
+    return h('div', { class: 'tr-krow' },
+      h('div', { class: 'meta' },
+        h('span', { class: 'title' }, h('b', null, p.name), ...roles),
+        h('span', { class: 'desc' }, p.hasKey ? `已填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}` : `还没填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}`),
+        trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
+        link),
+      h('span', { class: 'hstack', style: { gap: '6px' } }, key,
+        h('button', { class: 'btn primary sm', onclick: save }, '保存'),
+        h('button', { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试')));
+  }));
+}
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
   const c = tr.cfg;
@@ -840,14 +940,64 @@ function translatePage(page) {
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
-  const netSel = h('select', { 'aria-label': '翻译走的网络' }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
-  netSel.value = c.network.mode;
-  const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
-  page.append(...kids(
-    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。客户发来的消息会自动翻成中文；你的回复翻好后要自己按发送，不会自动发出。')),
+  // 翻译的网络：改了就保存（选项一改就存，代理地址点别处或按回车存），不用再点“应用”
+  if (c.network.mode === 'proxy' && c.network.proxyUrl) trNetLastUrl = c.network.proxyUrl;
+  const netSay = h('span', { id: 'tr-net-say', class: 'hint', role: 'status', style: { color: trNetErr ? 'var(--danger)' : '' } }, trNetSay);
+  const saveNet = async (mode, url) => {
+    trNetBusy = true;
+    let r;
+    try { r = await window.wa.trNetwork(mode, url); } finally { trNetBusy = false; }
+    clearTimeout(trNetTimer);
+    if (r.error) { trNetSay = r.error; trNetErr = true; trNetDraft = mode === 'proxy' ? { url } : null; }
+    else {
+      trNetSay = '已保存'; trNetErr = false; trNetDraft = null;
+      // 两秒后把“已保存”收掉：只改这一行的文字，不重画整页（别把正在别处打字的光标弄丢）
+      trNetTimer = setTimeout(() => { if (trNetSay === '已保存') { trNetSay = ''; const el = document.getElementById('tr-net-say'); if (el) el.textContent = ''; } }, 2000);
+    }
+    tr.cfg = r.config; tr.modes = r.modes; render(true);
+  };
+  const netMode = trNetDraft ? 'proxy' : c.network.mode;
+  const netUrl = trNetDraft ? trNetDraft.url : (c.network.proxyUrl || '');
+  const netSel = h('select', { 'aria-label': '翻译走的网络', onchange: (e) => {
+    const v = e.target.value;
+    if (v !== 'proxy') { saveNet(v, ''); return; }
+    // 选了“指定代理”：框里已经有地址就直接存，没有就等填好
+    const url = (trNetDraft && trNetDraft.url) || trNetLastUrl;
+    if (url.trim()) { saveNet('proxy', url); return; }
+    trNetDraft = { url: '' }; trNetSay = ''; trNetErr = false; render(true);
+    const el = document.getElementById('tr-net-url'); if (el) el.focus();
+  } }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
+  netSel.value = netMode;
+  const proxyIn = h('input', { id: 'tr-net-url', 'aria-label': '翻译代理地址', value: netUrl, placeholder: 'http://127.0.0.1:7890', style: { width: '200px', flex: 'none' },
+    oninput: (e) => { if (trNetDraft) trNetDraft.url = e.target.value; },
+    onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+    onblur: (e) => {
+      if (trNetBusy || !e.target.isConnected) return;
+      const url = e.target.value;
+      if (c.network.mode === 'proxy' && !trNetDraft && url.trim() === (c.network.proxyUrl || '')) return; // 没改
+      if (!url.trim()) { trNetDraft = { url: '' }; trNetSay = '填好代理地址才会保存'; trNetErr = false; const el = document.getElementById('tr-net-say'); if (el) el.textContent = trNetSay; return; }
+      saveNet('proxy', url);
+    } });
+  const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
+    trAdvanced = !trAdvanced; LS('trAdvanced', trAdvanced ? '1' : '0'); trSay = '';
+    if (!trAdvanced) { trEdit = null; trModeEdit = null; }
+    render(true);
+  } }, trAdvanced ? '回到简单设置' : '详细设置');
+  const head = [
+    h('div', { class: 'col', style: { gap: '6px' } },
+      h('div', { class: 'tr-head' }, h('h1', null, '翻译'), toggle),
+      h('p', { class: 'lead' }, `在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在${trAdvanced ? '下面' : '“详细设置”里'}关掉。你的回复翻好后要自己按发送，不会自动发出。`)),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
+  ];
+  if (!trAdvanced) {
+    page.append(...kids(...head,
+      h('h2', { class: 'ov-h2' }, 'API 密钥'),
+      h('p', { class: 'hint' }, '填好密钥就能翻译。服务商、网络、纠错、翻译模式都已经设好，一般不用改；要改点右上角“详细设置”。'),
+      trKeysBox(c, apply)));
+    return;
+  }
+  page.append(...kids(...head,
     h('h2', { class: 'ov-h2' }, '服务商'),
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
@@ -866,8 +1016,15 @@ function translatePage(page) {
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
         fixP && (/^hy-mt/i.test(fixP.model) || fixP.preset === 'deepl') ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
     setRow('翻译的网络', '和 WhatsApp 账号分开。OpenRouter 在国内一般要选代理。',
-      h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
-        h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
+      // “已保存”跟在后面；出错的话比较长，放到下面一行
+      h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px', marginTop: '-7px' } },
+        h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
+        trNetErr ? netSay : null)),
+    s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
+      h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
+        h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
+          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
@@ -913,6 +1070,8 @@ function renderPanel(force = false) {
     const host = h('div', { class: 'dk-host' });
     $panel.replaceChildren(panelHead(), host);
     dockRender(true);
+    // 从设置页回来（可能刚填了密钥、换了默认服务商）：主进程那时不推状态，这里重新拿一次
+    if (dk.st) dockFetch();
     if (tabChanged) fxPlay(host, 'fx-fade');
     return;
   }
@@ -1029,15 +1188,58 @@ function editorPage(id) {
       'aria-label': COLOR_NAMES[i] + (c === color ? '，已选' : ''),
       onclick: () => { color = c; liveColor = c; document.body.style.background = tint(c); drawSwatches(); },
     })));
-    const drawPresets = () => presets.replaceChildren(...PRESETS.map(([label, v]) => h('button', {
-      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button',
+    // 本机 7890–7899 端口检测结果：{ 7891: { open, socks, usedBy } }；null 表示还在检测
+    let portState = null;
+    let probing = 0;
+    const probePorts = async () => {
+      const n = ++probing;
+      try {
+        const list = await window.wa.editorPorts(d.id);
+        if (n !== probing) return;
+        portState = Object.fromEntries(list.map((p) => [p.port, p]));
+      } catch { if (n === probing) portState = {}; }
+      drawPresets();
+      drawPortNote();
+    };
+    const presetBtn = (label, v, status) => h('button', {
+      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}${status ? ` st-${status[0]}` : ''}`, type: 'button', title: status ? status[2] : null,
       onclick: () => {
         proxyInput.value = v;
         onProxyChange();
         // 带密码的模板：选中“用户名@代理IP:端口”，直接输入替换
         if (v.includes('用户名')) { proxyInput.focus(); proxyInput.setSelectionRange(7, v.length); }
       },
-    }, label)));
+    }, label, status ? h('span', { class: 'pst' }, status[1]) : null);
+    const drawPresets = () => {
+      const cur = localProxyPort(proxyInput.value);
+      const shown = PORT_RANGE.filter((p) => PORT_DEFAULT.includes(p) || (cur && cur.port === p)
+        || (portState && portState[p] && ((portState[p].open && portState[p].socks) || portState[p].usedBy.length)));
+      presets.replaceChildren(
+        presetBtn('直连', ''),
+        ...shown.map((p) => presetBtn(`Clash ${p}`, portUrl(p), portStatus(portState ? portState[p] : null))),
+        presetBtn('带密码的 http', 'http://用户名@代理IP:端口'),
+        h('button', { class: 'preset-refresh', type: 'button', title: '重新检测本机 7890–7899 端口', disabled: !portState, onclick: () => { portState = null; drawPresets(); drawPortNote(); probePorts(); } }, portState ? '重新检测' : '检测中…'));
+    };
+    // 选了（或手动填了）本机端口时，按检测结果说一句：没开怎么办、被谁用了、7890 是 Clash 主端口
+    const portNote = h('div', { role: 'status' });
+    const drawPortNote = () => {
+      const cur = localProxyPort(proxyInput.value);
+      const st = cur && portState ? portState[cur.port] : null;
+      const lines = [];
+      if (st && !st.open) {
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点“重新检测”或“测试”。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
+      } else if (st && cur.socks && !st.socks) {
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口被别的程序占着，或者要密码，不能当 socks5 代理用。请换一个端口，详见 `, clashLink(), '。'));
+      }
+      if (st && st.usedBy.length) {
+        lines.push(h('div', { class: 'note warn' }, `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP，有被关联的风险。建议给这个号单独开一个端口。`));
+      }
+      if (cur && cur.port === 7890 && (!st || st.open)) {
+        lines.push(h('div', { class: 'note plain' }, '7890 一般是 Clash 自己的端口，跟着 Clash 界面上选的节点走，节点一换出口 IP 就变，也可能和直连号同一个 IP。建议按 ', clashLink(), ' 给这个号单独开一个端口。'));
+      }
+      portNote.replaceChildren(...lines);
+      portNote.hidden = !lines.length;
+    };
     const drawTags = () => {
       const opt = d.regions.find((r) => r.key === region.value) || (region.selectedOptions[0] && { label: region.selectedOptions[0].textContent });
       const auto = region.value === 'auto';
@@ -1066,6 +1268,7 @@ function editorPage(id) {
       result.replaceChildren();
       tested = null;
       drawPresets();
+      drawPortNote();
       drawTags();
     };
     const regionRow = h('label', { class: 'field' }, '时区', region, tags, h('span', { class: 'hint' }, `应该和代理出口所在地一致，点“测试”会自动选好。WhatsApp 界面语言：${d.uiLanguage || '中文'}（所有账号统一）。`));
@@ -1112,6 +1315,7 @@ function editorPage(id) {
       const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value });
       testBtn.disabled = false;
       testBtn.textContent = '重新测试';
+      if (localProxyPort(proxyInput.value)) probePorts();
       if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return; }
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
@@ -1140,6 +1344,10 @@ function editorPage(id) {
 
     drawSwatches();
     onProxyChange();
+    probePorts();
+    // 去 Clash 里改完配置再切回来：自动重新检测一次（离开编辑页后自己移除）
+    const onFocus = () => { if (!root.isConnected) { window.removeEventListener('focus', onFocus); return; } probePorts(); };
+    window.addEventListener('focus', onFocus);
     // 有改动就告诉主进程：离开编辑页（切号、点通知等）前会先问一句
     let dirty = false;
     const markDirty = () => { if (!dirty) { dirty = true; window.wa.editorDirty(true); } };
@@ -1160,7 +1368,7 @@ function editorPage(id) {
         primaryRow,
         h('div', { class: 'field' },
           h('span', { class: 'field-head' }, '网络线路（代理）', h('a', { href: '#', class: 'help', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, '怎么在 Clash 里开端口？')),
-          presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint, liteDirectHint),
+          presets, portNote, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint, liteDirectHint),
         passwordRow,
         callsRow,
         regionRow,
@@ -1249,19 +1457,20 @@ function settingsPage() {
   const page = h('div', { class: 'page narrow' });
   if (settingsTab === 'memory') {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
-    const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
-      s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
-    select.value = String(st.recycleMB || st.recycleLastMB || 1024);
+    const autoOn = st.autoRecycle !== false;
+    const select = h('select', { 'aria-label': '单个账号刷新线', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
+      [0, ...s.recycleChoices].map((n) => h('option', { value: n }, n ? `${n} MB` : '不限')));
+    select.value = String(st.recycleMB ?? 1024);
     const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
       (s.capChoices || [0, 4096]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
     capSelect.value = String(st.capMB ?? 4096);
-    const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
+    const over = autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
         h('p', { class: 'lead' }, '账号不会休眠，一直在线收消息。')),
       h('div', { class: 'box' },
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
-          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
+          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
@@ -1283,13 +1492,14 @@ function settingsPage() {
           render(true);
         } }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
-      setRow('总内存上限', '所有账号加起来超过这个数，就自动刷新占用最多的后台账号。正在看的和有未读的不动。',
-        capSelect,
-        st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
-          `账号多，这个上限太低，暂时不起作用。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
-      setRow('单个账号超量自动刷新', '一个后台账号用的内存超过设定值，就自动刷新它。',
-        sw(st.recycleMB > 0, '单个账号超量自动刷新', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 1024 : 0)),
-        st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时刷新') : null),
+      setRow('自动回收后台账号', '后台账号内存涨多了，就自动刷新一下。不退出登录，不漏消息；正在看的和有未读的不动。',
+        sw(autoOn, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v)),
+        autoOn ? h('div', { class: 'col', style: { gap: '2px' } },
+          h('label', { class: 'inline' }, '单个后台账号超过', select, '时刷新它'),
+          h('label', { class: 'inline' }, '所有账号加起来超过', capSelect, '时刷新占用最多的'),
+          st.capMB > 0 && s.capAdvice ? h('span', { class: 'inline', role: 'status' },
+            h('span', { class: 'bad-text' }, '账号多，总上限够不着，现在不起作用。'),
+            h('button', { class: 'btn', style: { height: '28px', padding: '0 12px' }, onclick: () => window.wa.setSetting('capMB', 0) }, '改为不限')) : null) : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '再省一些内存，但滚动没那么顺滑。',
         h('span', { class: 'hstack', style: { gap: '10px' } },
           s.restartNeeded ? h('button', { class: 'btn primary', style: { height: '32px', padding: '0 14px' }, onclick: () => window.wa.restart() }, '立即重启') : null,
@@ -1331,7 +1541,7 @@ function settingsPage() {
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
         setRow('显示检查更新按钮', '在侧栏底部齿轮旁边，点一下立刻检查新版本。有新版会在后台下载，好了提醒你，不会自己重启。',
           sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
-        setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
+        setRow('聊天锁', `这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。随时按 ${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`,
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
@@ -1361,22 +1571,24 @@ function settingsPage() {
             const r = await window.wa.checkFix(c.fix.id, c.fix.region);
             if (r && r.ok) { c.level = 'ok'; c.detail = `已改成「${c.fix.label}」，页面已重新加载。`; c.fix = null; }
             render(true);
-          } }, `地区改成 ${c.fix.label}`)) : null)))),
+          } }, `地区改成 ${c.fix.label}`)) : null,
+          c.logs ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: () => window.wa.openLogs() }, '打开日志文件夹')) : null)))),
       h('span', { class: 'hint' }, `检查时间：${checkResult.time}`));
     }
   } else {
     const a = s.about;
     page.append(
       h('div', { class: 'hstack', style: { gap: '18px' } },
-        h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(31,175,110,.25)' } }),
+        h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,.25)' } }),
         h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: '14px' } }, `版本 ${a.version}`))),
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
-        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
+        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
+        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
-      h('span', { class: 'hint' }, '出问题时把最新的日志发给我们。日志里没有聊天内容和号码。'));
+      h('span', { class: 'hint' }, '日志里记着出错原因和问题代码，没有聊天内容和号码。'));
   }
   return page;
 }
@@ -1411,7 +1623,7 @@ function teamPage(t, accounts = []) {
 
   if (t.joined && !t.revoked) {
     const ok = !t.offline && !t.lastError;
-    wrap.append(
+    wrap.append(...kids(
       h('div', { class: 'kv' },
         h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, t.server),
         h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
@@ -1429,7 +1641,7 @@ function teamPage(t, accounts = []) {
         } }, teamForm.busy ? '同步中…' : '立即同步'),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
       result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null);
+      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
     if (t.privateAccounts.length && t.allowPrivate) {
       wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
         t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
@@ -1453,7 +1665,7 @@ function teamPage(t, accounts = []) {
   if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
   const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
   const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
-  wrap.append(
+  wrap.append(...kids(
     h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
     h('label', { class: 'field' }, '登记码（管理员在后台生成，15 分钟内有效）', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
     h('label', { class: 'field' }, '这台电脑的名字（给管理员看）', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
@@ -1471,7 +1683,7 @@ function teamPage(t, accounts = []) {
       if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
       render(true);
     } }, teamForm.busy ? '登记中…' : '登记')),
-    result);
+    result));
   return wrap;
 }
 
@@ -1575,6 +1787,9 @@ function render(forceContent = false) {
   renderTop();
   renderLock();
   renderPanel();
+  // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
+  const onTr = s.page === 'settings' && settingsTab === 'translate';
+  if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;

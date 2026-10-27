@@ -239,6 +239,20 @@ try {
     }
     assert.equal(encrypts, 0);
   });
+  await test('每种问题都有问题代码，界面不再说“发给我们”', () => {
+    const { PROBLEM_CODES } = require('../src/problem-codes');
+    const kinds = new Set([...main.matchAll(/setProblem\([^{]*\{\s*kind: '(\w+)'/g)].map(m => m[1]));
+    kinds.add(/TEAM_PROXY_PROBLEM = \{\s*kind: '(\w+)'/.exec(main)[1]);
+    // 页面打不开的提示由 loadProblem 按错误码生成
+    const load = main.slice(main.indexOf('function loadProblem('), main.indexOf('\n}\n', main.indexOf('function loadProblem(')));
+    for (const m of load.matchAll(/kind: '(\w+)'/g)) kinds.add(m[1]);
+    const lite = main.slice(main.indexOf('const LITE_PROBLEMS = {'), main.indexOf('\n};', main.indexOf('const LITE_PROBLEMS = {')));
+    for (const m of lite.matchAll(/^  (\w+): \(/gm)) kinds.add(m[1]);
+    assert.ok(kinds.size >= 12, `只找到 ${kinds.size} 种问题`);
+    for (const k of kinds) assert.match(PROBLEM_CODES[k] || '', /^[A-Z]\d$/, `问题 ${k} 没有代码`);
+    const shell = fs.readFileSync(path.join(root, 'src/shell/shell.js'), 'utf8');
+    assert.ok(!/发给我们/.test(main + shell));
+  });
   console.log(`全部通过（${passed} 项）`);
 } finally {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });

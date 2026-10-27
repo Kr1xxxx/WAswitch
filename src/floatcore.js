@@ -190,7 +190,7 @@ class FloatCore {
         if (!this.accs.get(job.accId)) continue; // 号被删了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
-        else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; }
+        else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
         this.onChange(job.accId);
       }
     } finally {
@@ -209,7 +209,7 @@ class FloatCore {
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, tr, err, warn, note, edited, fixed, suggest }) => ({ h, text, t, state, tr, err, warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '' })),
+        .map(({ h, text, t, state, tr, err, errPid, warn, note, edited, fixed, suggest }) => ({ h, text, t, state, tr, err, errPid: errPid || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '' })),
     };
   }
 }
