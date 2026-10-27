@@ -105,6 +105,28 @@ function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatu
   });
   // 辅助工具：不弹窗，设置页上写清楚会发什么出去
   handle('mcp:set-helpers', (_e, on) => { controller.setHelpers(on); return view(); });
+  // 修改客户资料：第一次打开时说明一下（不弹窗确认，改动可撤销）
+  handle('mcp:set-customer-edit', async (e, on) => {
+    if (on && !controller.settings.customerEdit) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
+        type: 'question',
+        buttons: ['取消', '打开'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '打开修改客户资料',
+        message: '打开后，AI 可以直接改客户名单',
+        detail: '能改客户的名字、标签、备注、下次跟进时间，也能新建客户；不能删除客户。\n\n改的时候不会弹窗问你，每次改动都记在这个窗口的「AI 操作记录」里，点“撤销”就改回去。AI 写进来的内容会发给你用的 AI 服务商。',
+      });
+      if (response !== 1) return view();
+    }
+    controller.setCustomerEdit(on);
+    return view();
+  });
+  // 撤销一条 AI 操作，返回 { view, message }
+  handle('mcp:undo', (_e, id) => {
+    const r = typeof id === 'string' ? controller.aiLog.undo(id) : { ok: false, message: '找不到这条记录' };
+    return { view: view(), ...r };
+  });
   handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];
