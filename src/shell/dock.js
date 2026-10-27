@@ -5,6 +5,7 @@
 
 const dk = {
   listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
+  stick: true, // 消息列表是不是停在最底下（用户自己滚动时更新）；在底下就跟着新消息滚
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的中文
   out: '', // 译文（可以手动改）
@@ -214,7 +215,7 @@ function dockFoldBar(btn, text, flip) {
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
-    return h('div', { class: `${cls} wide foot` }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
+    return h('div', { class: `${cls} wide foot`, 'data-h': it.h }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
   }
   const warn = it.warn && it.warn.length ? h('span', { class: 'tr-warn' }, `注意：译文里有原文没有的内容：${it.warn.slice(0, 3).join('、')}`) : null;
   const foot = !!(warn || (it.state === 'done' && it.suggest));
@@ -228,7 +229,7 @@ function dockItemRow(it, last) {
         it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
-  return h('div', { class: `${cls}${foot ? ' foot' : ''}` },
+  return h('div', { class: `${cls}${foot ? ' foot' : ''}`, 'data-h': it.h },
     dockOrig(it.h, it.text, it.state === 'done' && !!it.tr),
     tr,
     warn,
@@ -238,6 +239,12 @@ function dockItemRow(it, last) {
 function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
+  // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
+  // 程序自己设的滚动（恢复位置）也会触发 scroll：滚动距离没变就不算用户滚的
+  list.addEventListener('scroll', () => {
+    if (!list.isConnected || list.scrollTop === list._setTop) return;
+    dk.stick = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+  }, { passive: true });
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
@@ -255,14 +262,34 @@ function dockIncoming() {
   });
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
-  // 重画时保持滚动位置（点纠错/编辑不跳）；原来就在最底下或换了对话才滚到底，新消息照样跟上
-  const prev = $panel.querySelector('.dk-host .dk-list');
-  const key = `${st.accountId}|${st.title || ''}`;
-  const stay = prev && prev.isConnected && dk.listKey === key && prev.scrollHeight - prev.scrollTop - prev.clientHeight > 24;
-  const top = stay ? prev.scrollTop : 0;
-  dk.listKey = key;
-  requestAnimationFrame(() => { list.scrollTop = stay ? top : list.scrollHeight; });
   return list;
+}
+
+// 重画时保持滚动位置（翻译中、点纠错/编辑都不跳）。
+// 记下屏幕上第一条看得见的消息离列表顶部多远，重画后把同一条放回原处：上面的消息变高变矮（翻译中 → 译文）也不会把它挤走。
+// 原来就在最底下（或换了对话、第一次画）就滚到底，新消息照样跟上。
+// 必须在新列表放进页面后马上调（不等下一帧）：两次重画挨得近时，等下一帧会读到还没恢复的 0，列表就被打回顶部。
+function dockScrollMark() {
+  const st = dk.st;
+  const key = st ? `${st.accountId}|${st.title || ''}` : '';
+  const prev = $panel.querySelector('.dk-host .dk-list');
+  const same = dk.listKey === key;
+  dk.listKey = key;
+  if (!same || !prev || !prev.isConnected) dk.stick = true;
+  if (dk.stick) return { bottom: true };
+  // 用 offsetTop（列表是 position: relative）：不受淡入、上浮这些动画的位移影响
+  const top = prev.scrollTop;
+  const row = [...prev.querySelectorAll('.dk-item[data-h]')].find((r) => r.offsetTop + r.offsetHeight > top + 1);
+  return { bottom: false, h: row ? row.dataset.h : '', off: row ? row.offsetTop - top : 0, scrollTop: top };
+}
+function dockScrollRestore(mark) {
+  const list = $panel.querySelector('.dk-host .dk-list');
+  if (!list || !mark) return;
+  const row = !mark.bottom && mark.h ? [...list.querySelectorAll('.dk-item[data-h]')].find((r) => r.dataset.h === mark.h) : null;
+  if (mark.bottom) list.scrollTop = list.scrollHeight;
+  else if (row) list.scrollTop = row.offsetTop - mark.off;
+  else list.scrollTop = mark.scrollTop; // 那条已经不在了：退回原来的滚动距离
+  list._setTop = list.scrollTop;
 }
 
 function dockInHead() {
@@ -373,15 +400,18 @@ function dockRender(force = false) {
   const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
+  const mark = dockScrollMark();
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
     root.replaceChildren(...kids(dockKeyBar(), dockInHead(), list || dockIncoming(), msg, keep));
+    dockScrollRestore(mark);
     return;
   }
   const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockInHead(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
+  dockScrollRestore(mark);
   if (focusIn) { const box = el.querySelector('.dk-in'); box.focus(); box.selectionStart = box.selectionEnd = box.value.length; }
 }
