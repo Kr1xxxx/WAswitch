@@ -2297,6 +2297,9 @@ function insertText(accountId, text) {
   return 'ok';
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
+// 导出导入：[文件名前缀, 保存框标题, 打开框标题]
+const STORE_LABEL = { replies: ['话术', '导出话术', '导入话术'], customers: ['客户', '导出客户名单', '导入客户名单'], tmodes: ['翻译模式', '导出翻译模式', '导入翻译模式'] };
+const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmodes: modeStore })[kind];
 handleShell('panel:export', async ({ kind, format } = {}) => {
   if (!STORE_LABEL[kind]) return null;
   const store = storeOf(kind);
