@@ -199,9 +199,8 @@ class McpController {
     const { registerChatTools } = require('./chats');
     const { registerDraftTools } = require('./drafts');
     const { registerHelperTools } = require('./helpers');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerHelperTools };
     const { registerCustomerEditTools } = require('./customer-edit');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerCustomerEditTools };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerHelperTools, registerCustomerEditTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
