@@ -4,3 +4,5 @@ dist/
 
 # 根目录的临时截图（assets/、build/ 里的图片不受影响）
 /*.png
+dist-mcp/
+/src/mcp-module.json

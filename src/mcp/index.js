@@ -1,28 +1,35 @@
 // 把 MCP 接到 WAswitch：控制器、设置窗口和它的 IPC。
-// main.js 只需要调用 setupMcp(...)，并在托盘菜单里放一个“MCP 接口设置”入口。
+// 这部分代码不在安装包里：发版时打成单独下载的文件（见 src/mcp-module.js 和 scripts/build-mcp.js），
+// 主程序下载、校验后调用 setupMcp(...)。设置窗口的页面（settings.html / settings.js / preload.js）留在安装包里，路径由 uiDir 传进来。
+// 卸载时调用 dispose()：关服务、关窗口、注销 IPC，之后可以再次 setupMcp。
 const { app, BrowserWindow, ipcMain, clipboard, dialog } = require('electron');
 const path = require('path');
 const { McpController } = require('./server');
 
-function setupMcp({ hooks, lockLocalPage }) {
+// bridgeArgs：Claude Desktop 配置里用 WAswitch 自带的 Electron 运行 stdio 桥接时的参数
+// onStatus：状态变了（开关、运行、出错）时通知主程序刷新设置页
+function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatus = () => {} }) {
   let win = null;
   const controller = new McpController({
     dataDir: app.getPath('userData'),
     version: app.getVersion(),
     hooks,
-    onChange: () => { if (win && !win.isDestroyed()) win.webContents.send('mcp:update', view()); },
+    onChange: () => {
+      if (win && !win.isDestroyed()) win.webContents.send('mcp:update', view());
+      onStatus();
+    },
   });
 
   function snippets(s) {
     if (!s.running) return { claudeCode: '', claudeDesktop: '' };
-    const bridge = path.join(app.getAppPath(), 'bin', 'waswitch-mcp.js');
+    const args = bridgeArgs || [path.join(app.getAppPath(), 'bin', 'waswitch-mcp.js')];
     return {
       claudeCode: `claude mcp add --transport http waswitch ${s.url} --header "Authorization: Bearer ${s.token}"`,
       claudeDesktop: JSON.stringify({
         mcpServers: {
           waswitch: {
             command: process.execPath,
-            args: [bridge],
+            args,
             env: { ELECTRON_RUN_AS_NODE: '1', WASWITCH_TOKEN_FILE: s.tokenFile },
           },
         },
@@ -39,11 +46,14 @@ function setupMcp({ hooks, lockLocalPage }) {
     return { ...rest, snippets: shown };
   }
 
-  ipcMain.handle('mcp:status', () => view());
-  ipcMain.handle('mcp:set-enabled', async (_e, on) => { await controller.setEnabled(on); return view(); });
-  ipcMain.handle('mcp:regenerate', async () => { await controller.regenerateToken(); return view(); });
+  // 用 handle() 注册，dispose() 时一起注销
+  const channels = [];
+  const handle = (ch, fn) => { ipcMain.removeHandler(ch); ipcMain.handle(ch, fn); channels.push(ch); };
+  handle('mcp:status', () => view());
+  handle('mcp:set-enabled', async (_e, on) => { await controller.setEnabled(on); return view(); });
+  handle('mcp:regenerate', async () => { await controller.regenerateToken(); return view(); });
   // 第二层：第一次打开时先说明隐私影响
-  ipcMain.handle('mcp:set-layer2', async (e, on) => {
+  handle('mcp:set-layer2', async (e, on) => {
     if (on && !controller.settings.layer2Acknowledged) {
       const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
         type: 'warning',
@@ -60,7 +70,7 @@ function setupMcp({ hooks, lockLocalPage }) {
     return view();
   });
   // 打开预览就是开始读消息内容，再确认一次
-  ipcMain.handle('mcp:set-preview', async (e, on) => {
+  handle('mcp:set-preview', async (e, on) => {
     if (on && !controller.settings.preview) {
       const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
         type: 'warning',
@@ -77,7 +87,7 @@ function setupMcp({ hooks, lockLocalPage }) {
     return view();
   });
   // 起草回复：第一次打开时说明一下（放进输入框，不发送）
-  ipcMain.handle('mcp:set-drafts', async (e, on) => {
+  handle('mcp:set-drafts', async (e, on) => {
     if (on && !controller.settings.drafts) {
       const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
         type: 'question',
@@ -93,8 +103,8 @@ function setupMcp({ hooks, lockLocalPage }) {
     controller.setDrafts(on);
     return view();
   });
-  ipcMain.handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
-  ipcMain.handle('mcp:copy', (_e, key) => {
+  handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
+  handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];
     if (text) clipboard.writeText(text);
   });
@@ -103,15 +113,22 @@ function setupMcp({ hooks, lockLocalPage }) {
     if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
     win = new BrowserWindow({
       width: 620, height: 680, minimizable: false, maximizable: false, title: 'MCP 接口设置',
-      webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+      webPreferences: { preload: path.join(uiDir, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     win.setMenu(null);
     lockLocalPage(win.webContents);
-    win.loadFile(path.join(__dirname, 'settings.html'));
+    win.loadFile(path.join(uiDir, 'settings.html'));
     win.on('closed', () => { win = null; });
   }
 
-  return { controller, openSettings, init: () => controller.init(), close: () => controller.close() };
+  async function dispose() {
+    if (win && !win.isDestroyed()) win.destroy();
+    win = null;
+    for (const ch of channels) ipcMain.removeHandler(ch);
+    await controller.close();
+  }
+
+  return { controller, openSettings, init: () => controller.init(), close: () => controller.close(), dispose };
 }
 
 module.exports = { setupMcp };

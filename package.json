@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
-    "check:mcp": "node scripts/check-mcp.js",
+    "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
@@ -29,22 +29,24 @@
     "check:customer-time": "node scripts/check-customer-time.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
-    "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs"
+    "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
+    "build:mcp": "node scripts/build-mcp.js --embed"
   },
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
     "baileys": "7.0.0-rc14",
     "electron-updater": "6.8.10",
     "https-proxy-agent": "9.1.0",
     "qrcode": "1.5.4",
     "socks-proxy-agent": "10.1.0",
-    "undici": "7.30.1",
-    "zod": "3.25.76"
+    "undici": "7.30.1"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "electron": "44.9.3",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "zod": "3.25.76"
   },
   "build": {
     "appId": "com.waswitch.app",
@@ -52,7 +54,10 @@
     "files": [
       "src/**/*",
       "!src/fonts/misans{,/**/*}",
-      "bin/**/*",
+      "!src/mcp/**/*",
+      "src/mcp/settings.html",
+      "src/mcp/settings.js",
+      "src/mcp/preload.js",
       "assets/**/*"
     ],
     "icon": "assets/icon.png",

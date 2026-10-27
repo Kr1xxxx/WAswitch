@@ -2,6 +2,8 @@
 # 所有 action 按 commit 固定版本；只用默认的 GITHUB_TOKEN，写权限只给发布这一步。
 # 自动更新只认这里上传的文件：安装包、latest.yml / latest-mac.yml（含 sha512）和 blockmap。
 # 不要手动往 Release 里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
+# MCP 接口不在安装包里：先在一台机器上打成单独的文件 waswitch-mcp-<版本>.js（mcp-module），
+# 两个安装包都带上它的 sha512（src/mcp-module.json），用户在设置里下载时按这个校验。
 name: release
 
 on:
@@ -12,7 +14,27 @@ permissions:
   contents: read
 
 jobs:
+  mcp-module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: tag 和 package.json 的版本号一致
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - name: 打包 MCP 模块并自检
+        run: npm run check:mcp
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-module
+          path: dist-mcp/*
+          if-no-files-found: error
+
   build:
+    needs: mcp-module
     strategy:
       matrix:
         os: [windows-latest, macos-latest]
@@ -27,6 +49,13 @@ jobs:
       - name: tag 和 package.json 的版本号一致
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mcp-module
+          path: dist-mcp
+      - name: 安装包带上 MCP 文件的校验值
+        shell: bash
+        run: cp dist-mcp/mcp-module.json src/mcp-module.json && cat src/mcp-module.json
       # 没有代码签名证书：不自动找签名证书，也不在打包时发布
       - run: npx electron-builder --publish never
         env:

@@ -27,11 +27,11 @@ const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
-const { setupMcp } = require('./mcp');
+const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
-const { Updater } = require('./updater');
+const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
 const { TeamSync } = require('./team');
 const { CrmQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
@@ -583,7 +583,7 @@ const notifier = new Notifier({
     ...(visibleAccounts().length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
     { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
-    ...(mcp ? [{ label: 'MCP 接口设置…', click: () => mcp.openSettings() }] : []),
+    ...(mcpModule?.available() ? [{ label: 'MCP 接口设置…', click: () => mcpModule.openSettings() }] : []),
   ],
   trayText: () => (updater ? updater.trayText() : ''),
   updateMenu: () => {
@@ -613,8 +613,9 @@ function savePoppedSoon(data) {
 }
 app.on('will-quit', writePoppedNow);
 
-// MCP 接口（默认关闭）。在 app ready 之后创建。
+// MCP 接口：单独下载的模块（见 mcp-module.js），下载并加载后 mcp 才有值；开关默认关闭。在 app ready 之后创建。
 let mcp = null;
+let mcpModule = null;
 
 // 分批启动时还没开始加载的账号（页面停在 about:blank，不能算 ready）
 const pendingLoad = new Set();
@@ -1006,6 +1007,7 @@ function pushState() {
     editorColor,
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
+    mcp: mcpModule ? mcpModule.view() : null,
     collapsed: settings.sidebarCollapsed,
     team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
     locked,
@@ -2458,8 +2460,29 @@ app.whenReady().then(async () => {
   setInterval(watchExits, EXIT_WATCH_MS);
   setTimeout(watchExits, 3 * 60 * 1000);
 
-  mcp = setupMcp({ hooks: mcpHooks, lockLocalPage });
-  await mcp.init();
+  mcpModule = new McpModule({
+    dir: path.join(app.getPath('userData'), 'modules', 'mcp'),
+    dataDir: app.getPath('userData'),
+    appDir: app.getAppPath(),
+    uiDir: path.join(__dirname, 'mcp'),
+    // 从源码运行时总是用仓库里的 src/mcp（即使本地打过 mcp-module.json）
+    expected: app.isPackaged ? loadExpected(path.join(__dirname, 'mcp-module.json')) : null,
+    dev: !app.isPackaged,
+    owner: GH_OWNER,
+    repo: GH_REPO,
+    fetch: directRequest,
+    loadDev: () => require('./mcp'),
+    start: async (setupMcp, extra) => {
+      const m = setupMcp({ hooks: mcpHooks, lockLocalPage, onStatus: () => mcpModule.tick(), ...extra });
+      mcp = m;
+      await m.init();
+      return m;
+    },
+    stopped: () => { mcp = null; },
+    onChange: pushState,
+    log: (msg) => console.log(msg),
+  });
+  try { await mcpModule.init(); } catch (e) { console.warn(`MCP 没能启动：${e.message}`); }
   setupUpdater();
   team.start();
   notifier.refresh();
@@ -2481,6 +2504,12 @@ onShell('switch', (id) => userActivate(id));
 onShell('editor:dirty', (dirty) => { if (page === 'editor') editorDirty = dirty === true; });
 onShell('remove', (id) => { if (findAcc(id)) removeAccount(id); });
 onShell('app:restart', () => relaunchApp());
+// 设置 › AI 接口：下载、取消、开关、卸载 MCP 模块
+handleShell('mcp:download', () => mcpModule?.download());
+handleShell('mcp:cancel', () => mcpModule?.cancel());
+handleShell('mcp:enable', (on) => mcpModule?.setEnabled(on === true));
+handleShell('mcp:uninstall', () => mcpModule?.uninstall());
+onShell('mcp:open', () => mcpModule?.openSettings());
 // 用户在顶部横幅里回答 AI 的切换请求
 onShell('ai:answer', (yes) => {
   const req = aiRequest;
