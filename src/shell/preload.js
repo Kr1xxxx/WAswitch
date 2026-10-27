@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('wa', {
   aiAnswer: (yes) => ipcRenderer.send('ai:answer', yes === true),
   add: () => ipcRenderer.send('add'),
   edit: (id) => ipcRenderer.send('edit', id),
-  context: (id) => ipcRenderer.send('context', id),
+  context: (id, from) => ipcRenderer.send('context', id, from),
   reload: (id) => ipcRenderer.send('reload', id),
   retry: (id) => ipcRenderer.send('retry', id),
   toggleCollapse: () => ipcRenderer.send('collapse'),
