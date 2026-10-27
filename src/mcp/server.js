@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const cfg = require('./config');
 const { ChatGate } = require('./chats');
 const { DraftLog } = require('./drafts');
+const { TranslateLimit } = require('./helpers');
 
 const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_BODY = 1024 * 1024;
@@ -65,6 +66,8 @@ class McpController {
     this.gate = new ChatGate({ hooks, onChange: () => this.onChange() });
     // 起草回复的记录（谁给哪个对话起草了几个字，不含内容），只在内存里
     this.drafts = new DraftLog({ onChange: () => this.onChange() });
+    // 辅助工具里翻译的限速（每个连接），只在内存里
+    this.trLimit = new TranslateLimit();
   }
 
   status() {
@@ -81,6 +84,7 @@ class McpController {
       layer2Acknowledged: this.settings.layer2Acknowledged,
       drafts: this.settings.drafts,
       draftLog: this.drafts.log,
+      helpers: this.settings.helpers,
       allows: this.gate.activeAllows(),
       readLog: this.gate.log,
       clients: [...this.sessions.values()].map((s) => {
@@ -144,6 +148,16 @@ class McpController {
     this.onChange();
   }
 
+  // 辅助工具开关（话术、翻译、客户时间），关着时三个工具都不出现在列表里
+  setHelpers(on) {
+    this.settings.helpers = !!on;
+    cfg.saveSettings(this.dataDir, this.settings);
+    for (const s of this.sessions.values()) {
+      for (const t of s.helperTools || []) { if (on) t.enable(); else t.disable(); }
+    }
+    this.onChange();
+  }
+
   setPreview(on) {
     const turnedOn = !this.settings.preview && !!on;
     this.settings.preview = !!on;
@@ -171,8 +185,9 @@ class McpController {
     const { registerAccountTools } = require('./tools');
     const { registerChatTools } = require('./chats');
     const { registerDraftTools } = require('./drafts');
+    const { registerHelperTools } = require('./helpers');
     const { registerOpenChatTool } = require('./open-chat');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerOpenChatTool };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerHelperTools, registerOpenChatTool };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -212,6 +227,7 @@ class McpController {
     this.sessions.delete(id);
     this.gate.clearSession(id);
     this.drafts.clearSession(id);
+    this.trLimit.clearSession(id);
     try { await s.transport.close(); } catch { /* 已经断开 */ }
     try { await s.server.close(); } catch { /* 已经断开 */ }
   }
@@ -263,10 +279,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, draftTool: null, openTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, draftTool: null, openTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复和打开对话”后，可以用 open_chat 打开和某个号码的对话、用 draft_reply 把一条回复放进输入框，由用户自己按发送。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复和打开对话”后，可以用 open_chat 打开和某个号码的对话、用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
@@ -295,6 +311,8 @@ class McpController {
       },
     });
     if (!this.settings.drafts) { entry.draftTool.disable(); entry.openTool.disable(); }
+    entry.helperTools = this.sdk.registerHelperTools(server, this.hooks, { limit: this.trLimit });
+    if (!this.settings.helpers) for (const t of entry.helperTools) t.disable();
     const transport = new this.sdk.StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id) => {

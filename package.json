@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
-    "check:mcp": "node scripts/check-mcp.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
+    "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-helpers.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
@@ -15,7 +15,7 @@
     "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
-    "check:notify": "node scripts/check-notify.js",
+    "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js",
     "check:popup": "electron scripts/check-popup.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
