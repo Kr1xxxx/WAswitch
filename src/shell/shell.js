@@ -546,6 +546,7 @@ function problemButtons(acc) {
     case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
+    case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
     default: return [acc.direct ? null : btn('修改代理', () => window.wa.edit(acc.id)), retry(acc.mode === 'lite' && acc.needsQr ? '重新扫码' : '重新连接')];
   }
 }
@@ -556,7 +557,20 @@ function problemPage(acc) {
     h('h2', null, acc.problemTitle || '代理连不上，这个账号已暂停联网'),
     h('p', null, acc.problem),
     acc.retrying ? h('p', { class: 'hint' }, acc.direct ? '正在自动重试，网络恢复后会自动连上。' : '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
-    h('div', { class: 'btns' }, ...kids(...problemButtons(acc)))));
+    h('div', { class: 'btns' }, ...kids(...problemButtons(acc))),
+    problemDetails(acc)));
+}
+
+// 折起来的详细信息：问题代码（日志里也记着同一个代码）和日志文件夹。
+// 界面会整块重画，记住展开的是哪个号的哪个问题，重画后保持展开
+let detailsOpenKey = '';
+function problemDetails(acc) {
+  if (!acc.problemCode) return null;
+  const key = `${acc.id}|${acc.problemKind}`;
+  const logs = h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLogs(); } }, '打开日志文件夹');
+  return h('details', { class: 'pdetails', open: detailsOpenKey === key, ontoggle: (e) => { if (e.currentTarget.open) detailsOpenKey = key; else if (detailsOpenKey === key) detailsOpenKey = ''; } },
+    h('summary', null, `详细信息 · ${acc.problemCode}`),
+    h('p', null, `问题代码 ${acc.problemCode}，日志里也记着这个代码。`, ' ', logs));
 }
 
 // Clash 说明在 GitHub 上（安装包里不带 docs/），用浏览器打开
@@ -1349,7 +1363,8 @@ function settingsPage() {
             const r = await window.wa.checkFix(c.fix.id, c.fix.region);
             if (r && r.ok) { c.level = 'ok'; c.detail = `已改成「${c.fix.label}」，页面已重新加载。`; c.fix = null; }
             render(true);
-          } }, `地区改成 ${c.fix.label}`)) : null)))),
+          } }, `地区改成 ${c.fix.label}`)) : null,
+          c.logs ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: () => window.wa.openLogs() }, '打开日志文件夹')) : null)))),
       h('span', { class: 'hint' }, `检查时间：${checkResult.time}`));
     }
   } else {
@@ -1364,7 +1379,7 @@ function settingsPage() {
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
       updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
-      h('span', { class: 'hint' }, '出问题时把最新的日志发给我们。日志里没有聊天内容和号码。'));
+      h('span', { class: 'hint' }, '日志里记着出错原因和问题代码，没有聊天内容和号码。'));
   }
   return page;
 }
