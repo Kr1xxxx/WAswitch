@@ -17,18 +17,13 @@ const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
-const ports = require('./ports');
-const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
+const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
-const { Translator, DEFAULT_MODES, retireModes, needsKey } = require('./translate');
-const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = require('./trstore');
-const { FloatCore } = require('./floatcore');
-const { detectLang } = require('./langdetect');
+const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
-const { matchChatCustomer } = require('./chatlang');
 const { setupMcp } = require('./mcp');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
@@ -40,6 +35,9 @@ const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
 const { problemCode } = require('./problem-codes');
+const { setupEditorIpc } = require('./editor-ipc');
+const { setupCheckIpc } = require('./check-ipc');
+const { setupTranslateIpc } = require('./translate-ipc');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
@@ -482,7 +480,6 @@ async function watchExits() {
 // id -> 'logged_in' | 'needs_qr'。以后 MCP 的账号状态也从这里读
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
-let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
 let activeId = null;
 let page = 'account'; // account | editor | settings | welcome
 let editorId = null;
@@ -791,7 +788,7 @@ function layout() {
     }
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
-  layoutFloat(bounds);
+  trIpc.layoutFloat(bounds);
   syncLiteWatch();
 }
 
@@ -847,7 +844,7 @@ function pushState() {
     locked,
     panelOpen: panelShown(),
     panelTab,
-    floatOpen,
+    floatOpen: trIpc.floatOpen,
     lockChoices: memory.LOCK_CHOICES,
     // 分组：每组带上未读总数，折叠后组头上也能看到
     groups: groups.map((g) => ({
@@ -1100,7 +1097,7 @@ async function onNetworkChange() {
     // 断开旧连接，WhatsApp 网页会立刻用新线路重连，登录和聊天都不受影响
     await ses.closeAllConnections().catch(() => {});
   }
-  const tr = translateSession(false); // 翻译可能跟随系统代理
+  const tr = trIpc.translateSession(false); // 翻译可能跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   reconnectStuck();
@@ -1744,7 +1741,7 @@ function openEditor(id, prefill = null) {
   editorId = acc ? acc.id : null;
   editorColor = acc ? acc.color : nextColor();
   editorNonce += 1;
-  lastTest = null;
+  editorIpc.resetTest();
   editorDirty = false;
   page = 'editor';
   refresh();
@@ -1793,7 +1790,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
-  if (floatCore) floatCore.forget(id);
+  if (trIpc.floatCore) trIpc.floatCore.forget(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   const wasPrimary = acc.primary;
@@ -2166,9 +2163,9 @@ app.whenReady().then(async () => {
     retireModes(modeStore, fs.existsSync(flag));
     fs.writeFileSync(flag, '1');
   } catch (e) { console.warn(`旧翻译模式清理失败：${e.message}`); }
-  translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: translateSession });
-  applyTranslateNet().catch(() => {});
-  setupFloatCore();
+  translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: trIpc.translateSession });
+  trIpc.applyTranslateNet().catch(() => {});
+  trIpc.setupFloatCore();
   setInterval(checkFollowUps, 60 * 1000);
   setTimeout(checkFollowUps, 15 * 1000);
   accounts = loadAccounts();
@@ -2274,7 +2271,7 @@ handleShell('cust:save', (data) => {
   if (existing && parkedCustomer(existing)) return null;
   const accountId = typeof data.accountId === 'string' && findAcc(data.accountId) ? data.accountId : (customerStore.get(data.id)?.accountId || activeId || '');
   const ok = customerStore.upsert({ id: data.id, accountId, name: data.name, phone: data.phone, note: data.note, tags: data.tags, followUpAt: data.followUpAt, lang: data.lang });
-  if (ok) pushFloat(); // 悬浮窗和面板的目标语言可能跟着这个客户变
+  if (ok) trIpc.pushFloat(); // 悬浮窗和面板的目标语言可能跟着这个客户变
   return ok ? panelData() : null;
 });
 handleShell('cust:delete', (id) => {
@@ -2339,431 +2336,31 @@ handleShell('panel:import', async ({ kind } = {}) => {
   store.save();
   return { added, skipped: res.rows.length - added, data: panelData(), modes: modeStore.list() };
 });
-// ---- 翻译（只翻用户自己放进来的文字；不读页面、不自动发送） ----
-// 翻译请求用单独的内存会话，和任何 WhatsApp 账号都不共用 cookie 和代理
-function translateSession(local) {
-  return session.fromPartition(local ? 'wa-translate-local' : 'wa-translate');
-}
-async function applyTranslateNet() {
-  const net = translator.load().network;
-  const remote = translateSession(false);
-  if (net.mode === 'proxy' && net.proxyUrl) await remote.setProxy({ proxyRules: net.proxyUrl, proxyBypassRules: '<local>' });
-  else await remote.setProxy({ mode: net.mode === 'direct' ? 'direct' : 'system' });
-  await translateSession(true).setProxy({ mode: 'direct' }); // 本机模型不走代理
-}
-const trState = () => ({ config: translator.publicConfig(), modes: modeStore.list() });
-handleShell('tr:config', () => trState());
-handleShell('tr:provider:save', (data) => { const r = translator.saveProvider(data); pushFloat(); return { ...r, ...trState() }; });
-handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') translator.deleteProvider(id); pushFloat(); return trState(); });
-handleShell('tr:fix:zhipu', () => ({ ...translator.addZhipuForFix(), ...trState() }));
-handleShell('tr:roles', (roles) => { translator.setRoles(roles && typeof roles === 'object' ? roles : {}); pushFloat(); return trState(); });
-handleShell('tr:role', (text) => ({ ...translator.setRolePrompt(text), ...trState() }));
-handleShell('tr:network', async (net) => {
-  // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
-  if (net && net.mode === 'proxy') {
-    let u = null;
-    try { u = new URL(String(net.proxyUrl || '').trim()); } catch {}
-    const norm = (h) => { const x = String(h || '').replace(/^\[|\]$/g, '').toLowerCase(); return ['localhost', '127.0.0.1', '::1'].includes(x) ? 'loopback' : x; };
-    const same = u && accounts.some((a) => { const p = proxy.parse(a.proxy); return p && !p.error && norm(p.host) === norm(u.hostname) && String(p.port) === String(u.port); });
-    if (same) return { error: '这个代理端口已经给某个账号用了，翻译请用别的端口（或选“跟随系统代理”）', ...trState() };
-  }
-  const r = translator.setNetwork(net && typeof net === 'object' ? net : {});
-  if (r.ok) { try { await applyTranslateNet(); } catch { return { error: '代理设置没生效', ...trState() }; } }
-  return { ...r, ...trState() };
-});
-handleShell('tr:test', (id) => (typeof id === 'string' ? translator.test(id) : { error: '找不到这个服务商' }));
-// 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
-// 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
-const userTr = { waiting: 0, running: false, gen: 0 };
-async function userTranslate(args) {
-  const gen = userTr.gen;
-  const until = Date.now() + 35000;
-  userTr.waiting += 1;
-  try {
-    for (;;) {
-      if (userTr.gen !== gen) return { error: '已取消', kind: 'cancel' };
-      if (!translator.busy) {
-        userTr.running = true;
-        let r;
-        try { r = await translator.translate(args); } finally { userTr.running = false; }
-        // 面板和悬浮窗同时点：后一个继续等
-        if (!(r && r.kind === 'busy')) return r;
-      }
-      if (Date.now() > until) return { error: '上一段还在翻译', kind: 'busy' };
-      await new Promise((res) => setTimeout(res, 250));
-    }
-  } finally {
-    userTr.waiting -= 1;
-  }
-}
-function userCancel() {
-  if (userTr.running) return translator.cancel();
-  userTr.gen += 1;
-  return true;
-}
-handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft } = {}) => {
-  // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
-  const context = typeof ctxAccount === 'string' && ctxAccount === activeId && floatCore ? floatCore.contextOf(activeId) : undefined;
-  // __back：回译成中文核对，用固定的忠实翻译提示词
-  // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
-  if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft, fix: true });
-  let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
-    : typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
-});
-handleShell('tr:cancel', () => userCancel());
-// 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
-const chatCustomer = (accId, title) => matchChatCustomer(customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
-handleShell('tr:chatlang', async (accountId) => {
-  const acc = findAcc(accountId);
-  if (!acc || accountId !== activeId || page !== 'account' || locked || isLite(acc) || problems.has(acc.id)) return null;
-  const view = views.get(acc.id);
-  if (!view || view.webContents.isDestroyed()) return null;
-  const r = await waPage.readOpenChat(view.webContents);
-  if (!r.ok || accountId !== activeId) return null;
-  const c = chatCustomer(acc.id, r.title);
-  return { title: r.title, lang: c ? c.lang : '', name: c ? c.name : '' };
-});
-handleShell('tr:lang', ({ accountId, lang } = {}) => { if (findAcc(accountId)) translator.setAccountLang(accountId, lang); return trState(); });
-handleShell('tmode:save', (data) => {
-  if (!data || typeof data !== 'object') return { error: '数据不对' };
-  const rec = modeStore.upsert({ id: data.id, name: data.name, direction: data.direction, prompt: data.prompt, temperature: data.temperature });
-  return rec ? { ok: true, id: rec.id, ...trState() } : { error: modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
-});
-handleShell('tmode:delete', (id) => { if (typeof id === 'string') modeStore.remove(id); return trState(); });
+// ---------- 拆出去的接口模块（editor-ipc.js、check-ipc.js、translate-ipc.js）共用的上下文 ----------
+// 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
+const ctx = {
+  get accounts() { return accounts; },
+  get activeId() { return activeId; },
+  set activeId(v) { activeId = v; },
+  get page() { return page; },
+  set page(v) { page = v; },
+  get locked() { return locked; },
+  get win() { return win; },
+  get shellView() { return shellView; },
+  get translator() { return translator; },
+  get modeStore() { return modeStore; },
+  get customerStore() { return customerStore; },
+  get editorPrefill() { return editorPrefill; },
+  get editorColor() { return editorColor; },
+  get liteGuardHits() { return liteGuardHits; },
+  handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
+  nextName, nextColor, cleanNote, cleanPhone, applyPhone, COLORS, LITE_SCHEMES, newLiteKey, WA_URL, webrtcPolicy,
+  regionName, exitIps, exitChanges, recordExit, views, problems, notifier,
+  saveAccounts, startAccount, startLite, createView, destroyView, refresh, pushState, layout, focusActive, lockLocalPage, insertText,
+};
 
-// ---- 悬浮翻译窗（shen 2026-10-24 选的方案 B） ----
-// 只读当前打开的对话（隔离环境，见 wa-page.js 的 readOpenChat），不改页面、不碰输入框。
-// 悬浮窗是软件自己的小视图，叠在 WhatsApp 视图上面；关掉就销毁。读到的消息和译文只在内存里。
-const FLOAT_W = 340;
-const FLOAT_MIN_H = 260;
-const FLOAT_MAX_H = 480;
-const FLOAT_PILL = { width: 130, height: 34 };
-const FLOAT_COMPOSE_GAP = 76; // 底部留给 WhatsApp 输入框，不盖住
-let floatView = null;
-let floatOpen = false;
-let floatTimer = null;
-let floatFails = 0;
-let floatReadable = 'loading'; // ok | nochat | unreadable | loading
-let floatArea = null; // 账号视图的位置（layout 算出来的）
-let floatCore = null;
-let trStore = null; // 收到的消息的译文，永久存在磁盘上
-// 自动翻译默认开，只有手动关掉的号是 false
-const floatAuto = (id) => !!id && translator.load().accountAuto[id] !== false;
-// 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
-const readerOn = () => (floatOpen && !!floatView) || panelShown();
-let floatBusy = false;
-function floatInMode() {
-  const cfg = translator.load();
-  const list = modeStore.list().filter((m) => m.direction === 'in' || m.direction === 'both');
-  return list.find((m) => m.id === cfg.floatInMode) || list[0] || null;
-}
-// 纠错（AI 校对）的内置提示词：[原文] = <text>，[译文] = <draft>，[上下文] = <context>
-const FIX_IN = {
-  prompt: '你是翻译校对员。<text> 里是客户原文，<draft> 里是当前中文译文，<context> 里是最近聊天记录，只用来理解意思，不要翻译。'
-    + '对照原文和上下文检查译文：错译、漏译、多译、语气不对，人名、数字、金额、日期、型号是否正确，俚语、缩写、错别字是否理解对。'
-    + '只输出改好的中文译文，不要解释；如果已经正确，原样输出。',
-  temperature: 0.2,
-};
-const FIX_OUT = {
-  prompt: '你是{目标语言}母语的校对员。<text> 里是中文原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
-    + '检查译文是否准确表达原文、有没有漏译多译，修正语法和拼写，让说法自然、符合当地人聊天习惯，保持原来的语气。'
-    + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
-  temperature: 0.2,
-};
-function setupFloatCore() {
-  // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
-  const oldTrDir = path.join(app.getPath('userData'), 'translations');
-  const dTrDir = 'D:\\WAswitch\\translations';
-  const guess = process.platform === 'win32' && fs.existsSync(dTrDir) ? dTrDir : oldTrDir;
-  trStore = new TrStore(guess);
-  pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
-    if (!trStore) return;
-    trStore.flush();
-    if (process.platform === 'win32') migrateTr(dir === dTrDir ? oldTrDir : dTrDir, dir);
-    if (dir !== trStore.dir) { trStore.setDir(dir); console.log(`译文存在：${dir}`); }
-  }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
-  floatCore = new FloatCore({
-    store: trStore,
-    translate: (text, { fix, context, prev } = {}) => {
-      // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
-      const draft = fix && typeof prev === 'string' ? prev : '';
-      const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
-      if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
-      // 用户点的翻译在等：先让它
-      if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-      return translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
-    },
-  });
-  floatCore.onChange = (accId) => { if (accId === activeId) pushFloat(); };
-}
-// 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
-function floatCanRead() {
-  if (!readerOn() || page !== 'account' || locked || !win || !win.isVisible() || win.isMinimized()) return null;
-  const acc = findAcc(activeId);
-  if (!acc || isLite(acc) || problems.has(acc.id)) return null;
-  const view = views.get(acc.id);
-  if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return null;
-  return { acc, wc: view.webContents };
-}
-async function floatTick() {
-  floatTimer = null;
-  if (!readerOn() || floatBusy) return;
-  const target = floatCanRead();
-  let delay = 2000;
-  if (target) {
-    floatBusy = true;
-    let r;
-    try { r = await waPage.readOpenChat(target.wc); } finally { floatBusy = false; }
-    if (!readerOn() || target.acc.id !== activeId) { scheduleFloat(500); return; }
-    if (r.ok) {
-      // 打开的对话里还没有消息也算读到了（悬浮窗会提示没有文字消息）
-      floatFails = 0;
-      const was = floatReadable;
-      floatReadable = 'ok';
-      const cfg = translator.load();
-      let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id), dailyCap: cfg.dailyCap });
-      if (changed) changed = rememberDetected(target.acc.id) || changed;
-      if (changed || was !== 'ok') pushFloat();
-    } else if (r.why === 'nochat') {
-      // 没打开对话：不算失败，3 秒后再看
-      floatFails = 0;
-      delay = 3000;
-      if (floatReadable !== 'nochat') { floatReadable = 'nochat'; pushFloat(); }
-    } else {
-      // 读不到，或对话里有消息行但一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
-      floatFails += 1;
-      if (floatFails >= 3) {
-        delay = 30000;
-        if (floatReadable !== 'unreadable') { floatReadable = 'unreadable'; pushFloat(); }
-      }
-    }
-  }
-  scheduleFloat(delay);
-}
-function scheduleFloat(ms) {
-  if (floatTimer) clearTimeout(floatTimer);
-  floatTimer = readerOn() ? setTimeout(floatTick, ms) : null;
-}
-// 从最近收到的几条认出客户用的语言，记在这个对话上（手动选过的不改）
-function rememberDetected(accId) {
-  const v = floatCore.viewOf(accId);
-  if (!v.chatKey || !v.items.length) return false;
-  const lang = detectLang(v.items.slice(-5).map((it) => it.text).join('\n'));
-  if (!lang || lang === '中文') return false;
-  return translator.setChatLang(`${accId}:${v.chatKey}`, lang, 'detected');
-}
-// 发出的目标语言和它的来源：手动选的 > 客户名单里填的 > 认出来的 > 这个号的默认语言
-function outTarget(acc, v) {
-  const key = acc && v.chatKey ? `${acc.id}:${v.chatKey}` : '';
-  const kept = key ? translator.chatLang(key) : null;
-  const chat = acc && v.title ? chatCustomer(acc.id, v.title) : null;
-  if (kept && kept.src === 'manual') return { lang: kept.lang, from: 'manual', name: chat ? chat.name : '', auto: autoTarget(acc, chat, null) };
-  return { ...autoTarget(acc, chat, kept), auto: null };
-}
-// “自动”会翻成哪种：客户名单里填的 > 从客户消息认出来的 > 这个号的默认语言 > 英语
-function autoTarget(acc, chat, kept) {
-  const cfg = translator.load();
-  if (chat) return { lang: chat.lang, from: 'customer', name: chat.name };
-  if (kept && kept.src === 'detected') return { lang: kept.lang, from: 'detected', name: '' };
-  return { lang: (acc && cfg.accountLang[acc.id]) || '英语', from: 'default', name: '' };
-}
-function floatState() {
-  const cfg = translator.load();
-  const acc = findAcc(activeId);
-  const modes = modeStore.list();
-  const v = acc ? floatCore.viewOf(acc.id) : { title: '', items: [], paused: '' };
-  const primary = translator.provider(cfg.primaryId);
-  const inMode = floatInMode();
-  const out = outTarget(acc, v);
-  return {
-    accountId: acc ? acc.id : '',
-    accountName: acc ? acc.name : '',
-    lite: !!(acc && isLite(acc)),
-    readable: floatReadable,
-    title: v.title,
-    items: v.items,
-    paused: floatAuto(acc && acc.id) ? v.paused : '',
-    today: v.today || 0,
-    auto: !!(acc && floatAuto(acc.id)),
-    dailyCap: cfg.dailyCap,
-    hasProvider: !!primary,
-    // 默认翻译服务还没填密钥：翻译页顶上显示黄条和“去填密钥”
-    needKey: primary && needsKey(primary) ? { id: primary.id, name: primary.name || '翻译服务', others: (cfg.providers || []).some((p) => p.id !== primary.id && !needsKey(p)) } : null,
-    providerName: primary ? primary.name : '',
-    primaryId: primary ? primary.id : '',
-    fallbackId: cfg.fallbackId || '',
-    providers: (cfg.providers || []).map((p) => ({ id: p.id, name: p.name, model: p.model || '' })), // 翻译页的“换模型”下拉，不带密钥
-    engine: primary ? (primary.model || primary.name) : '',
-    collapsed: cfg.float.collapsed,
-    modes: {
-      out: modes.filter((m) => m.direction !== 'in').map(({ id, name }) => ({ id, name })),
-      in: modes.filter((m) => m.direction !== 'out').map(({ id, name }) => ({ id, name })),
-    },
-    inModeId: inMode ? inMode.id : '',
-    langs: translator.publicConfig().langs,
-    target: out.lang,
-    targetSrc: out.from, // manual | customer | detected | default
-    autoTarget: (out.auto || out).lang, // 下拉里“自动（…）”显示的语言
-    accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
-    canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
-    // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话
-    targetFrom: out.from === 'default' ? '' : (out.name || '这个对话'),
-  };
-}
-function pushFloat() {
-  const both = floatView && !floatView.webContents.isDestroyed();
-  const dock = panelShown() && shellView && !shellView.webContents.isDestroyed();
-  if (!both && !dock) return;
-  const st = floatState();
-  if (both) floatView.webContents.send('float:state', st);
-  if (dock) shellView.webContents.send('dock:state', st);
-}
-let floatLastAcc = null;
-function layoutFloat(area) {
-  floatArea = area;
-  // 换了号：重新开始读，悬浮窗和面板只显示新号的内容
-  if (readerOn() && activeId !== floatLastAcc) {
-    floatLastAcc = activeId;
-    floatFails = 0;
-    floatReadable = 'loading';
-    pushFloat();
-    scheduleFloat(200);
-  } else if (readerOn() && !floatTimer && !floatBusy) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
-  if (!readerOn()) floatLastAcc = null;
-  if (!floatView) return;
-  const acc = findAcc(activeId);
-  const show = floatOpen && page === 'account' && !locked && !!acc && !problems.has(acc.id) && area.width > FLOAT_W + 40;
-  floatView.setVisible(show);
-  if (!show) return;
-  const pos = translator.load().float;
-  const pill = pos.collapsed;
-  const w = pill ? FLOAT_PILL.width : FLOAT_W;
-  const h = pill ? FLOAT_PILL.height : Math.max(FLOAT_MIN_H, Math.min(FLOAT_MAX_H, area.height - 64 - FLOAT_COMPOSE_GAP));
-  const maxX = area.x + area.width - w - 8;
-  const maxY = area.y + area.height - h - FLOAT_COMPOSE_GAP;
-  const x = Math.max(area.x + 8, Math.min(maxX, area.x + area.width - w - pos.dx));
-  const y = Math.max(area.y + 8, Math.min(Math.max(area.y + 8, maxY), area.y + pos.dy));
-  floatView.setBounds({ x, y, width: w, height: h });
-  // 账号视图重建时会被加到最上面：保证悬浮窗始终在最上层
-  const kids = win.contentView.children;
-  if (kids[kids.length - 1] !== floatView) win.contentView.addChildView(floatView);
-}
-function openFloat() {
-  if (floatView) { floatOpen = true; layout(); scheduleFloat(0); pushState(); return; }
-  floatOpen = true;
-  floatView = new WebContentsView({
-    webPreferences: { preload: path.join(__dirname, 'float', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
-  });
-  floatView.setBackgroundColor('#00000000');
-  lockLocalPage(floatView.webContents);
-  floatView.webContents.loadFile(path.join(__dirname, 'float', 'index.html'));
-  win.contentView.addChildView(floatView);
-  floatReadable = 'loading';
-  floatFails = 0;
-  layout();
-  scheduleFloat(300);
-  pushState();
-}
-function closeFloat() {
-  floatOpen = false;
-  if (floatTimer) { clearTimeout(floatTimer); floatTimer = null; }
-  if (floatView) {
-    const v = floatView;
-    floatView = null;
-    try { win.contentView.removeChildView(v); } catch {}
-    if (!v.webContents.isDestroyed()) v.webContents.close();
-  }
-  focusActive();
-  pushState();
-}
-// 只接受悬浮窗自己发来的
-const fromFloat = (e) => !!floatView && !floatView.webContents.isDestroyed() && e.sender === floatView.webContents;
-const handleFloat = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
-  if (!fromFloat(e)) throw new Error('not allowed');
-  return fn(...args);
-});
-const onFloat = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromFloat(e)) fn(...args); });
-onShell('float:toggle', (on) => { if (typeof on === 'boolean' ? on : !floatOpen) openFloat(); else closeFloat(); });
-onFloat('float:ready', () => pushFloat());
-onFloat('float:close', () => closeFloat());
-onFloat('float:collapse', (on) => { translator.setFloat({ pos: { collapsed: on === true } }); layout(); pushFloat(); });
-let floatDrag = null;
-onFloat('float:move', ({ dx, dy } = {}) => {
-  if (!floatView || !floatArea || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
-  const b = floatView.getBounds();
-  floatDrag = floatDrag || { x: b.x, y: b.y };
-  floatDrag.x += Math.max(-500, Math.min(500, dx));
-  floatDrag.y += Math.max(-500, Math.min(500, dy));
-  const a = floatArea;
-  const x = Math.max(a.x + 8, Math.min(a.x + a.width - b.width - 8, floatDrag.x));
-  const y = Math.max(a.y + 8, Math.min(Math.max(a.y + 8, a.y + a.height - b.height - FLOAT_COMPOSE_GAP), floatDrag.y));
-  floatView.setBounds({ ...b, x, y });
-});
-onFloat('float:moveend', () => {
-  floatDrag = null;
-  if (!floatView || !floatArea) return;
-  const b = floatView.getBounds();
-  translator.setFloat({ pos: { dx: floatArea.x + floatArea.width - b.width - b.x, dy: b.y - floatArea.y } });
-});
-function readerItem(h, fix) {
-  if (typeof h !== 'string' || !activeId) return null;
-  floatCore.manual(activeId, h, fix === true);
-  pushFloat();
-  return { ok: true };
-}
-function readerAuto(on) {
-  const acc = findAcc(activeId);
-  if (!acc) return null;
-  const cfg = translator.load();
-  translator.setFloat({ accId: acc.id, auto: on === true });
-  if (on) floatCore.backfill(acc.id, { dailyCap: cfg.dailyCap });
-  pushFloat();
-  return { ok: true };
-}
-const readerInMode = (id) => { if (typeof id === 'string' && modeStore.get(id)) translator.setFloat({ inMode: id }); pushFloat(); return true; };
-handleFloat('float:item', (h) => readerItem(h, false));
-handleFloat('float:auto', readerAuto);
-handleFloat('float:inmode', readerInMode);
-// 面板“翻译”页用的同一套（只接受软件界面发来的）
-handleShell('dock:get', () => floatState());
-handleShell('dock:item', ({ h, fix } = {}) => readerItem(h, fix));
-handleShell('dock:suggest', ({ accountId, h, take } = {}) => (accountId === activeId && typeof h === 'string' ? floatCore.suggestion(activeId, h, take === true) : false));
-handleShell('dock:edit', ({ accountId, h, text } = {}) => {
-  if (accountId !== activeId || typeof h !== 'string' || typeof text !== 'string') return false;
-  return floatCore.edit(activeId, h, text);
-});
-handleShell('dock:auto', readerAuto);
-handleShell('dock:inmode', readerInMode);
-// 手动选这个对话的客户语言，记住；lang 为空 = 忘掉，回到自动。对话已经换了就不记
-handleShell('dock:lang', ({ accountId, title, lang } = {}) => {
-  const acc = findAcc(accountId);
-  if (!acc || accountId !== activeId) return floatState();
-  const v = floatCore.viewOf(acc.id);
-  if (v.chatKey && v.title === title) translator.setChatLang(`${acc.id}:${v.chatKey}`, lang || '', 'manual');
-  else if (!v.chatKey) translator.setAccountLang(acc.id, lang || ''); // 读不到对话（轻量模式等）：改这个号的默认语言，空 = 回到自动
-  pushFloat();
-  return floatState();
-});
-handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
-  if (accountId !== activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
-  const mode = typeof modeId === 'string' ? modeStore.get(modeId) : null;
-  return userTranslate({ text, mode, target, context: floatCore.contextOf(activeId) }); // 带上当前对话最近几条当上下文
-});
-handleFloat('float:cancel', () => userCancel());
-handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
-handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
-handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
-// 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
-handleShell('tr:auto', ({ accountId, on } = {}) => {
-  const acc = findAcc(accountId);
-  if (!acc) return trState();
-  translator.setFloat({ accId: acc.id, auto: on === true });
-  if (on === true) floatCore.backfill(acc.id, { dailyCap: translator.load().dailyCap });
-  pushFloat();
-  return trState();
-});
-handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
+// ---- 翻译和悬浮翻译窗（在 translate-ipc.js） ----
+const trIpc = setupTranslateIpc(ctx);
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
@@ -2786,18 +2383,6 @@ onShell('mute', ({ id, muted } = {}) => {
   pushState();
 });
 onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
-// 关于页：译文存在哪、占多大
-handleShell('trdir:info', async () => {
-  if (!trStore) return null;
-  const dir = trStore.dir;
-  return { dir, ...(await trDirInfo(dir)) };
-});
-onShell('trdir:open', () => {
-  if (!trStore) return;
-  const dir = trStore.dir;
-  try { fs.mkdirSync(dir, { recursive: true }); if (!fs.statSync(dir).isDirectory()) return; } catch { return; }
-  shell.openPath(dir);
-});
 
 // 轻量模式聊天页
 onShell('lite:open', ({ id, jid } = {}) => {
@@ -2999,294 +2584,16 @@ onShell('group:context', (id) => {
   ]).popup({ window: win });
 });
 
-// ---------- 编辑账号（新建和修改共用） ----------
+// ---------- 编辑账号，新建和修改共用（在 editor-ipc.js） ----------
+const editorIpc = setupEditorIpc(ctx);
 
-handleShell('editor:load', (id) => {
-  const acc = findAcc(id);
-  return {
-    id: acc ? acc.id : null,
-    isNew: !acc,
-    name: acc ? acc.name : String(editorPrefill?.name || nextName()).slice(0, 40),
-    note: acc ? acc.note : '',
-    phone: acc ? acc.phone : '',
-    color: acc ? acc.color : editorColor || nextColor(),
-    proxy: acc ? acc.proxy : '',
-    hasPassword: !!(acc && acc.proxyPassword),
-    region: acc ? acc.fingerprint.region : (fingerprint.regions[editorPrefill?.region] ? editorPrefill.region : 'auto'),
-    regions: Object.entries(fingerprint.regions).map(([key, v]) => ({ key, label: v.label })),
-    regionLabel: acc ? regionLabel(acc.fingerprint.region) : '',
-    uiLanguage: fingerprint.UI_LANGUAGE_LABEL,
-    mode: acc ? acc.mode : 'web',
-    allowCalls: !!(acc && acc.allowCalls),
-    // 新账号：还没有主号时默认就是主号
-    primary: acc ? acc.primary : !accounts.some((a) => a.primary),
-    primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
-    // 别的直连号（编辑页选直连时提醒一句同一出口 IP）
-    otherDirect: visibleAccounts().filter((a) => a.id !== id && !a.proxy).map((a) => a.name),
-    liteAvailable: canEncrypt(safeStorage),
-    platform: process.platform,
-  };
-});
-
-// 编辑页的代理预设：本机 7890–7899 哪些端口开着、能不能用、被哪个号占了
-handleShell('editor:ports', async (id) => {
-  const list = await ports.probeAll();
-  const used = ports.usage(accounts.filter((a) => !isParked(a)), id);
-  return list.map((p) => ({ ...p, usedBy: used[p.port] || [] }));
-});
-
-// 主号的出口 IP（轻量小号不能和主号用同一个 IP）。主号没设代理时查本机直连的出口。
-async function primaryExit(exceptId) {
-  const primary = accounts.find((a) => a.primary && a.id !== exceptId);
-  if (!primary) return { ip: null };
-  if (primary.proxy && exitIps.has(primary.id)) return { ip: exitIps.get(primary.id), name: primary.name };
-  const res = primary.proxy ? await proxy.test(primary.proxy, proxy.decryptPassword(primary.proxyPassword)) : await proxy.testDirect();
-  if (!res.ok) return { error: `查不到主号「${primary.name}」的出口 IP（${res.error}），没法确认这个号和主号不在同一个 IP，暂时不能保存。请确认主号的网络正常后再试。` };
-  if (primary.proxy) recordExit(primary, res.ip);
-  return { ip: res.ip, name: primary.name };
-}
-
-// 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同
-handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
-  const acc = findAcc(id);
-  const pass = proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password);
-  const res = await proxy.test(String(proxyText || ''), pass);
-  if (!res.ok) return res;
-  res.region = regionForTimezone(res.timezone);
-  if (res.region) res.regionLabel = regionLabel(res.region);
-  res.country = regionName(res.country);
-  const same = accounts.find((a) => a.id !== id && exitIps.get(a.id) === res.ip);
-  const before = same ? null : accounts.find((a) => a.id !== id && a.lastExit && a.lastExit.ip === res.ip);
-  if (same) res.sameAs = same.name;
-  else if (before) { res.sameAs = before.name; res.sameAt = before.lastExit.at; }
-  lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
-  return res;
-});
-
-handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
-  name = String(name || '').trim().slice(0, 40);
-  note = cleanNote(note);
-  phone = cleanPhone(phone);
-  if (!name) return { error: '请填写名称' };
-  if (!COLORS.includes(color)) color = nextColor();
-  const parsed = proxy.parse(String(proxyText || ''));
-  if (parsed && parsed.error) return { error: parsed.error };
-  if (!isValidRegion(region)) region = 'auto';
-  const proxyStored = parsed ? parsed.display : '';
-  // 允许通话只对网页版直连号有意义
-  const callsWanted = allowCalls === true && !parsed && mode !== 'lite';
-  let acc = findAcc(id);
-  // 模式只在添加时选，之后不能改（换模式等于换一台关联设备）
-  mode = acc ? acc.mode : (mode === 'lite' ? 'lite' : 'web');
-  // 主号只能在别的账号里勾选来更换，不能直接取消
-  const wantPrimary = mode === 'web' && (primary === true || !!(acc && acc.primary) || !accounts.some((a) => a.primary && a.id !== id));
-  const testedNow = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
-  if (mode === 'lite') {
-    if (primary === true) return { error: '主号只能用网页版，不能用轻量模式' };
-    if (!acc && liteConfirm !== true) return { error: '请先勾选下面的风险确认' };
-    // 直连可以（用户自己选，编辑页有风险提示）；设了代理就要测试通过、出口不能和主号相同
-    if (parsed && !LITE_SCHEMES.includes(parsed.scheme)) return { error: '轻量模式只支持 socks5 和 http 代理' };
-    const proxyChanged = !acc || acc.proxy !== proxyStored || !!String(password || '');
-    if (parsed && proxyChanged) {
-      if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
-      const pe = await primaryExit(id);
-      if (pe.error) return { error: pe.error };
-      if (pe.ip && pe.ip === testedNow.ip) return { error: `这个代理的出口 IP（${testedNow.ip}）和主号「${pe.name}」相同。轻量小号必须和主号用不同的 IP，请换一个代理端口或节点。` };
-    }
-  }
-
-  // 后台分来的号第一次保存：填了代理必须测试通过；不填就是直连（编辑页有一行风险提示，不拦）
-  if (acc && acc.teamNeedsProxy && mode === 'web' && parsed && !testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
-
-  // 密码：新填的优先；地址里带的其次；都没有时，只有主机、端口、用户名都没变才保留原来的，否则清掉
-  const plan = proxy.passwordPlan(acc ? acc.proxy : '', String(proxyText || ''), password);
-  let encPassword = plan.kind === 'old' ? acc.proxyPassword : '';
-  try {
-    if (plan.kind === 'new') encPassword = proxy.encryptPassword(plan.password);
-  } catch (e) {
-    return { error: e.message };
-  }
-  // 测试过的出口所在地显示在侧栏
-  let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
-  // 网页版选了“跟随本机”又设了代理：没测过就先测一次，按出口所在地填好时区。
-  // 测不通也照样保存；用户自己选了地区的不改
-  if (mode === 'web' && parsed && region === 'auto') {
-    if (!tested) {
-      const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
-      if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: regionForTimezone(res.timezone) };
-    }
-    if (tested && tested.region) region = tested.region;
-  }
-
-  let liteKey = '';
-  if (mode === 'lite' && !acc) {
-    try { liteKey = newLiteKey(); } catch (e) { return { error: e.message }; }
-  }
-  // 换了主号、或主号换了代理：轻量小号只在保存时和主号比过出口，提醒跑一次隔离自检
-  const oldPrimary = accounts.find((a) => a.primary);
-  const primaryMoved = wantPrimary && oldPrimary && oldPrimary.id !== id;
-  const primaryProxyChanged = wantPrimary && acc && acc.primary && acc.proxy !== proxyStored;
-  const remindCheck = (primaryMoved || primaryProxyChanged) && accounts.some(isLite);
-  if (wantPrimary) for (const a of accounts) if (a.id !== id) a.primary = false;
-
-  const teamFirstSave = !!(acc && acc.teamNeedsProxy);
-  if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
-  if (!acc) {
-    acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
-    accounts.push(acc);
-    if (tested) recordExit(acc, tested.ip);
-    saveAccounts();
-    page = 'account';
-    activeId = acc.id;
-    await startAccount(acc);
-    refresh();
-  } else if (isLite(acc)) {
-    const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword;
-    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
-    if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
-    acc.name = name;
-    acc.note = note;
-    applyPhone(acc, phone);
-    acc.color = color;
-    acc.proxy = proxyStored;
-    acc.proxyPassword = encPassword;
-    saveAccounts();
-    page = 'account';
-    activeId = acc.id;
-    if (changed || teamFirstSave) { problems.delete(acc.id); startLite(acc); }
-    refresh();
-  } else {
-    acc.primary = wantPrimary;
-    const changed = acc.proxy !== proxyStored || acc.proxyPassword !== encPassword || acc.fingerprint.region !== region || acc.allowCalls !== callsWanted;
-    acc.allowCalls = callsWanted;
-    if (acc.proxy !== proxyStored) { acc.exitLabel = ''; acc.lastExit = null; exitIps.delete(acc.id); exitChanges.delete(acc.id); }
-    if (tested) { acc.exitLabel = tested.label; recordExit(acc, tested.ip); }
-    acc.name = name;
-    acc.note = note;
-    applyPhone(acc, phone);
-    acc.color = color;
-    acc.proxy = proxyStored;
-    acc.proxyPassword = encPassword;
-    // 只改地区（时区），浏览器标识保持不变
-    acc.fingerprint.region = region;
-    saveAccounts();
-    page = 'account';
-    activeId = acc.id;
-    if (changed || teamFirstSave) {
-      destroyView(acc.id);
-      problems.delete(acc.id);
-      await createView(acc);
-    }
-    refresh();
-  }
-  notifier.refresh();
-  if (remindCheck) {
-    dialog.showMessageBox(win, {
-      type: 'info',
-      title: '请跑一次隔离自检',
-      message: primaryMoved ? '主号已更换' : '主号的代理已修改',
-      detail: '轻量小号只在保存时和主号比较过出口 IP。请到 设置 › 隔离自检 跑一次，确认小号和主号不在同一个 IP。',
-    }).catch(() => {});
-  }
-  return { ok: true };
-});
-
-// ---------- 隔离自检 ----------
-// 逐个测试每个账号的代理出口，找出走真实 IP 的号、共用出口的号、时区和出口对不上的号。
-
-handleShell('check:run', async () => {
-  const items = [];
-  const list = visibleAccounts(); // 停着的号（被团队后台收回等）不运行、不显示，自检也不算它
-  const byPort = new Map();
-  const byIp = new Map();
-  const direct = list.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
-  // 多个号直连是允许的，只提醒一句（黄色，不算出错）
-  if (direct.length > 1) items.push({ level: 'warn', title: `${direct.join('、')} 都是直连`, detail: '这几个号用同一个出口 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
-  const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  for (const acc of list) {
-    const p = proxy.parse(acc.proxy);
-    if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' }); continue; }
-    if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
-    const key = `${p.host}:${p.port}`;
-    byPort.set(key, [...(byPort.get(key) || []), acc.name]);
-    if (isLite(acc)) {
-      if (!LITE_SCHEMES.includes(p.scheme)) items.push({ level: 'bad', title: `${acc.name}：轻量模式不支持这种代理`, detail: '请换成 socks5:// 或 http:// 开头的代理地址。' });
-    } else {
-      // 会话里的代理规则不能带“直连”兜底
-      const rule = await session.fromPartition(`persist:wa-${acc.id}`).resolveProxy(WA_URL);
-      if (/DIRECT/i.test(rule)) items.push({ level: 'bad', title: `${acc.name}：代理可能漏走本机网络`, detail: '请重启 WAswitch 后再检查。' });
-    }
-    const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
-    if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error, raw: res.detail || '' }); continue; }
-    recordExit(acc, res.ip);
-    acc.exitLabel = regionName(res.country);
-    byIp.set(res.ip, [...(byIp.get(res.ip) || []), acc.name]);
-    const tz = fingerprint.resolve(acc.fingerprint).timezone;
-    const place = [acc.exitLabel, res.city].filter(Boolean).join(' · ');
-    // 轻量模式没有浏览器环境，不涉及时区
-    if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：IP ${res.ip}（${place}）` }); continue; }
-    // 跟随本机时，实际时区就是本机时区
-    const effTz = tz || localTz;
-    const fixRegion = regionForTimezone(res.timezone);
-    const fix = fixRegion ? { id: acc.id, region: fixRegion, label: regionLabel(fixRegion) } : null;
-    if (effTz !== res.timezone) {
-      items.push({
-        level: 'warn',
-        title: `${acc.name}：IP ${res.ip}（${place}）`,
-        detail: tz
-          ? `IP 在 ${res.timezone} 时区，账号设的是 ${tz}，对不上。${fix ? '' : '请在编辑账号里选一个最接近的地区。'}`
-          : `时区跟随本机（${localTz}），但 IP 在 ${res.timezone}，对不上。${fix ? '' : '请在编辑账号里选一个最接近的地区。'}`,
-        fix,
-      });
-    } else {
-      items.push({ level: 'ok', title: `${acc.name}：IP ${res.ip}（${place}）`, detail: '时区和 IP 一致。' });
-    }
-  }
-  for (const [key, names] of byPort) {
-    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 共用同一个代理端口`, detail: `${key}。它们会用同一个 IP，建议每个号一个端口。` });
-  }
-  for (const [ip, names] of byIp) {
-    if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 的出口 IP 相同`, detail: `${ip}。在 WhatsApp 看来这几个号在同一个地方。` });
-  }
-  // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
-  if (list.some((a) => isLite(a) && proxy.parse(a.proxy))) {
-    items.push(liteGuardHits
-      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。日志里记着拦下的是哪些连接。', logs: true }
-      : { level: 'ok', title: '轻量模式：都走代理，没有漏' });
-  }
-  // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
-  const webrtcBad = list.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));
-  const proxied = list.filter((a) => !isLite(a) && a.proxy);
-  if (webrtcBad.length) items.push({ level: 'bad', title: `${webrtcBad.map((a) => a.name).join('、')}：通话的网络设置没生效`, detail: '请重启 WAswitch 后再检查。' });
-  else if (proxied.length) items.push({ level: 'ok', title: '走代理的号：通话也走代理，不暴露本机 IP' });
-  for (const a of list.filter((x) => !isLite(x) && !x.proxy && x.allowCalls)) {
-    items.push({ level: 'warn', title: `${a.name}：允许通话（直连）`, detail: '通话会用本机 IP，可能和聊天的 IP 不一样。不打电话就在编辑账号里关掉。' });
-  }
-  const uaOk = list.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
-  items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识正常，看不出是多开软件' });
-  saveAccounts();
-  pushState();
-  return { items, time: new Date().toLocaleString('zh-CN') };
-});
+// ---------- 隔离自检（在 check-ipc.js） ----------
+setupCheckIpc(ctx);
 
 // 用户点了顶栏的“出口 IP 变了”：知道了，不再标黄
 onShell('zoom', ({ id, dir } = {}) => { if (typeof id === 'string' && [1, -1, 0].includes(dir)) stepZoom(id, dir); });
 handleShell('exit:ack', ({ id } = {}) => {
   if (exitChanges.delete(String(id))) refresh();
-  return { ok: true };
-});
-
-// 隔离自检里的“改成和出口一致”：只改地区（时区），然后重建页面
-handleShell('check:fix', async ({ id, region } = {}) => {
-  const acc = findAcc(id);
-  if (!acc || isLite(acc) || !isValidRegion(region) || region === 'auto') return { error: '改不了' };
-  if (acc.fingerprint.region === region) return { ok: true };
-  acc.fingerprint.region = region;
-  saveAccounts();
-  destroyView(acc.id);
-  problems.delete(acc.id);
-  await createView(acc);
-  refresh();
   return { ok: true };
 });
 
@@ -3302,7 +2609,7 @@ app.on('before-quit', (event) => {
   quitting = true;
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
-  if (trStore) trStore.flush(); // 还没写盘的译文
+  if (trIpc.trStore) trIpc.trStore.flush(); // 还没写盘的译文
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
