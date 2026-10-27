@@ -43,7 +43,7 @@ class FloatCore {
 
   forget(accId) {
     this.accs.delete(accId);
-    if (this.deps.store) this.deps.store.forgetAccount(accId);
+    if (this.deps.store) this.deps.store.removeAccount(accId); // 删号：这个号存的译文一起删
     this.queue = this.queue.filter((q) => q.accId !== accId);
   }
 

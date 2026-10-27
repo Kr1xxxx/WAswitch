@@ -92,7 +92,7 @@ async function core() {
   await persisted();
 }
 
-// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留
+// 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号时删掉这个号的（别的号不动）
 async function persisted() {
   const fs = require('fs');
   const os = require('os');
@@ -129,8 +129,28 @@ async function persisted() {
   fc.ingest('P', { title: 'q', msgs: [msg(1, false, '666@c.us', 'hello')] }, { auto: true, dailyCap: 500 });
   await sleep(20);
   assert.deepStrictEqual(sent, ['new one', 'hello']);
+  // 删号：这个号的译文文件夹在每个位置都删掉（Windows 上 C/D 两处），别的号不动；还没写盘的也不会再写回来
+  store.flush(); // 上面那个 store 的定时写盘先跑完（软件里只有一个 store）
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-other-'));
+  fs.mkdirSync(path.join(other, 'P'), { recursive: true });
+  fs.writeFileSync(path.join(other, 'P', 'x.json'), '{}');
+  ({ store, fc } = make());
+  store.otherDirs = [other, dir];
+  fc.ingest('Q', { title: 'q', msgs: [msg(1, false, '777@c.us', 'hola')] }, { auto: true, dailyCap: 500 });
+  fc.ingest('P', { title: 'p', msgs: [msg(9, false, '555@c.us', 'unsaved')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  store.flush();
+  assert.strictEqual(fs.readdirSync(path.join(dir, 'Q')).length, 1);
+  assert(fc.edit('P', hashOf('P', msg(9, false, '555@c.us', 'unsaved').id), '没写盘的'));
   fc.forget('P');
-  assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).length, 2, '删号不删存的译文');
+  store.flush();
+  await sleep(1100); // 等定时写盘跑过
+  assert(!fs.existsSync(path.join(dir, 'P')), '删号后这个号的译文文件夹不在');
+  assert(!fs.existsSync(path.join(other, 'P')), '另一处位置的也删掉');
+  assert.strictEqual(fs.readdirSync(path.join(dir, 'Q')).length, 1, '别的号不受影响');
+  store.removeAccount('../Q'); // 不合规的名字什么都不做
+  assert(fs.existsSync(path.join(dir, 'Q')));
+  fs.rmSync(other, { recursive: true, force: true });
   fs.rmSync(dir, { recursive: true, force: true });
   // 存哪：Windows 上 D 盘是本机固定硬盘才放 D 盘，U 盘/移动硬盘/网络盘/查不出来/写不进去都回到 C（userData）；Mac 不变；
   // 旧文件搬过去一次，不覆盖新位置已有的

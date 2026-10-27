@@ -1,7 +1,8 @@
 // 收到的消息的译文永久存在本机磁盘上（shen 2026-10-26：切回对话、重启软件都直接显示，不再调模型、不耗额度）。
 // 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, edited, fixed, at } }。
 // 不存原文和号码，只存原文的 hash 和译文。按原文认（同一对话里同样的话只翻一次），消息编号变了也认得出。
-// 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时不删（shen 2026-10-26）。
+// 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。
+// 删号时把这个号的文件夹删掉（shen 2026-10-27 改的；之前是删号保留），其他号不动。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -12,8 +13,9 @@ const textKey = (text) => crypto.createHash('sha256').update(String(text)).diges
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
 
 class TrStore {
-  constructor(dir) {
+  constructor(dir, { otherDirs = [] } = {}) {
     this.dir = dir;
+    this.otherDirs = otherDirs; // 以前可能放过译文的其他位置（Windows 上 C/D 两处），删号时一起删
     this.mem = new Map(); // `${acc}/${chat}` -> { data, dirty }
     this.timer = null;
   }
@@ -80,12 +82,13 @@ class TrStore {
     this.dir = dir;
   }
 
-  // 删号：磁盘上的译文保留，只把内存里的写盘后放掉
-  forgetAccount(acc) {
-    for (const [k, e] of [...this.mem]) {
-      if (!k.startsWith(`${acc}/`)) continue;
-      if (e.dirty) this.write(k, e);
-      this.mem.delete(k);
+  // 删号：内存里的直接丢掉（不再写盘），磁盘上这个号的文件夹在每个可能的位置都删掉
+  removeAccount(acc) {
+    if (!safe(acc)) return;
+    for (const k of [...this.mem.keys()]) if (k.startsWith(`${acc}/`)) this.mem.delete(k);
+    const dirs = new Set([this.dir, ...this.otherDirs].filter(Boolean).map((d) => path.resolve(d)));
+    for (const d of dirs) {
+      try { fs.rmSync(path.join(d, acc), { recursive: true, force: true }); } catch (err) { console.warn(`删号时删译文失败：${err.message}`); }
     }
   }
 }

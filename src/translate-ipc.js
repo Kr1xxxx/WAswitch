@@ -153,7 +153,7 @@ function setupTranslateIpc(ctx) {
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
     const dTrDir = 'D:\\WAswitch\\translations';
     const guess = process.platform === 'win32' && fs.existsSync(dTrDir) ? dTrDir : oldTrDir;
-    trStore = new TrStore(guess);
+    trStore = new TrStore(guess, { otherDirs: process.platform === 'win32' ? [oldTrDir, dTrDir] : [] });
     pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
       if (!trStore) return;
       trStore.flush();
