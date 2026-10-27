@@ -441,14 +441,23 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: 10px; padding: 0 4px; line-height: 15px; }
 .dk-item:has(.dk-edited, .dk-fixed) .dk-spacer { width: 112px; }
 .dk-orig { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
-.dk-fold { display: flex; align-items: center; gap: 6px; align-self: stretch; min-width: 0; margin-bottom: 1px; }
-.dk-fold-glass { position: relative; flex: 1 1 0; min-width: 40px; max-width: 220px; height: 15px; overflow: hidden; border-radius: 4px; cursor: pointer; }
-.dk-fold-text { display: block; font-size: 12px; line-height: 15px; color: var(--muted); white-space: nowrap; overflow: hidden; filter: blur(3.5px); opacity: .75; user-select: none; }
-.dk-fold-glass::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(255,255,255,.35), rgba(255,255,255,.15) 60%, rgba(240,242,245,.9)); }
-.dk-fold-btn { flex: none; position: relative; display: inline-block; width: 16px; height: 15px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; vertical-align: -2px; }
-.dk-fold-btn::before { content: ''; position: absolute; left: 6px; top: 4px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
-.dk-fold-btn[aria-expanded="true"]::before { left: 5px; top: 3px; transform: rotate(-45deg); }
-.dk-fold-btn:hover { color: var(--text); background: rgba(0,0,0,.05); }
+/* 原文折叠：看不见的副本行高减半撑出原文一半高（至少一行），真原文盖在上面、裁掉下半截、整块模糊，展开箭头叠在模糊正中；
+   展开时副本行高恢复，显示全文，箭头移到原文下面。宽度两种状态一样，切换时只有高度平滑变化 */
+.dk-fold { position: relative; display: block; align-self: stretch; min-width: 0; margin-bottom: 2px; transition: padding-bottom var(--fx) var(--fx-ease); }
+.dk-fold.open { padding-bottom: 16px; }
+.dk-fold-clip { position: relative; display: block; min-height: calc(12px * 1.4); overflow: hidden; border-radius: 4px; cursor: pointer; }
+.dk-fold.open .dk-fold-clip { cursor: auto; }
+.dk-fold-ghost { display: block; line-height: .7; visibility: hidden; user-select: none; pointer-events: none; transition: line-height var(--fx) var(--fx-ease); }
+.dk-fold.open .dk-fold-ghost { line-height: 1.4; }
+.dk-fold-text { position: absolute; left: 0; top: 0; right: 0; filter: blur(3px); opacity: .75; user-select: none; transition: filter var(--fx) ease, opacity var(--fx) ease; }
+.dk-fold.open .dk-fold-text { filter: none; opacity: 1; user-select: text; }
+.dk-fold-clip::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(240,242,245,.1), rgba(240,242,245,.5)); pointer-events: none; transition: opacity var(--fx) ease; }
+.dk-fold.open .dk-fold-clip::after { opacity: 0; }
+.dk-fold-btn { position: absolute; left: 50%; top: 50%; width: 26px; height: 14px; margin: -7px 0 0 -13px; padding: 0; border: 0; border-radius: 7px; background: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(11,20,26,.08), 0 1px 2px rgba(11,20,26,.12); color: var(--muted); cursor: pointer; transition: top var(--fx) var(--fx-ease), color .12s; }
+.dk-fold.open .dk-fold-btn { top: calc(100% - 8px); }
+.dk-fold-btn::before { content: ''; position: absolute; left: 10px; top: 2.5px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--fx) var(--fx-ease), top var(--fx) var(--fx-ease); }
+.dk-fold.open .dk-fold-btn::before { top: 5px; transform: rotate(135deg); }
+.dk-fold-btn:hover { color: var(--text); background: #fff; }
 .dk-tr { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
 .dk-tr.bad { color: var(--danger); font-size: 12px; }
 .dk-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #15803D; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
@@ -554,13 +563,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .cfm-box { animation: fx-pop var(--fx) var(--fx-ease) backwards; }
 .cfm.out { pointer-events: none; animation: fx-out var(--fx-fast) ease-in forwards; }
 .cfm.out .cfm-box { animation: fx-pop-out var(--fx-fast) ease-in forwards; }
-/* 原文折叠：箭头转 90°，展开的原文从上面淡入 */
-@keyframes fx-fold-open { from { transform: rotate(45deg); } }
-@keyframes fx-fold-close { from { transform: rotate(-45deg); } }
-@keyframes fx-unfold { from { opacity: 0; transform: translateY(-3px); } }
-.dk-fold-btn.fx-fold-open::before { animation: fx-fold-open var(--fx) var(--fx-ease) backwards; }
-.dk-fold-btn.fx-fold-close::before { animation: fx-fold-close var(--fx) var(--fx-ease) backwards; }
-.fx-unfold { animation: fx-unfold var(--fx) var(--fx-ease) backwards; }
 /* 翻译页顶上的“还没填密钥”黄条，和表单里的申请密钥链接 */
 .dk-keybar { margin: 10px 12px 0; display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.5; }
 .dk-keybar > span { flex: 1; }
