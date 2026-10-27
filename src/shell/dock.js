@@ -338,6 +338,7 @@ function dockSyncTabTools() {
 }
 
 // 参考样式：灰色圆角框，复制图标在框内左下角，和输入区同一块灰底（shen 2026-10-26 去掉朗读）
+// hint：右下角的小字（字符串），或者直接给一个元素（译文框用来放“已手动修改”这类状态）
 function dockField(box, getText, hint) {
   const copyBtn = h('button', { class: 'dk-tool', title: '复制', 'aria-label': '复制', onclick: async () => {
     const text = getText();
@@ -346,7 +347,7 @@ function dockField(box, getText, hint) {
     copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
-    h('div', { class: 'dk-tools' }, copyBtn, hint ? h('span', { class: 'dk-keyhint' }, hint) : null)));
+    h('div', { class: 'dk-tools' }, copyBtn, typeof hint === 'string' ? h('span', { class: 'dk-keyhint' }, hint) : hint || null)));
 }
 
 function dockCompose() {
@@ -374,23 +375,25 @@ function dockCompose() {
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）', placeholder: '译文会显示在这里，可以直接改' }, dk.out);
   out.addEventListener('input', () => {
     dk.out = out.value;
-    if (!dk.edited) { dk.edited = true; const tag = $panel.querySelector('.dk-edited'); if (tag) tag.hidden = false; }
+    if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
   });
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
+  // 译文的状态放在译文框右下角（像收到消息气泡那样），上面那行只留语言、模型和两个按钮，窄的时候不会把字挤成两行（shen 2026-10-27）
+  const editedTag = h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改');
+  const status = h('span', { class: 'dk-status' }, editedTag,
+    dk.fixed && !dk.edited ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
+    stale ? h('span', { class: 'dk-dim' }, '中文改过了') : null);
   return h('div', { class: 'dk-compose' },
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       h('span', { class: 'dk-label' }, '→'), dockLangSel(), dockModelSel('dk-lang', true),
-      h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改'),
-      dk.fixed && !dk.edited ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
-      stale ? h('span', { class: 'dk-dim' }, '中文改过了') : null,
       h('span', { class: 'grow' }),
       dk.busy ? h('button', { class: 'dk-link', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-link', title: 'AI 对照中文原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
           h('button', { class: 'dk-link', title: '按现在的中文和语气重新翻，会替换下面的译文', onclick: () => dockTranslate(false) }, dk.out ? '重新翻译' : '翻译'))),
-    dockField(out, () => out.value),
+    dockField(out, () => out.value, status),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
     dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },

@@ -684,7 +684,8 @@ function overviewPage() {
   const unread = s.accounts.filter((a) => a.unread).sort((a, b) => b.unread - a.unread);
   const total = unread.reduce((n, a) => n + a.unread, 0);
   const groupName = (a) => (s.groups || []).find((g) => g.id === a.groupId)?.name || '';
-  page.append(
+  // 没有未读时中间那块是 null：要过一遍 kids，不然页面上会显示 “null”
+  page.append(...kids(
     h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '未读总览'),
       h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。点一下切过去。` : '所有号都没有未读对话。')),
     unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
@@ -707,7 +708,7 @@ function overviewPage() {
           h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
           h('span', { class: 'hint' }, `${e.count} 个未读${e.popped ? '' : ' · 没弹'}`));
       }))
-      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。')));
+      : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。'))));
   return page;
 }
 
@@ -1424,8 +1425,8 @@ function editorPage(id) {
         h('div', { class: 'col', style: { gap: '6px' } },
           h('h1', null, d.isNew ? '添加账号' : '编辑账号'),
           h('p', { class: 'lead' }, '每个账号的登录、缓存、网络线路和时区都互相独立。')),
-        h('div', { class: 'hstack', style: { alignItems: 'flex-end', gap: '14px' } },
-          h('label', { class: 'field', style: { flex: '1' } }, '名称', name),
+        h('div', { class: 'hstack name-row' },
+          h('label', { class: 'field' }, '名称', name),
           h('div', { class: 'field' }, '颜色', swatches)),
         h('label', { class: 'field' }, '手机号', phone, h('span', { class: 'hint' }, '登录后自动读出这个号的手机号，鼠标停在侧栏账号上就能看到。自己填了就以你填的为准，清空后重新自动读取。')),
         h('label', { class: 'field' }, '备注', note, h('span', { class: 'hint' }, '只给自己看：显示在顶栏和侧栏（鼠标停在账号上）。')),
