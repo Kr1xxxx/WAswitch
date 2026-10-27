@@ -50,18 +50,29 @@ function popSig(c) {
   return crypto.createHash('sha1').update(`${cleanPreview(c && c.preview)}|${ts}`).digest('hex').slice(0, 12);
 }
 
-// 这个客户现在列表里显示的那条，是不是已经弹过（或用户已经看过）：同一个客户、同一条预览、未读条数没变多
+// 网页号对话列表里这条消息的时间，只认“今天”的钟点（10:31、上午10:31、10:31 PM）。
+// 昨天、星期几、日期这些不算：过了午夜同一条消息会从“23:50”变成“昨天”，不能当成新消息
+const CLOCK = /^(\d{1,2}[:.]\d{2}(\s?[ap]\.?m\.?)?|[ap]m\s?\d{1,2}[:.]\d{2}|(上午|下午|晚上|凌晨|中午)\s?\d{1,2}[:.]\d{2})$/i;
+function clockOf(c) {
+  const t = c && typeof c.time === 'string' ? c.time.replace(/\s+/g, ' ').trim() : '';
+  return CLOCK.test(t) ? t : '';
+}
+
+// 这个客户现在列表里显示的那条，是不是已经弹过（或用户已经看过）：同一个客户、同一条预览、未读条数没变多，
+// 而且（网页号）列表里显示的钟点没变。钟点变了说明是新发来的一条，哪怕话一样（比如又发了一句“ok”）
 function wasPopped(popped, key, c, n) {
   const rec = popped && popped.get(key);
-  return !!(rec && n <= rec.unread && rec.sig === popSig(c));
+  if (!(rec && n <= rec.unread && rec.sig === popSig(c))) return false;
+  const t = clockOf(c);
+  return !(t && t !== (rec.t || ''));
 }
 
 // 对话列表里哪些客户的未读变多了（要弹卡片）。
 // seen：上次记下的 key -> 未读数；null 表示这个号还没记过（刚启动、刚读过消息）
-// chats：对话列表 { name, unread, preview?, muted?, jid?, ts? }，最近的在前
+// chats：对话列表 { name, unread, preview?, muted?, jid?, ts?, time? }，最近的在前
 // firstLimit：没记过时最多挑几个（只挑列表最上面的，免得把以前的未读全弹一遍）
 // popped：已经弹过的 key -> { sig, unread }（见 wasPopped），弹过的同一条不再弹
-// 返回 { fresh: [{ key, name, unread, preview, jid, sig }], seen: 新的 Map, dup: 因为弹过而跳过了几个 }
+// 返回 { fresh: [{ key, name, unread, preview, jid, sig, t }], seen: 新的 Map, dup: 因为弹过而跳过了几个 }
 function grownChats(seen, chats, firstLimit = 1, limit = 3, popped = null) {
   const next = new Map(seen || []);
   const list = Array.isArray(chats) ? chats.filter((c) => c && chatKey(c)) : [];
@@ -81,9 +92,9 @@ function grownChats(seen, chats, firstLimit = 1, limit = 3, popped = null) {
   const fresh = pick.map(({ key, c, n }) => {
     let name = (c.name || key).replace(/\s+/g, ' ').trim();
     if ([...name].length > MAX_LEN) name = `${[...name].slice(0, MAX_LEN).join('')}…`;
-    return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '', sig: popSig(c) };
+    return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '', sig: popSig(c), t: clockOf(c) };
   });
   return { fresh, seen: next, dup };
 }
 
-module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, popSig, wasPopped, MAX_NAMES, MAX_LEN, MAX_PREVIEW };
+module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, popSig, clockOf, wasPopped, MAX_NAMES, MAX_LEN, MAX_PREVIEW };
