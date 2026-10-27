@@ -50,6 +50,8 @@ jobs:
         run: npm run check:atomic
       - name: 导出导入去重自检
         run: npm run check:records
+      - name: 导入文件编码自检
+        run: npm run check:import
 
   package-win:
     runs-on: windows-latest
