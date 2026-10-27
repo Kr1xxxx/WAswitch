@@ -9,7 +9,7 @@
 const { net, safeStorage, session } = require('electron');
 const { canEncrypt } = require('./secure-storage');
 const errtext = require('./errtext');
-const { parse, passwordPlan } = require('./proxy-parse');
+const { parse, passwordPlan, keepOldPassword } = require('./proxy-parse');
 
 // 地址写错时用的“黑洞”代理：所有请求都会失败，而不是直连
 const BLACKHOLE = 'socks5://127.0.0.1:9';
@@ -150,5 +150,5 @@ function passwordFor(oldRaw, oldEnc, newRaw, typed) {
   return '';
 }
 
-module.exports = { parse, passwordPlan, passwordFor, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
+module.exports = { parse, passwordPlan, keepOldPassword, passwordFor, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
 

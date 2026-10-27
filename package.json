@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
     "check:ports": "node scripts/check-ports.js && node scripts/check-proxy-pass.js",
-    "check:atomic": "node scripts/check-atomic.js",
+    "check:atomic": "node scripts/check-atomic.js && node scripts/check-account-id.js",
     "check:records": "node scripts/check-records.js",
     "check:translate": "node scripts/check-translate.js && node scripts/check-errtext.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",

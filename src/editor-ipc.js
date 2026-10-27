@@ -6,6 +6,7 @@ const proxy = require('./proxy');
 const ports = require('./ports');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { canEncrypt } = require('./secure-storage');
+const { newAccountId } = require('./account-id');
 
 function setupEditorIpc(ctx) {
   const {
@@ -114,9 +115,11 @@ function setupEditorIpc(ctx) {
 
     // 密码：新填的优先；地址里带的其次；都没有时，只有主机、端口、用户名都没变才保留原来的，否则清掉
     const plan = proxy.passwordPlan(acc ? acc.proxy : '', String(proxyText || ''), password);
-    let encPassword = plan.kind === 'old' ? acc.proxyPassword : '';
+    // 重新填了同一个密码也算没改，沿用原来那份（下面比较 changed 时才不会误判）
+    const keepOld = !!acc && proxy.keepOldPassword(plan, plan.kind === 'new' ? proxy.decryptPassword(acc.proxyPassword) : '');
+    let encPassword = keepOld ? acc.proxyPassword : '';
     try {
-      if (plan.kind === 'new') encPassword = proxy.encryptPassword(plan.password);
+      if (plan.kind === 'new' && !keepOld) encPassword = proxy.encryptPassword(plan.password);
     } catch (e) {
       return { error: e.message };
     }
@@ -146,7 +149,7 @@ function setupEditorIpc(ctx) {
     const teamFirstSave = !!(acc && acc.teamNeedsProxy);
     if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
     if (!acc) {
-      acc = { id: String(Date.now()), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+      acc = { id: newAccountId(ctx.accounts), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
       ctx.accounts.push(acc);
       if (tested) recordExit(acc, tested.ip);
       saveAccounts();

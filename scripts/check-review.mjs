@@ -253,6 +253,42 @@ try {
     const shell = fs.readFileSync(path.join(root, 'src/shell/shell.js'), 'utf8');
     assert.ok(!/发给我们/.test(main + shell));
   });
+  await test('出口巡检跳过已收回的号，测试中被收回的结果作废', async () => {
+    const parked = new Set(['2']);
+    const accounts = [
+      { id: '1', name: 'A', proxy: 'http://a@gw.example:1', proxyPassword: 'pa' },
+      { id: '2', name: 'B', proxy: 'http://b@gw.example:2', proxyPassword: 'pb', lastExit: { ip: '9.9.9.9', at: 1 } },
+      { id: '3', name: 'C', proxy: 'http://c@gw.example:3', proxyPassword: 'pc', lastExit: { ip: '8.8.8.8', at: 1 } },
+    ];
+    const isParked = a => parked.has(a.id);
+    const tested = [], events = [], net = [], health = [];
+    const proxyFake = {
+      decryptPassword: x => x,
+      test: async (url, pass) => {
+        tested.push(pass);
+        if (pass === 'pc') parked.add('3'); // 测 C 的时候后台把它收回了
+        return { ok: true, ip: '1.2.3.4', country: 'DE', ms: 50 };
+      },
+    };
+    const ctx = vm.createContext({ accounts, quitting: false, proxy: proxyFake, Map, Date, console: { warn() {} },
+      isParked, visibleAccounts: () => accounts.filter(a => !isParked(a)),
+      // 故意让 findAcc 不过滤停着的号：巡检自己必须挡住，不能只靠 findAcc
+      findAcc: id => accounts.find(a => a.id === id),
+      noteProxyHealth: a => health.push(a.id), netEvent: id => net.push(id),
+      regionName: c => c, saveAccounts() {}, refresh() {},
+      team: { recordEvent: a => events.push(a.id) }, lastLatency: new Map(), exitIps: new Map() });
+    const src = main.slice(main.indexOf('const EXIT_WATCH_MS'), main.indexOf("// id -> 'logged_in'"));
+    vm.runInContext(src + '\nthis.watchExits = watchExits; this.exitChanges = exitChanges;', ctx);
+    await ctx.watchExits();
+    assert.deepEqual(tested, ['pa', 'pc'], '已收回的 B 不能用它的代理凭据去测');
+    assert.deepEqual(health, ['1']);
+    assert.deepEqual(net, ['1']);
+    assert.deepEqual(events, [], '收回的号不能上报出口变化');
+    assert.equal(ctx.exitChanges.size, 0);
+    assert.deepEqual(accounts[1].lastExit, { ip: '9.9.9.9', at: 1 });
+    assert.deepEqual(accounts[2].lastExit, { ip: '8.8.8.8', at: 1 }, '测试中被收回的 C 不能改写记录');
+    assert.equal(accounts[0].lastExit.ip, '1.2.3.4');
+  });
   console.log(`全部通过（${passed} 项）`);
 } finally {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
