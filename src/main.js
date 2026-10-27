@@ -713,6 +713,41 @@ const mcpHooks = {
 
   // ---- 起草回复：放进输入框，不发送（见 draft-place.js） ----
   placeDraft: (args) => draftPlacer.place(args),
+
+  // ---- 客户资料：搜索本机客户名单（见 mcp/customers.js），只读 ----
+  // 和面板一样不含停着的号名下的客户；账号名只给看得见的号
+  listCustomers: () => (customerStore ? panelData().customers : []),
+  // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
+  confirmCustomers: async ({ client, query, timeoutMs }) => {
+    if (confirmDialogOpen) return 'busy';
+    confirmDialogOpen = true;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    notifier.showWindow();
+    try {
+      const { response } = await dialog.showMessageBox(win, {
+        signal: abort.signal,
+        type: 'question',
+        buttons: ['拒绝', '允许这一次', '10 分钟内允许'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: 'AI 想搜索客户资料',
+        message: `允许 AI 在客户名单里搜索 ${query} 吗？`,
+        detail: [
+          `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
+          '会读到：搜到的客户的名字、电话、标签、备注和跟进时间。只读，不会改资料。',
+          '读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+          '“10 分钟内允许”对这个连接的所有搜索有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+        ].join('\n'),
+      });
+      if (abort.signal.aborted) return 'deny';
+      return ['deny', 'once', 'ten'][response] || 'deny';
+    } finally {
+      clearTimeout(timer);
+      confirmDialogOpen = false;
+    }
+  },
 };
 
 // 轻量模式的输入框在软件界面里：请界面填进去，界面回 'ok' | 'not_empty' | 'chat' | 'none'

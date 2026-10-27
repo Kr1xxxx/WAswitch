@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const cfg = require('./config');
 const { ChatGate } = require('./chats');
 const { DraftLog } = require('./drafts');
+const { CustomerGate } = require('./customers');
 
 const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_BODY = 1024 * 1024;
@@ -65,6 +66,8 @@ class McpController {
     this.gate = new ChatGate({ hooks, onChange: () => this.onChange() });
     // 起草回复的记录（谁给哪个对话起草了几个字，不含内容），只在内存里
     this.drafts = new DraftLog({ onChange: () => this.onChange() });
+    // 客户资料的“10 分钟内允许”和搜索记录，只在内存里
+    this.customerGate = new CustomerGate({ hooks, onChange: () => this.onChange() });
   }
 
   status() {
@@ -81,6 +84,9 @@ class McpController {
       layer2Acknowledged: this.settings.layer2Acknowledged,
       drafts: this.settings.drafts,
       draftLog: this.drafts.log,
+      customers: this.settings.customers,
+      customerAllows: this.customerGate.activeAllows(),
+      customerLog: this.customerGate.log,
       allows: this.gate.activeAllows(),
       readLog: this.gate.log,
       clients: [...this.sessions.values()].map((s) => {
@@ -141,6 +147,18 @@ class McpController {
     this.onChange();
   }
 
+  // 客户资料开关：关着时 search_customers 不出现在列表里；关闭时清掉所有“10 分钟内允许”
+  setCustomers(on) {
+    this.settings.customers = !!on;
+    cfg.saveSettings(this.dataDir, this.settings);
+    if (!on) this.customerGate.clearAll();
+    for (const s of this.sessions.values()) {
+      if (!s.customerTool) continue;
+      if (on) s.customerTool.enable(); else s.customerTool.disable();
+    }
+    this.onChange();
+  }
+
   setPreview(on) {
     const turnedOn = !this.settings.preview && !!on;
     this.settings.preview = !!on;
@@ -168,7 +186,8 @@ class McpController {
     const { registerAccountTools } = require('./tools');
     const { registerChatTools } = require('./chats');
     const { registerDraftTools } = require('./drafts');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools };
+    const { registerCustomerTools } = require('./customers');
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerCustomerTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -208,6 +227,7 @@ class McpController {
     this.sessions.delete(id);
     this.gate.clearSession(id);
     this.drafts.clearSession(id);
+    this.customerGate.clearSession(id);
     try { await s.transport.close(); } catch { /* 已经断开 */ }
     try { await s.server.close(); } catch { /* 已经断开 */ }
   }
@@ -259,10 +279,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, draftTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, draftTool: null, customerTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“客户资料”后，可以用 search_customers 搜本机客户名单（每次要用户确认）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
@@ -284,6 +304,15 @@ class McpController {
       },
     });
     if (!this.settings.drafts) entry.draftTool.disable();
+    entry.customerTool = this.sdk.registerCustomerTools(server, this.hooks, {
+      gate: this.customerGate,
+      confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
+    if (!this.settings.customers) entry.customerTool.disable();
     const transport = new this.sdk.StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id) => {
@@ -291,10 +320,10 @@ class McpController {
         this.onChange();
       },
     });
+    // 断开（包括客户端正常结束会话）时走 dropSession，连同这个连接的“10 分钟内允许”一起清掉
     transport.onclose = () => {
       if (transport.sessionId && this.sessions.get(transport.sessionId) === entry) {
-        this.sessions.delete(transport.sessionId);
-        this.onChange();
+        this.dropSession(transport.sessionId).then(() => this.onChange());
       }
     };
     entry.transport = transport;
