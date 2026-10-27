@@ -1319,7 +1319,7 @@ function settingsPage() {
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
         setRow('显示检查更新按钮', '在侧栏底部设置和通知中间，点一下立刻检查新版本。',
           sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
-        setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
+        setRow('聊天锁', `这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。随时按 ${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`,
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));

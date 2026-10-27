@@ -28,8 +28,8 @@ const DEFAULTS = {
   recycleLastMB: 1024, // 关掉自动回收后再打开时，用上次选的值
   lastAccountId: '', // 上次在看的账号，启动时打开它
   capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
-  memDefaults: 2, // 第几版内存默认值；老设置里没有这个字段时，把还停在旧默认值的项改成新默认值
-  lockMinutes: 5, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
+  memDefaults: 3, // 第几版默认值；老设置里这个数比现在小时，把还停在旧默认值的项改成新默认值（每版只改一次）
+  lockMinutes: 15, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
 };
 const RECYCLE_CHOICES = [600, 800, 1024, 1500, 2000];
 const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096, 6144];
@@ -62,11 +62,14 @@ function loadSettings() {
     const raw = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     const bool = (k) => (typeof raw[k] === 'boolean' ? raw[k] : DEFAULTS[k]);
     // 老版本的默认值（800 MB 回收线、2 GB 总上限）压得太紧：还停在旧默认值的改成新默认值，用户自己选过别的值不动
-    if (raw.memDefaults !== DEFAULTS.memDefaults) {
+    const ver = Number(raw.memDefaults) || 0;
+    if (ver < 2) {
       if (raw.recycleMB === 800) raw.recycleMB = DEFAULTS.recycleMB;
       if (raw.recycleLastMB === 800) raw.recycleLastMB = DEFAULTS.recycleLastMB;
       if (raw.capMB === 2048) raw.capMB = DEFAULTS.capMB;
     }
+    // 第 3 版：聊天锁默认从 5 分钟改成 15 分钟（5 分钟太短，回个电话就锁了），还停在 5 分钟的改成 15
+    if (ver < 3 && raw.lockMinutes === 5) raw.lockMinutes = DEFAULTS.lockMinutes;
     return {
       lowMemoryMode: bool('lowMemoryMode'),
       recycleMB: nearestRecycle(raw.recycleMB),
