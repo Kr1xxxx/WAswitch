@@ -20,7 +20,7 @@ const dk = {
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
-  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认只显示译文，原文折叠成一条毛玻璃
+  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文只露半截、模糊
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
   seenTitle: null,
   unread: 0,
@@ -192,23 +192,40 @@ function dockMeta(it) {
     h('span', { class: 'dk-time' }, it.t || ''));
 }
 
-// 有译文时原文默认折叠：只露一条模糊的原文，右边一个小按钮展开/收起；没译文就直接显示原文
+// 有译文时原文默认折叠：只露上半截（约一半高，至少一行），整块模糊，展开箭头就叠在模糊正中；
+// 点箭头或模糊处展开全文，展开后箭头在原文下面，再点收起（shen 2026-10-27）。没译文就直接显示原文
+// 原地切换，不重画列表：高度平滑过渡，被点的这条上沿不动，列表不跳
 function dockOrig(key, text, hasTr) {
   if (!hasTr) return h('span', { class: 'dk-orig' }, text);
   const open = dk.openOrig.has(key);
-  const flip = () => { if (open) dk.openOrig.delete(key); else dk.openOrig.add(key); dockRender(true); };
-  const btn = h('button', { class: 'dk-fold-btn', 'aria-expanded': String(open), 'aria-label': open ? '收起原文' : '展开原文', title: open ? '收起原文' : '展开原文', onclick: flip });
-  // 按钮是个细线小箭头（收起时 <，展开后转成朝下）；放左边：右上角悬停时会冒出“纠错/编辑”，放右边会被挡住
-  // 刚点过：箭头转过去，原文展开时淡入下滑、收起时毛玻璃条淡入
-  const moved = fxChanged(`fold:${key}`, open, false);
-  if (moved) btn.classList.add(open ? 'fx-fold-open' : 'fx-fold-close');
-  const el = open ? h('span', { class: 'dk-orig dk-orig-open' }, btn, ' ', text) : dockFoldBar(btn, text, flip);
-  return moved ? fxPlay(el, open ? 'fx-unfold' : 'fx-fade') : el;
+  const btn = h('button', { class: 'dk-fold-btn' });
+  // 高度由一份看不见的同文副本撑起：字号、换行都一样，只是行高减半，所以正好是原文的一半高；展开时行高恢复
+  const clip = h('span', { class: 'dk-fold-clip' }, h('span', { class: 'dk-orig dk-fold-ghost', 'aria-hidden': 'true' }, text), h('span', { class: 'dk-orig dk-fold-text' }, text));
+  const box = h('span', { class: 'dk-fold' }, clip, btn);
+  const set = (o) => {
+    box.classList.toggle('open', o);
+    btn.setAttribute('aria-expanded', String(o));
+    btn.setAttribute('aria-label', o ? '收起原文' : '展开原文');
+    btn.title = o ? '收起原文' : '展开原文';
+  };
+  const flip = () => {
+    const o = !dk.openOrig.has(key);
+    if (o) dk.openOrig.add(key); else dk.openOrig.delete(key);
+    dockHoldScroll(box);
+    set(o);
+  };
+  set(open);
+  btn.addEventListener('click', flip);
+  clip.addEventListener('click', () => { if (!box.classList.contains('open')) flip(); });
+  return box;
 }
-function dockFoldBar(btn, text, flip) {
-  return h('span', { class: 'dk-fold' },
-    btn,
-    h('span', { class: 'dk-fold-glass', 'aria-hidden': 'true', onclick: flip }, h('span', { class: 'dk-fold-text' }, text)));
+// 展开/收起的那一下先关掉浏览器的滚动锚定：不然它可能拿这条下面的译文当锚点，把整列往上推
+function dockHoldScroll(el) {
+  const list = el.closest('.dk-list');
+  if (!list) return;
+  list.style.overflowAnchor = 'none';
+  clearTimeout(list._foldT);
+  list._foldT = setTimeout(() => { list.style.overflowAnchor = ''; }, 400);
 }
 
 function dockItemRow(it, last) {
