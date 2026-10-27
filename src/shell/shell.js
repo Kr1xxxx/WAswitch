@@ -432,12 +432,12 @@ function clockParts(tz) {
 }
 // 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
 let peer = null;
-// 认不出客户（群聊、查不到号码）时，同时显示美国东西两岸的时间：纽约和加州（客户在欧美，不显示本机时间，shen 2026-10-27）
-const DEFAULT_ZONES = [{ tz: 'America/New_York', place: '纽约' }, { tz: 'America/Los_Angeles', place: '加州' }];
+// 认不出客户（群聊、查不到号码）时，同时显示伦敦、纽约、加州的时间（客户在欧美，不显示本机时间，shen 2026-10-27）
+const DEFAULT_ZONES = [{ tz: 'Europe/London', place: '伦敦' }, { tz: 'America/New_York', place: '纽约' }, { tz: 'America/Los_Angeles', place: '加州' }];
 function clockChip(acc) {
   const chip = h('span', { class: 'chip clock' }, icon('clock', 12), h('span'));
   const draw = () => {
-    // 认得出客户号码：显示客户当地时间；认不出：显示纽约和加州时间
+    // 认得出客户号码：显示客户当地时间；认不出：显示伦敦、纽约、加州时间
     const z = peer && peer.accountId === acc.id ? peer.zone : null;
     if (z) {
       const c = clockParts(z.tz);
@@ -447,15 +447,15 @@ function clockChip(acc) {
       chip.title = `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`;
       return;
     }
-    const [ny, ca] = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
-    // 星期一样时只写一次：“纽约 周二 11:44 · 加州 08:44”；跨了零点才给加州也写星期
-    const caText = ca.text.split(' ')[0] === ny.text.split(' ')[0] ? ca.text.split(' ')[1] : ca.text;
-    chip.lastChild.textContent = `${ny.place} ${ny.text} · ${ca.place} ${caText}`;
-    const night = ny.night && ca.night; // 两边都是深夜 / 清晨才标黄
+    const zones = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
+    // 星期只在第一个写：“伦敦 周二 16:44 · 纽约 11:44 · 加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
+    const day = (x) => x.text.split(' ')[0];
+    chip.lastChild.textContent = zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`).join(' · ');
+    const night = zones.every((x) => x.night); // 几个地方都是深夜 / 清晨才标黄
     chip.classList.toggle('night', night);
     chip.classList.remove('peer');
     const own = acc.timezone ? `。这个号的出口时区是 ${acc.timezone}，现在 ${clockParts(acc.timezone).text}` : '';
-    chip.title = `美国纽约（${ny.tz}）和加州（${ca.tz}）的时间，认不出客户时默认显示。打开有号码的私聊时，这里会换成客户的当地时间${night ? '。美国东西两岸现在都是休息时间' : ''}${own}`;
+    chip.title = `${zones.map((x) => `${x.place}（${x.tz}）`).join('、')}的时间，认不出客户时默认显示。打开有号码的私聊时，这里会换成客户的当地时间${night ? '。这几个地方现在都是休息时间' : ''}${own}`;
   };
   draw();
   chip.draw = draw;

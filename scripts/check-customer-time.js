@@ -112,7 +112,7 @@ async function clockChecks() {
   check(lookups.length === n1, '查到的号码记住，不每 2 秒都查');
   views.get('a').webContents.page = { title: 'Nina Weber', chat: '55555555555555@lid' };
   await pc.tick();
-  check(sent[sent.length - 1].msg.zone === null, '@lid 查不到号码：推 null（顶栏显示纽约和加州时间）');
+  check(sent[sent.length - 1].msg.zone === null, '@lid 查不到号码：推 null（顶栏显示伦敦、纽约、加州时间）');
   await pc.tick();
   console.log = origLog;
   const clockLogs = logs.filter((l) => l.startsWith('顶栏客户时间'));
@@ -143,9 +143,9 @@ async function clockChecks() {
   check(sent.length === count, '窗口看不见时不读');
 }
 
-// 顶栏默认时间：认不出客户时同时显示纽约和加州时间，不再显示“本机”或账号出口地（shen 2026-10-27）
+// 顶栏默认时间：认不出客户时同时显示伦敦、纽约、加州时间，不再显示“本机”或账号出口地（shen 2026-10-27）
 const shellSrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'shell', 'shell.js'), 'utf8');
-check(/const DEFAULT_ZONES = \[\{ tz: 'America\/New_York', place: '纽约' \}, \{ tz: 'America\/Los_Angeles', place: '加州' \}\];/.test(shellSrc), '顶栏默认是纽约 + 加州两个时间');
+check(/const DEFAULT_ZONES = \[\{ tz: 'Europe\/London', place: '伦敦' \}, \{ tz: 'America\/New_York', place: '纽约' \}, \{ tz: 'America\/Los_Angeles', place: '加州' \}\];/.test(shellSrc), '顶栏默认是伦敦 + 纽约 + 加州三个时间');
 check(!/'本机'/.test(shellSrc.slice(shellSrc.indexOf('function clockChip'), shellSrc.indexOf('window.wa.onPeerZone'))), '顶栏时钟不再写“本机”');
 
 clockChecks().then(() => {
