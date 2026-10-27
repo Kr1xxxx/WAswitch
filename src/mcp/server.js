@@ -127,11 +127,11 @@ class McpController {
     if (on) this.settings.layer2Acknowledged = true;
     cfg.saveSettings(this.dataDir, this.settings);
     if (!on) this.gate.clearAll();
+    // 读对话组：list_chats、search_chats、read_messages 一起开关
     for (const s of this.sessions.values()) {
-      // 「读对话」组：list_chats 和 read_messages 一起开关
-      for (const tool of [s.chatTool, s.messageTool]) {
-        if (!tool) continue;
-        if (on) tool.enable(); else tool.disable();
+      for (const t of [s.chatTool, s.searchTool, s.messageTool]) {
+        if (!t) continue;
+        if (on) t.enable(); else t.disable();
       }
     }
     this.onChange();
@@ -186,8 +186,9 @@ class McpController {
     const { registerChatTools } = require('./chats');
     const { registerMessageTools } = require('./messages');
     const { registerDraftTools } = require('./drafts');
+    const { registerSearchTools } = require('./search');
     const { registerHelperTools } = require('./helpers');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerMessageTools, registerDraftTools, registerHelperTools };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerMessageTools, registerDraftTools, registerSearchTools, registerHelperTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -279,13 +280,13 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, messageTool: null, draftTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, searchTool: null, messageTool: null, draftTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 read_messages 读某个对话最近的消息（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话、用 read_messages 读某个对话最近的消息（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
-    entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
+    const readOpts = {
       gate: this.gate,
       previewAllowed: () => this.settings.preview,
       confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
@@ -293,17 +294,12 @@ class McpController {
         const c = server.server.getClientVersion();
         return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
       },
-    });
-    entry.messageTool = this.sdk.registerMessageTools(server, this.hooks, {
-      gate: this.gate,
-      confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
-      sessionInfo: (extra) => {
-        const c = server.server.getClientVersion();
-        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
-      },
-    });
-    // 第二层关着时工具不出现在列表里
-    if (!this.settings.layer2) { entry.chatTool.disable(); entry.messageTool.disable(); }
+    };
+    entry.chatTool = this.sdk.registerChatTools(server, this.hooks, readOpts);
+    entry.searchTool = this.sdk.registerSearchTools(server, this.hooks, readOpts);
+    entry.messageTool = this.sdk.registerMessageTools(server, this.hooks, readOpts);
+    // 第二层（读对话组）关着时工具不出现在列表里
+    if (!this.settings.layer2) { entry.chatTool.disable(); entry.searchTool.disable(); entry.messageTool.disable(); }
     entry.draftTool = this.sdk.registerDraftTools(server, this.hooks, {
       log: this.drafts,
       sessionInfo: (extra) => {

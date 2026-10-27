@@ -162,6 +162,12 @@ class LiteProc {
     return this.request({ type: 'send', id, jid, text }, 30000);
   }
 
+  // MCP 搜索对话：这个号在本机保存的全部对话。号没在运行时返回 null（不为了这个启动后台进程）
+  chatList(id) {
+    if (!this.sessions.has(id) || !this.proc) return Promise.resolve(null);
+    return this.request({ type: 'chats', id }, 10000);
+  }
+
   // MCP read_messages：按名称或号码找对话、读最近的消息（只读本机缓存）
   ask(msg) {
     if (!this.sessions.has(msg.id)) return Promise.resolve({ ok: false, reason: 'notrunning' });
@@ -241,6 +247,11 @@ class LiteHost extends EventEmitter {
   sendText(id, jid, text) {
     const p = this.procOf(id);
     return p ? p.sendText(id, jid, text) : Promise.reject(new Error('这个号没有在运行'));
+  }
+
+  chatList(id) {
+    const p = this.procOf(id);
+    return p ? p.chatList(id) : Promise.resolve(null);
   }
 
   findChat(id, chat) {

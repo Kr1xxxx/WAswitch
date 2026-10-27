@@ -42,7 +42,9 @@ function render(s) {
   log.innerHTML = '';
   for (const r of s.readLog) {
     const li = document.createElement('li');
-    li.textContent = r.kind === 'messages'
+    li.textContent = r.kind === 'search'
+      ? `${time(r.at)} ${r.client} 在「${r.account}」里找「${r.query}」，找到 ${r.count} 个对话${r.preview ? '（含预览）' : ''}`
+      : r.kind === 'messages'
       ? `${time(r.at)} ${r.client} 读了「${r.account}」的 ${r.count} 条消息`
       : `${time(r.at)} ${r.client} 读了「${r.account}」${r.count} 个对话${r.preview ? '（含预览）' : ''}`;
     log.appendChild(li);

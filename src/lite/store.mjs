@@ -198,6 +198,13 @@ export class ChatStore {
   }
 }
 
+// 个人对话的手机号（+ 开头）；群和隐藏号码的对话（@lid）返回 null
+export function phoneOf(jid) {
+  if (!String(jid).endsWith('@s.whatsapp.net')) return null;
+  const user = String(jid).split('@')[0].split(':')[0];
+  return /^\d{5,20}$/.test(user) ? `+${user}` : null;
+}
+
 // 没有名字时显示号码部分（群显示“群聊”）
 export function shortJid(jid) {
   if (isJidGroup(jid)) return '群聊';

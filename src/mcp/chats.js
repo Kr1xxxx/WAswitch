@@ -91,6 +91,41 @@ class ChatGate {
     return '用户没有允许（拒绝或 2 分钟内没有确认）。60 秒内不要再请求。';
   }
 
+  // 一次读几个账号（search_chats）：已经“10 分钟内允许”的账号不再问，其余的合在一个确认框里问。
+  // accounts: [{ id, name }]；ask: 传给 confirmRead 的其他内容（kind、query）。返回 null 表示可以读
+  async checkMany({ session, client, accounts, preview, timeoutMs, ask = {} }) {
+    const t = this.now();
+    const waits = accounts.map((a) => this.lastRead.get(`list|${a.id}`)).filter((x) => x && t - x < RATE_MS);
+    if (waits.length) return `同一账号每 5 秒最多读一次，请 ${Math.ceil((RATE_MS - (t - Math.max(...waits))) / 1000)} 秒后再试。`;
+    const need = accounts.filter((a) => {
+      const allow = this.allows.get(this.key(session, a.id, preview));
+      return !(allow && allow.until > t);
+    });
+    if (!need.length) return null;
+
+    const blocked = this.blockedUntil.get(session);
+    if (blocked && blocked > t) return `用户在 10 分钟内拒绝了 ${DENY_LIMIT} 次，这个连接 ${Math.ceil((blocked - t) / 60000)} 分钟内不会再请求确认。`;
+    const denied = need.map((a) => this.denials.get(`${session}|${a.id}`)).filter((x) => x && t - x < DENY_COOLDOWN_MS);
+    if (denied.length) return `用户刚拒绝过，请 ${Math.ceil((DENY_COOLDOWN_MS - (t - Math.max(...denied))) / 1000)} 秒后再试。`;
+
+    const answer = await this.hooks.confirmRead({
+      ...ask, client, account: need.map((a) => a.name).join('、'), accounts: need.map((a) => a.name), includePreview: preview, timeoutMs,
+    });
+    if (answer === 'busy') return '已经有一个确认框在等用户处理，请稍后再试。';
+    if (answer === 'ten' && session === 'unknown') return null;
+    if (answer === 'ten') {
+      const until = this.now() + ALLOW_MS;
+      for (const a of need) this.allows.set(this.key(session, a.id, preview), { session, client, accountId: a.id, accountName: a.name, kind: 'list', preview, until });
+      this.onChange();
+      return null;
+    }
+    if (answer === 'once') return null;
+    // 一个确认框拒绝只算一次（不然搜 3 个号被拒一次就直接锁 10 分钟），冷却对每个账号都生效
+    this.recordDenial(session, need[0].id);
+    for (const a of need.slice(1)) this.denials.set(`${session}|${a.id}`, this.now());
+    return '用户没有允许（拒绝或 2 分钟内没有确认）。60 秒内不要再请求。';
+  }
+
   recordDenial(session, accountId) {
     const t = this.now();
     this.denials.set(`${session}|${accountId}`, t);
@@ -106,6 +141,15 @@ class ChatGate {
   record({ client, account, count, preview, kind = 'list' }) {
     this.lastRead.set(`${kind}|${account.id}`, this.now());
     this.log.unshift({ at: this.now(), client, account: account.name, count, preview, kind });
+    this.log.length = Math.min(this.log.length, LOG_MAX);
+    this.onChange();
+  }
+
+  // search_chats 的记录：搜了哪些号、搜什么、找到几个（不记找到的内容）
+  recordSearch({ client, accounts, query, count, preview }) {
+    const t = this.now();
+    for (const a of accounts) this.lastRead.set(`list|${a.id}`, t);
+    this.log.unshift({ at: t, kind: 'search', client, account: accounts.map((a) => a.name).join('、'), query, count, preview });
     this.log.length = Math.min(this.log.length, LOG_MAX);
     this.onChange();
   }
