@@ -707,7 +707,7 @@ function checkIdleLock() {
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
 let panelOpen = false;
-let panelTab = 'replies'; // replies | customers | translate
+let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
 let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
@@ -2257,8 +2257,9 @@ handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
 onShell('panel:tab', (tab) => {
-  if (!['replies', 'customers', 'translate'].includes(tab)) return;
+  if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
+  if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
   panelOpen = true;
   refresh();
 });
@@ -2280,14 +2281,24 @@ handleShell('cust:delete', (id) => {
 });
 handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 // 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
-// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
-function insertText(accountId, text) {
-  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里。
+// 焦点不在对话下方的输入框（比如在搜索框）就不贴，返回 'focus' 让用户先点一下输入框
+const insertBlocked = (accountId) => {
   const acc = findAcc(accountId);
   if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
   if (isLite(acc)) return 'lite'; // 轻量模式的输入框在软件界面里，由界面自己填
   const view = views.get(accountId);
-  if (!view || view.webContents.isDestroyed()) return 'changed';
+  return !view || view.webContents.isDestroyed() ? 'changed' : '';
+};
+async function insertText(accountId, text) {
+  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+  const blocked = insertBlocked(accountId);
+  if (blocked) return blocked;
+  const focus = await waPage.composeFocus(views.get(accountId).webContents);
+  const after = insertBlocked(accountId); // 读焦点期间可能换号、锁定
+  if (after) return after;
+  if (focus !== 'compose') return 'focus';
+  const view = views.get(accountId);
   clipboard.writeText(text.slice(0, 4000));
   view.webContents.focus();
   view.webContents.paste();
@@ -2300,7 +2311,14 @@ const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmod
 handleShell('panel:export', async ({ kind, format } = {}) => {
   if (!STORE_LABEL[kind]) return null;
   const store = storeOf(kind);
-  const rows = kind === 'customers' ? panelData().customers : store.list();
+  // 客户：停着的号（团队收回等）名下的也导出，账号名照写，方便收回前后都能备份
+  let rows = store.list();
+  let parked = 0;
+  if (kind === 'customers') {
+    const names = new Map(accounts.map((a) => [a.id, a.name]));
+    parked = rows.filter(parkedCustomer).length;
+    rows = rows.map((c) => ({ ...c, accountName: names.get(c.accountId) || '' }));
+  }
   const json = format === 'json';
   const stamp = new Date().toISOString().slice(0, 10);
   const r = await dialog.showSaveDialog(win, {
@@ -2313,7 +2331,7 @@ handleShell('panel:export', async ({ kind, format } = {}) => {
     ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
     : records.toCsv(kind, rows);
   fs.writeFileSync(r.filePath, out);
-  return { count: rows.length };
+  return { count: rows.length, parked };
 });
 handleShell('panel:import', async ({ kind } = {}) => {
   if (!STORE_LABEL[kind]) return null;
@@ -2325,16 +2343,13 @@ handleShell('panel:import', async ({ kind } = {}) => {
   if (r.canceled || !r.filePaths[0]) return null;
   const res = records.readImport(kind, r.filePaths[0]);
   if (res.error) return { error: res.error };
-  const store = storeOf(kind);
-  let added = 0;
-  for (const row of res.rows) {
-    const data = { ...row, id: undefined };
-    // 客户：文件里的账号编号对得上就用它，否则记到当前账号
-    if (kind === 'customers') data.accountId = typeof row.accountId === 'string' && findAcc(row.accountId) ? row.accountId : activeId || '';
-    if (store.upsert(data, { save: false, imported: true })) added += 1;
-  }
-  store.save();
-  return { added, skipped: res.rows.length - added, data: panelData(), modes: modeStore.list() };
+  // 客户：文件里的账号编号本机还有（包括停着的号）就用它，否则记到当前账号。
+  // 同一账号下电话（没电话按名字）已经有的跳过，同一个文件导两次不会多出来
+  const rows = kind === 'customers'
+    ? res.rows.map((row) => ({ ...row, accountId: typeof row.accountId === 'string' && accounts.some((a) => a.id === row.accountId) ? row.accountId : activeId || '' }))
+    : res.rows;
+  const { added, dup, bad } = storeOf(kind).importRows(rows);
+  return { added, dup, bad, skipped: dup + bad, data: panelData(), modes: modeStore.list() };
 });
 // ---------- 拆出去的接口模块（editor-ipc.js、check-ipc.js、translate-ipc.js）共用的上下文 ----------
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量

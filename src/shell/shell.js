@@ -502,7 +502,7 @@ function renderTop() {
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）
 function panelHead() {
-  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'replies', false);
+  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'translate', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
@@ -671,6 +671,8 @@ async function panelLoad() {
   try { pn.data = await window.wa.panelData(); pn.loaded = true; } catch {}
   renderPanel(true);
 }
+// 导入结果：新加几条，已经有的、内容不全的各跳过几条
+const importSay = (r, unit) => `导入了 ${r.added} ${unit}${r.dup ? `，${r.dup} ${unit}已经有了` : ''}${r.bad ? `，${r.bad} ${unit}内容不全跳过` : ''}`;
 function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }
 async function panelInsert(text) {
   const acc = active();
@@ -687,6 +689,7 @@ async function panelInsert(text) {
   }
   const r = await window.wa.panelInsert(pn.accountId, text);
   if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
+  else if (r === 'focus') panelSay('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点“放进输入框”', true);
   else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
 }
 const fmtDue = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -1045,7 +1048,7 @@ function translatePage(page) {
         h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除翻译模式「${delName(m.name)}」？`, detail: '删除后不能恢复。' })) return; apply(await window.wa.tmodeDelete(m.id)); } }, '删除'))))),
     h('div', { class: 'hstack' },
       h('button', { class: 'btn', onclick: () => { trModeEdit = { direction: 'out', temperature: 0.3 }; trSay = ''; render(true); } }, '+ 新建模式'),
-      h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelImport('tmodes'); if (!r) return; if (r.error) trSay = `导入失败：${r.error}`; else { trSay = `导入了 ${r.added} 个${r.skipped ? `，跳过 ${r.skipped} 个` : ''}`; tr.modes = r.modes; } render(true); } }, '导入'),
+      h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelImport('tmodes'); if (!r) return; if (r.error) trSay = `导入失败：${r.error}`; else { trSay = importSay(r, '个'); tr.modes = r.modes; } render(true); } }, '导入'),
       h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelExport('tmodes', 'json'); if (r) { trSay = `导出了 ${r.count} 个`; render(true); } } }, '导出'))));
 }
 
@@ -1056,7 +1059,7 @@ function renderPanel(force = false) {
   if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
-  const tab = s.panelTab || 'replies';
+  const tab = s.panelTab || 'translate';
   const sig = `${s.activeId}|${tab}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
   if (!force && sig === pn.sig && $panel.firstChild) return;
   if (!force && pn.tab === tab && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
@@ -1087,10 +1090,10 @@ function renderPanel(force = false) {
       if (!r) return;
       if (r.error) return panelSay(`导入失败：${r.error}`, true);
       pn.data = r.data;
-      return panelSay(`导入了 ${r.added} 条${r.skipped ? `，跳过 ${r.skipped} 条` : ''}`);
+      return panelSay(importSay(r, '条'));
     }
     const r = await window.wa.panelExport(kind, what);
-    if (r) panelSay(`导出了 ${r.count} 条`);
+    if (r) panelSay(`导出了 ${r.count} 条${r.parked ? `（含已停用账号的 ${r.parked} 条）` : ''}`);
   };
   $panel.replaceChildren(...kids(
     panelHead(),

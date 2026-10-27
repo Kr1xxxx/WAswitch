@@ -2,6 +2,10 @@
 // 假的 electron.app 和假的网页，快进时间，看总上限会不会反复刷新。
 const Module = require('module');
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-mem-'));
 
 let fakeNow = Date.now();
 Date.now = () => fakeNow;
@@ -9,11 +13,22 @@ const usage = new Map(); // pid -> MB
 const realLoad = Module._load;
 Module._load = function load(req, ...rest) {
   if (req === 'electron') {
-    return { app: { getPath: () => '/tmp', getAppMetrics: () => [...usage].map(([pid, mb]) => ({ pid, memory: { workingSetSize: mb * 1024 } })) } };
+    return { app: { getPath: () => userData, getAppMetrics: () => [...usage].map(([pid, mb]) => ({ pid, memory: { workingSetSize: mb * 1024 } })) } };
   }
   return realLoad.call(this, req, ...rest);
 };
-const { MemoryManager } = require('../src/memory');
+const { MemoryManager, loadSettings, saveSettings } = require('../src/memory');
+
+// 0. 工作台默认停在“翻译”；切到别的页后存进设置，重启（重新读设置）还在那一页；写坏的值回到翻译
+assert.strictEqual(loadSettings().panelTab, 'translate', '新装应默认翻译');
+saveSettings({ ...loadSettings(), panelTab: 'replies' });
+assert.strictEqual(loadSettings().panelTab, 'replies', '重启后应记住话术');
+saveSettings({ ...loadSettings(), panelTab: 'bogus' });
+assert.strictEqual(loadSettings().panelTab, 'translate', '坏值应回到翻译');
+const legacy = { lockMinutes: 15 }; // 老版本的设置文件没有 panelTab
+fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(legacy));
+assert.strictEqual(loadSettings().panelTab, 'translate', '老用户升级后默认翻译');
+console.log('✓ 工作台默认翻译，并记住上次的页');
 
 function setup(n, mb, settings) {
   const views = new Map();

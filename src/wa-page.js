@@ -26,6 +26,8 @@ const SELECTORS = {
   filterTab: '#side [role="tab"], #side [role="tablist"] button',
   // 悬浮翻译：当前打开的对话（右侧 #main）
   chatMain: '#main',
+  // 对话下方写消息的输入框。“放进输入框”只在焦点在这里时才粘贴
+  composeBox: ['#main footer [contenteditable="true"]'],
   chatTitle: ['#main header span[title]', '#main header [title]', '#main header span[dir="auto"]'],
   // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
   message: '[data-id]',
@@ -311,5 +313,23 @@ async function readOwnNumber(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readOwnNumber, parseWid, READ_CHAT_CODE, parsePre };
+// 页面里当前的焦点是不是聊天输入框。只读 document.activeElement，不移动焦点、不改页面。
+// 返回 'compose'（在输入框里）| 'other'（在搜索框等别处，或哪里都不在）| 'unknown'（页面在加载或读不到）
+const FOCUS_CODE = `(() => {
+  const el = document.activeElement;
+  if (!el || !el.isContentEditable) return 'other';
+  return ${JSON.stringify(SELECTORS.composeBox)}.some((s) => el.closest(s)) ? 'compose' : 'other';
+})()`;
+
+async function composeFocus(wc) {
+  if (wc.isDestroyed() || wc.isLoading()) return 'unknown';
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: FOCUS_CODE }]);
+    return ['compose', 'other'].includes(r) ? r : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readOwnNumber, composeFocus, parseWid, READ_CHAT_CODE, parsePre };
 
