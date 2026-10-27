@@ -239,6 +239,42 @@ try {
     }
     assert.equal(encrypts, 0);
   });
+  await test('代理出错页分清 Clash 没开和节点挂了（探本机端口）', async () => {
+    const net = require('node:net');
+    const cut = (name) => { const i = main.indexOf(name); return main.slice(i, main.indexOf('\n}\n', i) + 2); };
+    const ctx = { errtext: require('../src/errtext'), ports: require('../src/ports'), proxy: require('../src/proxy-parse'), PROXY_ERRORS: new Set(), out: {} };
+    vm.runInNewContext(`const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);\n${cut('function loadProblem(')}\n${cut('async function portProbeFor(')}\nout.loadProblem = loadProblem; out.portProbeFor = portProbeFor;`, ctx);
+    const { loadProblem, portProbeFor } = ctx.out;
+    // 假的 Clash 端口：socks5 握手回 05 00，之后连节点失败
+    const srv = net.createServer(s => s.once('data', () => s.write(Buffer.from([5, 0]))));
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const open = srv.address().port;
+    const closedSrv = net.createServer(); await new Promise(r => closedSrv.listen(0, '127.0.0.1', r));
+    const closed = closedSrv.address().port; await new Promise(r => closedSrv.close(r));
+    try {
+      const acc = (port) => ({ name: '德国号', proxy: `socks5://127.0.0.1:${port}` });
+      const pOpen = await portProbeFor(acc(open), 'net::ERR_SOCKS_CONNECTION_FAILED');
+      assert.equal(pOpen.open && pOpen.socks, true);
+      const dead = loadProblem(acc(open), -120, 'net::ERR_SOCKS_CONNECTION_FAILED', pOpen);
+      assert.equal(dead.kind, 'proxy'); // 还是 P1
+      assert.match(dead.title, /节点不通/);
+      assert.match(dead.text, new RegExp(`${open} 端口也通.*换个节点`));
+      assert.ok(!/Clash 没开/.test(dead.text));
+      assert.equal(dead.short, '节点不通');
+      assert.match(dead.detail, /ERR_SOCKS_CONNECTION_FAILED \(-120\)/); // 原话照旧收进详细信息
+      const pClosed = await portProbeFor(acc(closed), 'net::ERR_PROXY_CONNECTION_FAILED');
+      assert.equal(pClosed.open, false);
+      const down = loadProblem(acc(closed), -130, 'net::ERR_PROXY_CONNECTION_FAILED', pClosed);
+      assert.equal(down.kind, 'proxy');
+      assert.match(down.text, /通常是 Clash 没开，或者 Clash 里没开这个端口/);
+      assert.match(down.title, new RegExp(`连不上 Clash 的 ${closed} 端口`));
+      // 不是本机端口、或不是“连不上代理”这类错误，不探
+      assert.equal(await portProbeFor({ proxy: 'socks5://10.0.0.5:1080' }, 'net::ERR_SOCKS_CONNECTION_FAILED'), null);
+      assert.equal(await portProbeFor(acc(open), 'net::ERR_NAME_NOT_RESOLVED'), null);
+      // 探不出来（null）时还是原来的说法
+      assert.match(loadProblem(acc(open), -120, 'net::ERR_SOCKS_CONNECTION_FAILED', null).text, /Clash 没开/);
+    } finally { srv.close(); }
+  });
   await test('每种问题都有问题代码，界面不再说“发给我们”', () => {
     const { PROBLEM_CODES } = require('../src/problem-codes');
     const kinds = new Set([...main.matchAll(/setProblem\([^{]*\{\s*kind: '(\w+)'/g)].map(m => m[1]));

@@ -17,6 +17,7 @@ const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
+const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
@@ -1158,21 +1159,24 @@ const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
 // 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
-function loadProblem(acc, code, desc) {
+// port：出错后探一下本机端口的结果 { open, socks }（见 portProbeFor）。端口通着还连不上，就是 Clash 当前节点挂了
+function loadProblem(acc, code, desc, port) {
   const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? ` · ${acc.proxy}` : ''}`;
   const kind = errtext.netKind(desc);
   const p = acc.proxy ? proxy.parse(acc.proxy) : null;
   if (PROXY_ERRORS.has(code) || (p && !p.error && ['proxyDown', 'proxyNode', 'proxyAuth', 'refused'].includes(kind))) {
     const local = p && !p.error && errtext.isLocal(p.host);
-    const node = kind === 'proxyNode' || kind === 'dns';
+    const nodeDead = local && kind === 'proxyDown' && !!(port && port.open && port.socks);
+    const node = kind === 'proxyNode' || kind === 'dns' || nodeDead;
     const auth = kind === 'proxyAuth';
     const title = auth ? `${acc.name}的代理用户名或密码不对`
       : node ? (local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理打不开 WhatsApp`)
         : p && !p.error ? (local ? `${acc.name}连不上 Clash 的 ${p.port} 端口` : `${acc.name}连不上代理 ${p.host}:${p.port}`) : `${acc.name}连不上代理`;
     const why = auth ? '请在编辑里改好代理的用户名和密码。'
+      : nodeDead ? `Clash 开着，${p.port} 端口也通，但这个端口对应的节点连不出去。去 Clash 给这个端口换个节点。`
       : node ? (local ? 'Clash 开着，但当前节点打不开 WhatsApp，在 Clash 里换个节点试试。' : '代理连上了，但通过它打不开 WhatsApp，代理那边的网络可能有问题。')
         : local ? '通常是 Clash 没开，或者 Clash 里没开这个端口。' : '代理可能停了，或者地址、端口不对。';
-    return { kind: 'proxy', title, short: '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
+    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
   }
   if (acc.proxy && (kind === 'dns' || kind === 'timeout' || kind === 'reset')) {
     return { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `${errtext.netReason(desc, { proxy: p && !p.error ? p : null })}。`, detail: raw, retrying: true };
@@ -1186,6 +1190,14 @@ function loadProblem(acc, code, desc) {
     cert: ['安全连接出错', '连不上', '可能是网络被拦截，或者电脑时间不对。请检查电脑的日期和时间。'],
   }[kind] || ['WhatsApp 页面打不开', '连不上', '网络有问题，可能是没联网或代理不通。'];
   return { kind: 'network', title: plain[0], short: plain[1], text: plain[2], detail: raw, retrying: true };
+}
+
+// 本机端口代理报“连不上代理”时，先探一下端口：分清是 Clash/端口没开，还是端口开着但节点挂了。
+// 只连本机，最多等 0.8 秒；不是本机端口或不是这类错误就不探
+async function portProbeFor(acc, desc) {
+  const p = acc.proxy ? proxy.parse(acc.proxy) : null;
+  if (!p || p.error || !errtext.isLocal(p.host) || errtext.netKind(desc) !== 'proxyDown') return null;
+  try { return await ports.probe(Number(p.port), { host: p.host.replace(/^\[|\]$/g, '') }); } catch { return null; }
 }
 
 // ---------- 缩放（每个号单独记） ----------
@@ -1396,9 +1408,11 @@ async function createView(acc, loadDelay = 0) {
   });
 
   let failed = false;
+  let failToken = null;
   wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
   wc.on('did-start-loading', () => {
     failed = false;
+    failToken = null;
     if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
     quietUntil = Date.now() + RELOAD_QUIET_MS;
   });
@@ -1406,8 +1420,15 @@ async function createView(acc, loadDelay = 0) {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
-    setProblem(acc.id, loadProblem(acc, code, desc));
-    scheduleRetry(acc.id);
+    const token = {};
+    failToken = token;
+    portProbeFor(acc, desc).then((port) => {
+      // 探端口期间又开始了新的加载（重试、换代理）或者这个号已经关了：这次结果作废
+      if (failToken !== token || wc.isDestroyed() || views.get(acc.id)?.webContents !== wc) return;
+      if (port) console.warn(`账号 ${acc.id} 的 ${port.port} 端口：${port.open ? (port.socks ? '开着，节点不通' : '开着，但不是 socks5') : '没开'}`);
+      setProblem(acc.id, loadProblem(acc, code, desc, port));
+      scheduleRetry(acc.id);
+    });
   });
   // Ctrl + 鼠标滚轮（或触控板缩放手势）：和快捷键走同一条路，记下的比例和顶栏一直对得上
   wc.on('zoom-changed', (_e, dir) => { if (!locked) stepZoom(acc.id, dir === 'in' ? 1 : -1); });
