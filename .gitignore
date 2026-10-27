@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+
+# 根目录的临时截图（assets/、build/ 里的图片不受影响）
+/*.png
