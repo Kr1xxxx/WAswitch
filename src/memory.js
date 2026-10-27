@@ -32,7 +32,9 @@ const DEFAULTS = {
   capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
   memDefaults: 3, // 第几版默认值；老设置里这个数比现在小时，把还停在旧默认值的项改成新默认值（每版只改一次）
   lockMinutes: 15, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
+  panelTab: 'translate', // 工作台上次停在哪一页，重启后还在这一页；新装默认翻译
 };
+const PANEL_TABS = ['replies', 'customers', 'translate'];
 const RECYCLE_CHOICES = [600, 800, 1024, 1500, 2000];
 const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096, 6144];
 const LOCK_CHOICES = [0, 1, 3, 5, 10, 15, 30];
@@ -86,6 +88,7 @@ function loadSettings() {
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
       capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,
       lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
+      panelTab: PANEL_TABS.includes(raw.panelTab) ? raw.panelTab : DEFAULTS.panelTab,
       memDefaults: DEFAULTS.memDefaults,
     };
   } catch {
@@ -287,4 +290,4 @@ class MemoryManager {
   }
 }
 
-module.exports = { DEFAULTS, RECYCLE_CHOICES, CAP_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };
+module.exports = { DEFAULTS, PANEL_TABS, RECYCLE_CHOICES, CAP_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };

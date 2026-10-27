@@ -502,7 +502,7 @@ function renderTop() {
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）
 function panelHead() {
-  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'replies', false);
+  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'translate', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
@@ -1056,7 +1056,7 @@ function renderPanel(force = false) {
   if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
-  const tab = s.panelTab || 'replies';
+  const tab = s.panelTab || 'translate';
   const sig = `${s.activeId}|${tab}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
   if (!force && sig === pn.sig && $panel.firstChild) return;
   if (!force && pn.tab === tab && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
