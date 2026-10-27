@@ -42,6 +42,8 @@ jobs:
         run: xvfb-run -a node scripts/check-view-race.js
       - name: 内存回收不会反复刷新
         run: npm run check:memory
+      - name: 通知写出是哪个客户
+        run: npm run check:notify
       - name: 自动更新自检
         run: npm run check:updater
       - name: 代理端口检测自检

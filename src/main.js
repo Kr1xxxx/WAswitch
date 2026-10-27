@@ -20,6 +20,7 @@ const errtext = require('./errtext');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
+const { unreadNames } = require('./notify-text');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
@@ -497,6 +498,7 @@ let lastTypedAt = 0;
 let liteHost = null;
 const liteStates = new Map(); // id -> { status, qr }
 const liteViews = new Map(); // id -> 后台进程推来的对话列表和当前对话
+const liteUnreadNames = new Map(); // id -> 后台进程推来的有未读的对话名字（通知里用）
 const liteOpen = new Map(); // id -> 正在看的对话
 let liteGuardHits = 0; // 网络护栏拦下的次数（隔离自检里显示）
 const isLite = (acc) => acc && acc.mode === 'lite';
@@ -523,8 +525,23 @@ const memoryManager = new memory.MemoryManager(settings, {
   onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
+// 新消息通知里写是哪几个对话：只要名字和未读数，不读消息内容。
+// 聊天锁定、账号出错、页面还在加载时返回 null，通知退回“有 N 个未读对话”
+async function unreadChatNames(acc) {
+  if (locked || problems.has(acc.id)) return null;
+  if (isLite(acc)) return liteUnreadNames.get(acc.id) || null;
+  const view = views.get(acc.id);
+  if (!view || pendingLoad.has(acc.id)) return null;
+  // 标题里的未读数先变，左边对话列表稍后才排好，等一下再读
+  await new Promise((r) => setTimeout(r, 600));
+  if (locked || views.get(acc.id) !== view || view.webContents.isDestroyed()) return null;
+  const r = await waPage.readChatList(view.webContents, { includePreview: false });
+  return r && r.ok ? unreadNames(r.chats) : null;
+}
+
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  unreadChats: (acc) => unreadChatNames(acc),
   onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
@@ -983,6 +1000,7 @@ function parkAccount(acc) {
   loginStates.delete(acc.id);
   liteStates.delete(acc.id);
   liteViews.delete(acc.id);
+  liteUnreadNames.delete(acc.id);
   liteOpen.delete(acc.id);
   mcp?.controller.gate.clearAccount(acc.id);
   notifier.forget(acc.id);
@@ -1656,9 +1674,10 @@ function bindLiteEvents() {
     if (prev !== status && status === 'stuck') notifier.notify(acc, '连接反复出错，已停止重连。点这里打开这个号重试。');
     refresh();
   });
-  liteHost.on('unread', ({ id, count }) => {
+  liteHost.on('unread', ({ id, count, chats }) => {
     const acc = findAcc(id);
     if (!acc) return;
+    liteUnreadNames.set(id, unreadNames(chats));
     notifier.update(acc, count, { isActive: id === activeId && page === 'account' });
     pushState();
   });
@@ -1835,6 +1854,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   loginStates.delete(id);
   liteStates.delete(id);
   liteViews.delete(id);
+  liteUnreadNames.delete(id);
   liteOpen.delete(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);

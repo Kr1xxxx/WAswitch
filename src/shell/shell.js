@@ -1533,7 +1533,7 @@ function settingsPage() {
   } else if (settingsTab === 'notify') {
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '通知'),
-        h('p', { class: 'lead' }, '通知标题显示账号名，点通知直接打开那个号。不显示消息内容。')),
+        h('p', { class: 'lead' }, '通知标题显示账号名，正文写是哪几个对话（比如“Emma Schneider、John Miller 等 3 个未读对话”），点通知直接打开那个号。只写对话名字，不显示消息内容；聊天锁定时只写未读数。')),
       h('div', null, s.accounts.length ? s.accounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center' } },
         h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
         h('span', { class: 'meta' }, a.name),
