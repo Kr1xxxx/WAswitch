@@ -2280,14 +2280,24 @@ handleShell('cust:delete', (id) => {
 });
 handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 // 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
-// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
-function insertText(accountId, text) {
-  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里。
+// 焦点不在对话下方的输入框（比如在搜索框）就不贴，返回 'focus' 让用户先点一下输入框
+const insertBlocked = (accountId) => {
   const acc = findAcc(accountId);
   if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
   if (isLite(acc)) return 'lite'; // 轻量模式的输入框在软件界面里，由界面自己填
   const view = views.get(accountId);
-  if (!view || view.webContents.isDestroyed()) return 'changed';
+  return !view || view.webContents.isDestroyed() ? 'changed' : '';
+};
+async function insertText(accountId, text) {
+  if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
+  const blocked = insertBlocked(accountId);
+  if (blocked) return blocked;
+  const focus = await waPage.composeFocus(views.get(accountId).webContents);
+  const after = insertBlocked(accountId); // 读焦点期间可能换号、锁定
+  if (after) return after;
+  if (focus !== 'compose') return 'focus';
+  const view = views.get(accountId);
   clipboard.writeText(text.slice(0, 4000));
   view.webContents.focus();
   view.webContents.paste();
