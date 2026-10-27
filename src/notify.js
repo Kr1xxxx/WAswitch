@@ -9,24 +9,29 @@
 // - 对话列表来自 hooks.readChats（网页号在隔离环境里只读对话列表，不往页面注入；轻量号来自后台进程）
 // - 读不到对话列表（页面在加载、聊天锁着）时：一张号的卡，写“有 N 个未读对话”
 // - 用户正看着这个号（WAswitch 在前台、正开着这个号）不弹；看着别的号或 WAswitch 在后台照常弹
+// - 同一条消息只弹一次：按 号 + 客户 + 这条消息（预览的指纹 + 未读条数）记下弹过的（popped），
+//   刷新页面、重连、软件重启、标题里的数字掉了又回来，都不会把弹过的再弹一遍。只有点了“稍后”会按约定再提醒一次
 const { app, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
-const { unreadBody, unreadNames, grownChats, chatKey, cleanPreview } = require('./notify-text');
+const { unreadBody, unreadNames, grownChats, chatKey, cleanPreview, popSig } = require('./notify-text');
 
 const READ_TIMEOUT_MS = 2000; // 读对话列表最多等这么久，超时就用“有 N 个未读对话”
 const LATER_MS = 10 * 60 * 1000; // 点“稍后”：10 分钟后还没读再弹一次
 const RECENT_POP_MS = 15 * 1000; // 这么久之内这个号刚弹过卡片，读不出新客户时就不再补一张号的卡
+const MAX_POPPED = 200; // 每个号最多记多少个客户“弹过哪一条”
 
 const asset = (name) => path.join(__dirname, '..', 'assets', name);
 
 class Notifier {
-  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), readChats(acc), popup, openChat(id, jid), isActive(id) }
+  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), readChats(acc), popup, openChat(id, jid), isActive(id),
+  //          loadPopped() -> { id: { 客户: { sig, unread } } }, savePopped(同样的结构) }
   constructor(hooks, { laterMs = LATER_MS } = {}) {
     this.hooks = hooks;
     this.laterMs = laterMs;
     this.popSeq = new Map(); // id -> 最近一次读对话列表的编号，读的期间又有新消息就只用新的
     this.unread = new Map(); // id -> 未读对话数
     this.seen = new Map(); // id -> Map(客户 -> 已经弹过的未读条数)
+    this.poppedMap = null; // id -> Map(客户 -> { sig, unread })：弹过（或用户看着时已经出现过）的那一条，存在磁盘上
     this.lastPop = new Map(); // id -> 最近一次弹卡片的时间
     this.laterTimers = new Map(); // 卡片 key -> “稍后”的定时器
     this.scanning = new Map(); // id -> 正在读对话列表的次数
@@ -35,6 +40,63 @@ class Notifier {
   }
 
   get popup() { return this.hooks.popup || null; }
+
+  // 弹过的记录：第一次用时从磁盘读
+  get popped() {
+    if (!this.poppedMap) {
+      this.poppedMap = new Map();
+      let raw = null;
+      try { raw = this.hooks.loadPopped ? this.hooks.loadPopped() : null; } catch { raw = null; }
+      if (raw && typeof raw === 'object') {
+        for (const [id, chats] of Object.entries(raw)) {
+          if (!chats || typeof chats !== 'object') continue;
+          const m = new Map();
+          for (const [key, r] of Object.entries(chats)) {
+            if (r && typeof r.sig === 'string' && Number.isInteger(r.unread)) m.set(key, { sig: r.sig, unread: r.unread });
+          }
+          if (m.size) this.poppedMap.set(id, m);
+        }
+      }
+    }
+    return this.poppedMap;
+  }
+
+  savePopped() {
+    if (!this.hooks.savePopped) return;
+    const out = {};
+    for (const [id, m] of this.popped) if (m.size) out[id] = Object.fromEntries(m);
+    try { this.hooks.savePopped(out); } catch { /* 存不上就算了，只是重启后可能多弹一次 */ }
+  }
+
+  // 记下这个客户现在这一条已经处理过（弹过，或用户正看着时出现的），以后同一条不再弹
+  markPopped(id, key, sig, unread) {
+    let m = this.popped.get(id);
+    if (!m) { m = new Map(); this.popped.set(id, m); }
+    m.delete(key); // 放到最后，超出上限时先删最久没动的
+    m.set(key, { sig, unread });
+    if (m.size > MAX_POPPED) m.delete(m.keys().next().value);
+  }
+
+  // 读到列表后：未读已经是 0 的客户（读过了）去掉记录，下次她再发同样的话（比如“ok”）照常弹；
+  // record：把现在有未读的客户都记成处理过（用户正看着、开着勿扰、第一次看列表时，这些不算新消息）
+  notePopped(id, chats, { record = false } = {}) {
+    if (!Array.isArray(chats)) return;
+    const m = this.popped.get(id);
+    let changed = false;
+    for (const c of chats) {
+      const key = chatKey(c);
+      if (!key) continue;
+      const n = Number.isInteger(c.unread) && c.unread > 0 ? c.unread : 0;
+      if (!n) { if (m && m.delete(key)) changed = true; continue; }
+      if (!record) continue;
+      const sig = popSig(c);
+      const rec = m && m.get(key);
+      if (rec && rec.sig === sig && rec.unread === n) continue;
+      this.markPopped(id, key, sig, n);
+      changed = true;
+    }
+    if (changed) this.savePopped();
+  }
 
   init() {
     if (process.platform === 'win32') app.setAppUserModelId('com.waswitch.app');
@@ -89,8 +151,8 @@ class Notifier {
     const prev = this.unread.get(acc.id) || 0;
     const before = Math.max(prev, baseline);
     this.unread.set(acc.id, count);
-    // 有对话被读掉了：记下的“弹过几条”可能对不上了，下次重新对
-    if (count < prev) this.seen.delete(acc.id);
+    // 有对话被读掉了：记下的“弹过几条”可能对不上了，下次重新对；看一眼列表，把读掉的客户从“弹过的”里去掉
+    if (count < prev) { this.seen.delete(acc.id); this.noteRead(acc); }
     // 全读完了：这个号的卡片收起来，“稍后”也不用再提醒
     if (count === 0) this.dropCards(acc.id);
     if (count > before) this.lastNewAt = Date.now();
@@ -105,10 +167,19 @@ class Notifier {
   }
 
   // 未读对话数没变，但某个客户又发了一条（同一个对话的未读条数变多）：网页号定时看一眼对话列表，轻量号由后台进程推过来
+  // 正看着这个号、开着勿扰：不弹，只记下来，免得切走 / 关掉勿扰后把这期间看过的当新消息弹出来
   recheck(acc, { isActive }) {
-    if (!(this.unread.get(acc.id) > 0) || this.muted(acc) || this.looking(isActive) || this.dnd) return;
+    if (!(this.unread.get(acc.id) > 0) || this.muted(acc)) return;
     if (this.scanning.get(acc.id)) return; // 正在读（比如未读数刚变多），别打断它
-    this.scan(acc, { poll: true });
+    this.scan(acc, { poll: true, silent: this.looking(isActive) || this.dnd });
+  }
+
+  // 有对话被读掉了：读一下列表，把未读变成 0 的客户从“弹过的”里去掉（不弹、不影响正在读的那次）
+  async noteRead(acc) {
+    if (!this.popped.get(acc.id)) return;
+    const chats = await this.readChats(acc);
+    if (!(this.hooks.getAccounts() || []).some((a) => a.id === acc.id)) return;
+    this.notePopped(acc.id, chats);
   }
 
   async readChats(acc) {
@@ -148,11 +219,15 @@ class Notifier {
       return;
     }
     const prevSeen = this.seen.get(acc.id) || null;
-    const { fresh: list, seen } = grownChats(prevSeen, chats, fresh);
+    // 正看着 / 勿扰 / 第一次看这个号的列表：只记下来，不弹以前的未读
+    const quiet = silent || (poll && !prevSeen);
+    this.notePopped(acc.id, chats, { record: quiet });
+    const { fresh: list, seen, dup } = grownChats(prevSeen, chats, fresh, 3, this.popped.get(acc.id));
     this.seen.set(acc.id, seen);
-    if (silent) return;
-    if (poll && !prevSeen) return; // 第一次看这个号的列表：只记下来，不弹以前的未读
+    if (quiet) return;
     if (!list.length) {
+      // 变多的客户都是弹过的那一条（页面刷新、重连后数字掉了又回来）：不弹，也不补号的卡
+      if (dup) return;
       // 列表里找不到新客户（被搜索筛掉了、还没排好）：刚弹过就算了，没弹过补一张号的卡
       if (!poll && Date.now() - (this.lastPop.get(acc.id) || 0) > RECENT_POP_MS) this.popAccount(acc, count || n, unreadNames(chats));
       return;
@@ -162,7 +237,9 @@ class Notifier {
     // 倒着放，列表里最近的那个客户最后放、在最上面
     for (const c of list.slice().reverse()) {
       this.show({ key: `m:${acc.id}:${c.key}`, kind: 'msg', accId: acc.id, chat: c.name, chatKey: c.key, jid: c.jid, text: c.preview || '发来新消息', count: c.unread });
+      this.markPopped(acc.id, c.key, c.sig, c.unread);
     }
+    this.savePopped();
     // 定时看列表弹出来的（同一个客户又发一条）也记进通知记录；未读对话数变多那条在 update() 里已经记过
     if (poll && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count: n, popped: true });
   }
@@ -225,6 +302,7 @@ class Notifier {
     this.popSeq.delete(id);
     this.seen.delete(id);
     this.lastPop.delete(id);
+    if (this.popped.delete(id)) this.savePopped();
     this.dropCards(id);
     if (this.popup) this.popup.dropAccount(id);
     this.refresh();

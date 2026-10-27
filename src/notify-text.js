@@ -3,6 +3,8 @@
 // - 读不到（页面在加载、结构认不出、聊天已锁定）时：一张号的卡，写“Emma Schneider、John Miller 等 3 个未读对话”
 //   或“有 N 个未读对话”（unreadBody）
 
+const crypto = require('crypto');
+
 const MAX_NAMES = 2; // 正文里最多写几个名字
 const MAX_LEN = 30; // 每个名字最多多少字
 
@@ -42,19 +44,35 @@ function cleanPreview(text) {
   return [...t].length > MAX_PREVIEW ? `${[...t].slice(0, MAX_PREVIEW).join('')}…` : t;
 }
 
+// 一条消息的“指纹”：最后一条预览 + 时间（轻量号有，网页号没有）。只存短哈希，不把消息内容写到磁盘上
+function popSig(c) {
+  const ts = c && Number.isFinite(c.ts) && c.ts > 0 ? String(c.ts) : '';
+  return crypto.createHash('sha1').update(`${cleanPreview(c && c.preview)}|${ts}`).digest('hex').slice(0, 12);
+}
+
+// 这个客户现在列表里显示的那条，是不是已经弹过（或用户已经看过）：同一个客户、同一条预览、未读条数没变多
+function wasPopped(popped, key, c, n) {
+  const rec = popped && popped.get(key);
+  return !!(rec && n <= rec.unread && rec.sig === popSig(c));
+}
+
 // 对话列表里哪些客户的未读变多了（要弹卡片）。
 // seen：上次记下的 key -> 未读数；null 表示这个号还没记过（刚启动、刚读过消息）
-// chats：对话列表 { name, unread, preview?, muted?, jid? }，最近的在前
+// chats：对话列表 { name, unread, preview?, muted?, jid?, ts? }，最近的在前
 // firstLimit：没记过时最多挑几个（只挑列表最上面的，免得把以前的未读全弹一遍）
-// 返回 { fresh: [{ key, name, unread, preview, jid }], seen: 新的 Map }
-function grownChats(seen, chats, firstLimit = 1, limit = 3) {
+// popped：已经弹过的 key -> { sig, unread }（见 wasPopped），弹过的同一条不再弹
+// 返回 { fresh: [{ key, name, unread, preview, jid, sig }], seen: 新的 Map, dup: 因为弹过而跳过了几个 }
+function grownChats(seen, chats, firstLimit = 1, limit = 3, popped = null) {
   const next = new Map(seen || []);
   const list = Array.isArray(chats) ? chats.filter((c) => c && chatKey(c)) : [];
   const grown = [];
+  let dup = 0;
   for (const c of list) {
     const key = chatKey(c);
     const n = Number.isInteger(c.unread) && c.unread > 0 ? c.unread : 0;
-    if (n > 0 && n > (seen ? (seen.get(key) || 0) : 0)) grown.push({ key, c, n });
+    if (n > 0 && n > (seen ? (seen.get(key) || 0) : 0)) {
+      if (wasPopped(popped, key, c, n)) dup += 1; else grown.push({ key, c, n });
+    }
     if (n > 0) next.set(key, n); else next.delete(key);
   }
   // 静音的对话（WhatsApp 里设了静音）不单独弹，除非只有它们
@@ -63,9 +81,9 @@ function grownChats(seen, chats, firstLimit = 1, limit = 3) {
   const fresh = pick.map(({ key, c, n }) => {
     let name = (c.name || key).replace(/\s+/g, ' ').trim();
     if ([...name].length > MAX_LEN) name = `${[...name].slice(0, MAX_LEN).join('')}…`;
-    return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '' };
+    return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '', sig: popSig(c) };
   });
-  return { fresh, seen: next };
+  return { fresh, seen: next, dup };
 }
 
-module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, MAX_NAMES, MAX_LEN, MAX_PREVIEW };
+module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, popSig, wasPopped, MAX_NAMES, MAX_LEN, MAX_PREVIEW };

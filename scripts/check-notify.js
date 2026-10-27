@@ -257,6 +257,124 @@ function make(readChats, { win = null, laterMs } = {}) {
   await tick(60);
   check(popup.cards.length === 1 && popup.cards[0].text === '有 2 个未读对话', '稍后（号的卡）：写现在的未读数');
 
+  // ---------- 同一条消息只弹一次（按 号 + 客户 + 这条消息 去重） ----------
+  // 置顶的老客户 Emma 弹过；读掉 John 后（记下的条数清掉）新客户 Lucas 来了：只弹 Lucas，不把 Emma 那条再弹一遍
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Liefertermin?' }];
+  ({ n, popup } = make(async () => current));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Liefertermin?' }, { name: 'John Miller', unread: 1, preview: 'Thanks' }];
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 2 && popup.cards[1].chat === 'John Miller', '先弹 Emma，再弹 John');
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Liefertermin?' }, { name: 'John Miller', unread: 0, preview: 'Thanks' }];
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Liefertermin?' }, { name: 'Lucas Martin', unread: 1, preview: 'Bonjour' }];
+  popup.cards.length = 0;
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].chat === 'Lucas Martin', `读掉一个对话后来了新客户：只弹新客户，置顶的 Emma 不再弹（弹了 ${popup.cards.map((c) => c.chat).join('、')}）`);
+
+  // 标题里的数字掉到 0 又回来（页面重连、刷新）：弹过的不再弹，也不补“有 N 个未读对话”
+  popup.cards.length = 0;
+  popup.dropped.length = 0;
+  n.update(acc, 0, { isActive: false });
+  await tick(10);
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, `数字掉了又回来：弹过的两条都不再弹（弹了 ${popup.cards.length} 张）`);
+  // 数字掉的那一刻列表里两个客户还显示有未读：不算读过，记录不清掉
+  check(n.popped.get('a1') && n.popped.get('a1').has('Emma Schneider') && n.popped.get('a1').has('Lucas Martin'), '弹过的记录还在');
+
+  // 软件重启：记录从磁盘读回来；轻量号也按上次的未读数当原数，涨回原数不弹
+  let saved = null;
+  const mk2 = (readChats) => {
+    const p2 = fakePopup();
+    const n2 = new Notifier({ getAccounts: () => [acc, acc2], getWindow: () => null, activate() {}, quit() {}, readChats, popup: p2, loadPopped: () => saved, savePopped: (d) => { saved = JSON.parse(JSON.stringify(d)); } });
+    n2.refresh = () => {};
+    return { n: n2, popup: p2 };
+  };
+  current = [{ jid: '491701234567@s.whatsapp.net', name: 'Emma', unread: 1, ts: 1700000000, preview: 'Hallo' }, { jid: '15551234567@s.whatsapp.net', name: 'John', unread: 1, ts: 1700000100, preview: 'Hi' }];
+  ({ n, popup } = mk2(async () => current));
+  n.update(acc2, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 2 && saved && saved.a2 && Object.keys(saved.a2).length === 2, '两个新客户弹两张，记录写进磁盘（只存指纹）');
+  check(!JSON.stringify(saved).includes('Hallo') && !JSON.stringify(saved).includes('Hi"'), '磁盘上的记录不含消息内容');
+  ({ n, popup } = mk2(async () => current));
+  n.update(acc2, 2, { isActive: false, baseline: 2 });
+  await tick(10);
+  check(popup.cards.length === 0, '重启后未读数涨回原数：不弹');
+  ({ n, popup } = mk2(async () => current));
+  n.update(acc2, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, '重启后就算没有原数，弹过的那条也不再弹，不补号的卡');
+  current = [{ jid: '4930123456@s.whatsapp.net', name: 'Anna', unread: 1, ts: 1700000200, preview: 'Guten Tag' }, ...current];
+  n.update(acc2, 3, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].chat === 'Anna', '重启后来了新客户：照弹');
+
+  // 读掉以后客户又发一句一样的话（比如“ok”）：照弹
+  current = [{ name: 'Emma Schneider', unread: 1, preview: 'ok' }];
+  ({ n, popup } = make(async () => current));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 0, preview: 'ok' }];
+  n.update(acc, 0, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 1, preview: 'ok' }];
+  popup.cards.length = 0;
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].chat === 'Emma Schneider', '读掉后她又发了一样的“ok”：照弹');
+  // 轻量号：带时间，读掉那一下没看到也能分出是新的一条
+  current = [{ jid: '491701234567@s.whatsapp.net', name: 'Emma', unread: 1, ts: 100, preview: 'ok' }];
+  ({ n, popup } = make(async () => current));
+  n.update(acc2, 1, { isActive: false });
+  await tick(10);
+  current = []; // 轻量号推来的列表只有未读的，读掉后是空的
+  n.update(acc2, 0, { isActive: false });
+  await tick(10);
+  current = [{ jid: '491701234567@s.whatsapp.net', name: 'Emma', unread: 1, ts: 200, preview: 'ok' }];
+  popup.cards.length = 0;
+  n.update(acc2, 1, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1, '轻量号：同样的话、时间不同，算新的一条，照弹');
+
+  // 勿扰期间同一个客户又发了几条：不弹；关掉勿扰后定时看列表也不补弹这些
+  current = [{ name: 'Emma Schneider', unread: 1, preview: 'Hallo' }];
+  ({ n, popup } = make(async () => current));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  popup.dnd = true;
+  current = [{ name: 'Emma Schneider', unread: 3, preview: 'Hallo???' }];
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  popup.dnd = false;
+  popup.cards.length = 0;
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, '勿扰期间来的：关掉勿扰后不补弹');
+  current = [{ name: 'Emma Schneider', unread: 4, preview: 'Neu' }];
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].count === 4, '关掉勿扰后真的又来一条：弹');
+  // 正看着这个号时同一个客户又发：切走后不补弹
+  ({ n, popup } = make(async () => current, { win: focusedWin }));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 6, preview: 'Noch eine' }];
+  n.recheck(acc, { isActive: true });
+  await tick(10);
+  popup.cards.length = 0;
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, '正看着这个号时她又发的：切走后不补弹');
+
+  // 删号：记录一起删
+  n.forget('a1');
+  check(!n.popped.has('a1'), '删号后弹过的记录一起删掉');
+
   // ---------- 弹窗队列 ----------
   let now = 1000;
   const q = new PopupQueue({ now: () => now, durationMs: 6000 });
