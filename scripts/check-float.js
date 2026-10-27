@@ -401,6 +401,9 @@ core().then(() => {
     assert(empty);
     const r2 = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r2.why, 'nochat');
+    // 还在二维码页（没登录）：单独说 qr，翻译页提示“扫码登录后可用”
+    await w.webContents.executeJavaScript(`document.body.innerHTML = '<div data-ref="2@abc"><canvas aria-label="Scan this QR code"></canvas></div>'; 1`);
+    assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'qr');
     console.log('悬浮翻译只读脚本自检通过');
     app.exit(0);
   }).catch((e) => { console.error(e); app.exit(1); });

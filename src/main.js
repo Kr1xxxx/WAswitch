@@ -1246,7 +1246,9 @@ async function qrWatchTick() {
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
-const RELOAD_QUIET_MS = 15 * 1000;
+// 页面显示出对话列表后再等这么久让未读数涨回原数；整个过程最多等 RELOAD_QUIET_MAX_MS
+const RELOAD_QUIET_MS = 5 * 1000;
+const RELOAD_QUIET_MAX_MS = 2 * 60 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
 // 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
@@ -1341,6 +1343,34 @@ function addNotifLog({ id, count, popped }) {
   notifLog.push({ at: Date.now(), id: String(id), count, popped: !!popped });
   if (notifLog.length > NOTIF_LOG_MAX) notifLog.splice(0, notifLog.length - NOTIF_LOG_MAX);
   saveNotifLogSoon();
+}
+
+// 每个号最后一次的未读数，存在磁盘上。软件重启后页面重新加载，未读数涨回这个数不算新消息
+const unreadLastFile = () => path.join(app.getPath('userData'), 'unread-last.json');
+let unreadLast = null;
+let unreadLastTimer = null;
+function savedUnread(id) {
+  if (!unreadLast) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(unreadLastFile(), 'utf8'));
+      unreadLast = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    } catch {
+      unreadLast = {}; // 文件不存在或坏了：当成都没有未读
+    }
+  }
+  const n = unreadLast[id];
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+function rememberUnread(id, count) {
+  if (savedUnread(id) === count) return;
+  unreadLast[id] = count;
+  clearTimeout(unreadLastTimer);
+  unreadLastTimer = setTimeout(() => {
+    unreadLastTimer = null;
+    const ids = new Set(accounts.map((a) => a.id));
+    for (const k of Object.keys(unreadLast)) if (!ids.has(k) || !unreadLast[k]) delete unreadLast[k];
+    try { writeJsonAtomic(unreadLastFile(), unreadLast); } catch (e) { console.warn('未读数保存失败', e.message); }
+  }, 2000);
 }
 
 // ---------- 拼写检查（每个号单独开关） ----------
@@ -1488,13 +1518,19 @@ async function createView(acc, loadDelay = 0) {
   views.set(acc.id, view);
 
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
-  // 页面刚开始加载的 15 秒里标题会从 0 涨回刷新前的数：涨回原数不弹，超过原数（真有新消息）照常弹
+  // 页面刚开始加载时标题会从 0 涨回刷新前的数：涨回原数不弹、不记，超过原数（真有新消息）照常弹。
+  // 软件重启后也一样：原数用上次关掉前记下的未读数，所以刷新、重启都不会多出一条“N 个未读”的通知记录。
+  // 等到什么时候：标题出现数字，或者页面已经显示出对话列表后再等几秒（扫码页直接结束），最多 2 分钟
   let quietUntil = 0;
   let baseline = 0;
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
     const count = m ? Number(m[1]) : 0;
-    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account', baseline: Date.now() < quietUntil ? baseline : 0 });
+    const restoring = Date.now() < quietUntil;
+    notifier.update(acc, count, { isActive: acc.id === activeId && page === 'account', baseline: restoring ? baseline : 0 });
+    // 标题里出现了数字，说明页面已经读出未读数，之后照常算
+    if (restoring && count > 0) quietUntil = 0;
+    if (!restoring || count > 0) rememberUnread(acc.id, count);
     pushState();
   });
 
@@ -1504,8 +1540,23 @@ async function createView(acc, loadDelay = 0) {
   wc.on('did-start-loading', () => {
     failed = false;
     failToken = null;
-    if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
-    quietUntil = Date.now() + RELOAD_QUIET_MS;
+    // 连续刷新时保留第一次的原数；软件刚打开时用上次记下的数
+    if (Date.now() >= quietUntil) baseline = notifier.unread.has(acc.id) ? notifier.unread.get(acc.id) : savedUnread(acc.id);
+    quietUntil = Date.now() + RELOAD_QUIET_MAX_MS;
+  });
+  let settleRun = 0;
+  wc.on('did-finish-load', async () => {
+    const run = ++settleRun;
+    while (run === settleRun && Date.now() < quietUntil && !wc.isDestroyed()) {
+      const st = await waPage.loginState(wc); // 隔离环境只读检查，和掉线检测同一个
+      if (run !== settleRun || Date.now() >= quietUntil) break;
+      if (st === 'needs_qr') { quietUntil = 0; break; }
+      if (st === 'logged_in') { quietUntil = Math.min(quietUntil, Date.now() + RELOAD_QUIET_MS); break; }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    // 等完了数字也没回来（比如在手机上都读掉了）：记下现在的数，免得下次重启还拿旧数当原数
+    const left = Math.max(0, quietUntil - Date.now());
+    setTimeout(() => { if (run === settleRun && !wc.isDestroyed() && Date.now() >= quietUntil) rememberUnread(acc.id, notifier.unread.get(acc.id) || 0); }, left + 500);
   });
   wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误

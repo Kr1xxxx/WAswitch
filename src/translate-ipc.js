@@ -143,7 +143,7 @@ function setupTranslateIpc(ctx) {
   let floatOpen = false;
   let floatTimer = null;
   let floatFails = 0;
-  let floatReadable = 'loading'; // ok | nochat | unreadable | loading
+  let floatReadable = 'loading'; // ok | nochat | qr | unreadable | loading
   let floatArea = null; // 账号视图的位置（layout 算出来的）
   let floatCore = null;
   let trStore = null; // 收到的消息的译文，永久存在磁盘上
@@ -229,11 +229,11 @@ function setupTranslateIpc(ctx) {
         let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id), dailyCap: cfg.dailyCap });
         if (changed) changed = rememberDetected(target.acc.id) || changed;
         if (changed || was !== 'ok') pushFloat();
-      } else if (r.why === 'nochat') {
-        // 没打开对话：不算失败，3 秒后再看
+      } else if (r.why === 'nochat' || r.why === 'qr') {
+        // 没打开对话，或者还在二维码页没登录：不算失败，3 秒后再看
         floatFails = 0;
         delay = 3000;
-        if (floatReadable !== 'nochat') { floatReadable = 'nochat'; pushFloat(); }
+        if (floatReadable !== r.why) { floatReadable = r.why; pushFloat(); }
       } else {
         // 读不到，或对话里有消息行但一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
         floatFails += 1;

@@ -418,7 +418,7 @@ function exitChip(acc) {
   return h('span', { class: 'chip', title: exitTitle(acc) }, icon('globe', 12), acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel);
 }
 
-// 当地时间：按账号的时区显示，深夜（22:00–8:00）变黄，提醒这时候发消息不像真人
+// 当地时间：按账号的时区显示，22:00–8:00 变黄，提醒这时候发消息不像真人。5:00 前写“深夜”，5:00–8:00 写“清晨”
 const clockFormats = new Map();
 function clockParts(tz) {
   const key = tz || '';
@@ -427,16 +427,17 @@ function clockParts(tz) {
   }
   const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
   const hour = Number(parts.hour);
-  return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night: hour >= 22 || hour < 8 };
+  const night = hour >= 22 || hour < 8;
+  return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
 function clockChip(acc) {
   const place = acc.timezone ? acc.regionLabel.replace(/^出口时区（.*\/(.+)）$/, '$1').replace(/_/g, ' ') : '本机';
   const chip = h('span', { class: 'chip clock' }, icon('clock', 12), h('span'));
   const draw = () => {
     const c = clockParts(acc.timezone);
-    chip.lastChild.textContent = `${place} ${c.text}${c.night ? ' · 深夜' : ''}`;
+    chip.lastChild.textContent = `${place} ${c.text}${c.night ? ` · ${c.when}` : ''}`;
     chip.classList.toggle('night', c.night);
-    chip.title = `当地时间（${acc.timezone || '跟随本机时区'}）${c.night ? '。这个号所在地现在是深夜，这时候大量发消息不像真人' : ''}`;
+    chip.title = `当地时间（${acc.timezone || '跟随本机时区'}）${c.night ? `。这个号所在地现在是${c.when}，这时候大量发消息不像真人` : ''}`;
   };
   draw();
   chip.draw = draw;
@@ -1161,7 +1162,7 @@ function editorPage(id) {
         !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
-    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：日本客户群 · 小王负责' });
+    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：德国客户 · 小王负责' });
     const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24', placeholder: '登录后自动填写，也可以自己填' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
