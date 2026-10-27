@@ -537,3 +537,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .dk-fold-btn.fx-fold-open::before { animation: fx-fold-open var(--fx) var(--fx-ease) backwards; }
 .dk-fold-btn.fx-fold-close::before { animation: fx-fold-close var(--fx) var(--fx-ease) backwards; }
 .fx-unfold { animation: fx-unfold var(--fx) var(--fx-ease) backwards; }
+/* 翻译页顶上的“还没填密钥”黄条，和表单里的申请密钥链接 */
+.dk-keybar { margin: 10px 12px 0; display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.5; }
+.dk-keybar > span { flex: 1; }
+.dk-keybar .pn-btn { flex: none; }
+.tr-keylink { font-size: 12px; }

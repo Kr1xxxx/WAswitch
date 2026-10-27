@@ -17,6 +17,7 @@ const dk = {
   busy: false,
   msg: '',
   bad: false,
+  msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
   openOrig: new Set(), // 点开看原文的收到消息（hash）；默认只显示译文，原文折叠成一条毛玻璃
@@ -42,11 +43,11 @@ function dockCountUnread() {
 }
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, unread: 0, seenTitle: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null });
   dk.seen.clear();
 }
 
-function dockSay(msg, bad = false) { dk.msg = msg; dk.bad = bad; dockRender(true); }
+function dockSay(msg, bad = false, pid = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dockRender(true); }
 
 window.wa.onDock((st) => {
   if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
@@ -83,12 +84,12 @@ async function dockTranslate(insert = false) {
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
-  dk.busy = true; dk.msg = ''; dockRender(true);
+  dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
-  if (r.error) return dockSay(r.error, true);
+  if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '');
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
   if (!p.insert) return dockSay(r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
@@ -99,7 +100,7 @@ async function dockInsert() {
   if (!dk.out.trim()) return dockSay('还没有译文', true);
   if (dk.st && dk.forTitle !== null && dk.st.title !== dk.forTitle) return dockSay('译文是给另一个对话翻的，没有放。看一下再点', true);
   await panelInsert(dk.out);
-  dk.msg = pn.msg; dk.bad = pn.bad; pn.msg = '';
+  dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
   dockRender(true);
 }
 // ⌃⇧↵ / 放进输入框：有译文就放（改过的就放改过的）；中文改了又没手动改译文，先重新翻
@@ -223,7 +224,9 @@ function dockItemRow(it, last) {
   const tr = it.state === 'done' ? [trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, '翻译中…', sp)
-      : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ', h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
+      : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ',
+        it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
+        h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
   return h('div', { class: `${cls}${foot ? ' foot' : ''}` },
     dockOrig(it.h, it.text, it.state === 'done' && !!it.tr),
@@ -343,6 +346,15 @@ function dockCompose() {
         '放进输入框', h('span', { class: 'dk-key' }, mac ? '⌘ ⇧ ↵' : 'Ctrl+Shift+Enter'))));
 }
 
+// 默认翻译服务没填密钥：顶上一条黄条，点“去填密钥”直接打开它的表单
+function dockKeyBar() {
+  const k = dk.st && dk.st.needKey;
+  if (!k) return null;
+  return h('div', { class: 'tr-warn dk-keybar', role: 'status' },
+    h('span', null, `默认翻译服务「${k.name}」还没填密钥，现在翻译不了。${k.others ? '也可以在 设置 › 翻译 里把有密钥的设为默认。' : ''}`),
+    h('button', { class: 'pn-btn primary', onclick: () => trOpenKey(k.id) }, '去填密钥'));
+}
+
 // force=false：只刷新状态条和消息列表，正在写的回复不动
 function dockRender(force = false) {
   if (!dockVisible()) return;
@@ -358,16 +370,17 @@ function dockRender(force = false) {
     return;
   }
   const root = host.querySelector('.dk');
-  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg)) : null;
+  const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
+  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
-    root.replaceChildren(...kids(dockInHead(), list || dockIncoming(), msg, keep));
+    root.replaceChildren(...kids(dockKeyBar(), dockInHead(), list || dockIncoming(), msg, keep));
     return;
   }
-  const el = h('div', { class: 'dk' }, ...kids(dockInHead(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockInHead(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
   if (focusIn) { const box = el.querySelector('.dk-in'); box.focus(); box.selectionStart = box.selectionEnd = box.value.length; }

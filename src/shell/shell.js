@@ -721,6 +721,19 @@ let trEdit = null; // 正在编辑的服务商 { id?, preset, name, baseUrl, mod
 let trModeEdit = null;
 let trSay = '';
 let trTestRes = {};
+let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
+const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
+// 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
+async function trOpenKey(pid) {
+  if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
+  const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
+  trEdit = p ? { ...p } : trEdit;
+  trFocusKey = !!p;
+  trSay = '';
+  settingsTab = 'translate';
+  window.wa.showPage('settings');
+  if (s.page === 'settings') render(true);
+}
 function trProviderForm() {
   const e = trEdit;
   const presets = tr.cfg.presets;
@@ -757,6 +770,8 @@ function trProviderForm() {
   const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, thinking: think.value });
   for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
   for (const el of [name, base, key]) el.style.width = '260px';
+  // 设置页可能连着重画几次：等画到页面上的那一次再把光标放进去
+  if (trFocusKey) requestAnimationFrame(() => { if (!trFocusKey || !key.isConnected) return; trFocusKey = false; key.scrollIntoView({ block: 'center' }); key.focus(); });
   const isMt = /^hy-mt/i.test(model.value);
   // DeepL 是机器翻译：没有地址、模型、深度思考可选；各类型的说明也不一样，换类型时重画表单
   const deepl = preset.value === 'deepl';
@@ -767,7 +782,8 @@ function trProviderForm() {
     setRow('名称', '可不填。', name),
     deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '一般不用改。', base),
     deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : `${{ hunyuan: '填腾讯云 TokenHub 的密钥。', zhipu: '智谱开放平台（bigmodel.cn）里的 API 密钥。' }[preset.value] || ''}会加密保存。`, key),
+    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : `${{ hunyuan: '填腾讯云 TokenHub 的密钥。', zhipu: '智谱开放平台（bigmodel.cn）里的 API 密钥。' }[preset.value] || ''}会加密保存。`, key,
+      preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '翻译用不上，选“禁用”更快。', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
@@ -901,6 +917,8 @@ function renderPanel(force = false) {
     const host = h('div', { class: 'dk-host' });
     $panel.replaceChildren(panelHead(), host);
     dockRender(true);
+    // 从设置页回来（可能刚填了密钥、换了默认服务商）：主进程那时不推状态，这里重新拿一次
+    if (dk.st) dockFetch();
     if (tabChanged) fxPlay(host, 'fx-fade');
     return;
   }
