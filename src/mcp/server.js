@@ -132,9 +132,12 @@ class McpController {
     if (on) this.settings.layer2Acknowledged = true;
     cfg.saveSettings(this.dataDir, this.settings);
     if (!on) this.gate.clearAll();
+    // 读对话组：list_chats 和 search_chats 一起开关
     for (const s of this.sessions.values()) {
-      if (!s.chatTool) continue;
-      if (on) s.chatTool.enable(); else s.chatTool.disable();
+      for (const t of [s.chatTool, s.searchTool]) {
+        if (!t) continue;
+        if (on) t.enable(); else t.disable();
+      }
     }
     this.onChange();
   }
@@ -198,9 +201,10 @@ class McpController {
     const { registerAccountTools } = require('./tools');
     const { registerChatTools } = require('./chats');
     const { registerDraftTools } = require('./drafts');
+    const { registerSearchTools } = require('./search');
     const { registerHelperTools } = require('./helpers');
     const { registerCustomerEditTools } = require('./customer-edit');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerHelperTools, registerCustomerEditTools };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerSearchTools, registerHelperTools, registerCustomerEditTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -293,13 +297,13 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, draftTool: null, helperTools: [], customerTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, searchTool: null, draftTool: null, helperTools: [], customerTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“修改客户资料”后，可以用 update_customer 改客户的标签、备注、跟进时间或新建客户，每次修改用户都能撤销。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“修改客户资料”后，可以用 update_customer 改客户的标签、备注、跟进时间或新建客户，每次修改用户都能撤销。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
-    entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
+    const readOpts = {
       gate: this.gate,
       previewAllowed: () => this.settings.preview,
       confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
@@ -307,9 +311,11 @@ class McpController {
         const c = server.server.getClientVersion();
         return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
       },
-    });
-    // 第二层关着时工具不出现在列表里
-    if (!this.settings.layer2) entry.chatTool.disable();
+    };
+    entry.chatTool = this.sdk.registerChatTools(server, this.hooks, readOpts);
+    entry.searchTool = this.sdk.registerSearchTools(server, this.hooks, readOpts);
+    // 第二层（读对话组）关着时工具不出现在列表里
+    if (!this.settings.layer2) { entry.chatTool.disable(); entry.searchTool.disable(); }
     entry.draftTool = this.sdk.registerDraftTools(server, this.hooks, {
       log: this.drafts,
       sessionInfo: (extra) => {
