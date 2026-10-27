@@ -20,6 +20,10 @@ const scenario = async (mode) => {
   window.__cbs.state({ accounts: [{ id: 'a1', name: 'Lukas', color: '#3b82f6' }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
   push();
   await wait(300);
+  // 字体（fonts.css）加载完行高才定下来；CI 上字体晚到会让每行矮/高一行，看起来像“消息上下跳了 -28px”。
+  // 等字体就绪、再等两帧让布局稳定后再开始记位置
+  if (document.fonts && document.fonts.ready) await document.fonts.ready;
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const list = () => document.querySelector('.dk-list');
   if (list().scrollHeight - list().clientHeight < 200) return { error: '列表太短，测不出滚动' };
   if (mode === 'middle') { list().scrollTop = Math.round((list().scrollHeight - list().clientHeight) / 2); await wait(100); }
@@ -49,6 +53,7 @@ const scenario = async (mode) => {
   await wait(400);
   on = false;
   const l = list();
+  if (!frames.length) return { error: '一帧都没记到（窗口没在画动画帧）' };
   return { frames, end: { top: l.scrollTop, gap: l.scrollHeight - l.scrollTop - l.clientHeight, first: frames[frames.length - 1].first } };
 };
 
