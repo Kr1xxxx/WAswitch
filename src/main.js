@@ -36,6 +36,7 @@ const { CrmQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
+const { problemCode } = require('./problem-codes');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
@@ -820,6 +821,7 @@ function trackNet() {
     const next = { ...prev, problem, login };
     if (problem && problem !== prev.problem) {
       netEvent(acc.id, 'down', { detail: problem });
+      console.warn(`账号 ${acc.id} 出现问题 ${problemCode(problem) || '-'}（${problem}）`);
       if (!prev.problem) next.downAt = Date.now();
     } else if (!problem && prev.problem) {
       netEvent(acc.id, 'up', { ms: prev.downAt ? Date.now() - prev.downAt : undefined, detail: prev.problem });
@@ -889,6 +891,7 @@ function pushState() {
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
         problemKind: problem ? problem.kind || '' : '',
+        problemCode: problem ? problemCode(problem.kind) : '',
         direct: !acc.proxy,
         allowCalls: !!acc.allowCalls,
         // 从没登录成功过的号停在二维码页是正常的第一步，不算故障
@@ -1559,12 +1562,12 @@ const LITE_PROBLEMS = {
   crashLoop: () => ({
     title: '轻量模式后台进程反复出错，已停止自动恢复',
     short: '后台出错',
-    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，请在设置 › 关于里打开日志文件夹，把最近的日志发给我们。',
+    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，点“打开日志文件夹”，最新的日志里记着出错原因。',
   }),
   crashed: () => ({
     title: '轻量模式后台进程意外退出',
     short: '后台出错',
-    text: '正在自动恢复。如果反复出现，请在设置 › 关于里打开日志文件夹，把最近的日志发给我们。',
+    text: '正在自动恢复。如果反复出现，点“打开日志文件夹”，最新的日志里记着出错原因。',
     retrying: true,
   }),
 };
@@ -3188,7 +3191,7 @@ handleShell('check:run', async () => {
   // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
   if (accounts.some((a) => isLite(a) && proxy.parse(a.proxy))) {
     items.push(liteGuardHits
-      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。请把日志发给我们看看。' }
+      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。日志里记着拦下的是哪些连接。', logs: true }
       : { level: 'ok', title: '轻量模式：都走代理，没有漏' });
   }
   // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示

@@ -142,6 +142,10 @@ button.chip { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .panel h2 { margin: 0; font-size: 20px; }
 .panel p { margin: 0; line-height: 1.65; color: var(--muted); }
 .btns { display: flex; gap: 10px; }
+/* 问题页底部折起来的详细信息：问题代码、日志文件夹 */
+.pdetails { font-size: 12px; color: var(--muted); }
+.pdetails summary { cursor: pointer; padding: 2px 0; }
+.pdetails p { font-size: 12px; margin-top: 4px; }
 .btn { height: 40px; padding: 0 18px; border-radius: 20px; border: 1px solid #e3e6ea; background: #fff; font-size: 14px; }
 .btn.primary { border: none; background: var(--text); color: #fff; font-weight: 600; }
 .btn.danger { border-color: #f3c2c6; color: var(--danger); }
