@@ -1494,7 +1494,7 @@ const LITE_SCHEMES = ['socks5', 'http', 'https'];
 function liteProxyUrl(acc) {
   const p = proxy.parse(acc.proxy);
   if (!p) return '';
-  if (p.error || p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
+  if (p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
   if (p.scheme === 'socks5') return `socks5h://${p.host}:${p.port}`;
   const pass = proxy.decryptPassword(acc.proxyPassword) || p.password;
   const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(pass)}@` : '';
