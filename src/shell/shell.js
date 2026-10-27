@@ -430,19 +430,32 @@ function clockParts(tz) {
   const night = hour >= 22 || hour < 8;
   return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
+// 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
+let peer = null;
 function clockChip(acc) {
-  const place = acc.timezone ? acc.regionLabel.replace(/^出口时区（.*\/(.+)）$/, '$1').replace(/_/g, ' ') : '本机';
+  const own = acc.timezone ? acc.regionLabel.replace(/^出口时区（.*\/(.+)）$/, '$1').replace(/_/g, ' ') : '本机';
   const chip = h('span', { class: 'chip clock' }, icon('clock', 12), h('span'));
   const draw = () => {
-    const c = clockParts(acc.timezone);
+    // 认得出客户号码：显示客户当地时间；没号码、群聊：照旧显示这个号所在地（或本机）的时间
+    const z = peer && peer.accountId === acc.id ? peer.zone : null;
+    const c = clockParts(z ? z.tz : acc.timezone);
+    const place = z ? `客户 ${z.approx ? '约 ' : ''}${z.place}` : own;
     chip.lastChild.textContent = `${place} ${c.text}${c.night ? ` · ${c.when}` : ''}`;
     chip.classList.toggle('night', c.night);
-    chip.title = `当地时间（${acc.timezone || '跟随本机时区'}）${c.night ? `。这个号所在地现在是${c.when}，这时候大量发消息不像真人` : ''}`;
+    chip.classList.toggle('peer', !!z);
+    chip.title = z
+      ? `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`
+      : `当地时间（${acc.timezone || '跟随本机时区'}）。打开有号码的私聊时，这里会换成客户的当地时间${c.night ? `。这个号所在地现在是${c.when}，这时候大量发消息不像真人` : ''}`;
   };
   draw();
   chip.draw = draw;
   return chip;
 }
+window.wa.onPeerZone((z) => {
+  peer = z && typeof z === 'object' ? z : null;
+  const c = $top.querySelector('.chip.clock');
+  if (c && c.draw) c.draw();
+});
 // 每 20 秒只刷新时钟文字，不重画整个顶栏
 setInterval(() => {
   if ($top.hidden || document.hidden) return;

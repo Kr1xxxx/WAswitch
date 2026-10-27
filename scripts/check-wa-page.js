@@ -74,6 +74,11 @@ app.whenReady().then(async () => {
   await chat.loadFile(path.join(__dirname, 'fixtures', 'wa-chat.html'));
   const cw = chat.webContents;
   while (cw.isLoading()) await new Promise((r) => setTimeout(r, 20));
+  // 顶栏“客户当地时间”：只读标题和第一条消息的对话编号，不改页面
+  const peerBefore = await cw.executeJavaScript('document.documentElement.outerHTML');
+  const peer = await waPage.readChatPeer(cw);
+  check(peer && peer.title === 'Carlos García' && peer.chat === '111@c.us', `readChatPeer：读到对话标题和对话编号（${JSON.stringify(peer)}）`);
+  check(await cw.executeJavaScript('document.documentElement.outerHTML') === peerBefore, 'readChatPeer 前后页面 HTML 完全相同');
   const focusOn = (sel) => cw.executeJavaScript(`document.querySelector(${JSON.stringify(sel)}).focus(); void 0`);
   check(await waPage.composeFocus(cw) === 'other', '焦点哪里都不在：不是输入框');
   await focusOn('#side [contenteditable]');
