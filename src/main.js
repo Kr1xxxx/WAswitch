@@ -554,7 +554,7 @@ const popup = new PopupWindow({
 ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
 ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
 ipcMain.on('popup:act', (e, { uid, action } = {}) => {
-  if (!['open', 'later', 'close', 'clear'].includes(action)) return;
+  if (!['open', 'later', 'close'].includes(action)) return;
   popup.onAction(e.sender, Number(uid), action);
 });
 
@@ -564,6 +564,7 @@ const notifier = new Notifier({
   popup,
   openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
   setDnd: (on) => setSetting('popupDnd', on === true),
+  isActive: (id) => id === activeId && page === 'account',
   onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,

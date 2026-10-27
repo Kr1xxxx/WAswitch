@@ -89,14 +89,8 @@
   function render() {
     document.body.classList.toggle('win', state.platform === 'win32');
     zone.replaceChildren(...state.cards.map(card));
-    if (state.more > 0) {
-      const more = h('div', 'more');
-      more.append(document.createTextNode(`还有 ${state.more} 条 · `));
-      const b = h('button', null, '全部收起');
-      b.dataset.act = 'clear';
-      more.append(b);
-      zone.append(more);
-    }
+    // 多出来的只写条数，没有“全部收起”：一张一张点掉，不会一下子全没了（shen 2026-10-27）
+    if (state.more > 0) zone.append(h('div', 'more', `还有 ${state.more} 条`));
     // 只留还在的卡片，免得集合一直变大
     const live = new Set(state.cards.map((c) => c.uid));
     for (const uid of seen) if (!live.has(uid)) seen.delete(uid);
@@ -146,7 +140,6 @@
     const t = e.target.closest('[data-act]');
     if (!t) return;
     const act = t.dataset.act;
-    if (act === 'clear') { window.pp.act(0, 'clear'); return; }
     const nt = t.closest('.nt');
     if (nt) window.pp.act(nt.dataset.uid, act);
   });
@@ -158,6 +151,9 @@
   window.pp.onState((s) => {
     state = s || { cards: [], more: 0 };
     if (s && s.sound) ding();
+    // 卡片都收走（窗口要藏起来）或主进程说悬停作废：忘掉记住的鼠标位置，
+    // 不然窗口再显示时会拿旧位置误判“鼠标停在卡上”，把底下软件的点击挡住
+    if (!state.cards.length || (s && s.resetHover)) { lastPoint = null; hovering = false; }
     render();
   });
   window.pp.ready();

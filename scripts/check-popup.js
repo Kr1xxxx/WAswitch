@@ -24,6 +24,7 @@ const MSGS = [
 
 const settings = { popupSeconds: 0, popupSound: true, popupDnd: false };
 let locked = false;
+let idleSeconds = 0; // 假的“系统多久没输入”：0 = 正在用电脑
 const opened = [];
 const later = [];
 const popup = new PopupWindow({
@@ -33,6 +34,7 @@ const popup = new PopupWindow({
   settings: () => settings,
   onOpen: (c) => opened.push(c),
   onLater: (c) => later.push(c),
+  idleSeconds: () => idleSeconds,
 }, { idleCloseMs: 1500 });
 ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
 ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
@@ -97,18 +99,51 @@ app.whenReady().then(async () => {
   await page('document.querySelector(".nt .btn:not(.pri)").click()');
   assert(await until(() => later.length === 1), '点稍后传回主进程');
 
-  // 自动消失
+  // 页面说“鼠标停在卡上”，但鼠标其实不在窗口里（xvfb 下光标在屏幕中间）：不信，不暂停倒计时、不关点穿
+  popup.onHover(w.webContents, true);
+  assert.strictEqual(popup.queue.hoverSince, 0, '鼠标不在窗口里时不接受“悬停”（窗口藏过再显示时页面记的旧位置不可信）');
+
+  // 自动消失：只在用户在用电脑时倒计时（此时还剩 3 张，再加一张凑成 3 张 + “还有 1 条”）
+  popup.show({ key: 'm:fr:Chloé Dubois', kind: 'msg', accId: 'fr', chat: 'Chloé Dubois', text: 'Merci, à bientôt !', count: 1 });
+  assert.strictEqual(popup.queue.size, 4);
   settings.popupSeconds = 1;
   popup.refresh();
-  assert(await until(() => popup.queue.size === 0, 3000), '到时间自动收走');
+  idleSeconds = 30; // 没动鼠标、没按键
+  await wait(2500);
+  assert.strictEqual(popup.queue.size, 4, '没在用电脑：卡片不消失');
+  assert(popup.queue.items.every((x) => x.leftMs !== Infinity), '只是暂停，回来接着算');
+  idleSeconds = 0;
+  // 前 3 张先走完；藏在“还有 1 条”后面的那张露出来才开始算，所以不会同时全没
+  assert(await until(() => popup.queue.size === 1, 3000), '在用电脑：到时间前 3 张收走');
+  assert(await until(() => popup.queue.size === 0, 3000), '补上来的那张从头算 1 秒再收走');
+
+  // 离开电脑超过 5 分钟：期间的卡片不再自动消失，回来后要手动一张一张点掉；没有“全部收起”
+  popup.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Sind Sie noch da?', count: 1 });
+  idleSeconds = 6 * 60;
+  popup.show({ key: 'm:us:Olivia Bennett', kind: 'msg', accId: 'us', chat: 'Olivia Bennett', text: 'Any update on the return label?', count: 1 });
+  await wait(1200);
+  idleSeconds = 0; // 人回来了
+  await wait(2500);
+  assert.strictEqual(popup.queue.size, 2, '离开超过 5 分钟：回来后卡片还在，不自动消失');
+  assert(popup.queue.items.every((x) => x.sticky), '两张都标成要手动点');
+  assert.strictEqual(await page('document.querySelectorAll("[data-act=clear]").length'), 0, '没有“全部收起”');
+  await page('document.querySelector(".nt .x").click()');
+  assert(await until(() => popup.queue.size === 1), '点一张收一张');
+  await page('document.querySelector(".nt .x").click()');
+  assert(await until(() => popup.queue.size === 0), '再点一张收一张');
   assert(await until(() => !w.isDestroyed() && !w.isVisible(), 1000), '都收走后窗口藏起来');
   // 空闲后关掉窗口（正式是 1 分钟，这里 1.5 秒）
   assert(await until(() => popup.win === null && w.isDestroyed(), 4000), '空闲后窗口关掉，不常驻');
 
-  // 勿扰
+  // 勿扰：新消息不弹；号自己的提醒（退出登录、断线）照弹，不响
   settings.popupDnd = true;
-  assert.strictEqual(popup.show({ key: 'x', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo', count: 1 }), false, '勿扰：不弹');
+  assert.strictEqual(popup.show({ key: 'x', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo', count: 1 }), false, '勿扰：新消息不弹');
   assert.strictEqual(popup.win, null, '勿扰：不建窗口');
+  assert.strictEqual(popup.show({ key: 'n0', kind: 'notice', accId: 'de', text: '已退出登录，需要重新扫码。' }), true, '勿扰：退出登录这类提醒照弹');
+  assert.strictEqual(popup.pendingSound, false, '勿扰：照弹但不响');
+  assert(await until(() => popup.win && popup.ready && popup.win.isVisible()), '勿扰下提醒的窗口建出来了');
+  popup.onAction(popup.win.webContents, popup.queue.items[0].uid, 'close');
+  assert(await until(() => popup.win === null, 4000), '收走后窗口关掉');
 
   // 再来一条：窗口重新建出来
   settings.popupDnd = false;

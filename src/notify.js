@@ -11,7 +11,7 @@
 // - 用户正看着这个号（WAswitch 在前台、正开着这个号）不弹；看着别的号或 WAswitch 在后台照常弹
 const { app, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
-const { unreadBody, unreadNames, grownChats, chatKey } = require('./notify-text');
+const { unreadBody, unreadNames, grownChats, chatKey, cleanPreview } = require('./notify-text');
 
 const READ_TIMEOUT_MS = 2000; // 读对话列表最多等这么久，超时就用“有 N 个未读对话”
 const LATER_MS = 10 * 60 * 1000; // 点“稍后”：10 分钟后还没读再弹一次
@@ -20,7 +20,7 @@ const RECENT_POP_MS = 15 * 1000; // 这么久之内这个号刚弹过卡片，�
 const asset = (name) => path.join(__dirname, '..', 'assets', name);
 
 class Notifier {
-  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), readChats(acc), popup, openChat(id, jid) }
+  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), readChats(acc), popup, openChat(id, jid), isActive(id) }
   constructor(hooks, { laterMs = LATER_MS } = {}) {
     this.hooks = hooks;
     this.laterMs = laterMs;
@@ -64,7 +64,7 @@ class Notifier {
     return this.hooks.isMuted ? this.hooks.isMuted(acc) : !!acc.muted;
   }
 
-  // 勿扰开着：一张都不弹
+  // 勿扰开着：新消息不弹（号自己的提醒照弹，见 popup.js）
   get dnd() { return !!(this.popup && this.popup.dnd); }
 
   // 用户正看着这个号：WAswitch 在前台，正开着这个号
@@ -96,6 +96,9 @@ class Notifier {
     if (count > before) this.lastNewAt = Date.now();
     const popped = count > before && !this.muted(acc) && !this.looking(isActive) && !this.dnd;
     if (popped) this.scan(acc, { count, fresh: count - before });
+    // 正看着这个号、或开着勿扰：不弹，但把每个客户现在的未读条数记下来，
+    // 不然切走以后 / 关掉勿扰以后，定时看列表会把这些早看过的当新消息弹出来
+    else if (count > before && !this.muted(acc)) this.scan(acc, { poll: true, silent: true });
     // 通知记录：只记哪个号、什么时候、几个未读，以及有没有弹出来；不记消息内容
     if (count > before && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count, popped });
     this.refresh();
@@ -124,7 +127,8 @@ class Notifier {
   }
 
   // 读对话列表，给未读变多的客户弹卡片；读不到就弹一张号的卡
-  async scan(acc, { count = 0, fresh = 1, poll = false } = {}) {
+  // poll：定时看的（读不到不弹号的卡）；silent：只记下每个客户的未读条数，不弹
+  async scan(acc, { count = 0, fresh = 1, poll = false, silent = false } = {}) {
     const seq = (this.popSeq.get(acc.id) || 0) + 1;
     this.popSeq.set(acc.id, seq);
     this.scanning.set(acc.id, (this.scanning.get(acc.id) || 0) + 1);
@@ -146,16 +150,21 @@ class Notifier {
     const prevSeen = this.seen.get(acc.id) || null;
     const { fresh: list, seen } = grownChats(prevSeen, chats, fresh);
     this.seen.set(acc.id, seen);
+    if (silent) return;
     if (poll && !prevSeen) return; // 第一次看这个号的列表：只记下来，不弹以前的未读
     if (!list.length) {
       // 列表里找不到新客户（被搜索筛掉了、还没排好）：刚弹过就算了，没弹过补一张号的卡
       if (!poll && Date.now() - (this.lastPop.get(acc.id) || 0) > RECENT_POP_MS) this.popAccount(acc, count || n, unreadNames(chats));
       return;
     }
+    // 读到客户了：之前读不到时弹的那张“有 N 个未读对话”号的卡收掉，不和客户卡并存
+    if (this.popup && this.popup.dropKey) this.popup.dropKey(`m:${acc.id}:*`);
     // 倒着放，列表里最近的那个客户最后放、在最上面
     for (const c of list.slice().reverse()) {
       this.show({ key: `m:${acc.id}:${c.key}`, kind: 'msg', accId: acc.id, chat: c.name, chatKey: c.key, jid: c.jid, text: c.preview || '发来新消息', count: c.unread });
     }
+    // 定时看列表弹出来的（同一个客户又发一条）也记进通知记录；未读对话数变多那条在 update() 里已经记过
+    if (poll && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count: n, popped: true });
   }
 
   popAccount(acc, count, names) {
@@ -180,7 +189,9 @@ class Notifier {
     if (card.jid && this.hooks.openChat) this.hooks.openChat(card.accId, card.jid);
   }
 
-  // 弹窗上点了“稍后”：10 分钟后这个客户（读不到列表就看这个号）还有未读，再弹一次
+  // 弹窗上点了“稍后”：10 分钟后这个客户还有未读，再弹一次（内容用现在列表里的，不用 10 分钟前的旧预览）。
+  // 客户卡：列表读不到（锁着、页面在加载）就不确定读没读，宁可不弹；号的卡：这个号还有未读就弹。
+  // 到时候正看着这个号也不弹
   later(card) {
     if (card.kind !== 'msg' || !card.accId) return;
     clearTimeout(this.laterTimers.get(card.key));
@@ -188,15 +199,18 @@ class Notifier {
       this.laterTimers.delete(card.key);
       const acc = (this.hooks.getAccounts() || []).find((a) => a.id === card.accId);
       if (!acc || !(this.unread.get(acc.id) > 0) || this.muted(acc)) return;
-      let still = true;
+      const chats = await this.readChats(acc);
+      const n = this.unread.get(acc.id) || 0;
+      const isActive = this.hooks.isActive ? this.hooks.isActive(acc.id) : false;
+      if (!(n > 0) || !(this.hooks.getAccounts() || []).some((a) => a.id === acc.id) || this.looking(isActive)) return;
       if (card.chatKey) {
-        const chats = await this.readChats(acc);
-        if (Array.isArray(chats)) {
-          const c = chats.find((x) => chatKey(x) === card.chatKey);
-          still = !!(c && c.unread > 0);
-        }
+        if (!Array.isArray(chats)) return;
+        const c = chats.find((x) => chatKey(x) === card.chatKey);
+        if (!(c && c.unread > 0)) return;
+        this.show({ ...card, again: true, text: cleanPreview(c.preview) || card.text, count: c.unread });
+        return;
       }
-      if (still && this.unread.get(acc.id) > 0) this.show({ ...card, again: true });
+      this.show({ ...card, again: true, text: unreadBody(n, unreadNames(chats)), count: 0 });
     }, this.laterMs);
     this.laterTimers.set(card.key, t);
   }
