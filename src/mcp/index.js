@@ -61,8 +61,8 @@ function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatu
         defaultId: 0,
         cancelId: 0,
         title: '打开第二层：读对话',
-        message: '打开后，AI 可以在你确认后读取对话列表、按名字或号码找对话',
-        detail: '读到的对话名称（以及你另外打开的消息预览）会发给你用的 AI 服务商，例如 Anthropic。聊天对方不会知道。\n\n每次读取都会弹窗让你确认；读取是只读的，不会点开对话、不会标已读，内容不会保存到电脑上。',
+        message: '打开后，AI 可以在你确认后读取对话列表、按名字或号码找对话、读聊天消息',
+        detail: '读到的对话名称、聊天消息（以及你另外打开的消息预览）会发给你用的 AI 服务商，例如 Anthropic。聊天对方不会知道。\n\n每次读取都会弹窗让你确认，读消息时会写明读哪个对话；读取是只读的，不会点开别的对话、不会标已读，内容不会保存到电脑上。网页版账号只能读当前打开的那个对话的消息，轻量版账号可以读任意对话。',
       });
       if (response !== 1) return view();
     }

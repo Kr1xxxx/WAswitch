@@ -168,6 +168,12 @@ class LiteProc {
     return this.request({ type: 'chats', id }, 10000);
   }
 
+  // MCP read_messages：按名称或号码找对话、读最近的消息（只读本机缓存）
+  ask(msg) {
+    if (!this.sessions.has(msg.id)) return Promise.resolve({ ok: false, reason: 'notrunning' });
+    return this.request(msg, 10000);
+  }
+
   stopIfIdle() {
     if (this.sessions.size || !this.proc) return;
     this.shutdownProc();
@@ -246,6 +252,16 @@ class LiteHost extends EventEmitter {
   chatList(id) {
     const p = this.procOf(id);
     return p ? p.chatList(id) : Promise.resolve(null);
+  }
+
+  findChat(id, chat) {
+    const p = this.procOf(id);
+    return p ? p.ask({ type: 'findChat', id, chat }) : Promise.resolve({ ok: false, reason: 'notrunning' });
+  }
+
+  history(id, jid, limit) {
+    const p = this.procOf(id);
+    return p ? p.ask({ type: 'history', id, jid, limit }) : Promise.resolve({ ok: false, reason: 'notrunning' });
   }
 
   // 两个后台进程的 pid（内存统计用）

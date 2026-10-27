@@ -2,7 +2,7 @@
 // MCP 第二层读取对话列表时也复用这里。
 //
 // 规则（经 shen 同意）：只在隔离环境（isolated world）里只读检查，不在页面自己的环境里运行脚本，
-// 不修改页面。掉线检测不读聊天内容；MCP 第二层只在用户确认后读对话列表（预览默认不读）。
+// 不修改页面。掉线检测不读聊天内容；MCP 第二层只在用户确认后读对话列表（预览默认不读）和当前打开对话的消息（read_messages）。
 
 const ISOLATED_WORLD = 1001; // 固定的隔离环境编号，和页面自己的脚本互不可见
 
@@ -168,8 +168,10 @@ function parsePre(raw) {
 // 悬浮翻译和 CRM 同步：只读当前打开的对话的最后 20 条消息。
 // 只用 querySelector / getAttribute / textContent（不用 innerText，不触发排版），不滚动、不聚焦、不改页面。
 // 不读群里的发送人、引用的消息和链接预览；时间只在隔离环境里解析成数字（t），发送人名字不带出来。每条最多 4000 字，总共最多 20000 字。
+// MCP 的 read_messages 可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
 const MAX_MSGS = 20;
-const READ_CHAT_CODE = `(() => {
+const MAX_MSGS_LIMIT = 50;
+const readChatCode = (max = MAX_MSGS) => `(() => {
   const parsePre = ${parsePre.toString()};
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
@@ -294,17 +296,18 @@ const READ_CHAT_CODE = `(() => {
   const msgs = [];
   let size = 0;
   // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
-  for (const { n, id: rawId, out } of top.slice(-${MAX_MSGS}).reverse()) {
+  for (const { n, id: rawId, out } of top.slice(-${max}).reverse()) {
     const id = rawId.slice(0, 300);
     const r = textOf(n);
     const text = r.text.slice(0, 4000);
-    if (size + text.length > 20000) break;
+    if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
     size += text.length;
     msgs.push({ id, out, text, t: r.t });
   }
   msgs.reverse();
   return { ok: true, title, msgs };
 })()`;
+const READ_CHAT_CODE = readChatCode(MAX_MSGS);
 
 const cleanTime = (t) => {
   if (!t || typeof t !== 'object') return null;
@@ -318,12 +321,14 @@ const cleanTime = (t) => {
   return { ...v, ambig: t.ambig === true, at, altAt };
 };
 
-async function readOpenChat(wc) {
+// max：最多读几条（默认 20，最多 50）。只读页面上已经显示出来的消息，不滚动
+async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
+  const n = Number.isInteger(max) ? Math.min(Math.max(max, 1), MAX_MSGS_LIMIT) : MAX_MSGS;
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: READ_CHAT_CODE }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
-    const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-MAX_MSGS)
+    const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
       .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
     return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', msgs };
   } catch {
