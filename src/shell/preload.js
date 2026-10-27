@@ -70,6 +70,8 @@ contextBridge.exposeInMainWorld('wa', {
   updateCheckOnly: () => ipcRenderer.send('update:check-only'),
   updateInstall: () => ipcRenderer.send('update:install'),
   openLogs: () => ipcRenderer.send('open-logs'),
+  trDirInfo: () => ipcRenderer.invoke('trdir:info'),
+  openTrDir: () => ipcRenderer.send('trdir:open'),
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
   editorTest: (data) => ipcRenderer.invoke('editor:test', data),
