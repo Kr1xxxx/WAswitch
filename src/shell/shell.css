@@ -125,8 +125,8 @@ body.collapsed .foot .upd-check { display: none; }
 #topbar > * { flex-shrink: 0; }
 #topbar > .who { flex-shrink: 10; min-width: 0; }
 #topbar > .grow { flex-shrink: 1; }
-#topbar > .chip.clock { flex-shrink: 1; min-width: 60px; overflow: hidden; }
-#topbar > .chip.clock > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#topbar > .chip.clock, #topbar > .chip.exit { flex-shrink: 1; min-width: 44px; overflow: hidden; }
+#topbar > .chip.clock > span, #topbar > .chip.exit > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: #f2f4f6; font-size: 12px; color: var(--soft); white-space: nowrap; }
 .chip.bad { background: #fdecee; color: var(--danger); }
 .chip.night { background: #fff4d6; color: #8a5a00; }
@@ -217,7 +217,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .switch::after { content: ""; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .switch[aria-checked="true"] { background: #16a34a; justify-content: flex-end; }
 .box { display: flex; flex-direction: column; gap: 12px; padding: 18px; border-radius: 14px; background: #f7f8fa; }
-.memrow { display: grid; grid-template-columns: 110px 1fr 70px 110px; gap: 12px; align-items: center; font-size: 13px; }
+.memrow { display: grid; grid-template-columns: minmax(110px, 1fr) 1fr 70px 110px; gap: 12px; align-items: center; font-size: 13px; }
 .memrow .bar { height: 6px; border-radius: 3px; background: #e3e6ea; overflow: hidden; display: flex; }
 .memrow .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 8px; }
 .inline { display: flex; align-items: center; gap: 8px; padding-top: 6px; font-size: 13px; color: var(--soft); }
@@ -252,8 +252,10 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 /* ---------- 轻量模式聊天页 ---------- */
 .lite { height: 100%; display: flex; flex-direction: column; }
 .lite-status { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; background: #fbfbfc; }
-.lite-qr { display: flex; gap: 32px; align-items: center; max-width: 680px; }
-.lite-qr img { width: 264px; height: 264px; border-radius: 12px; border: 1px solid #e3e6ea; background: #fff; padding: 8px; image-rendering: pixelated; flex: none; }
+.lite-qr { display: flex; flex-wrap: wrap; justify-content: center; gap: 24px 32px; align-items: center; max-width: 680px; }
+/* 右边开着工作台、窗口又窄时：说明换到二维码下面，不出横向滚动条 */
+.lite-qr > .col { flex: 1 1 240px; }
+.lite-qr img { width: min(264px, 100%); height: auto; aspect-ratio: 1; border-radius: 12px; border: 1px solid #e3e6ea; background: #fff; padding: 8px; image-rendering: pixelated; flex: none; }
 .lite-qr h2 { margin: 0; font-size: 20px; }
 .lite-qr ol { margin: 0; padding-left: 18px; line-height: 1.9; color: var(--soft); }
 .spinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #e3e6ea; border-top-color: var(--text); animation: spin 1s linear infinite; }
@@ -276,7 +278,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .lite-empty { display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--muted); font-size: 13px; text-align: center; }
 .lite-head { flex: none; height: 46px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
 .lite-msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; background: #f7f8fa; }
-.lite-msg { align-self: flex-start; max-width: 72%; display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 10px; background: #fff; box-shadow: 0 1px 1px rgba(0,0,0,.05); font-size: 14px; }
+.lite-msg { align-self: flex-start; max-width: max(72%, min(100%, 260px)); display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 10px; background: #fff; box-shadow: 0 1px 1px rgba(0,0,0,.05); font-size: 14px; }
 .lite-msg.me { align-self: flex-end; background: #dcf5e3; }
 .lite-msg .text { white-space: pre-wrap; word-break: break-word; }
 .lite-msg .from { font-size: 11px; font-weight: 600; color: #1d4ed8; }
@@ -409,7 +411,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .tr-auto-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-prow { display: flex; gap: 10px; align-items: center; padding: 6px 0; min-width: 0; }
 .tr-prow > :nth-child(2), .tr-prow > :nth-child(3) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tr-prow > :first-child { flex: none; max-width: 40%; }
+.tr-prow > :first-child { flex: none; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tr-form select { height: 34px; border-radius: 8px; font-size: 13px; }
 .tr-form input, .tr-form textarea { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; background: #fff; box-sizing: border-box; }
 .tr-form textarea { width: 100%; resize: vertical; }
@@ -506,7 +508,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-outhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 /* 窗口窄时先让两个下拉框变短（文字省略），按钮保持一行；实在放不下按钮整体换到下一行，不会一个字一个字地折 */
 .dk-outhead select { flex: 0 1 auto; min-width: 64px; }
-.dk-outhead .dk-row, .dk-outhead > .dk-link { flex: none; }
+.dk-outhead .dk-row, .dk-outhead > .dk-link { flex: none; margin-left: auto; }
 .dk-status { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .dk-status:empty { display: none; }
 .dk-edited { font-size: 11px; color: #8a5a00; background: #fff4d6; border-radius: 4px; padding: 0 6px; }
@@ -609,3 +611,14 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 
 /* 按钮、标签、页签里的中文不折行：空间不够时由外层收缩或换行，不把“重新翻译”挤成“重新翻/译”（shen 2026-10-27） */
 .btn, .dk-link, .link-btn, .dk-edited, .dk-fixed, .dk-status .dk-dim, .tag, .pn-tag, .pill, .crm-tag, .tab, .tb-tab, .back, .updbtns button, .dk-label { white-space: nowrap; }
+/* 侧栏账号名太长时只省略名字，后面的 CRM 标记照样完整显示 */
+.row .name { display: flex; align-items: center; gap: 4px; }
+.row .name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row .name .crm-tag { flex: none; margin-left: 2px; }
+/* 团队页 CRM 列表：号名一行（省略号），说明占剩下的宽度 */
+.setrow > .crm-name { flex: none; max-width: 45%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.setrow > .crm-note { flex: 1 1 0; min-width: 0; }
+/* 内存页、轻量会话头：名字一行，太长省略，鼠标停上去看全名 */
+.memrow > .memname { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lite-head b { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+

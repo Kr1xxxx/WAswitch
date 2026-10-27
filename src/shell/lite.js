@@ -74,7 +74,8 @@ function makeLitePage(id) {
     const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
     // 本机还没聊过的号码（AI 用 open_chat 打开的）没有名字，显示号码
     const bare = /@s\.whatsapp\.net$/.test(view.jid || '') ? `+${view.jid.split('@')[0]}` : '';
-    title.replaceChildren(h('b', null, view.title || (chats.find((c) => c.jid === view.jid) || {}).name || bare));
+    const name = view.title || (chats.find((c) => c.jid === view.jid) || {}).name || bare;
+    title.replaceChildren(h('b', { title: name }, name));
     msgs.replaceChildren(...items.map((m) => h('div', { class: `lite-msg${m.me ? ' me' : ''}` },
       m.from ? h('small', { class: 'from' }, m.from) : null,
       h('span', { class: 'text' }, linkify(m.text)),
@@ -115,7 +116,7 @@ function makeLitePage(id) {
         h('img', { src: lite.qr, alt: '登录二维码', width: '264', height: '264' }),
         h('div', { class: 'col', style: { gap: '12px' } },
           h('h2', null, '用手机扫码登录'),
-          h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫左边的二维码')),
+          h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫这个二维码')),
           h('p', { class: 'hint' }, `${acc.direct ? '直连（这台电脑的真实 IP）' : `通过 ${acc.proxyLabel} 连接`}。二维码每隔一会儿自动更新。`),
           h('div', { class: 'note bad' }, '轻量模式不是官方客户端，这个号有被封的风险。请先用不重要的号试用两周。'))));
     } else if (st === 'qrExpired') {

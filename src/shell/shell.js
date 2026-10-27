@@ -225,7 +225,7 @@ function accountRow(acc) {
   },
   avatar,
   h('span', { class: 'meta' },
-    h('span', { class: 'name' }, acc.name, acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
+    h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
     h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
@@ -404,18 +404,18 @@ function exitTitle(acc) {
 
 // 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
 function exitChip(acc) {
-  if (acc.problem) return h('span', { class: 'chip bad', title: exitTitle(acc) }, icon('globe', 12), acc.problemShort);
+  if (acc.problem) return h('span', { class: 'chip exit bad', title: exitTitle(acc) }, icon('globe', 12), h('span', null, acc.problemShort));
   const ch = acc.exitChange;
   if (ch) {
     const when = new Date(ch.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const moved = ch.fromLabel && ch.toLabel && ch.fromLabel !== ch.toLabel;
     return h('button', {
-      class: 'chip night', type: 'button',
+      class: 'chip exit night', type: 'button',
       title: `${when} 巡检发现出口 IP 变了：${ch.from} → ${ch.to}${moved ? `（${ch.fromLabel} → ${ch.toLabel}，国家也变了，时区可能对不上，建议跑一次隔离自检）` : ''}。机场节点常会自动换 IP，频繁变化容易被 WhatsApp 当成异常。点一下表示知道了。`,
       onclick: () => window.wa.exitAck(acc.id),
-    }, icon('globe', 12), `出口 IP 变了${moved ? `（${ch.toLabel}）` : ''} · ${ch.to}`);
+    }, icon('globe', 12), h('span', null, `出口 IP 变了${moved ? `（${ch.toLabel}）` : ''} · ${ch.to}`));
   }
-  return h('span', { class: 'chip', title: exitTitle(acc) }, icon('globe', 12), acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel);
+  return h('span', { class: 'chip exit', title: exitTitle(acc) }, icon('globe', 12), h('span', null, acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel));
 }
 
 // 当地时间：按账号的时区显示，22:00–8:00 变黄，提醒这时候发消息不像真人。5:00 前写“深夜”，5:00–8:00 写“清晨”
@@ -1096,7 +1096,7 @@ function translatePage(page) {
     h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用来翻客户发来的消息。'),
     trModeEdit ? trModeForm() : null,
     h('div', { class: 'box' }, tr.modes.map((m) => h('div', { class: 'tr-prow' },
-      h('b', null, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
+      h('b', { title: m.name }, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
       h('span', { class: 'hint', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.prompt),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         h('button', { class: 'pn-btn', onclick: () => { trModeEdit = { ...m }; render(true); } }, '修改'),
@@ -1538,7 +1538,7 @@ function settingsPage() {
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
           h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
-          h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+          h('span', { class: 'memname', title: a.name }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台'))),
@@ -1756,8 +1756,8 @@ function crmBox(accounts, upload) {
     h('p', { class: 'hint', style: { margin: '0', fontSize: '12px' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
       h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
-      h('span', { class: 'meta' }, a.name),
-      h('span', { class: 'hint', style: { fontSize: '12px' } }, a.crm
+      h('span', { class: 'meta crm-name', title: a.name }, a.name),
+      h('span', { class: 'hint crm-note', style: { fontSize: '12px' } }, a.crm
         ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }
