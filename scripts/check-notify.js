@@ -186,6 +186,77 @@ function make(readChats, { win = null, laterMs } = {}) {
   n.notifyApp('跟进提醒', 'Emma Schneider', () => {}, { sensitive: true });
   check(popup.cards.length === 2 && popup.cards[0].kind === 'notice' && popup.cards[1].kind === 'app' && popup.cards[1].sensitive, '退出登录、跟进提醒等也走自带弹窗（跟进提醒带客户名，锁着时遮住）');
 
+  // 正看着这个号：不弹，但记下每个客户的未读；切走后定时看列表，不会把早看过的弹出来
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Hallo' }, { name: 'John Miller', unread: 1 }];
+  ({ n, popup } = make(async () => current, { win: focusedWin }));
+  n.update(acc, 2, { isActive: true });
+  await tick(10);
+  check(popup.cards.length === 0 && n.seen.get('a1') && n.seen.get('a1').get('Emma Schneider') === 2, '正看着这个号：不弹，但记下 Emma 已有 2 条');
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, '切走后定时看列表：没新消息就不把看过的弹出来');
+  current = [{ name: 'Emma Schneider', unread: 3, preview: 'Noch was' }, { name: 'John Miller', unread: 1 }];
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].count === 3, '切走后 Emma 真的又发一条：弹');
+
+  // 定时看列表弹出来的也记进通知记录
+  ({ n, popup, logs } = make(async () => current));
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  current = [{ name: 'Emma Schneider', unread: 4, preview: 'Hallo?' }, { name: 'John Miller', unread: 1 }];
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(logs.length === 2 && logs[1].popped === true, '定时看列表弹的也记一条通知记录');
+
+  // 先读不到列表弹了号的卡，后来读到客户：号的卡收掉
+  let readable = null;
+  ({ n, popup } = make(async () => readable));
+  popup.droppedKeys = [];
+  popup.dropKey = (k) => popup.droppedKeys.push(k);
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].key === 'm:a1:*', '读不到：先弹号的卡');
+  readable = [{ name: 'Emma Schneider', unread: 1, preview: 'Hi' }];
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  check(popup.droppedKeys.includes('m:a1:*') && popup.cards[1].chat === 'Emma Schneider', '读到客户后把“有 N 个未读对话”那张收掉');
+
+  // 稍后：列表读不到（锁着、页面在加载）就不确定读没读，不弹；用现在的预览而不是旧的；正看着不弹
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Neu' }];
+  ({ n, popup } = make(async () => current, { laterMs: 30 }));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  const laterCard = popup.cards[0];
+  popup.cards.length = 0;
+  n.later(laterCard);
+  await tick(60);
+  check(popup.cards.length === 1 && popup.cards[0].text === 'Neu' && popup.cards[0].count === 2 && popup.cards[0].again, `稍后：用现在列表里的预览和条数（${popup.cards[0] && popup.cards[0].text}）`);
+  popup.cards.length = 0;
+  current = null;
+  n.later(laterCard);
+  await tick(60);
+  check(popup.cards.length === 0, '稍后：到时间列表读不到（锁着/加载中）：不弹旧内容');
+  current = [{ name: 'Emma Schneider', unread: 2, preview: 'Neu' }];
+  ({ n, popup } = make(async () => current, { laterMs: 30, win: focusedWin }));
+  n.hooks.isActive = () => true;
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  popup.cards.length = 0;
+  n.later(laterCard);
+  await tick(60);
+  check(popup.cards.length === 0, '稍后：到时间正看着这个号：不弹');
+  // 号的卡的稍后：这个号还有未读就弹，写现在的未读数
+  ({ n, popup } = make(async () => null, { laterMs: 30 }));
+  n.update(acc, 3, { isActive: false });
+  await tick(10);
+  const accCard = popup.cards[0];
+  popup.cards.length = 0;
+  n.later(accCard);
+  n.update(acc, 2, { isActive: false });
+  await tick(60);
+  check(popup.cards.length === 1 && popup.cards[0].text === '有 2 个未读对话', '稍后（号的卡）：写现在的未读数');
+
   // ---------- 弹窗队列 ----------
   let now = 1000;
   const q = new PopupQueue({ now: () => now, durationMs: 6000 });
@@ -193,27 +264,28 @@ function make(readChats, { win = null, laterMs } = {}) {
   let v = q.view();
   check(v.shown.length === 3 && v.more === 2 && v.shown[0].key === 'James', '最多摆 3 张，最新的在最上面，其余“还有 2 条”');
   now += 2000;
+  q.advance(2000);
   q.push({ key: 'Lucas', count: 2 });
   v = q.view();
   check(q.size === 5 && v.shown[0].key === 'Lucas' && v.shown[0].merged, '同一个客户再来：合并成一张，移到最上面');
-  now += 3999;
-  check(q.tick() === 0, '6 秒内不收');
+  check(q.advance(3999) === 0, '6 秒内不收');
   q.setHover(true);
-  now += 10000;
-  check(q.tick() === 0, '鼠标停在上面：不收');
+  check(q.advance(10000) === 0 && q.size === 5, '鼠标停在上面：不扣时间、不收');
   q.setHover(false);
-  check(q.tick() === 0 && q.size === 5, '移开后接着算，不会一下全收走');
-  now += 1600;
-  q.tick();
-  check(q.size === 1 && q.items[0].key === 'Lucas', '时间到的收走（后来合并的那张还留着）');
-  now += 6000;
-  q.tick();
-  check(q.size === 0, '最后一张也到时间收走');
+  check(q.size === 5 && q.view().shown.every((x) => x.leftMs >= 1500), '移开后至少再留 1.5 秒，不会一下全收走');
+  q.advance(1600);
+  check(q.size === 3 && q.items[0].key === 'Lucas', `时间到的收走，后面补上来的两张（Olivia、Emma）还没开始倒计时（剩 ${q.size} 张）`);
+  check(q.view().shown.slice(1).every((x) => x.leftMs === 6000), '藏在“还有 N 条”后面的那两张没被扣时间，露出来后从头算 6 秒');
+  q.advance(6000);
+  check(q.size === 0, '最后几张也到时间收走');
   q.setDuration(0);
   q.push({ key: 'Emma' });
-  now += 3600 * 1000;
-  q.tick();
-  check(q.size === 1 && q.nextExpiry() === 0, '“不自动消失”：一直留着');
+  q.advance(3600 * 1000);
+  check(q.size === 1 && !q.hasExpiring, '“不自动消失”：一直留着');
+  q.setDuration(0);
+  check(q.items[0].leftMs === Infinity, '时长没变时 setDuration 不动已有的卡');
+  q.setDuration(4000);
+  check(q.items[0].leftMs === 4000, '时长变了：按新时长从头算');
   check(q.remove(q.items[0].uid) && q.size === 0, '点了打开/稍后/关闭：收走这一张');
 
   console.log(failures ? `\n有 ${failures} 项失败` : '\n全部通过');
