@@ -23,6 +23,12 @@ const MAX_SAME_ERROR = 5; // 这些错误连续出现这么多次就不再重连
 // 只有这些断开原因重连没用（会话坏了、设备不匹配）；网络类断开（408、428、503 等）一直退避重连
 const HOPELESS_CODES = new Set([500, 411]);
 const MAX_RETRY_MS = 5 * 60 * 1000;
+// 代理端口通、但一直连不上 WhatsApp（多半是 Clash 当前节点挂了）：
+// 30 秒还没连上，或者连续失败 3 次，就报“连不上 WhatsApp”，界面换成带原因的问题页。
+// 这时最长 1 分钟重试一次，节点恢复后很快自动连上（这种情况连接根本到不了 WhatsApp）。
+export const SLOW_MS = 30 * 1000;
+export const SLOW_FAILS = 3;
+const SLOW_RETRY_MS = 60 * 1000;
 
 // 只记录错误的简短说明，长数字（可能是号码）换掉
 const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 300);
@@ -65,8 +71,13 @@ export class Session {
     if (this.key.length !== 32) throw new Error('密钥长度不对');
     this.makeSocket = opts.makeSocket || makeWASocket; // 自检时替换
     this.fetchVersion = opts.fetchVersion; // 自检时替换
+    this.slowMs = opts.slowMs || SLOW_MS; // 自检时改短
     this.status = 'idle';
     this.attempt = 0;
+    this.fails = 0; // 连续几次没连上（连上过或出了二维码就清零）
+    this.unreachable = false; // 已经报了“连不上 WhatsApp”
+    this.wasOpen = false; // 这次启动后连上过（没连上过的号界面写“正在连接”，不写“连接断开”）
+    this.lastErr = '';
     this.sends = [];
     this.watched = false;
     this.watchJid = null;
@@ -108,7 +119,9 @@ export class Session {
     if (this.sock || this.starting) return;
     this.starting = true;
     try {
-      this.setStatus('connecting');
+      this.watchSlow();
+      // 刚才是代理端口不通：先保持那个提示，这次连上了或者换了原因再更新，免得问题页来回跳
+      if (this.status !== 'proxyDown') this.setDown('connecting');
       try {
         if (!this.auth) this.auth = makeAuthState(this.cfg.dir, this.key, (e) => this.log(`凭据写盘失败：${e.message}`));
         if (!this.store) this.store = new ChatStore(this.cfg.dir, this.key, (e) => this.log(`聊天缓存写盘失败：${e.message}`));
@@ -120,6 +133,7 @@ export class Session {
         const u = new URL(this.cfg.proxy);
         if (!(await probe(u.hostname, Number(u.port)))) {
           if (this.stopped) return;
+          this.lastErr = '';
           this.setStatus('proxyDown');
           this.scheduleRetry();
           return;
@@ -133,6 +147,34 @@ export class Session {
     } finally {
       this.starting = false;
     }
+  }
+
+  // 还没连上时的状态：已经报了“连不上 WhatsApp”就一直显示它，免得每次重试问题页一闪就没
+  setDown(status, extra = {}) {
+    if (this.unreachable) this.setStatus('unreachable', { detail: this.lastErr, ...extra });
+    else this.setStatus(status, { fresh: !this.wasOpen, ...extra });
+  }
+
+  // 开始等连接：30 秒还没连上（也没出二维码）就报原因
+  watchSlow() {
+    if (this.slowTimer || this.unreachable) return;
+    this.slowTimer = setTimeout(() => { this.slowTimer = null; this.markUnreachable(); }, this.slowMs);
+  }
+
+  markUnreachable() {
+    if (this.stopped || this.unreachable) return;
+    this.unreachable = true;
+    // 代理端口不通（proxyDown）原因更具体，保持不变；被封、退出登录这些也不覆盖
+    if (['connecting', 'reconnecting'].includes(this.status)) this.setDown(this.status);
+  }
+
+  // 连上 WhatsApp 了（登录成功或出了二维码）：清掉计数和计时
+  reached() {
+    clearTimeout(this.slowTimer);
+    this.slowTimer = null;
+    this.fails = 0;
+    this.unreachable = false;
+    this.lastErr = '';
   }
 
   connect() {
@@ -186,11 +228,14 @@ export class Session {
     if (sock !== this.sock) return;
     if (qr) {
       this.qrShown = true;
+      this.reached();
       QRCode.toDataURL(qr, { margin: 1, width: 264 }).then((url) => {
         if (sock === this.sock && !this.stopped) this.setStatus('qr', { qr: url });
       }, (e) => this.log(`二维码生成失败：${e.message}`));
     }
     if (connection === 'open') {
+      this.reached();
+      this.wasOpen = true;
       this.attempt = 0;
       this.lastCode = null;
       this.sameCode = 0;
@@ -223,19 +268,25 @@ export class Session {
     if (code === 405) { resetVersionCache(); this.setStatus('outdated'); return; } // 版本被拒：下次连接重新查
     if (code === DisconnectReason.restartRequired) { this.start(); return; } // 扫码成功后的正常重启
     if (this.qrShown && !this.auth.state.creds.me) { this.setStatus('qrExpired'); return; }
-    // 500 badSession、411 这类错误连续出现，重连也没用，停下来让用户处理；网络类断开不计数
-    if (HOPELESS_CODES.has(code)) {
+    const errMsg = String(lastDisconnect?.error?.message || '').split('\n')[0];
+    // 500 badSession、411 这类错误连续出现，重连也没用，停下来让用户处理；网络类断开不计数。
+    // 连接本身没建立（Baileys 报 “WebSocket Error”，比如代理节点不通）也会带 500，那是网络问题，照样一直重试
+    if (HOPELESS_CODES.has(code) && !/^WebSocket Error/.test(errMsg)) {
       this.sameCode = code === this.lastCode ? this.sameCode + 1 : 1;
       this.lastCode = code;
       if (this.sameCode >= MAX_SAME_ERROR) { this.setStatus('stuck', { code }); return; }
     }
-    this.setStatus('reconnecting', { code: code || 0 });
+    this.fails += 1;
+    this.lastErr = scrub(errMsg);
+    if (this.fails >= SLOW_FAILS) this.unreachable = true;
+    this.watchSlow();
+    this.setDown('reconnecting', { code: code || 0 });
     this.scheduleRetry();
   }
 
   scheduleRetry() {
     clearTimeout(this.retryTimer);
-    const delay = Math.min(10000 * 2 ** Math.min(this.attempt, 10), MAX_RETRY_MS);
+    const delay = Math.min(10000 * 2 ** Math.min(this.attempt, 10), this.unreachable ? SLOW_RETRY_MS : MAX_RETRY_MS);
     this.attempt += 1;
     this.retryTimer = setTimeout(() => this.start(), delay);
   }
@@ -307,6 +358,8 @@ export class Session {
   stop() {
     this.stopped = true;
     clearTimeout(this.retryTimer);
+    clearTimeout(this.slowTimer);
+    this.slowTimer = null;
     clearTimeout(this.emitTimer);
     this.emitTimer = null;
     const sock = this.sock;
