@@ -2733,6 +2733,15 @@ handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
+// 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
+handleShell('tr:auto', ({ accountId, on } = {}) => {
+  const acc = findAcc(accountId);
+  if (!acc) return trState();
+  translator.setFloat({ accId: acc.id, auto: on === true });
+  if (on === true) floatCore.backfill(acc.id, { dailyCap: translator.load().dailyCap });
+  pushFloat();
+  return trState();
+});
 handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));

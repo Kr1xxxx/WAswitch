@@ -382,6 +382,10 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .tr-recent summary { cursor: pointer; padding: 4px 0; }
 .tr-old { text-align: left; font: inherit; cursor: pointer; margin-top: 6px; width: 100%; }
 .tr-old .x { max-height: 2.6em; }
+.tr-auto { flex: none; gap: 8px; min-width: 200px; max-width: 260px; }
+.tr-auto-row { justify-content: space-between; gap: 10px; }
+.tr-auto-name .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 8px; }
+.tr-auto-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-prow { display: flex; gap: 10px; align-items: center; padding: 6px 0; min-width: 0; }
 .tr-prow > :nth-child(2), .tr-prow > :nth-child(3) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-prow > :first-child { flex: none; max-width: 40%; }
