@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { writeJsonAtomic } = require('../atomic');
 
 const DEFAULT_PORT = 39393;
 const TOKEN_FILE = 'mcp-token.json';
@@ -29,8 +30,7 @@ function loadSettings(dir) {
 
 function saveSettings(dir, settings) {
   const file = settingsPath(dir);
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(settings, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, settings, 2);
 }
 
 function newToken() {
@@ -40,10 +40,7 @@ function newToken() {
 // 先写临时文件再改名，保证其他程序读到的要么是旧的完整文件，要么是新的完整文件
 function writeTokenFile(dir, { port, token }) {
   const file = tokenPath(dir);
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ url: `http://127.0.0.1:${port}/mcp`, port, token }, null, 2), { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, { url: `http://127.0.0.1:${port}/mcp`, port, token }, 2, { mode: 0o600 });
   return file;
 }
 

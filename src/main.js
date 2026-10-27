@@ -13,6 +13,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const log = require('./log');
+const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
@@ -189,8 +190,7 @@ function loadGroups() {
 }
 function saveGroups() {
   const file = groupsFile();
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(groups, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, groups, 2);
 }
 const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
 // 是否不弹通知：账号自己关了，或者所在分组整组关了
@@ -256,8 +256,7 @@ function createGroup(moveId) {
 
 function saveAccounts() {
   const file = storeFile();
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(accounts, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, accounts, 2);
 }
 
 function loadAccounts() {
@@ -273,7 +272,7 @@ function loadAccounts() {
     } catch (e) {
       // 文件损坏时先备份，不直接覆盖，也不清理任何数据
       const backup = `${file}.broken-${Date.now()}`;
-      fs.copyFileSync(file, backup);
+      try { fs.copyFileSync(file, backup); } catch (err) { console.warn(`备份 accounts.json 失败：${err.message}`); }
       console.warn(`accounts.json 无法读取（${e.message}），已备份到 ${backup}`);
       list = [];
       accountsFileOk = false;
@@ -390,6 +389,12 @@ function liteDir(id) {
 // 启动时删掉已删除账号残留的分区文件夹（删除账号时文件可能还被占用，删不掉）
 function cleanupPartitions() {
   if (!accountsFileOk) return;
+  // accounts.json 以前读坏过（留着 .broken- 备份）：之后员工又加了号、文件又“正常”了，
+  // 但里面只有新号，其他号的登录数据还在等着从备份恢复，绝不能当残留删掉。备份被处理掉之前一直不清理
+  if (hasBrokenBackup(storeFile())) {
+    console.warn('发现 accounts.json 的损坏备份，跳过清理残留账号数据');
+    return;
+  }
   let liteNames = [];
   try { liteNames = fs.readdirSync(path.join(app.getPath('userData'), 'lite')); } catch { /* 没有轻量模式账号 */ }
   const keepLite = new Set(accounts.filter((a) => a.mode === 'lite').map((a) => a.id));
@@ -1227,9 +1232,7 @@ function saveNotifLogSoon() {
   notifLogTimer = setTimeout(() => {
     notifLogTimer = null;
     try {
-      const file = notifLogFile();
-      fs.writeFileSync(`${file}.tmp`, JSON.stringify(notifLog));
-      fs.renameSync(`${file}.tmp`, file);
+      writeJsonAtomic(notifLogFile(), notifLog);
     } catch (e) { console.warn('通知记录保存失败', e.message); }
   }, 2000);
 }
@@ -1494,7 +1497,7 @@ const LITE_SCHEMES = ['socks5', 'http', 'https'];
 function liteProxyUrl(acc) {
   const p = proxy.parse(acc.proxy);
   if (!p) return '';
-  if (p.error || p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
+  if (p.error || !LITE_SCHEMES.includes(p.scheme)) return null;
   if (p.scheme === 'socks5') return `socks5h://${p.host}:${p.port}`;
   const pass = proxy.decryptPassword(acc.proxyPassword) || p.password;
   const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(pass)}@` : '';
@@ -3016,7 +3019,7 @@ handleShell('editor:load', (id) => {
     primary: acc ? acc.primary : !accounts.some((a) => a.primary),
     primaryName: accounts.find((a) => a.primary && a.id !== id)?.name || '',
     // 别的直连号（编辑页选直连时提醒一句同一出口 IP）
-    otherDirect: accounts.filter((a) => a.id !== id && !a.proxy).map((a) => a.name),
+    otherDirect: visibleAccounts().filter((a) => a.id !== id && !a.proxy).map((a) => a.name),
     liteAvailable: canEncrypt(safeStorage),
     platform: process.platform,
   };
@@ -3190,13 +3193,14 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
 
 handleShell('check:run', async () => {
   const items = [];
+  const list = visibleAccounts(); // 停着的号（被团队后台收回等）不运行、不显示，自检也不算它
   const byPort = new Map();
   const byIp = new Map();
-  const direct = accounts.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
+  const direct = list.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
   // 多个号直连是允许的，只提醒一句（黄色，不算出错）
   if (direct.length > 1) items.push({ level: 'warn', title: `${direct.join('、')} 都是直连`, detail: '这几个号用同一个出口 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
   const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  for (const acc of accounts) {
+  for (const acc of list) {
     const p = proxy.parse(acc.proxy);
     if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' }); continue; }
     if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
@@ -3242,20 +3246,20 @@ handleShell('check:run', async () => {
     if (names.length > 1) items.push({ level: 'bad', title: `${names.join('、')} 的出口 IP 相同`, detail: `${ip}。在 WhatsApp 看来这几个号在同一个地方。` });
   }
   // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
-  if (accounts.some((a) => isLite(a) && proxy.parse(a.proxy))) {
+  if (list.some((a) => isLite(a) && proxy.parse(a.proxy))) {
     items.push(liteGuardHits
       ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。日志里记着拦下的是哪些连接。', logs: true }
       : { level: 'ok', title: '轻量模式：都走代理，没有漏' });
   }
   // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
-  const webrtcBad = accounts.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));
-  const proxied = accounts.filter((a) => !isLite(a) && a.proxy);
+  const webrtcBad = list.filter((a) => !isLite(a) && views.has(a.id) && views.get(a.id).webContents.getWebRTCIPHandlingPolicy() !== webrtcPolicy(a));
+  const proxied = list.filter((a) => !isLite(a) && a.proxy);
   if (webrtcBad.length) items.push({ level: 'bad', title: `${webrtcBad.map((a) => a.name).join('、')}：通话的网络设置没生效`, detail: '请重启 WAswitch 后再检查。' });
   else if (proxied.length) items.push({ level: 'ok', title: '走代理的号：通话也走代理，不暴露本机 IP' });
-  for (const a of accounts.filter((x) => !isLite(x) && !x.proxy && x.allowCalls)) {
+  for (const a of list.filter((x) => !isLite(x) && !x.proxy && x.allowCalls)) {
     items.push({ level: 'warn', title: `${a.name}：允许通话（直连）`, detail: '通话会用本机 IP，可能和聊天的 IP 不一样。不打电话就在编辑账号里关掉。' });
   }
-  const uaOk = accounts.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
+  const uaOk = list.every((a) => !/Electron|waswitch/i.test(fingerprint.resolve(a.fingerprint).userAgent));
   items.push({ level: uaOk ? 'ok' : 'bad', title: '浏览器标识正常，看不出是多开软件' });
   saveAccounts();
   pushState();
@@ -3300,7 +3304,7 @@ app.on('before-quit', (event) => {
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
     notifLogTimer = null;
-    try { fs.writeFileSync(notifLogFile(), JSON.stringify(notifLog || [])); } catch {}
+    try { writeJsonAtomic(notifLogFile(), notifLog || []); } catch {}
   }
   if (liteHost && liteHost.running() && !liteFlushed) {
     event.preventDefault();

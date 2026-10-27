@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { canEncrypt } = require('../secure-storage');
+const { writeJsonAtomic } = require('../atomic');
 const errtext = require('../errtext');
 
 const PROTOCOL = 1;
@@ -114,8 +115,7 @@ class TeamSync {
   }
   persist() {
     const file = this.file();
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-    fs.renameSync(`${file}.tmp`, file);
+    writeJsonAtomic(file, this.state, 2, { mode: 0o600 });
   }
   tokenPlain() {
     if (!canEncrypt(this.safe)) return '';

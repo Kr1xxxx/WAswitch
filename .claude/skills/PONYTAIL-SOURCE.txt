@@ -1,0 +1,2 @@
+ponytail* skills: copied from https://github.com/DietrichGebert/ponytail v5.3.2 (commit 09c434a), MIT license.
+Cloud sessions skip marketplace plugins, so the skills live in the repo. Update by re-copying skills/*/SKILL.md.

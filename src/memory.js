@@ -16,6 +16,7 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { writeJsonAtomic } = require('./atomic');
 
 // settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
@@ -95,8 +96,7 @@ function loadSettings() {
 // 先写临时文件再改名，写到一半断电也不会把设置文件写坏
 function saveSettings(settings) {
   const file = settingsFile();
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(settings, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, settings, 2);
 }
 
 // 必须在 app ready 之前调用

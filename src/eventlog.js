@@ -1,6 +1,7 @@
 // 小型本地记录：存成一个 JSON 数组，条数和天数都有上限，写盘延后合并（先写临时文件再改名）。
 // 只用来存不敏感的小记录（时间、账号编号、事件类型、毫秒数、错误类型），不存代理地址、账号密码或聊天内容。
 const fs = require('fs');
+const { writeJsonAtomic } = require('./atomic');
 
 class EventLog {
   // routine：例行记录的类型（比如每 30 分钟一次的巡检），每个号只留最近 routinePerId 条，
@@ -61,8 +62,7 @@ class EventLog {
 
   write() {
     try {
-      fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items || []));
-      fs.renameSync(`${this.file}.tmp`, this.file);
+      writeJsonAtomic(this.file, this.items || []);
     } catch (e) {
       console.warn('记录保存失败', e.message);
     }
