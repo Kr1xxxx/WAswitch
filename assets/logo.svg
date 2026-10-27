@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2FCB85"/><stop offset="1" stop-color="#128F57"/></linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26282C"/><stop offset="1" stop-color="#0B0B0D"/></linearGradient>
+    <linearGradient id="au" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EBCF92"/><stop offset="1" stop-color="#B48A45"/></linearGradient>
   </defs>
   <rect width="100" height="100" rx="22" fill="url(#g)"/>
-  <path d="M32 20h28a12 12 0 0 1 12 12v16a12 12 0 0 1-12 12H30l-10 8V32a12 12 0 0 1 12-12z" fill="#fff" fill-opacity=".45"/>
-  <path d="M42 38h28a12 12 0 0 1 12 12v36l-10-8H42a12 12 0 0 1-12-12V50a12 12 0 0 1 12-12z" fill="#fff"/>
-  <g class="dots" fill="#1A9F62"><circle cx="45" cy="58" r="4"/><circle cx="56" cy="58" r="4"/><circle cx="67" cy="58" r="4"/></g>
+  <rect x=".5" y=".5" width="99" height="99" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".12"/>
+  <path d="M43 35A22 22 0 0 1 65 57A22 22 0 0 1 43 79H21V57A22 22 0 0 1 43 35Z" fill="#fff"/>
+  <path d="M69 21A10 10 0 0 1 79 31V41H69A10 10 0 0 1 59 31A10 10 0 0 1 69 21Z" fill="url(#au)"/>
 </svg>

@@ -1,0 +1,16 @@
+{
+  "env": {
+    "PONYTAIL_DEFAULT_MODE": "lite"
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ponytail@ponytail": true
+  }
+}

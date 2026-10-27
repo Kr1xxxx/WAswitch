@@ -200,6 +200,15 @@ function extraContacts(source, output) {
   return [...pick(output)].filter((x) => !src.has(x));
 }
 
+// 这个服务商能不能直接用：有密钥，或是不用密钥的本机接口（DeepL 一定要密钥）
+function needsKey(p) {
+  if (!p || p.keyEnc) return false;
+  return p.preset === 'deepl' || !checkBaseUrl(p.baseUrl).local;
+}
+// 报错里点名是哪个服务商（“去填密钥”按钮靠 pid 打开它的表单）
+const provName = (p) => (p && p.name) || '翻译服务';
+const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}还没填密钥`, pid: p.id });
+
 function statusError(status) {
   if (status === 401 || status === 403) return { kind: 'auth', text: '密钥不对或没有权限' };
   if (status === 402) return { kind: 'quota', text: '账户没余额了' };
@@ -559,7 +568,7 @@ class Translator {
   // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }
   async callDeepl(p, { text, target, source, context }, signal) {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
-    if (!key) throw { kind: 'auth', text: '还没填密钥' };
+    if (!key) throw noKey(p);
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
@@ -572,8 +581,9 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: 'DeepL 密钥不对（免费版密钥以 :fx 结尾）', status: 403 };
+      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id };
       const err = statusError(res.status);
+      if (err.kind === 'auth') throw { kind: 'auth', text: `${provName(p)}的${err.text}`, status: res.status, pid: p.id };
       throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
     }
     let out = '';
@@ -608,7 +618,7 @@ class Translator {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
     const chk = checkBaseUrl(p.baseUrl);
     if (chk.error) throw { kind: 'config', text: chk.error };
-    if (!key && !chk.local) throw { kind: 'auth', text: '还没填密钥' };
+    if (!key && !chk.local) throw noKey(p);
     const body = { model: p.model, messages, temperature, max_tokens: maxTokens, stream: false };
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
@@ -631,6 +641,8 @@ class Translator {
       if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
         throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
       }
+      // 密钥错：点名服务商，附上服务商原话（已遮住密钥），界面给“去填密钥”按钮
+      if (err.kind === 'auth') throw { kind: 'auth', text: `${provName(p)}的${err.text}${detail ? `：${detail}` : ''}`, status: res.status, pid: p.id };
       throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
     }
     let out = '';
@@ -701,7 +713,8 @@ class Translator {
       if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
-      return { error: lastErr.text, kind: lastErr.kind };
+      // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单
+      return lastErr.kind === 'auth' && lastErr.pid ? { error: lastErr.text, kind: 'auth', providerId: lastErr.pid } : { error: lastErr.text, kind: lastErr.kind };
     } finally {
       this.busy = null;
     }
@@ -728,5 +741,5 @@ class Translator {
   }
 }
 
-module.exports = { DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

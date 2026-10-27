@@ -15,11 +15,12 @@ const os = require('os');
 const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
+const ports = require('./ports');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
-const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
+const { Translator, DEFAULT_MODES, retireModes, needsKey } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
@@ -36,6 +37,7 @@ const { CrmQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
+const { problemCode } = require('./problem-codes');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
@@ -525,19 +527,7 @@ const notifier = new Notifier({
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
   settingsMenu: () => [
-    {
-      label: `后台账号超过 ${settings.recycleMB || settings.recycleLastMB} MB 时自动刷新回收内存`,
-      type: 'checkbox',
-      checked: settings.recycleMB > 0,
-      click: () => setSetting('recycleMB', settings.recycleMB > 0 ? 0 : settings.recycleLastMB),
-    },
     { label: '立即清理内存（刷新没有未读的后台账号）', click: () => { memoryManager.cleanNow(); } },
-    {
-      label: '省内存模式（关闭显卡加速，重启后生效）',
-      type: 'checkbox',
-      checked: settings.lowMemoryMode,
-      click: () => { setSetting('lowMemoryMode', !settings.lowMemoryMode); askRestart(); },
-    },
     ...(visibleAccounts().length ? [{ label: locked ? '聊天已锁定' : '立即锁定聊天', enabled: !locked, click: () => setLocked(true) }] : []),
     { label: '未读总览…', click: () => { notifier.showWindow(); showPage('overview'); } },
     { label: '设置…', click: () => { notifier.showWindow(); showPage('settings'); } },
@@ -820,6 +810,7 @@ function trackNet() {
     const next = { ...prev, problem, login };
     if (problem && problem !== prev.problem) {
       netEvent(acc.id, 'down', { detail: problem });
+      console.warn(`账号 ${acc.id} 出现问题 ${problemCode(problem) || '-'}（${problem}）`);
       if (!prev.problem) next.downAt = Date.now();
     } else if (!problem && prev.problem) {
       netEvent(acc.id, 'up', { ms: prev.downAt ? Date.now() - prev.downAt : undefined, detail: prev.problem });
@@ -889,6 +880,7 @@ function pushState() {
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
         problemKind: problem ? problem.kind || '' : '',
+        problemCode: problem ? problemCode(problem.kind) : '',
         direct: !acc.proxy,
         allowCalls: !!acc.allowCalls,
         // 从没登录成功过的号停在二维码页是正常的第一步，不算故障
@@ -1559,12 +1551,12 @@ const LITE_PROBLEMS = {
   crashLoop: () => ({
     title: '轻量模式后台进程反复出错，已停止自动恢复',
     short: '后台出错',
-    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，请在设置 › 关于里打开日志文件夹，把最近的日志发给我们。',
+    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，点“打开日志文件夹”，最新的日志里记着出错原因。',
   }),
   crashed: () => ({
     title: '轻量模式后台进程意外退出',
     short: '后台出错',
-    text: '正在自动恢复。如果反复出现，请在设置 › 关于里打开日志文件夹，把最近的日志发给我们。',
+    text: '正在自动恢复。如果反复出现，点“打开日志文件夹”，最新的日志里记着出错原因。',
     retrying: true,
   }),
 };
@@ -1825,7 +1817,7 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
+  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
@@ -1845,20 +1837,6 @@ function relaunchApp() {
   app.relaunch();
   quitting = true;
   app.quit();
-}
-
-// 托盘里切换了省内存模式：问一下要不要现在重启
-async function askRestart() {
-  if (settings.lowMemoryMode === startupLowMemory) return;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: ['稍后', '现在重启'],
-    defaultId: 1,
-    cancelId: 0,
-    message: '省内存模式要重启 WAswitch 才生效',
-    detail: '重启大约需要十几秒，账号不用重新登录。',
-  });
-  if (response === 1) relaunchApp();
 }
 
 // ---------- 编辑页没保存就离开 ----------
@@ -2573,6 +2551,8 @@ function floatState() {
     auto: !!(acc && floatAuto(acc.id)),
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
+    // 默认翻译服务还没填密钥：翻译页顶上显示黄条和“去填密钥”
+    needKey: primary && needsKey(primary) ? { id: primary.id, name: primary.name || '翻译服务', others: (cfg.providers || []).some((p) => p.id !== primary.id && !needsKey(p)) } : null,
     providerName: primary ? primary.name : '',
     primaryId: primary ? primary.id : '',
     fallbackId: cfg.fallbackId || '',
@@ -2737,6 +2717,15 @@ handleFloat('float:cancel', () => userCancel());
 handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
 handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === activeId && findAcc(accountId)) translator.setAccountLang(accountId, lang); pushFloat(); return true; });
+// 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
+handleShell('tr:auto', ({ accountId, on } = {}) => {
+  const acc = findAcc(accountId);
+  if (!acc) return trState();
+  translator.setFloat({ accId: acc.id, auto: on === true });
+  if (on === true) floatCore.backfill(acc.id, { dailyCap: translator.load().dailyCap });
+  pushFloat();
+  return trState();
+});
 handleShell('tr:dailycap', (n) => { translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
@@ -2982,6 +2971,13 @@ handleShell('editor:load', (id) => {
   };
 });
 
+// 编辑页的代理预设：本机 7890–7899 哪些端口开着、能不能用、被哪个号占了
+handleShell('editor:ports', async (id) => {
+  const list = await ports.probeAll();
+  const used = ports.usage(accounts.filter((a) => !isParked(a)), id);
+  return list.map((p) => ({ ...p, usedBy: used[p.port] || [] }));
+});
+
 // 主号的出口 IP（轻量小号不能和主号用同一个 IP）。主号没设代理时查本机直连的出口。
 async function primaryExit(exceptId) {
   const primary = accounts.find((a) => a.primary && a.id !== exceptId);
@@ -3198,7 +3194,7 @@ handleShell('check:run', async () => {
   // 只看走代理的轻量号（直连的轻量号在另一个进程里，上面已经算进直连号）
   if (accounts.some((a) => isLite(a) && proxy.parse(a.proxy))) {
     items.push(liteGuardHits
-      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。请把日志发给我们看看。' }
+      ? { level: 'bad', title: `轻量模式：拦下了 ${liteGuardHits} 次绕过代理的连接`, detail: '没有发出去，本机 IP 没暴露。日志里记着拦下的是哪些连接。', logs: true }
       : { level: 'ok', title: '轻量模式：都走代理，没有漏' });
   }
   // WebRTC：走代理的号必须只走代理；直连号按“允许通话”开关分别显示
@@ -3240,6 +3236,7 @@ handleShell('check:fix', async ({ id, region } = {}) => {
 // 关于页：检查更新、重启以更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动重启安装
 onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动重启了
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动重启
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）
