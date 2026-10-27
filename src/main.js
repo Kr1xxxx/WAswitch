@@ -567,6 +567,9 @@ const notifier = new Notifier({
   setDnd: (on) => setSetting('popupDnd', on === true),
   isActive: (id) => id === activeId && page === 'account',
   onNew: (e) => addNotifLog(e),
+  // 弹过哪一条（只存指纹，不存消息内容）：软件重启后同一条不再弹
+  loadPopped: () => { try { return JSON.parse(fs.readFileSync(poppedFile(), 'utf8')); } catch { return null; } },
+  savePopped: (data) => savePoppedSoon(data),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
@@ -590,6 +593,24 @@ const notifier = new Notifier({
       : [{ label: `重启以更新到 ${u.version}`, click: () => updater.install() }];
   },
 });
+
+// 弹过的消息记录，2 秒内的多次改动合成一次写盘；退出前补写
+const poppedFile = () => path.join(app.getPath('userData'), 'notify-popped.json');
+let poppedPending = null;
+let poppedTimer = null;
+function writePoppedNow() {
+  clearTimeout(poppedTimer);
+  poppedTimer = null;
+  if (!poppedPending) return;
+  const data = poppedPending;
+  poppedPending = null;
+  try { writeJsonAtomic(poppedFile(), data); } catch (e) { console.warn('弹窗记录保存失败', e.message); }
+}
+function savePoppedSoon(data) {
+  poppedPending = data;
+  if (!poppedTimer) poppedTimer = setTimeout(writePoppedNow, 2000);
+}
+app.on('will-quit', writePoppedNow);
 
 // MCP 接口（默认关闭）。在 app ready 之后创建。
 let mcp = null;
@@ -892,7 +913,7 @@ function offlineIds() {
 // 某个客户的未读条数变多了就弹（合并到这个客户的卡片上）。没有未读的号、静音的号、正在看的号不看
 const RECHECK_MS = 10 * 1000;
 function recheckUnread() {
-  if (locked || settings.popupDnd) return;
+  if (locked) return; // 勿扰时也看：不弹，只记下这期间来过的，关掉勿扰后不把它们当新消息弹
   for (const acc of visibleAccounts()) {
     if (isLite(acc) || !(notifier.unread.get(acc.id) > 0) || problems.has(acc.id)) continue;
     notifier.recheck(acc, { isActive: acc.id === activeId && page === 'account' });
@@ -1769,7 +1790,10 @@ function bindLiteEvents() {
     liteUnreadChats.set(id, Array.isArray(chats) ? chats : []);
     const isActive = id === activeId && page === 'account';
     const grew = count > (notifier.unread.get(id) || 0);
-    notifier.update(acc, count, { isActive });
+    // 软件刚打开时的第一次：涨回上次关掉前的未读数不算新消息（和网页号一样），不然重启后会把以前弹过的再弹一遍
+    const baseline = notifier.unread.has(id) ? 0 : savedUnread(id);
+    notifier.update(acc, count, { isActive, baseline });
+    rememberUnread(id, count);
     // 未读对话数没变、但某个客户又发了一条：也弹（同一个客户合并成一张）
     if (!grew) notifier.recheck(acc, { isActive });
     pushState();
