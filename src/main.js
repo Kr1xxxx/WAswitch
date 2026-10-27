@@ -677,8 +677,35 @@ const mcpHooks = {
     if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
     return waPage.readChatList(view.webContents, opts);
   },
+  // search_chats：网页号读左侧列表已显示的对话（同 list_chats，只读）；轻量号读后台保存的全部对话
+  readAllChats: async (id, { includePreview } = {}) => {
+    const acc = findAcc(id);
+    if (!acc) return { ok: false, reason: 'loading' };
+    if (isLite(acc)) {
+      let list = null;
+      try { list = await liteHost.chatList(id); } catch { list = null; }
+      if (!Array.isArray(list)) return { ok: false, reason: 'loading' };
+      return {
+        ok: true,
+        scope: 'all',
+        filtered: false,
+        chats: list.map((c) => ({
+          name: String(c.name || ''),
+          number: c.number || null,
+          unread: Number(c.unread) || 0,
+          time: c.ts ? new Date(c.ts * 1000).toISOString() : '',
+          is_group: !!c.group,
+          ...(includePreview ? { preview: String(c.preview || '') } : {}),
+        })),
+      };
+    }
+    const view = views.get(id);
+    if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
+    const r = await waPage.readChatList(view.webContents, { includePreview: !!includePreview });
+    return r && r.ok ? { ...r, scope: 'visible' } : r;
+  },
   // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
-  confirmRead: async ({ client, account, includePreview, timeoutMs }) => {
+  confirmRead: async ({ kind, query, client, account, includePreview, timeoutMs }) => {
     if (confirmDialogOpen) return 'busy';
     confirmDialogOpen = true;
     const abort = new AbortController();
@@ -692,15 +719,25 @@ const mcpHooks = {
         defaultId: 0,
         cancelId: 0,
         noLink: true,
-        title: 'AI 想读取对话列表',
-        message: `允许 AI 读取「${account}」的对话列表吗？`,
+        title: kind === 'search' ? 'AI 想找对话' : 'AI 想读取对话列表',
+        message: kind === 'search'
+          ? `允许 AI 在「${account}」里找名字或号码含「${String(query || '').slice(0, 64)}」的对话吗？`
+          : `允许 AI 读取「${account}」的对话列表吗？`,
         detail: [
           `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
-          includePreview
-            ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
-            : '会读取：对话名称、未读数、时间。不含消息内容。',
-          '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-          '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ...(kind === 'search' ? [
+            includePreview
+              ? '会发给 AI：找到的对话的名称、号码、未读数、时间，以及最后一条消息预览（你在设置里打开了预览）。'
+              : '会发给 AI：找到的对话的名称、号码、未读数、时间。不含消息内容。',
+            '网页版账号只看对话列表顶部已经显示的对话，轻量模式账号看本机保存的全部对话。只读，不会点开对话，不会标为已读。',
+            '“10 分钟内允许”只对这个连接、这些账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ] : [
+            includePreview
+              ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
+              : '会读取：对话名称、未读数、时间。不含消息内容。',
+            '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+            '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ]),
         ].join('\n'),
       });
       if (abort.signal.aborted) return 'deny';
@@ -1299,6 +1336,8 @@ async function networkSignature() {
 }
 async function onNetworkChange() {
   console.log('检测到网络或系统代理变化，重新连接');
+  // 接下来几分钟里未读数掉了又回来是重连，不是新消息：弹过的不再弹（网页号、轻量号都一样）
+  for (const acc of visibleAccounts()) notifier.hold(acc.id);
   for (const acc of visibleAccounts()) {
     if (isLite(acc)) continue;
     const ses = session.fromPartition(`persist:wa-${acc.id}`);
@@ -1627,6 +1666,8 @@ async function createView(acc, loadDelay = 0) {
     // 连续刷新时保留第一次的原数；软件刚打开时用上次记下的数
     if (Date.now() >= quietUntil) baseline = notifier.unread.has(acc.id) ? notifier.unread.get(acc.id) : savedUnread(acc.id);
     quietUntil = Date.now() + RELOAD_QUIET_MAX_MS;
+    // 重试加载可能拖过 2 分钟（线路断了很久）：通知那边也记着刷新前的未读数，回来时弹过的不再弹
+    notifier.hold(acc.id, baseline);
   });
   let settleRun = 0;
   wc.on('did-finish-load', async () => {
@@ -1645,6 +1686,7 @@ async function createView(acc, loadDelay = 0) {
   wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
+    notifier.hold(acc.id); // 线路不通、等着重试：这期间标题里的数字没了不算读掉
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
     const token = {};
     failToken = token;
@@ -1869,6 +1911,8 @@ function bindLiteEvents() {
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
+    // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
+    if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);

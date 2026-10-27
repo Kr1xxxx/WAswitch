@@ -162,6 +162,12 @@ class LiteProc {
     return this.request({ type: 'send', id, jid, text }, 30000);
   }
 
+  // MCP 搜索对话：这个号在本机保存的全部对话。号没在运行时返回 null（不为了这个启动后台进程）
+  chatList(id) {
+    if (!this.sessions.has(id) || !this.proc) return Promise.resolve(null);
+    return this.request({ type: 'chats', id }, 10000);
+  }
+
   stopIfIdle() {
     if (this.sessions.size || !this.proc) return;
     this.shutdownProc();
@@ -235,6 +241,11 @@ class LiteHost extends EventEmitter {
   sendText(id, jid, text) {
     const p = this.procOf(id);
     return p ? p.sendText(id, jid, text) : Promise.reject(new Error('这个号没有在运行'));
+  }
+
+  chatList(id) {
+    const p = this.procOf(id);
+    return p ? p.chatList(id) : Promise.resolve(null);
   }
 
   // 两个后台进程的 pid（内存统计用）
