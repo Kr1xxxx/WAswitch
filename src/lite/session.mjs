@@ -206,8 +206,9 @@ export class Session {
       for (const m of messages || []) this.store.addMessage(m, { countUnread: false });
       this.changed();
     });
-    ev.on('chats.upsert', (list) => { for (const c of list) this.store.updateChat(c); this.changed(); });
-    ev.on('chats.update', (list) => { for (const c of list) this.store.updateChat(c); this.changed(); });
+    // 在线时的对话变化：unreadCount 正数是 Baileys 这一批新增的条数，新消息的未读由下面 messages.upsert 一条条加（见 store.liveChat）
+    ev.on('chats.upsert', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
+    ev.on('chats.update', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
     ev.on('chats.delete', (ids) => { for (const id of ids) this.store.remove(id); this.changed(); });
     const names = (list) => { for (const c of list) this.store.setName(c.id, c.name || c.notify || c.verifiedName); this.changed(); };
     ev.on('contacts.upsert', names);
@@ -216,7 +217,8 @@ export class Session {
     ev.on('messages.upsert', ({ messages, type }) => {
       if (sock !== this.sock) return;
       for (const m of messages) {
-        const r = this.store.addMessage(m, { countUnread: type === 'notify' });
+        // notify：在线收到的；append：断线期间收到、重连后补发的（比缓存里最后一条新才算未读），或自己发的
+        const r = this.store.addMessage(m, { countUnread: type === 'notify' ? true : type === 'append' ? 'newer' : false });
         if (r && r.incoming) this.post({ type: 'incoming', id: this.id, jid: r.jid });
       }
       if (this.crmSince) this.captureCrm(sock, messages);
