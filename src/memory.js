@@ -33,7 +33,11 @@ const DEFAULTS = {
   memDefaults: 3, // 第几版默认值；老设置里这个数比现在小时，把还停在旧默认值的项改成新默认值（每版只改一次）
   lockMinutes: 15, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
   panelTab: 'translate', // 工作台上次停在哪一页，重启后还在这一页；新装默认翻译
+  popupSeconds: 6, // 通知弹窗多少秒后自动收走，0 表示不自动收
+  popupSound: true, // 弹窗时放提示音
+  popupDnd: false, // 勿扰：不弹窗，只记进通知记录
 };
+const POPUP_SECONDS = [4, 6, 10, 0];
 const PANEL_TABS = ['replies', 'customers', 'translate'];
 const RECYCLE_CHOICES = [600, 800, 1024, 1500, 2000];
 const CAP_CHOICES = [0, 1024, 1536, 2048, 3072, 4096, 6144];
@@ -89,6 +93,9 @@ function loadSettings() {
       capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,
       lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
       panelTab: PANEL_TABS.includes(raw.panelTab) ? raw.panelTab : DEFAULTS.panelTab,
+      popupSeconds: POPUP_SECONDS.includes(raw.popupSeconds) ? raw.popupSeconds : DEFAULTS.popupSeconds,
+      popupSound: bool('popupSound'),
+      popupDnd: bool('popupDnd'),
       memDefaults: DEFAULTS.memDefaults,
     };
   } catch {
@@ -290,4 +297,4 @@ class MemoryManager {
   }
 }
 
-module.exports = { DEFAULTS, PANEL_TABS, RECYCLE_CHOICES, CAP_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };
+module.exports = { DEFAULTS, PANEL_TABS, POPUP_SECONDS, RECYCLE_CHOICES, CAP_CHOICES, MemoryManager, loadSettings, saveSettings, applyStartupSwitches, LOCK_CHOICES };

@@ -1,6 +1,7 @@
-// 新消息通知的正文：能读到有未读的对话名字时写“Emma Schneider、John Miller 等 3 个未读对话”，
-// 读不到（页面在加载、结构认不出、聊天已锁定）就退回原来的“有 N 个未读对话”。
-// 只用对话名字，不用消息内容。
+// 新消息弹窗的文字。
+// - 能读到对话列表时：每个未读变多的客户一张卡，写客户名字和对话列表里的最后一条预览（grownChats）
+// - 读不到（页面在加载、结构认不出、聊天已锁定）时：一张号的卡，写“Emma Schneider、John Miller 等 3 个未读对话”
+//   或“有 N 个未读对话”（unreadBody）
 
 const MAX_NAMES = 2; // 正文里最多写几个名字
 const MAX_LEN = 30; // 每个名字最多多少字
@@ -31,4 +32,40 @@ function unreadBody(count, names) {
   return count > shown.length ? `${joined} 等 ${count} 个未读对话` : `${joined} 发来新消息`;
 }
 
-module.exports = { unreadNames, unreadBody, MAX_NAMES, MAX_LEN };
+const MAX_PREVIEW = 160; // 预览最多多少字（弹窗里最多显示 3 行）
+
+const chatKey = (c) => (c && typeof c.jid === 'string' && c.jid) || (c && typeof c.name === 'string' ? c.name.replace(/\s+/g, ' ').trim() : '');
+
+function cleanPreview(text) {
+  if (typeof text !== 'string') return '';
+  const t = text.replace(/\s+/g, ' ').trim();
+  return [...t].length > MAX_PREVIEW ? `${[...t].slice(0, MAX_PREVIEW).join('')}…` : t;
+}
+
+// 对话列表里哪些客户的未读变多了（要弹卡片）。
+// seen：上次记下的 key -> 未读数；null 表示这个号还没记过（刚启动、刚读过消息）
+// chats：对话列表 { name, unread, preview?, muted?, jid? }，最近的在前
+// firstLimit：没记过时最多挑几个（只挑列表最上面的，免得把以前的未读全弹一遍）
+// 返回 { fresh: [{ key, name, unread, preview, jid }], seen: 新的 Map }
+function grownChats(seen, chats, firstLimit = 1, limit = 3) {
+  const next = new Map(seen || []);
+  const list = Array.isArray(chats) ? chats.filter((c) => c && chatKey(c)) : [];
+  const grown = [];
+  for (const c of list) {
+    const key = chatKey(c);
+    const n = Number.isInteger(c.unread) && c.unread > 0 ? c.unread : 0;
+    if (n > 0 && n > (seen ? (seen.get(key) || 0) : 0)) grown.push({ key, c, n });
+    if (n > 0) next.set(key, n); else next.delete(key);
+  }
+  // 静音的对话（WhatsApp 里设了静音）不单独弹，除非只有它们
+  const loud = grown.filter((g) => !g.c.muted);
+  const pick = (loud.length ? loud : grown).slice(0, seen ? limit : Math.max(1, Math.min(firstLimit, limit)));
+  const fresh = pick.map(({ key, c, n }) => {
+    let name = (c.name || key).replace(/\s+/g, ' ').trim();
+    if ([...name].length > MAX_LEN) name = `${[...name].slice(0, MAX_LEN).join('')}…`;
+    return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '' };
+  });
+  return { fresh, seen: next };
+}
+
+module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, MAX_NAMES, MAX_LEN, MAX_PREVIEW };

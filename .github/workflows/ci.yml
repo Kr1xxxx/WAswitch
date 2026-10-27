@@ -48,8 +48,10 @@ jobs:
         run: npm run check:memory
       - name: 断线提醒（满 2 分钟弹一次、恢复不弹）
         run: npm run check:offline
-      - name: 通知写出是哪个客户
+      - name: 新消息弹窗写出是哪个客户
         run: npm run check:notify
+      - name: 自带通知弹窗窗口（右上角、堆叠、聊天锁、空闲关窗）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
       - name: 自动更新自检
         run: npm run check:updater
       - name: 代理端口检测自检
