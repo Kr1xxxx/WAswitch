@@ -98,13 +98,15 @@ export class ChatStore {
     this.save.schedule();
   }
 
-  // 来自 chats.upsert / chats.update / 历史同步
+  // 来自历史同步（unreadCount 是这个对话现在的未读条数）。在线时的 chats.update / chats.upsert 走 liveChat()
   updateChat(c) {
     if (ignoredJid(c.id)) return;
     const chat = this.chat(c.id);
     if (c.name || c.subject) chat.name = String(c.name || c.subject).slice(0, 80);
     if (typeof c.unreadCount === 'number') {
-      chat.unread = Math.max(0, c.unreadCount);
+      // -1：在手机上标成了未读（不知道几条，至少算 1 条）
+      if (c.unreadCount < 0) chat.unread = Math.max(chat.unread, 1);
+      else chat.unread = c.unreadCount;
       if (!chat.unread) this.unreadKeys.delete(c.id);
     }
     const ts = toNumber(c.conversationTimestamp);
@@ -112,7 +114,20 @@ export class ChatStore {
     this.save.schedule();
   }
 
+  // 在线时的 chats.update / chats.upsert。这里的 unreadCount 是 Baileys 这一批新增的条数（每来一条 +1），
+  // 不是对话现在的未读数；新消息的条数由 addMessage 一条条加，所以正数不用。
+  // 0（在别的设备上读了）和 -1（在手机上标成未读）照常用
+  liveChat(c) {
+    if (typeof c.unreadCount === 'number' && c.unreadCount > 0) {
+      c = { ...c };
+      delete c.unreadCount;
+    }
+    this.updateChat(c);
+  }
+
   // 加一条消息；返回 { jid, added, incoming } 或 null
+  // countUnread：true 对方发来的算未读（在线收到的 notify）；
+  //   'newer' 比缓存里最后一条还新才算（断线期间收到、重连后补发的 append。旧消息补发不算）；false 都不算（历史同步）
   addMessage(msg, { countUnread }) {
     const key = msg.key || {};
     const jid = key.remoteJid;
@@ -121,6 +136,7 @@ export class ChatStore {
     if (text === null) return null;
     const list = this.msgs.get(jid) || [];
     if (list.some((m) => m.id === key.id)) return { jid, added: false };
+    const latest = list.length ? list[list.length - 1].ts : 0;
     const group = isJidGroup(jid);
     const sender = key.participant || '';
     if (msg.pushName && !key.fromMe) this.setName(group ? sender : jid, msg.pushName);
@@ -137,7 +153,7 @@ export class ChatStore {
     this.msgs.set(jid, list);
     const chat = this.chat(jid);
     if (item.ts >= chat.ts) { chat.ts = item.ts; chat.preview = (item.from ? `${item.from}：` : '') + item.text.slice(0, 120); }
-    const incoming = countUnread && !key.fromMe;
+    const incoming = !key.fromMe && (countUnread === 'newer' ? item.ts >= latest : !!countUnread);
     if (incoming) {
       chat.unread += 1;
       const keys = this.unreadKeys.get(jid) || [];
@@ -196,6 +212,13 @@ export class ChatStore {
     this.unreadKeys.delete(jid);
     this.save.schedule();
   }
+}
+
+// 个人对话的手机号（+ 开头）；群和隐藏号码的对话（@lid）返回 null
+export function phoneOf(jid) {
+  if (!String(jid).endsWith('@s.whatsapp.net')) return null;
+  const user = String(jid).split('@')[0].split(':')[0];
+  return /^\d{5,20}$/.test(user) ? `+${user}` : null;
 }
 
 // 没有名字时显示号码部分（群显示“群聊”）

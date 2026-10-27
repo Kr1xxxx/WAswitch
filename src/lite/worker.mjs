@@ -54,6 +54,8 @@ async function handle(m) {
       if (!s) throw new Error('这个号没有在运行');
       await s.send(m.jid, m.text);
       return undefined;
+    case 'chats':
+      return s ? s.chatList() : null;
     case 'shutdown':
       for (const x of sessions.values()) x.stop();
       sessions.clear();

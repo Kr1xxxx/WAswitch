@@ -23,6 +23,7 @@ const { Notifier } = require('./notify');
 const { PopupWindow } = require('./popup');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
+const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
@@ -678,8 +679,35 @@ const mcpHooks = {
     if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
     return waPage.readChatList(view.webContents, opts);
   },
+  // search_chats：网页号读左侧列表已显示的对话（同 list_chats，只读）；轻量号读后台保存的全部对话
+  readAllChats: async (id, { includePreview } = {}) => {
+    const acc = findAcc(id);
+    if (!acc) return { ok: false, reason: 'loading' };
+    if (isLite(acc)) {
+      let list = null;
+      try { list = await liteHost.chatList(id); } catch { list = null; }
+      if (!Array.isArray(list)) return { ok: false, reason: 'loading' };
+      return {
+        ok: true,
+        scope: 'all',
+        filtered: false,
+        chats: list.map((c) => ({
+          name: String(c.name || ''),
+          number: c.number || null,
+          unread: Number(c.unread) || 0,
+          time: c.ts ? new Date(c.ts * 1000).toISOString() : '',
+          is_group: !!c.group,
+          ...(includePreview ? { preview: String(c.preview || '') } : {}),
+        })),
+      };
+    }
+    const view = views.get(id);
+    if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
+    const r = await waPage.readChatList(view.webContents, { includePreview: !!includePreview });
+    return r && r.ok ? { ...r, scope: 'visible' } : r;
+  },
   // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
-  confirmRead: async ({ client, account, includePreview, timeoutMs }) => {
+  confirmRead: async ({ kind, query, client, account, includePreview, timeoutMs }) => {
     if (confirmDialogOpen) return 'busy';
     confirmDialogOpen = true;
     const abort = new AbortController();
@@ -693,15 +721,25 @@ const mcpHooks = {
         defaultId: 0,
         cancelId: 0,
         noLink: true,
-        title: 'AI 想读取对话列表',
-        message: `允许 AI 读取「${account}」的对话列表吗？`,
+        title: kind === 'search' ? 'AI 想找对话' : 'AI 想读取对话列表',
+        message: kind === 'search'
+          ? `允许 AI 在「${account}」里找名字或号码含「${String(query || '').slice(0, 64)}」的对话吗？`
+          : `允许 AI 读取「${account}」的对话列表吗？`,
         detail: [
           `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
-          includePreview
-            ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
-            : '会读取：对话名称、未读数、时间。不含消息内容。',
-          '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-          '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ...(kind === 'search' ? [
+            includePreview
+              ? '会发给 AI：找到的对话的名称、号码、未读数、时间，以及最后一条消息预览（你在设置里打开了预览）。'
+              : '会发给 AI：找到的对话的名称、号码、未读数、时间。不含消息内容。',
+            '网页版账号只看对话列表顶部已经显示的对话，轻量模式账号看本机保存的全部对话。只读，不会点开对话，不会标为已读。',
+            '“10 分钟内允许”只对这个连接、这些账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ] : [
+            includePreview
+              ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
+              : '会读取：对话名称、未读数、时间。不含消息内容。',
+            '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+            '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ]),
         ].join('\n'),
       });
       if (abort.signal.aborted) return 'deny';
@@ -717,6 +755,40 @@ const mcpHooks = {
   // ---- 打开对话：网页版跳到 /send?phone=，轻量模式直接选中（见 chat-open.js） ----
   openChat: (args) => chatOpener.open(args),
 
+  // ---- 客户资料：搜索本机客户名单（见 mcp/customers.js），只读 ----
+  // 和面板一样不含停着的号名下的客户；账号名只给看得见的号
+  listCustomers: () => (customerStore ? panelData().customers : []),
+  // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
+  confirmCustomers: async ({ client, query, timeoutMs }) => {
+    if (confirmDialogOpen) return 'busy';
+    confirmDialogOpen = true;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    notifier.showWindow();
+    try {
+      const { response } = await dialog.showMessageBox(win, {
+        signal: abort.signal,
+        type: 'question',
+        buttons: ['拒绝', '允许这一次', '10 分钟内允许'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: 'AI 想搜索客户资料',
+        message: `允许 AI 在客户名单里搜索 ${query} 吗？`,
+        detail: [
+          `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
+          '会读到：搜到的客户的名字、电话、标签、备注和跟进时间。只读，不会改资料。',
+          '读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+          '“10 分钟内允许”对这个连接的所有搜索有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+        ].join('\n'),
+      });
+      if (abort.signal.aborted) return 'deny';
+      return ['deny', 'once', 'ten'][response] || 'deny';
+    } finally {
+      clearTimeout(timer);
+      confirmDialogOpen = false;
+    }
+  },
   // ---- 辅助工具：话术、翻译（客户时间在 mcp/helpers.js 里按号码算，不用 hooks） ----
   listQuickReplies: () => (replyStore ? replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })) : []),
   translateModes: () => (modeStore ? modeStore.list() : []),
@@ -887,6 +959,14 @@ function panelData() {
     })),
   };
 }
+// MCP 修改客户资料（update_customer）和撤销用的接口，见 customer-mcp.js。改完让界面刷新客户名单
+Object.assign(mcpHooks, customerHooks({
+  store: () => customerStore,
+  findAcc: (id) => findAcc(id),
+  parked: parkedCustomer,
+  onChange: () => { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('panel:changed'); },
+}));
+
 // 跟进提醒：每分钟看一次，到时间的弹通知，只写名字（通知会显示在锁屏上，不写电话和备注）
 // 一次最多弹 3 条，其余合成一条“还有 N 条跟进提醒”
 function checkFollowUps() {

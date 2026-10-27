@@ -708,6 +708,14 @@ async function panelLoad() {
   try { pn.data = await window.wa.panelData(); pn.loaded = true; } catch {}
   renderPanel(true);
 }
+// MCP 改了客户名单（或在 MCP 设置里撤销了）：重新拿数据，只换列表。正在编辑表单时不重画，免得冲掉正在打的字
+window.wa.onPanelChanged(async () => {
+  if (!pn.loaded) return;
+  try { pn.data = await window.wa.panelData(); } catch { return; }
+  if (pn.edit || pn.tab !== 'customers' || $panel.hidden) return;
+  const list = $panel.querySelector('.pn-list');
+  if (list) list.replaceChildren(...customerItems());
+});
 // 导入结果：新加几条，已经有的、内容不全的各跳过几条
 const importSay = (r, unit) => `导入了 ${r.added} ${unit}${r.dup ? `，${r.dup} ${unit}已经有了` : ''}${r.bad ? `，${r.bad} ${unit}内容不全跳过` : ''}`;
 function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }
