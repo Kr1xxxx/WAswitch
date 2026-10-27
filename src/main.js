@@ -15,6 +15,7 @@ const os = require('os');
 const log = require('./log');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
+const errtext = require('./errtext');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
@@ -888,6 +889,7 @@ function pushState() {
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
         problemShort: problem ? problem.short : '',
+        problemDetail: problem ? problem.detail || '' : '',
         problemKind: problem ? problem.kind || '' : '',
         direct: !acc.proxy,
         allowCalls: !!acc.allowCalls,
@@ -1161,6 +1163,37 @@ async function checkLogins() {
 const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
+// 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
+function loadProblem(acc, code, desc) {
+  const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? ` · ${acc.proxy}` : ''}`;
+  const kind = errtext.netKind(desc);
+  const p = acc.proxy ? proxy.parse(acc.proxy) : null;
+  if (PROXY_ERRORS.has(code) || (p && !p.error && ['proxyDown', 'proxyNode', 'proxyAuth', 'refused'].includes(kind))) {
+    const local = p && !p.error && errtext.isLocal(p.host);
+    const node = kind === 'proxyNode' || kind === 'dns';
+    const auth = kind === 'proxyAuth';
+    const title = auth ? `${acc.name}的代理用户名或密码不对`
+      : node ? (local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理打不开 WhatsApp`)
+        : p && !p.error ? (local ? `${acc.name}连不上 Clash 的 ${p.port} 端口` : `${acc.name}连不上代理 ${p.host}:${p.port}`) : `${acc.name}连不上代理`;
+    const why = auth ? '请在编辑里改好代理的用户名和密码。'
+      : node ? (local ? 'Clash 开着，但当前节点打不开 WhatsApp，在 Clash 里换个节点试试。' : '代理连上了，但通过它打不开 WhatsApp，代理那边的网络可能有问题。')
+        : local ? '通常是 Clash 没开，或者 Clash 里没开这个端口。' : '代理可能停了，或者地址、端口不对。';
+    return { kind: 'proxy', title, short: '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
+  }
+  if (acc.proxy && (kind === 'dns' || kind === 'timeout' || kind === 'reset')) {
+    return { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `${errtext.netReason(desc, { proxy: p && !p.error ? p : null })}。`, detail: raw, retrying: true };
+  }
+  const plain = {
+    offline: ['这台电脑没联网', '没网', '网络恢复后会自动连上。'],
+    changed: ['网络刚切换过', '网络切换', '马上会自动重新连接。'],
+    dns: ['打不开 WhatsApp 网站', '连不上', acc.proxy ? '找不到 WhatsApp 的网站地址。' : '这个号是直连，跟随电脑的系统代理：要开着 Clash 的系统代理才能打开 WhatsApp。'],
+    timeout: ['连接 WhatsApp 超时', '连不上', '网络太慢或不通。'],
+    reset: ['到 WhatsApp 的连接被中断了', '连不上', '通常是网络不稳定。'],
+    cert: ['安全连接出错', '连不上', '可能是网络被拦截，或者电脑时间不对。请检查电脑的日期和时间。'],
+  }[kind] || ['WhatsApp 页面打不开', '连不上', '网络有问题，可能是没联网或代理不通。'];
+  return { kind: 'network', title: plain[0], short: plain[1], text: plain[2], detail: raw, retrying: true };
+}
+
 // ---------- 缩放（每个号单独记） ----------
 // 和 Chrome 一样的几档（ZOOM_STEPS 在文件开头）；只对网页版号生效（轻量模式的界面跟着软件走）
 function applyZoom(acc) {
@@ -1381,17 +1414,7 @@ async function createView(acc, loadDelay = 0) {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
-    if (PROXY_ERRORS.has(code)) {
-      setProblem(acc.id, {
-        kind: 'proxy',
-        title: '代理连不上，这个账号已暂停联网',
-        short: '代理连不上',
-        text: `${acc.name} 设置的线路 ${acc.proxy} 没有响应（${desc}）。为了不暴露真实 IP，不会改用直连。请检查 Clash 是否在运行、端口是否正确。`,
-        retrying: true,
-      });
-    } else {
-      setProblem(acc.id, { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `页面加载失败（${desc}），可能是网络不通。`, retrying: true });
-    }
+    setProblem(acc.id, loadProblem(acc, code, desc));
     scheduleRetry(acc.id);
   });
   // Ctrl + 鼠标滚轮（或触控板缩放手势）：和快捷键走同一条路，记下的比例和顶栏一直对得上
@@ -1427,7 +1450,8 @@ async function createView(acc, loadDelay = 0) {
       kind: 'config',
       title: '代理设置有误，这个账号已暂停联网',
       short: '代理设置有误',
-      text: `${applied.error}。为避免暴露真实 IP，这个账号暂时不联网，请修改代理。`,
+      text: `${errtext.hasChinese(applied.error) ? applied.error : '代理设置没能生效'}。为避免暴露真实 IP，这个账号暂时不联网，请修改代理。`,
+      detail: errtext.hasChinese(applied.error) ? '' : applied.error,
       config: true,
     });
     return view;
@@ -2767,7 +2791,15 @@ handleShell('lite:send', async ({ id, jid, text } = {}) => {
     await liteHost.sendText(id, jid, text);
     return { ok: true };
   } catch (e) {
-    return { error: e.message };
+    // 自己写的提示是中文，原样给；底层库（Baileys）的英文换成人话，原话放“详细信息”
+    const raw = errtext.rawOf(e);
+    if (errtext.hasChinese(raw)) return { error: raw };
+    console.warn(`轻量号 ${id} 发送失败：${raw}`);
+    const kind = errtext.netKind(raw);
+    const why = ['reset', 'timeout', 'offline', 'changed', 'dns', 'refused', 'unreachable'].includes(kind) || /closed|lost|not open|socket/i.test(raw)
+      ? '没发出去：这个号正在重连，连上后再发一次（文字还在输入框里）'
+      : '没发出去，稍后再发一次（文字还在输入框里）';
+    return { error: why, detail: raw };
   }
 });
 // ---------- 一键清理缓存 ----------
@@ -3154,7 +3186,7 @@ handleShell('check:run', async () => {
       if (/DIRECT/i.test(rule)) items.push({ level: 'bad', title: `${acc.name}：代理可能漏走本机网络`, detail: '请重启 WAswitch 后再检查。' });
     }
     const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
-    if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error }); continue; }
+    if (!res.ok) { items.push({ level: 'bad', title: `${acc.name}：代理连不上`, detail: res.error, raw: res.detail || '' }); continue; }
     recordExit(acc, res.ip);
     acc.exitLabel = regionName(res.country);
     byIp.set(res.ip, [...(byIp.get(res.ip) || []), acc.name]);

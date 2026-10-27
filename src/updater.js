@@ -20,6 +20,7 @@ const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const errtext = require('./errtext');
 
 const OWNER = 'Kr1xxxx';
 const REPO = 'WAswitch';
@@ -229,6 +230,7 @@ class Updater {
       percent: 0,
       lastCheckAt: 0,
       lastResult: '',
+      lastDetail: '', // 失败时的原话（英文），关于页收在“详细信息”里
       failures: 0,
       mac: this.mac,
       manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
@@ -287,11 +289,12 @@ class Updater {
   fail(e) {
     const msg = String(e && e.message ? e.message : e).split('\n')[0].slice(0, 200);
     console.warn(`检查更新失败：${msg}`);
-    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${msg}`, failures: this.state.failures + 1, percent: 0, userAsked: false });
+    const { text, detail } = updateErrorText(e, msg);
+    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${text}`, lastDetail: detail, failures: this.state.failures + 1, percent: 0, userAsked: false });
   }
 
   succeed(status, lastResult, patch = {}) {
-    this.set({ status, lastCheckAt: Date.now(), lastResult, failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
+    this.set({ status, lastCheckAt: Date.now(), lastResult, lastDetail: '', failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
   }
 
   // 用户点“检查并更新”（或下载中点“下好后自动重启”）：一次点击 = 同意下好后马上重启安装
@@ -527,6 +530,20 @@ class Updater {
     shell.showItemInFolder(this.macApp);
     shell.openPath('/Applications').catch(() => {});
   }
+}
+
+// 检查更新失败的原因说人话：自己写的中文原样用；网络错误、electron-updater 的英文换成中文，原话放 lastDetail
+function updateErrorText(e, msg) {
+  if (errtext.hasChinese(msg)) return { text: msg, detail: '' };
+  const raw = errtext.rawOf(e) || msg;
+  const m = /HttpError:?\s*(\d{3})/.exec(raw);
+  const status = (e && Number(e.statusCode)) || (m ? Number(m[1]) : 0);
+  if (status === 404) return { text: '找不到更新文件，新版本可能还在发布中，过几分钟再试', detail: raw };
+  if (status === 403 || status === 429) return { text: 'GitHub 暂时限制了访问，过一会儿再试', detail: raw };
+  if (status >= 500) return { text: 'GitHub 那边暂时出错，过一会儿再试', detail: raw };
+  const kind = errtext.netKind(raw);
+  if (kind === 'other' && !/net::|ERR_|\bE[A-Z]{4,}\b|fetch failed|socket/.test(raw)) return { text: '检查更新出错了，过一会儿再试', detail: raw };
+  return { text: `连不上 GitHub（${errtext.netReason(raw)}）`, detail: raw };
 }
 
 // 新版本的 yml 还没传上去：Mac 是自己的 PendingError；Windows 是 electron-updater 找不到 latest.yml

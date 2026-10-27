@@ -537,3 +537,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .dk-fold-btn.fx-fold-open::before { animation: fx-fold-open var(--fx) var(--fx-ease) backwards; }
 .dk-fold-btn.fx-fold-close::before { animation: fx-fold-close var(--fx) var(--fx-ease) backwards; }
 .fx-unfold { animation: fx-unfold var(--fx) var(--fx-ease) backwards; }
+
+/* 报错原话：默认收起，点“详细信息”展开 */
+.err-raw { margin-top: 6px; font-size: 12px; color: var(--muted); text-align: left; }
+.err-raw summary { cursor: pointer; user-select: none; width: fit-content; }
+.err-raw code { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, .05); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; }
+.panel .err-raw { margin-top: -6px; max-width: 100%; }
+.panel .err-raw summary { margin: 0 auto; }

@@ -200,14 +200,21 @@ function extraContacts(source, output) {
   return [...pick(output)].filter((x) => !src.has(x));
 }
 
-function statusError(status) {
-  if (status === 401 || status === 403) return { kind: 'auth', text: '密钥不对或没有权限' };
-  if (status === 402) return { kind: 'quota', text: '账户没余额了' };
-  if (status === 429) return { kind: 'quota', text: '请求太频繁或超出额度，稍后再试' };
-  if (status === 404) return { kind: 'model', text: '地址或模型名不对' };
-  if (status === 400 || status === 422) return { kind: 'bad', text: '服务商拒绝了这次请求（可能是模型名不对或文字太长）' };
-  if (status >= 500) return { kind: 'server', text: '服务商那边出错了' };
-  return { kind: 'other', text: `服务商返回 ${status}` };
+// name：服务商名字（例如“智谱”“OpenRouter”），报错里写明是谁出的问题
+function statusError(status, name = '') {
+  const who = name ? `${name}${/[A-Za-z0-9)]$/.test(name) ? ' ' : ''}` : '服务商';
+  if (status === 401 || status === 403) return { kind: 'auth', text: `${who}的密钥不对或没有权限` };
+  if (status === 402) return { kind: 'quota', text: `${who}账户没余额了` };
+  if (status === 429) return { kind: 'quota', text: `${who}请求太频繁或超出额度，稍后再试` };
+  if (status === 404) return { kind: 'model', text: `${who}的地址或模型名不对` };
+  if (status === 400 || status === 422) return { kind: 'bad', text: `${who}拒绝了这次请求（可能是模型名不对或文字太长）` };
+  if (status >= 500) return { kind: 'server', text: `${who}那边出错了，稍后再试` };
+  return { kind: 'other', text: `${who}返回了错误（${status}）` };
+}
+// 服务商原话是中文就接在后面（例如“余额不足”）；英文的不放正文，放进 detail（界面上收在“详细信息”里）
+function withDetail(err, status, detail) {
+  if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status };
+  return { kind: err.kind, text: err.text, status, ...(detail ? { detail: `HTTP ${status} · ${detail}` } : { detail: `HTTP ${status}` }) };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
 function providerDetail(body, key = '') {
@@ -572,9 +579,8 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: 'DeepL 密钥不对（免费版密钥以 :fx 结尾）', status: 403 };
-      const err = statusError(res.status);
-      throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
+      if (res.status === 403) throw { kind: 'auth', text: 'DeepL 密钥不对（免费版密钥以 :fx 结尾）', status: 403, detail: detail ? `HTTP 403 · ${detail}` : '' };
+      throw withDetail(statusError(res.status, p.name || 'DeepL'), res.status, detail);
     }
     let out = '';
     try {
@@ -594,7 +600,7 @@ class Translator {
       res = await ses.fetch(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal });
     } catch (e) {
       if (signal.aborted) throw stopped();
-      throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）' };
+      throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）', detail: String((e && e.message) || e || '').slice(0, 200) };
     }
     try { return { ok: res.ok, status: res.status, text: await readCapped(res) }; } catch (e) {
       if (e && e.kind === 'big') throw { kind: 'big', text: '服务商返回的内容太大，已丢弃' };
@@ -625,13 +631,13 @@ class Translator {
     const res = await this.post(`${chk.url}/chat/completions`, headers, body, chk.local, signal);
     const { text } = res;
     if (!res.ok) {
-      const err = statusError(res.status);
+      const err = statusError(res.status, p.name);
       const detail = providerDetail(text, key);
       // 429 多半是“服务繁忙/限流”（混元 hy-mt2-plus 常见），不是没钱：不带英文原话，交给上层重试和换备用
       if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
         throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
       }
-      throw { kind: err.kind, text: detail ? `${err.text}：${detail}` : err.text, status: res.status };
+      throw withDetail(err, res.status, detail);
     }
     let out = '';
     try {
@@ -701,7 +707,7 @@ class Translator {
       if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
-      return { error: lastErr.text, kind: lastErr.kind };
+      return { error: lastErr.text, kind: lastErr.kind, ...(lastErr.detail ? { detail: lastErr.detail } : {}) };
     } finally {
       this.busy = null;
     }
@@ -720,7 +726,7 @@ class Translator {
       const out = p.preset === 'deepl' ? await this.callDeepl(p, { text: 'Hello', target: '中文' }, controller.signal) : await this.call(p, buildMessages({ prompt: '把用户的文字翻译成{目标语言}。' }, 'Hello', { target: '中文' }, undefined, '', p.model), { temperature: 0, maxTokens: 64, signal: controller.signal });
       return { ok: true, ms: Date.now() - started, sample: out.slice(0, 40) };
     } catch (e) {
-      return { error: (e && e.text) || '测试失败' };
+      return { error: (e && e.text) || '测试失败', ...(e && e.detail ? { detail: e.detail } : {}) };
     } finally {
       clearTimeout(timer);
       this.busy = null;

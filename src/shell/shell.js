@@ -84,6 +84,16 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
+// 报错的原话（英文错误码、服务商原话）收在“详细信息”里，平时不占地方，排查时点开看。
+// 界面经常整块重画，点开过的记下来，重画后还是开着
+const rawOpen = new Set();
+function rawDetail(text) {
+  if (!text) return null;
+  const el = h('details', { class: 'err-raw', open: rawOpen.has(text) }, h('summary', null, '详细信息'), h('code', null, text));
+  el.addEventListener('toggle', () => { if (el.open) rawOpen.add(text); else rawOpen.delete(text); if (rawOpen.size > 50) rawOpen.clear(); });
+  return el;
+}
+
 // ---------- 过渡动画 ----------
 // 界面每次状态变化都整块重画，CSS transition 接不上。这里按“槽位”记住上次的值，值真的变了才给新元素放一次动画。
 // 动画只用 opacity/transform，时长在 shell.css 的 --fx-* 里统一改；系统开了“减少动态效果”就不动
@@ -123,7 +133,7 @@ let settingsTab = 'memory';
 let checkResult = null;
 let checkRunning = false;
 // 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
-const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', showUpload: false };
+const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', detail: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
 let memClean = { busy: false, result: '' };
@@ -555,6 +565,7 @@ function problemPage(acc) {
     h('div', { class: 'warnicon' }, icon('warn', 26)),
     h('h2', null, acc.problemTitle || '代理连不上，这个账号已暂停联网'),
     h('p', null, acc.problem),
+    rawDetail(acc.problemDetail),
     acc.retrying ? h('p', { class: 'hint' }, acc.direct ? '正在自动重试，网络恢复后会自动连上。' : '正在自动重试，网络或 Clash 恢复后会自动连上。') : null,
     h('div', { class: 'btns' }, ...kids(...problemButtons(acc)))));
 }
@@ -721,6 +732,7 @@ let trEdit = null; // 正在编辑的服务商 { id?, preset, name, baseUrl, mod
 let trModeEdit = null;
 let trSay = '';
 let trTestRes = {};
+let trTestRaw = {}; // 测试失败时服务商的原话
 function trProviderForm() {
   const e = trEdit;
   const presets = tr.cfg.presets;
@@ -841,9 +853,9 @@ function translatePage(page) {
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
         p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
       h('span', { class: 'hint' }, `${p.preset === 'deepl' ? '机器翻译' : p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
-      h('span', { class: 'hint' }, trTestRes[p.id] || ''),
+      h('span', { class: 'hint' }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
       h('span', { class: 'hstack', style: { gap: '4px' } },
-        h('button', { class: 'pn-btn', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试'),
+        h('button', { class: 'pn-btn', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; trTestRaw[p.id] = r.ok ? '' : r.detail || ''; render(true); } }, '测试'),
         p.id !== c.primaryId ? h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认') : null,
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
         h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除服务商「${delName(p.name)}」？`, detail: `保存的密钥也会一起删掉。${p.id === c.primaryId ? '它是现在的默认服务商，删了以后要重新选一个。' : ''}` })) return; apply(await window.wa.trProviderDelete(p.id)); } }, '删除'))))
@@ -1100,7 +1112,7 @@ function editorPage(id) {
       const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value });
       testBtn.disabled = false;
       testBtn.textContent = '重新测试';
-      if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error)); return; }
+      if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return; }
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
@@ -1343,7 +1355,7 @@ function settingsPage() {
     if (checkResult) {
       page.append(h('div', { class: 'checks' }, checkResult.items.map((c) => h('div', { class: 'check' },
         h('span', { class: `mark${c.level === 'bad' ? ' bad' : c.level === 'warn' ? ' warn' : ''}` }, c.level === 'ok' ? '✓' : '!'),
-        h('span', { class: 'meta' }, h('span', null, c.title), c.detail ? h('span', { class: 'hint' }, c.detail) : null,
+        h('span', { class: 'meta' }, h('span', null, c.title), c.detail ? h('span', { class: 'hint' }, c.detail) : null, rawDetail(c.raw),
           c.fix ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: async (e) => {
             e.currentTarget.disabled = true;
             const r = await window.wa.checkFix(c.fix.id, c.fix.region);
@@ -1393,7 +1405,7 @@ function teamPage(t, accounts = []) {
   if (!t) return wrap;
   const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
   const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: '13px' } }, x))));
-  const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result) : null;
+  const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result, teamForm.result.startsWith('✓') ? null : rawDetail(teamForm.detail)) : null;
   wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '团队'),
     h('p', { class: 'lead' }, '登记后，管理员可以给你分配账号、查看每个号的状态。不登记不影响使用。')));
 
@@ -1405,14 +1417,14 @@ function teamPage(t, accounts = []) {
         h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
         h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
         h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
-      ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`),
+      ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
       t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
       h('div', { class: 'btns' },
         h('button', { class: 'btn', disabled: teamForm.busy, onclick: async () => {
           teamForm.busy = true; render(true);
           const r = await window.wa.teamSync();
           teamForm.busy = false;
-          teamForm.result = r && r.ok ? '✓ 已同步' : (r && r.error) || '同步没成功';
+          teamForm.result = r && r.ok ? '✓ 已同步' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
           render(true);
         } }, teamForm.busy ? '同步中…' : '立即同步'),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
@@ -1425,7 +1437,7 @@ function teamPage(t, accounts = []) {
           h('span', { class: 'meta' }, a.name),
           h('button', { class: 'btn', onclick: async () => {
             const r = await window.wa.teamJoin([a.id]);
-            teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功';
+            teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功'; teamForm.detail = (r && r.detail) || '';
             render(true);
           } }, '加入团队')))));
     }
@@ -1455,7 +1467,7 @@ function teamPage(t, accounts = []) {
       teamForm.busy = true; teamForm.result = ''; render(true);
       const r = await window.wa.teamEnroll({ server: teamForm.server, code: teamForm.code, deviceName: teamForm.deviceName, localIds: [...teamForm.picked], consent: teamForm.consent });
       teamForm.busy = false;
-      teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功';
+      teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功'; teamForm.detail = (r && r.detail) || '';
       if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
       render(true);
     } }, teamForm.busy ? '登记中…' : '登记')),
@@ -1496,7 +1508,8 @@ function updateBox(u) {
       h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
       h('span', { class: 'pct' }, `${u.percent}%`)) : null,
     u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。可以去下载页手动下载。`) : null,
-    h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`));
+    h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`),
+    u.status === 'error' ? rawDetail(u.lastDetail) : null);
 }
 
 // ---------- 总渲染 ----------

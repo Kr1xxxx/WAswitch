@@ -8,6 +8,7 @@
 // 否则会在用户不知情的情况下暴露真实 IP。
 const { net, safeStorage, session } = require('electron');
 const { canEncrypt } = require('./secure-storage');
+const errtext = require('./errtext');
 
 // 地址写错时用的“黑洞”代理：所有请求都会失败，而不是直连
 const BLACKHOLE = 'socks5://127.0.0.1:9';
@@ -98,11 +99,24 @@ function queryExit(ses, onLogin) {
     req.on('response', (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => { clearTimeout(timer); res.statusCode === 200 ? resolve(data) : reject(new Error(`HTTP ${res.statusCode}`)); });
+      res.on('end', () => { clearTimeout(timer); res.statusCode === 200 ? resolve(data) : reject(Object.assign(new Error(`HTTP ${res.statusCode}`), { status: res.statusCode })); });
     });
     req.on('error', (e) => { clearTimeout(timer); reject(e); });
     req.end();
   });
+}
+
+function parseExit(body) {
+  try { return JSON.parse(body); } catch { throw Object.assign(new Error(`ipinfo 返回的不是 JSON：${String(body).slice(0, 80)}`), { bad: true }); }
+}
+
+// 测出口失败：中文说明 + 原话（放进“详细信息”）。原话不带代理密码
+function exitError(e, p) {
+  const raw = errtext.rawOf(e);
+  if (e && e.status) return { error: errtext.ipinfoStatus(e.status), detail: raw };
+  if (e && e.bad) return { error: '查 IP 的网站返回的内容不对，过一会儿再测', detail: raw };
+  if (errtext.hasChinese(raw)) return { error: p ? `代理连不上：${raw}` : raw };
+  return { error: errtext.netReason(raw, { proxy: p }), detail: p ? `${raw} · ${p.rules}` : raw };
 }
 
 // 测试代理：通过它访问一个查询出口 IP 的网址，返回出口 IP、国家、时区。
@@ -128,10 +142,10 @@ async function testOnce(raw, password) {
       if (authInfo.isProxy && p.username) callback(p.username, password || p.password);
       else callback();
     });
-    const info = JSON.parse(body);
+    const info = parseExit(body);
     return { ok: true, ip: info.ip, country: info.country, city: info.city, timezone: info.timezone, ms: Date.now() - started };
   } catch (e) {
-    return { error: `代理连不上：${e.message}` };
+    return exitError(e, p);
   } finally {
     ses.clearStorageData().catch(() => {});
     ses.closeAllConnections().catch(() => {});
@@ -144,10 +158,10 @@ async function testDirect() {
   const ses = session.fromPartition('proxytest-direct', { cache: false });
   await ses.setProxy({ mode: 'direct' });
   try {
-    const info = JSON.parse(await queryExit(ses, (_a, callback) => callback()));
+    const info = parseExit(await queryExit(ses, (_a, callback) => callback()));
     return { ok: true, ip: info.ip, country: info.country };
   } catch (e) {
-    return { error: e.message };
+    return exitError(e, null);
   } finally {
     ses.clearStorageData().catch(() => {});
     ses.closeAllConnections().catch(() => {});
