@@ -48,6 +48,8 @@ jobs:
         run: npm run check:ports
       - name: 安全写文件自检
         run: npm run check:atomic
+      - name: 导出导入去重自检
+        run: npm run check:records
 
   package-win:
     runs-on: windows-latest

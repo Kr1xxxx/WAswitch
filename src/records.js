@@ -61,6 +61,18 @@ const KINDS = {
   },
 };
 
+// 判断导入是否重复用的键。客户：同一账号下电话相同（只比数字，+34 612-345 和 34612345 算同一个）；
+// 没填电话的按名字（不分大小写）。话术：标题+内容。翻译模式：名字+方向+提示词
+const phoneDigits = (p) => String(p || '').replace(/\D/g, '');
+function dupKey(kind, r) {
+  if (kind === 'customers') {
+    const d = phoneDigits(r.phone);
+    return `${r.accountId || ''}\n${d ? `p:${d}` : `n:${String(r.name || '').toLowerCase()}`}`;
+  }
+  if (kind === 'replies') return `${r.title}\n${r.text}`;
+  return `${r.name}\n${r.direction}\n${r.prompt}`;
+}
+
 class Records {
   constructor(dir, kind) {
     this.kind = kind;
@@ -144,6 +156,25 @@ class Records {
     }
     if (save) this.save();
     return rec;
+  }
+
+  // 导入一批：内容和已有记录（包括停用账号名下的）重复的跳过，文件里自己重复的也只留第一条。
+  // 返回 { added, dup, bad }：新加了几条、几条已经有了、几条内容不全
+  importRows(rows) {
+    this.load();
+    const seen = new Set(this.items.filter((r) => !r.deleted).map((r) => dupKey(this.kind, r)));
+    let added = 0; let dup = 0; let bad = 0;
+    for (const row of rows) {
+      const clean = this.def.clean(row || {});
+      if (!this.def.valid(clean)) { bad += 1; continue; }
+      const key = dupKey(this.kind, clean);
+      if (seen.has(key)) { dup += 1; continue; }
+      if (!this.upsert({ ...row, id: undefined }, { save: false, imported: true })) { bad += 1; continue; }
+      seen.add(key);
+      added += 1;
+    }
+    this.save();
+    return { added, dup, bad };
   }
 
   remove(id) {
@@ -247,4 +278,4 @@ function readImport(kind, file) {
   return { rows };
 }
 
-module.exports = { KINDS, Records, toCsv, readImport, parseCsv, csvCell };
+module.exports = { KINDS, Records, dupKey, toCsv, readImport, parseCsv, csvCell };
