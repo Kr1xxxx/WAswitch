@@ -22,7 +22,7 @@ const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes, needsKey } = require('./translate');
-const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
+const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const memory = require('./memory');
@@ -1974,10 +1974,20 @@ function updateIdleReason() {
   return null;
 }
 
+// 用户点了更新、已经下好：窗口开着时，30 秒内打过字、在编辑账号或正在确认操作，先不重启
+function updateBusyReason() {
+  if (!win || !win.isVisible() || win.isMinimized()) return null;
+  if (page === 'editor') return '正在编辑账号';
+  if (confirmDialogOpen || clearingCache) return '正在操作';
+  if (Date.now() - lastTypedAt < TYPING_MS) return '正在打字';
+  return null;
+}
+
 function setupUpdater() {
   updater = new Updater({
     onChange: () => { notifier.refresh(); pushState(); },
     idleReason: updateIdleReason,
+    busyReason: updateBusyReason,
     beforeInstall: async () => {
       if (!win || !win.isVisible()) fs.writeFileSync(updateMarker(), String(Date.now()));
       quitting = true;
@@ -2456,10 +2466,17 @@ const FIX_OUT = {
   temperature: 0.2,
 };
 function setupFloatCore() {
+  // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
   const oldTrDir = path.join(app.getPath('userData'), 'translations');
-  const trDir = pickTrDir(oldTrDir);
-  migrateTr(oldTrDir, trDir);
-  trStore = new TrStore(trDir);
+  const dTrDir = 'D:\\WAswitch\\translations';
+  const guess = process.platform === 'win32' && fs.existsSync(dTrDir) ? dTrDir : oldTrDir;
+  trStore = new TrStore(guess);
+  pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
+    if (!trStore) return;
+    trStore.flush();
+    if (process.platform === 'win32') migrateTr(dir === dTrDir ? oldTrDir : dTrDir, dir);
+    if (dir !== trStore.dir) { trStore.setDir(dir); console.log(`译文存在：${dir}`); }
+  }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
   floatCore = new FloatCore({
     store: trStore,
     translate: (text, { fix, context, prev } = {}) => {
@@ -2763,6 +2780,18 @@ onShell('mute', ({ id, muted } = {}) => {
   pushState();
 });
 onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
+// 关于页：译文存在哪、占多大
+handleShell('trdir:info', async () => {
+  if (!trStore) return null;
+  const dir = trStore.dir;
+  return { dir, ...(await trDirInfo(dir)) };
+});
+onShell('trdir:open', () => {
+  if (!trStore) return;
+  const dir = trStore.dir;
+  try { fs.mkdirSync(dir, { recursive: true }); if (!fs.statSync(dir).isDirectory()) return; } catch { return; }
+  shell.openPath(dir);
+});
 
 // 轻量模式聊天页
 onShell('lite:open', ({ id, jid } = {}) => {
@@ -3257,6 +3286,7 @@ handleShell('check:fix', async ({ id, region } = {}) => {
 
 // 关于页：检查更新、重启以更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动重启安装
+onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动重启了
 onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动重启
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 

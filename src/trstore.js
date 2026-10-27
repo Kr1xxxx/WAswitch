@@ -74,6 +74,13 @@ class TrStore {
     for (const [k, e] of this.mem) if (e.dirty) this.write(k, e);
   }
 
+  // 换存放位置（启动后查完盘才知道放哪）：先把没写盘的写到旧位置，再清掉内存，之后读写都在新位置
+  setDir(dir) {
+    this.flush();
+    this.mem.clear();
+    this.dir = dir;
+  }
+
   // 删号：磁盘上的译文保留，只把内存里的写盘后放掉
   forgetAccount(acc) {
     for (const [k, e] of [...this.mem]) {
@@ -84,17 +91,62 @@ class TrStore {
   }
 }
 
-// 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；没有 D 盘或写不进去才放 C（userData 里）。
-// 不放桌面。Mac 不变。opts 只给自检用。
-function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations' } = {}) {
+// 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；不放桌面。Mac 不变。
+// 2026-10-27：D 盘必须是本机固定硬盘才放（U 盘、SD 卡、移动硬盘、网络盘、光驱都不放），查不出来也不放，
+// 写不进去也不放，这些情况都放 C（userData 里）。查盘要调 PowerShell，所以是异步的。opts 只给自检用。
+async function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations', probe = probeDrive } = {}) {
   if (platform !== 'win32') return fallback;
+  let info = null;
+  try { info = await probe(path.parse(preferred).root); } catch { /* 查不出来 */ }
+  if (!isLocalFixed(info)) return fallback;
   try {
     fs.mkdirSync(preferred, { recursive: true });
-    const probe = path.join(preferred, `.probe-${process.pid}`);
-    fs.writeFileSync(probe, '');
-    fs.rmSync(probe, { force: true });
+    const probeFile = path.join(preferred, `.probe-${process.pid}`);
+    fs.writeFileSync(probeFile, '');
+    fs.rmSync(probeFile, { force: true });
     return preferred;
   } catch { return fallback; }
+}
+
+// 盘的类型（.NET DriveInfo）和接口（Get-Disk 的 BusType，认出插在 USB 上的移动硬盘）。输出像 "Fixed|NVMe"。
+const REMOVABLE_BUS = new Set(['usb', 'sd', 'mmc', '7', '12', '13']);
+function parseDriveProbe(out) {
+  const [type = '', bus = ''] = String(out || '').trim().split(/\r?\n/).pop().split('|').map((x) => x.trim());
+  return type ? { type, bus } : null;
+}
+function isLocalFixed(info) {
+  return !!info && info.type.toLowerCase() === 'fixed' && !REMOVABLE_BUS.has(info.bus.toLowerCase());
+}
+function probeDrive(root) {
+  const letter = String(root || '').charAt(0).toUpperCase();
+  if (!/^[A-Z]$/.test(letter)) return Promise.resolve(null);
+  const ps = "$ErrorActionPreference='SilentlyContinue';"
+    + `$t=(New-Object System.IO.DriveInfo '${letter}').DriveType;`
+    + `$b=(Get-Partition -DriveLetter ${letter} | Get-Disk | Select-Object -First 1).BusType;`
+    + "Write-Output ([string]$t+'|'+[string]$b)"; // 不用双引号：Windows 传参时双引号要转义，容易出错
+  const { execFile } = require('child_process');
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { timeout: 15000, windowsHide: true }, (e, out) => resolve(e ? null : parseDriveProbe(out)));
+  });
+}
+
+// 关于页用：文件夹里存了多少（每个号一个文件夹，每个对话一个 .json）
+async function dirInfo(dir) {
+  const fsp = fs.promises;
+  let bytes = 0;
+  let files = 0;
+  let accs = [];
+  try { accs = (await fsp.readdir(dir, { withFileTypes: true })).filter((d) => d.isDirectory()); } catch { return { bytes, files }; }
+  for (const a of accs) {
+    let names = [];
+    try { names = await fsp.readdir(path.join(dir, a.name)); } catch { continue; }
+    for (const f of names) {
+      if (!f.endsWith('.json')) continue;
+      try { bytes += (await fsp.stat(path.join(dir, a.name, f))).size; files++; } catch { /* 刚好被删 */ }
+    }
+  }
+  return { bytes, files };
 }
 
 // 旧位置的译文搬到新位置（一次性；之后旧文件夹没了就什么都不做）。跨盘不能 rename，所以复制再删。
@@ -120,4 +172,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, textKey, pickDir, migrate };
+module.exports = { TrStore, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };

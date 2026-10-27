@@ -132,15 +132,22 @@ async function persisted() {
   fc.forget('P');
   assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).length, 2, '删号不删存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
-  // 存哪：Windows 优先 D 盘，写不进去回到 C（userData）；Mac 不变；旧文件搬过去一次，不覆盖新位置已有的
-  const { pickDir, migrate } = require('../src/trstore');
+  // 存哪：Windows 上 D 盘是本机固定硬盘才放 D 盘，U 盘/移动硬盘/网络盘/查不出来/写不进去都回到 C（userData）；Mac 不变；
+  // 旧文件搬过去一次，不覆盖新位置已有的
+  const { pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo } = require('../src/trstore');
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trdir-'));
   const oldDir = path.join(base, 'old');
   const dDir = path.join(base, 'D', 'WAswitch', 'translations');
-  assert.strictEqual(pickDir(oldDir, { platform: 'darwin', preferred: dDir }), oldDir);
-  assert.strictEqual(pickDir(oldDir, { platform: 'win32', preferred: dDir }), dDir);
+  const fixed = async () => ({ type: 'Fixed', bus: 'NVMe' });
+  assert.strictEqual(await pickDir(oldDir, { platform: 'darwin', preferred: dDir, probe: fixed }), oldDir);
+  for (const [out, want] of [['Removable|USB', oldDir], ['Fixed|USB', oldDir], ['Fixed|SD', oldDir], ['Network|', oldDir], ['CDRom|', oldDir], ['NoRootDirectory|', oldDir], ['', oldDir], ['Fixed|SATA', dDir], ['Fixed|', dDir]]) {
+    assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: dDir, probe: async () => parseDriveProbe(out) }), want, `D 盘是 ${out || '查不出来'}`);
+  }
+  assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: dDir, probe: async () => { throw new Error('x'); } }), oldDir, '查盘出错就用 C');
+  assert.deepStrictEqual(parseDriveProbe('Fixed|NVMe\r\n'), { type: 'Fixed', bus: 'NVMe' });
+  assert(!isLocalFixed(parseDriveProbe('Fixed|7')), 'BusType 是数字 7 也是 USB');
   fs.writeFileSync(path.join(base, 'file'), '');
-  assert.strictEqual(pickDir(oldDir, { platform: 'win32', preferred: path.join(base, 'file', 'x') }), oldDir, '写不进去就用 C');
+  assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: path.join(base, 'file', 'x'), probe: fixed }), oldDir, '写不进去就用 C');
   fs.mkdirSync(path.join(oldDir, 'A'), { recursive: true });
   fs.writeFileSync(path.join(oldDir, 'A', 'c1.json'), '{"k":1}');
   fs.writeFileSync(path.join(oldDir, 'A', 'c2.json'), '{"k":"old"}');
@@ -152,6 +159,18 @@ async function persisted() {
   assert(!fs.existsSync(oldDir), '搬完删掉旧的');
   assert.strictEqual(migrate(oldDir, dDir), 0);
   assert.strictEqual(migrate(dDir, dDir), 0);
+  // 关于页显示的大小：只算每个号文件夹里的 .json
+  fs.writeFileSync(path.join(dDir, 'A', 'note.txt'), 'xxxxxxxx');
+  assert.deepStrictEqual(await dirInfo(dDir), { bytes: 7 + 11, files: 2 });
+  assert.deepStrictEqual(await dirInfo(path.join(base, 'nope')), { bytes: 0, files: 0 });
+  // 换位置：没写盘的先写到旧位置，之后读写新位置
+  const st = new TrStore(oldDir);
+  st.put('A', 'c9', 'hi', { tr: '你好' });
+  st.setDir(dDir);
+  assert(fs.existsSync(path.join(oldDir, 'A', 'c9.json')), '换位置前写盘');
+  assert.strictEqual(st.get('A', 'c9', 'hi'), null, '新位置没有这条');
+  assert.strictEqual(st.get('A', 'c1', 'x'), null);
+  assert(st.load('A', 'c1').data.k === 1, '新位置读得到');
   fs.rmSync(base, { recursive: true, force: true });
   console.log('译文存盘自检通过');
 }

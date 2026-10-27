@@ -28,6 +28,7 @@ const ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com', 'r
 const FIRST_CHECK_MS = 60 * 1000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const IDLE_POLL_MS = 60 * 1000;
+const WAIT_POLL_MS = 5 * 1000; // 用户点了更新但还在打字：每 5 秒看一次停手没有
 const FAIL_WARN_AT = 3; // 连续失败这么多次，关于页标黄
 const IDLE_TIMEOUT_MS = 60 * 1000; // Mac 下载：这么久没收到数据就算失败
 const STUCK_CHECKING_MS = 5 * 60 * 1000; // 检查超过 5 分钟没结果
@@ -217,6 +218,7 @@ class Updater {
   // hooks: {
   //   onChange(),                       状态变了（刷新关于页和托盘）
   //   idleReason() -> string | null,    现在不能自动安装的原因；null 表示可以装
+  //   busyReason() -> string | null,    用户手上正在忙（打字、编辑账号）：用户点了更新也先等一等
   //   beforeInstall() -> Promise,       安装前（轻量模式写盘、记下要不要回托盘）
   //   installFailed() -> Promise,       安装没成功（恢复轻量模式、取消退出状态）
   //   notify(title, body, onClick),     系统通知
@@ -234,7 +236,8 @@ class Updater {
       failures: 0,
       mac: this.mac,
       manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
-      userAsked: false, // 用户点了“检查并更新”：下好后马上重启安装，不等空闲、不用再点一次
+      userAsked: false, // 用户点了“检查并更新”：下好后不等空闲就重启安装，不用再点一次（只等用户停手）
+      waitReason: '', // 用户点了更新、已经下好，但还在打字：等停手再重启
     };
     this.updater = null;
     this.ops = hooks.macOps || macOps;
@@ -245,6 +248,8 @@ class Updater {
     this.idleMs = hooks.idleMs || IDLE_TIMEOUT_MS; // 测试时调小
     this.busySince = 0; // 进入 checking / downloading，或下载进度最近一次变化的时间
     this.pendingTimer = null;
+    this.waitTimer = null;
+    this.waitPollMs = hooks.waitPollMs || WAIT_POLL_MS; // 测试时调小
   }
 
   start() {
@@ -290,7 +295,7 @@ class Updater {
     const msg = String(e && e.message ? e.message : e).split('\n')[0].slice(0, 200);
     console.warn(`检查更新失败：${msg}`);
     const { text, detail } = updateErrorText(e, msg);
-    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${text}`, lastDetail: detail, failures: this.state.failures + 1, percent: 0, userAsked: false });
+    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${text}`, lastDetail: detail, failures: this.state.failures + 1, percent: 0, userAsked: false, waitReason: '' });
   }
 
   succeed(status, lastResult, patch = {}) {
@@ -304,6 +309,14 @@ class Updater {
     if (s === 'downloaded') { this.install(); return; }
     this.set({ userAsked: true });
     if (s !== 'checking' && s !== 'downloading') this.check();
+  }
+
+  // 下好后在等用户停手时点了“稍后”：不自动重启了，改回空闲（缩到托盘）时再装
+  userLater() {
+    if (!this.state.userAsked) return;
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
+    this.set({ userAsked: false, waitReason: '' });
   }
 
   async check() {
@@ -371,10 +384,24 @@ class Updater {
     autoUpdater.on('error', (e) => { if (!isPending(e)) this.fail(e); });
   }
 
-  // 自动安装：只在用户肯定不在用的时候
+  // 自动安装：只在用户肯定不在用的时候。
+  // 用户点了更新：不等缩到托盘，但手上在忙（30 秒内打过字、在编辑账号）时先等，停手了再重启，免得打到一半的字没了
   maybeAutoInstall() {
-    if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
-    if (!this.state.userAsked && this.hooks.idleReason()) return;
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
+    if (this.state.manual || this.state.status !== 'downloaded' || this.installing) {
+      if (this.state.waitReason) this.set({ waitReason: '' });
+      return;
+    }
+    if (this.state.userAsked) {
+      const busy = this.hooks.busyReason ? this.hooks.busyReason() : null;
+      if (busy !== (this.state.waitReason || null)) this.set({ waitReason: busy || '' });
+      if (busy) {
+        this.waitTimer = setTimeout(() => this.maybeAutoInstall(), this.waitPollMs);
+        this.waitTimer.unref?.();
+        return;
+      }
+    } else if (this.hooks.idleReason()) return;
     console.log(`${this.state.userAsked ? '用户点了更新，' : ''}自动安装新版本 ${this.state.version}`);
     this.install();
   }
@@ -382,6 +409,8 @@ class Updater {
   // 用户点“重启以更新”，或空闲时自动调用
   async install() {
     if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
     this.installing = true;
     try {
       if (this.mac && (!this.macApp || !fs.existsSync(this.macApp))) throw new Error('解压好的新版本不见了');
