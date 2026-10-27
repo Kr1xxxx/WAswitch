@@ -1950,10 +1950,20 @@ function updateIdleReason() {
   return null;
 }
 
+// 用户点了更新、已经下好：窗口开着时，30 秒内打过字、在编辑账号或正在确认操作，先不重启
+function updateBusyReason() {
+  if (!win || !win.isVisible() || win.isMinimized()) return null;
+  if (page === 'editor') return '正在编辑账号';
+  if (confirmDialogOpen || clearingCache) return '正在操作';
+  if (Date.now() - lastTypedAt < TYPING_MS) return '正在打字';
+  return null;
+}
+
 function setupUpdater() {
   updater = new Updater({
     onChange: () => { notifier.refresh(); pushState(); },
     idleReason: updateIdleReason,
+    busyReason: updateBusyReason,
     beforeInstall: async () => {
       if (!win || !win.isVisible()) fs.writeFileSync(updateMarker(), String(Date.now()));
       quitting = true;
@@ -3225,6 +3235,7 @@ handleShell('check:fix', async ({ id, region } = {}) => {
 
 // 关于页：检查更新、重启以更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动重启安装
+onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动重启了
 onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动重启
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
