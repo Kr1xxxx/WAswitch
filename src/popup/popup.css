@@ -1,0 +1,95 @@
+/* 通知弹窗：B 样式（WhatsApp 头像卡），跟系统深浅色走。
+   窗口是透明的，卡片四周留透明边给阴影（和 src/popup.js 里的 PAD 一致）。
+   透明窗口里 backdrop-filter 模糊不到桌面，所以底色几乎不透明。 */
+:root {
+  --nt-bg: rgba(248, 248, 250, .97);
+  --nt-solid: #F6F6F8;
+  --nt-ink: #121316;
+  --nt-sub: #5B606A;
+  --nt-line: rgba(0, 0, 0, .1);
+  --nt-btn: rgba(0, 0, 0, .06);
+  --nt-btn-h: rgba(0, 0, 0, .11);
+  --nt-shadow: 0 10px 28px rgba(20, 24, 32, .2), 0 1px 3px rgba(20, 24, 32, .14);
+  --wa: #128C7E;
+  --wa-ink: #fff;
+  --fx: 220ms;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --nt-bg: rgba(44, 45, 50, .97);
+    --nt-solid: #2C2D32;
+    --nt-ink: #F2F3F5;
+    --nt-sub: #A9AEB6;
+    --nt-line: rgba(255, 255, 255, .1);
+    --nt-btn: rgba(255, 255, 255, .09);
+    --nt-btn-h: rgba(255, 255, 255, .15);
+    --nt-shadow: 0 10px 28px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .45);
+    --wa: #1FAF5A;
+    color-scheme: dark;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --fx: 0ms; } }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font: 13px/1.4 var(--font-ui); color: var(--nt-ink); user-select: none; cursor: default; }
+
+#zone { padding: 4px 8px 24px 24px; width: 376px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+
+.nt {
+  width: 344px; background: var(--nt-bg); color: var(--nt-ink);
+  border-radius: 16px; box-shadow: var(--nt-shadow); border: .5px solid var(--nt-line);
+  padding: 12px; display: grid; gap: 10px; position: relative; cursor: pointer;
+}
+.win .nt { border-radius: 8px; }
+.nt.in { animation: slideIn var(--fx) var(--ease); }
+@keyframes slideIn { from { transform: translateX(28px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.top { display: flex; gap: 11px; min-width: 0; }
+.av {
+  width: 42px; height: 42px; border-radius: 50%; flex: none; position: relative;
+  display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 15px; letter-spacing: .02em;
+}
+.av.lock { background: var(--nt-btn-h); color: var(--nt-sub); }
+.av.logo { background: transparent; }
+.av.logo svg.big { width: 42px; height: 42px; border-radius: 10px; }
+.av .badge { position: absolute; right: -3px; bottom: -3px; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--nt-solid); box-sizing: content-box; }
+.body { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.line1 { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.who { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cnt { font-size: 11px; font-weight: 600; background: var(--nt-btn); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+.again { font-size: 11px; color: var(--nt-sub); white-space: nowrap; }
+time { margin-left: auto; color: var(--nt-sub); font-size: 11.5px; white-space: nowrap; flex: none; }
+.meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--nt-sub); font-size: 11.5px; }
+.acc { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.acc i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.txt { opacity: .86; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+.locked .txt { color: var(--nt-sub); opacity: 1; }
+
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.acts.one { grid-template-columns: 1fr; }
+.btn { border: 0; background: var(--nt-btn); color: var(--nt-ink); font: 500 12.5px/1 var(--font-ui); padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+.btn:hover { background: var(--nt-btn-h); }
+.btn.pri { background: var(--wa); color: var(--wa-ink); }
+.btn.pri:hover { filter: brightness(1.06); }
+.win .btn { border-radius: 4px; }
+
+/* 关闭：Mac 在左上角（和系统通知一样），Windows 在右上角；鼠标停在卡片上才出现 */
+.x {
+  position: absolute; top: -7px; left: -7px; width: 20px; height: 20px; border-radius: 50%;
+  border: .5px solid var(--nt-line); background: var(--nt-solid); color: var(--nt-sub);
+  font-size: 11px; line-height: 18px; text-align: center; padding: 0; opacity: 0; transition: opacity 120ms;
+  cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+}
+.nt:hover .x { opacity: 1; }
+.win .x { left: auto; right: 6px; top: 6px; background: transparent; border: 0; box-shadow: none; }
+.win .nt:hover time { visibility: hidden; }
+
+.more {
+  font-size: 11.5px; color: var(--nt-ink); background: var(--nt-bg); border: .5px solid var(--nt-line);
+  border-radius: 999px; padding: 4px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, .14);
+  display: flex; gap: 8px; align-items: center;
+}
+.more button { border: 0; background: transparent; color: var(--wa); font: 600 11.5px var(--font-ui); cursor: pointer; padding: 0; }

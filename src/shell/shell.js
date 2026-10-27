@@ -650,7 +650,7 @@ function overviewPage() {
     h('div', { class: 'hstack', style: { justifyContent: 'space-between', marginTop: '8px' } },
       h('h2', { class: 'ov-h2' }, '通知记录'),
       notifLogCache.length ? h('button', { class: 'btn', onclick: async () => { if (!await confirmDelete({ title: '清空通知记录？', detail: `会删掉这里的 ${notifLogCache.length} 条记录，不影响未读数和聊天。`, ok: '清空' })) return; await window.wa.notifClear(); loadNotifLog(); } }, '清空记录') : null),
-    h('p', { class: 'hint', style: { margin: 0 } }, '每次有号的未读变多都记一条（最多 300 条），只记哪个号、什么时候、几个未读，不记消息内容。“没弹”表示当时这个号或分组不弹通知，或者你正看着它。'),
+    h('p', { class: 'hint', style: { margin: 0 } }, '每次有号的未读变多都记一条（最多 300 条），只记哪个号、什么时候、几个未读，不记消息内容。“没弹”表示当时这个号或分组不弹通知、开着勿扰，或者你正看着它。'),
     notifLogCache.length
       ? h('div', { class: 'box ov-log' }, notifLogCache.map((e) => {
         const a = byId.get(e.id);
@@ -1535,7 +1535,18 @@ function settingsPage() {
   } else if (settingsTab === 'notify') {
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '通知'),
-        h('p', { class: 'lead' }, '通知标题显示账号名，正文写是哪几个对话（比如“Emma Schneider、John Miller 等 3 个未读对话”），点通知直接打开那个号。只写对话名字，不显示消息内容；聊天锁定时只写未读数。')),
+        h('p', { class: 'lead' }, '新消息从屏幕右上角弹出：客户名字、哪个号收到的、最后一条消息。点「打开」切到这个号；点「稍后」先收起，10 分钟后还没读再提醒一次。同一个客户连着发会合并成一张，最多同时摆 3 张。聊天锁定时不显示客户名字和内容。正开着这个号看时不弹。')),
+      h('div', null,
+        setRow('自动消失', '鼠标停在弹窗上时不消失。',
+          h('select', { 'aria-label': '弹窗自动消失时间', onchange: (e) => window.wa.setSetting('popupSeconds', Number(e.target.value)) },
+            (s.popupChoices || [4, 6, 10, 0]).map((n) => h('option', { value: String(n), selected: st.popupSeconds === n }, n ? `${n} 秒` : '不自动消失')))),
+        setRow('提示音', '弹窗时响一声。',
+          sw(st.popupSound !== false, '弹窗提示音', (v) => window.wa.setSetting('popupSound', v))),
+        setRow('勿扰', st.popupDnd ? '勿扰中：新消息不弹窗，未读数和通知记录照常。' : '开着时新消息不弹窗，未读数和通知记录照常。托盘菜单里也能开关。',
+          sw(!!st.popupDnd, '勿扰', (v) => window.wa.setSetting('popupDnd', v))),
+        setRow('试一下', '弹一张示例卡片看看样子。',
+          h('button', { class: 'btn', disabled: !!st.popupDnd, title: st.popupDnd ? '勿扰开着，先关掉勿扰' : '', onclick: () => window.wa.popupTest() }, '弹一张'))),
+      h('h2', { class: 'ov-h2' }, '哪些号弹'),
       h('div', null, s.accounts.length ? s.accounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center' } },
         h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
         h('span', { class: 'meta' }, a.name),

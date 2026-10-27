@@ -15,6 +15,7 @@
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
     "check:notify": "node scripts/check-notify.js",
+    "check:popup": "electron scripts/check-popup.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
     "check:ports": "node scripts/check-ports.js && node scripts/check-proxy-pass.js",

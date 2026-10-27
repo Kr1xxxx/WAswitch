@@ -20,7 +20,7 @@ const errtext = require('./errtext');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
-const { unreadNames } = require('./notify-text');
+const { PopupWindow } = require('./popup');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
@@ -499,7 +499,7 @@ let lastTypedAt = 0;
 let liteHost = null;
 const liteStates = new Map(); // id -> { status, qr }
 const liteViews = new Map(); // id -> 后台进程推来的对话列表和当前对话
-const liteUnreadNames = new Map(); // id -> 后台进程推来的有未读的对话名字（通知里用）
+const liteUnreadChats = new Map(); // id -> 后台进程推来的有未读的对话（名字、未读条数、最后一条预览，弹窗里用）
 const liteOpen = new Map(); // id -> 正在看的对话
 let liteGuardHits = 0; // 网络护栏拦下的次数（隔离自检里显示）
 const isLite = (acc) => acc && acc.mode === 'lite';
@@ -526,23 +526,43 @@ const memoryManager = new memory.MemoryManager(settings, {
   onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
-// 新消息通知里写是哪几个对话：只要名字和未读数，不读消息内容。
-// 聊天锁定、账号出错、页面还在加载时返回 null，通知退回“有 N 个未读对话”
-async function unreadChatNames(acc) {
+// 新消息弹窗要用的对话列表：名字、未读条数、最后一条消息的预览（对话列表里本来就显示的那一行）。
+// 网页号在隔离环境里只读（不往页面注入）；轻量号用后台进程推来的。
+// 聊天锁定、账号出错、页面还在加载时返回 null，弹窗退回“有 N 个未读对话”
+async function readUnreadChats(acc) {
   if (locked || problems.has(acc.id)) return null;
-  if (isLite(acc)) return liteUnreadNames.get(acc.id) || null;
+  if (isLite(acc)) return liteUnreadChats.get(acc.id) || null;
   const view = views.get(acc.id);
   if (!view || pendingLoad.has(acc.id)) return null;
   // 标题里的未读数先变，左边对话列表稍后才排好，等一下再读
   await new Promise((r) => setTimeout(r, 600));
   if (locked || views.get(acc.id) !== view || view.webContents.isDestroyed()) return null;
-  const r = await waPage.readChatList(view.webContents, { includePreview: false });
-  return r && r.ok ? unreadNames(r.chats) : null;
+  const r = await waPage.readChatList(view.webContents, { includePreview: true });
+  return r && r.ok ? r.chats : null;
 }
+
+// 自带通知弹窗（屏幕右上角）。所有提醒都走它，不用系统通知
+const popup = new PopupWindow({
+  getWindow: () => win,
+  account: (id) => { const a = accounts.find((x) => x.id === id); return a ? { name: a.name, color: a.color } : null; },
+  locked: () => locked,
+  settings: () => settings,
+  onOpen: (card) => notifier.open(card),
+  onLater: (card) => notifier.later(card),
+});
+ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
+ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
+ipcMain.on('popup:act', (e, { uid, action } = {}) => {
+  if (!['open', 'later', 'close', 'clear'].includes(action)) return;
+  popup.onAction(e.sender, Number(uid), action);
+});
 
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
-  unreadChats: (acc) => unreadChatNames(acc),
+  readChats: (acc) => readUnreadChats(acc),
+  popup,
+  openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
+  setDnd: (on) => setSetting('popupDnd', on === true),
   onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
@@ -694,6 +714,7 @@ function setLocked(on) {
   if (locked === on) return;
   if (on && !accounts.length) return;
   locked = on;
+  popup.refresh(); // 锁上后弹窗马上遮住客户名字和内容
   // 先把键盘焦点从账号页面挪走，锁住后打字不会进到聊天里
   if (on && shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus();
   layout();
@@ -760,12 +781,12 @@ function checkFollowUps() {
   customerStore.save();
   for (const c of due.slice(0, 3)) {
     const accId = c.accountId;
-    notifier.notifyApp('WAswitch', `跟进提醒：${c.name || '一位客户'}`, () => {
+    notifier.notifyApp('跟进提醒', c.name || '一位客户', () => {
       notifier.showWindow();
       if (findAcc(accId)) userActivate(accId); // 只切换账号，不自动打开面板
-    });
+    }, { sensitive: true });
   }
-  if (due.length > 3) notifier.notifyApp('WAswitch', `还有 ${due.length - 3} 条跟进提醒`, () => notifier.showWindow());
+  if (due.length > 3) notifier.notifyApp('跟进提醒', `还有 ${due.length - 3} 条跟进提醒`, () => notifier.showWindow());
 }
 
 // 切换提速：切走的号会被降级（定时器节流、画面缓存释放），放久了再切回来要先补做积压的活、
@@ -864,6 +885,16 @@ function offlineIds() {
   }
   return ids;
 }
+// 网页号：同一个客户又发一条时标题里的未读对话数不变，每 10 秒看一眼有未读的号的对话列表（只读），
+// 某个客户的未读条数变多了就弹（合并到这个客户的卡片上）。没有未读的号、静音的号、正在看的号不看
+const RECHECK_MS = 10 * 1000;
+function recheckUnread() {
+  if (locked || settings.popupDnd) return;
+  for (const acc of visibleAccounts()) {
+    if (isLite(acc) || !(notifier.unread.get(acc.id) > 0) || problems.has(acc.id)) continue;
+    notifier.recheck(acc, { isActive: acc.id === activeId && page === 'account' });
+  }
+}
 function checkOffline() {
   const now = Date.now();
   if (offlineLastTick && now - offlineLastTick > OFFLINE_TICK_MS * 4) offlineWatch.restart();
@@ -902,6 +933,7 @@ function pushState() {
     panelTab,
     floatOpen: trIpc.floatOpen,
     lockChoices: memory.LOCK_CHOICES,
+    popupChoices: memory.POPUP_SECONDS,
     // 分组：每组带上未读总数，折叠后组头上也能看到
     groups: groups.map((g) => ({
       id: g.id,
@@ -1036,7 +1068,7 @@ function parkAccount(acc) {
   loginStates.delete(acc.id);
   liteStates.delete(acc.id);
   liteViews.delete(acc.id);
-  liteUnreadNames.delete(acc.id);
+  liteUnreadChats.delete(acc.id);
   liteOpen.delete(acc.id);
   mcp?.controller.gate.clearAccount(acc.id);
   notifier.forget(acc.id);
@@ -1801,8 +1833,12 @@ function bindLiteEvents() {
   liteHost.on('unread', ({ id, count, chats }) => {
     const acc = findAcc(id);
     if (!acc) return;
-    liteUnreadNames.set(id, unreadNames(chats));
-    notifier.update(acc, count, { isActive: id === activeId && page === 'account' });
+    liteUnreadChats.set(id, Array.isArray(chats) ? chats : []);
+    const isActive = id === activeId && page === 'account';
+    const grew = count > (notifier.unread.get(id) || 0);
+    notifier.update(acc, count, { isActive });
+    // 未读对话数没变、但某个客户又发了一条：也弹（同一个客户合并成一张）
+    if (!grew) notifier.recheck(acc, { isActive });
     pushState();
   });
   liteHost.on('view', (v) => {
@@ -1978,7 +2014,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   loginStates.delete(id);
   liteStates.delete(id);
   liteViews.delete(id);
-  liteUnreadNames.delete(id);
+  liteUnreadChats.delete(id);
   liteOpen.delete(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
@@ -2034,10 +2070,12 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton'].includes(key)) {
+  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton', 'popupSound', 'popupDnd'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
+  } else if (key === 'popupSeconds') {
+    if (!memory.POPUP_SECONDS.includes(value)) return;
   } else {
     return;
   }
@@ -2045,6 +2083,7 @@ function setSetting(key, value) {
   if (key === 'recycleMB' && value > 0) settings.recycleLastMB = value; // 关掉再打开时沿用
   memory.saveSettings(settings);
   if (key === 'openAtLogin') applyLoginItem();
+  if (key.startsWith('popup')) popup.refresh();
   notifier.refresh();
   refresh();
 }
@@ -2331,7 +2370,7 @@ app.whenReady().then(async () => {
     win.hide();
     if (!hintShown && !mac) {
       hintShown = true;
-      notifier.tray.displayBalloon?.({ title: 'WAswitch 还在运行', content: '已缩到托盘，继续接收消息。右键托盘图标可以退出。' });
+      notifier.notifyApp('WAswitch 还在运行', '已缩到托盘，继续接收消息。右键托盘图标可以退出。');
     }
   });
 
@@ -2392,6 +2431,7 @@ app.whenReady().then(async () => {
   }
   memoryManager.start();
   setInterval(checkOffline, OFFLINE_TICK_MS);
+  setInterval(recheckUnread, RECHECK_MS);
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setTimeout(checkLogins, 60 * 1000);
   setInterval(watchExits, EXIT_WATCH_MS);
@@ -2594,6 +2634,11 @@ onShell('mute', ({ id, muted } = {}) => {
   saveAccounts();
   notifier.refresh();
   pushState();
+});
+// 设置 › 通知里的“试一下”：弹一张示例卡片（示例客户，不是真消息）
+onShell('popup:test', () => {
+  const acc = visibleAccounts()[0];
+  popup.show({ key: 'sample', kind: 'sample', accId: acc ? acc.id : '', chat: 'Emma Schneider', text: 'Hallo! Ist der Liefertermin für Bestellung #4471 noch der 12.11.? Wir planen die Montage am 14.', count: 1 });
 });
 onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
 

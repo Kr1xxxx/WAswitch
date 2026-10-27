@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('wa', {
   tmodeDelete: (id) => ipcRenderer.invoke('tmode:delete', id),
   notifLog: () => ipcRenderer.invoke('notif:log'),
   notifClear: () => ipcRenderer.invoke('notif:clear'),
+  popupTest: () => ipcRenderer.send('popup:test'),
   moveAccount: (id, groupId, beforeId) => ipcRenderer.send('acc:move', { id, groupId, beforeId }),
   groupCreate: () => ipcRenderer.send('group:create'),
   groupRename: (id, name) => ipcRenderer.send('group:rename', { id, name }),
