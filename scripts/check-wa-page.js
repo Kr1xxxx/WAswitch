@@ -65,6 +65,24 @@ app.whenReady().then(async () => {
   const n = await waPage.readChatList(wc);
   check(!n.ok && n.reason === 'no_list', '没有对话列表（未登录）：返回 no_list');
 
+  // “放进输入框”前的焦点检查：只有焦点在对话下方的输入框里才算
+  const chat = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
+  await chat.loadFile(path.join(__dirname, 'fixtures', 'wa-chat.html'));
+  const cw = chat.webContents;
+  while (cw.isLoading()) await new Promise((r) => setTimeout(r, 20));
+  const focusOn = (sel) => cw.executeJavaScript(`document.querySelector(${JSON.stringify(sel)}).focus(); void 0`);
+  check(await waPage.composeFocus(cw) === 'other', '焦点哪里都不在：不是输入框');
+  await focusOn('#side [contenteditable]');
+  check(await waPage.composeFocus(cw) === 'other', '焦点在左上角搜索框：不是输入框');
+  await focusOn('#main footer button');
+  check(await waPage.composeFocus(cw) === 'other', '焦点在输入框旁边的按钮：不是输入框');
+  await focusOn('#main footer [contenteditable]');
+  const html = await cw.executeJavaScript('document.documentElement.outerHTML');
+  check(await waPage.composeFocus(cw) === 'compose', '焦点在聊天输入框：是输入框');
+  check(await cw.executeJavaScript('document.activeElement === document.querySelector("#main footer [contenteditable]")'), '读焦点没有把焦点移走');
+  check(await cw.executeJavaScript('document.documentElement.outerHTML') === html, '读焦点前后页面 HTML 完全相同');
+  chat.destroy();
+
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   app.exit(failures ? 1 : 0);
 });

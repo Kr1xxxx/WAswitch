@@ -1,7 +1,7 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>WhatsApp</title></head><body>
 <!-- 仿 WhatsApp 网页版打开一个对话时的结构，只给悬浮翻译的只读脚本做自检用 -->
-<div id="side"><div id="pane-side"></div></div>
+<div id="side"><div contenteditable="true" role="textbox" aria-label="搜索"></div><div id="pane-side"></div></div>
 <div id="main">
   <header><span dir="auto" title="Carlos García">Carlos García</span></header>
   <div role="application">
@@ -19,6 +19,6 @@
       <span>Pedro</span>
       <div class="copyable-text" data-pre-plain-text="[18:43, 24/10/2026] Pedro: "><span class="selectable-text copyable-text"><span>Hola grupo</span></span></div></div></div>
   </div>
-  <footer><div contenteditable="true"></div></footer>
+  <footer><button aria-label="表情">☺</button><div contenteditable="true" role="textbox"><p>草稿</p></div></footer>
 </div>
 </body></html>

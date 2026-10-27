@@ -44,6 +44,7 @@ function dragHandle(el) {
 async function insertOut() {
   const r = await window.fl.insert(s.accountId, ui.out);
   if (r === 'ok') say('已贴进聊天框，检查后自己按发送');
+  else if (r === 'focus') say('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点“放进输入框”', true);
   else say(r === 'lite' ? '轻量模式请用面板插入' : '当前账号变了、已锁定或页面没打开，没有贴', true);
 }
 // insert=true：翻译完直接贴进聊天框（不发送）。翻译期间换了号或换了对话就不贴

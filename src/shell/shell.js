@@ -689,6 +689,7 @@ async function panelInsert(text) {
   }
   const r = await window.wa.panelInsert(pn.accountId, text);
   if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
+  else if (r === 'focus') panelSay('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点“放进输入框”', true);
   else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
 }
 const fmtDue = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
