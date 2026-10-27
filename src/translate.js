@@ -90,17 +90,23 @@ const CONTEXT_MAX_CHARS = 1500;
 const escTags = (t) => String(t).split('</text>').join('</ text>').split('</context>').join('</ context>').split('<context>').join('< context>');
 
 // 上下文：[{ out, text }]，从旧到新。只留最近 8 条，每条最多 300 字，合计最多 1500 字（从最新往前取）
-function contextBlock(context) {
-  if (!Array.isArray(context)) return '';
-  const lines = [];
+// 返回裁好的 [{ out, text }]（从旧到新，text 已压成一行）；下面三种格式都用它
+function trimContext(context) {
+  if (!Array.isArray(context)) return [];
+  const out = [];
   let total = 0;
   for (const m of context.slice(-CONTEXT_MAX_ITEMS).reverse()) {
     if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
     const t = m.text.replace(/\s+/g, ' ').trim().slice(0, CONTEXT_ITEM_CHARS);
     if (total + t.length > CONTEXT_MAX_CHARS) break;
     total += t.length;
-    lines.unshift(`${m.out ? '我' : '客户'}：${escTags(t)}`);
+    out.unshift({ out: !!m.out, text: t });
   }
+  return out;
+}
+
+function contextBlock(context) {
+  const lines = trimContext(context).map((m) => `${m.out ? '我' : '客户'}：${escTags(m.text)}`);
   return lines.length ? `<context>\n${lines.join('\n')}\n</context>\n\n` : '';
 }
 
@@ -113,17 +119,7 @@ const DEEPL_LANGS = {
 const deeplUrl = (key) => (/:fx$/i.test(key) ? 'https://api-free.deepl.com/v2/translate' : 'https://api.deepl.com/v2/translate');
 // 给 DeepL 的上下文：不用标签，直接最近几条消息的原文（DeepL 只拿它理解，不翻译、不计费）
 function deeplContext(context) {
-  if (!Array.isArray(context)) return '';
-  const out = [];
-  let total = 0;
-  for (const m of context.slice(-CONTEXT_MAX_ITEMS).reverse()) {
-    if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
-    const t = m.text.replace(/\s+/g, ' ').trim().slice(0, CONTEXT_ITEM_CHARS);
-    if (total + t.length > CONTEXT_MAX_CHARS) break;
-    total += t.length;
-    out.unshift(t);
-  }
-  return out.join('\n');
+  return trimContext(context).map((m) => m.text).join('\n');
 }
 
 // 混元的旧地址（换成 TokenHub 之前）
@@ -144,17 +140,7 @@ function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
   const terms = glossaryPairs(role, target === '中文');
   const ref = terms.length ? `参考下面的翻译：\n${terms.join('\n')}\n\n` : '';
-  const lines = [];
-  if (Array.isArray(context)) {
-    let total = 0;
-    for (const m of context.slice(-CONTEXT_MAX_ITEMS).reverse()) {
-      if (!m || typeof m.text !== 'string' || !m.text.trim()) continue;
-      const t = m.text.replace(/\s+/g, ' ').trim().slice(0, CONTEXT_ITEM_CHARS);
-      if (total + t.length > CONTEXT_MAX_CHARS) break;
-      total += t.length;
-      lines.unshift(`${m.out ? '我' : '客户'}：${t}`);
-    }
-  }
+  const lines = trimContext(context).map((m) => `${m.out ? '我' : '客户'}：${m.text}`);
   const content = lines.length
     ? `${lines.join('\n')}\n参考上面的信息，把下面的文本翻译成${target}，注意不需要翻译上文，也不要额外解释：\n${text}`
     : `把下面的文本翻译成${target}，不要额外解释。\n\n${text}`;
