@@ -77,8 +77,7 @@ function body() {
   if (!s.accountId) return [h('p', { class: 'hint pad' }, '先添加一个 WhatsApp 账号。')];
   if (!s.hasProvider) return [h('p', { class: 'hint pad' }, '还没设置翻译服务：去 设置 › 翻译 添加。')];
   const parts = [];
-  if (s.lite) parts.push(h('p', { class: 'hint pad' }, '轻量模式的号请用右侧面板里的“翻译”。'));
-  else if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '先在左边点开一个聊天，这里就会显示客户的消息。'));
+  if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '先在左边点开一个聊天，这里就会显示客户的消息。'));
   else if (s.readable === 'unreadable') parts.push(h('p', { class: 'hint pad bad' }, '打开的聊天里认不出消息（可能是 WhatsApp 改版了）。'));
   else if (!s.items.length) parts.push(h('p', { class: 'hint pad' }, '这个对话最近没有收到文字消息。'));
   else {
@@ -149,7 +148,7 @@ function render(force = false) {
   const inSel = h('select', { class: 'mini', 'aria-label': '收到用的模式', onchange: (e) => window.fl.setInMode(e.target.value) }, s.modes.in.map((m) => h('option', { value: m.id }, m.name)));
   inSel.value = s.inModeId;
   const auto = h('label', { class: 'auto', title: '自动翻译这个号当前对话里新收到的消息' },
-    h('input', { type: 'checkbox', checked: s.auto, disabled: s.lite || !s.hasProvider || !s.accountId, onchange: async (e) => {
+    h('input', { type: 'checkbox', checked: s.auto, disabled: !s.hasProvider || !s.accountId, onchange: async (e) => {
       await window.fl.setAuto(e.target.checked);
     } }), '自动');
   const head = h('div', { class: 'head' },

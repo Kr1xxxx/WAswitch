@@ -400,7 +400,8 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 
 /* 右侧工作台顶部的切页：客户资料 / 话术 / 翻译 */
 .wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: 1px solid var(--line); background: #fff; }
-.wb-tabs .icon-btn { align-self: center; }
+.wb-tools { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 6px; }
+.wb-tools .dk-mini { min-width: 0; max-width: 84px; }
 .tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .tb-tab:hover { color: var(--text); background: rgba(0,0,0,.03); }
 .tb-tab.on { color: var(--text); font-weight: 600; }
@@ -429,7 +430,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-mini { max-width: 104px; color: var(--soft); }
 .dk-model { max-width: 150px; }
 /* 收到的消息：照 WhatsApp 收到的气泡。紧凑，时间小号灰字在右下角，纠错/编辑悬停才显示 */
-.dk-list { position: relative; flex: 1; min-height: 80px; overflow-y: auto; overflow-anchor: none; padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.dk-list { position: relative; flex: 1; min-height: 80px; overflow-y: auto; overflow-anchor: none; padding: 8px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
 .dk-item { position: relative; align-self: flex-start; max-width: 92%; min-width: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px 6px 9px; border-radius: 8px; background: #f0f2f5; box-shadow: 0 1px .5px rgba(11,20,26,.13); }
 .dk-item.wide { align-self: stretch; max-width: none; }
 .dk-item.foot { padding-bottom: 20px; }

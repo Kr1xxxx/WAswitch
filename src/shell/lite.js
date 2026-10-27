@@ -105,7 +105,7 @@ function makeLitePage(id) {
   // 没连上时盖在聊天页上面的提示（连接中、扫码、二维码过期）
   function drawStatus(acc, lite) {
     const st = lite.status;
-    const key = `${st}:${st === 'qr' ? lite.qr : ''}:${acc.proxyLabel}`;
+    const key = `${st}:${st === 'qr' ? lite.qr : ''}:${acc.proxyLabel}:${lite.fresh}`;
     if (key === statusKey) return;
     statusKey = key;
     if (st === 'qr' && lite.qr) {
@@ -122,7 +122,8 @@ function makeLitePage(id) {
         h('p', null, '一段时间没有扫码，已停止刷新二维码。'),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary', onclick: () => window.wa.retry(id) }, '重新获取二维码'))));
     } else {
-      const reconnecting = st === 'reconnecting';
+      // 这次启动后连上过才算“断开”；新加的号、刚打开软件时都写“正在连接”
+      const reconnecting = st === 'reconnecting' && lite.fresh === false;
       status.replaceChildren(h('div', { class: 'panel' },
         h('div', { class: 'spinner', 'aria-hidden': 'true' }),
         h('h2', null, reconnecting ? '连接断开，正在重新连接…' : '正在连接…'),

@@ -20,6 +20,30 @@ const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d
 // 消息上显示的时间（WhatsApp 页面上写的“几点几分”），认不出就空着
 const hhmm = (t) => (t && Number.isInteger(t.h) && Number.isInteger(t.mi) ? `${String(t.h).padStart(2, '0')}:${String(t.mi).padStart(2, '0')}` : '');
 
+// 轻量号的消息里图片、语音等是一个类型标签（见 lite/store.mjs 的 LABELS），本身不用翻；带说明文字的只翻说明
+const LITE_LABEL = /^\[(?:图片|视频|语音|文件|贴纸|名片|位置|实时位置|投票|活动|暂不支持的消息，请在手机上查看)\]\s*/;
+
+// 轻量号不用读网页：后台进程推来的当前对话（view）本来就有消息文字，换成和 readOpenChat 一样的格式。
+// jid：用户在轻量聊天页点开的对话。view 还没跟上（刚点开）时返回 why: 'wait'
+function fromLite(view, jid) {
+  if (!jid) return { ok: false, why: 'nochat' };
+  if (!view || view.jid !== jid) return { ok: false, why: 'wait' };
+  const chat = String(jid).replace(/_/g, '');
+  const msgs = [];
+  for (const m of Array.isArray(view.messages) ? view.messages : []) {
+    if (!m || !m.id) continue;
+    const text = String(m.text || '').replace(LITE_LABEL, '');
+    if (!text.trim()) continue;
+    const d = m.ts ? new Date(m.ts * 1000) : null;
+    msgs.push({ id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes() } : null });
+  }
+  const listed = (Array.isArray(view.chats) ? view.chats : []).find((c) => c && c.jid === jid);
+  // 没名字的私聊用号码当标题（和 WhatsApp 网页一样），客户名单能按号码对上
+  const user = String(jid).split('@')[0].split(':')[0];
+  const number = String(jid).endsWith('@s.whatsapp.net') ? `+${user}` : '';
+  return { ok: true, title: view.title || (listed && listed.name) || number, msgs };
+}
+
 class FloatCore {
   // deps: { translate(text, modeId) -> Promise<result>, now?(), store?: TrStore }
   constructor(deps) {
@@ -243,4 +267,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, hashOf, chatOf, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };
+module.exports = { FloatCore, fromLite, hashOf, chatOf, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };
