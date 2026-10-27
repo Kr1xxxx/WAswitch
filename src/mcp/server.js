@@ -128,8 +128,11 @@ class McpController {
     cfg.saveSettings(this.dataDir, this.settings);
     if (!on) this.gate.clearAll();
     for (const s of this.sessions.values()) {
-      if (!s.chatTool) continue;
-      if (on) s.chatTool.enable(); else s.chatTool.disable();
+      // 「读对话」组：list_chats 和 read_messages 一起开关
+      for (const tool of [s.chatTool, s.messageTool]) {
+        if (!tool) continue;
+        if (on) tool.enable(); else tool.disable();
+      }
     }
     this.onChange();
   }
@@ -181,9 +184,10 @@ class McpController {
     const { isInitializeRequest } = require('@modelcontextprotocol/sdk/types.js');
     const { registerAccountTools } = require('./tools');
     const { registerChatTools } = require('./chats');
+    const { registerMessageTools } = require('./messages');
     const { registerDraftTools } = require('./drafts');
     const { registerHelperTools } = require('./helpers');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerHelperTools };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerMessageTools, registerDraftTools, registerHelperTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -275,10 +279,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, draftTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, messageTool: null, draftTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 read_messages 读某个对话最近的消息（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
@@ -290,8 +294,16 @@ class McpController {
         return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
       },
     });
+    entry.messageTool = this.sdk.registerMessageTools(server, this.hooks, {
+      gate: this.gate,
+      confirmTimeoutMs: CONFIRM_TIMEOUT_MS,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
     // 第二层关着时工具不出现在列表里
-    if (!this.settings.layer2) entry.chatTool.disable();
+    if (!this.settings.layer2) { entry.chatTool.disable(); entry.messageTool.disable(); }
     entry.draftTool = this.sdk.registerDraftTools(server, this.hooks, {
       log: this.drafts,
       sessionInfo: (extra) => {

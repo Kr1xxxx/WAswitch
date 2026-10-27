@@ -13,6 +13,7 @@ if (DIRECT) setAllowAll(true);
 
 const { Session } = await import('./session.mjs');
 const { proxyHost } = await import('./transport.mjs');
+const { findChat, readHistory } = await import('./history.mjs');
 
 const sessions = new Map();
 
@@ -50,6 +51,13 @@ async function handle(m) {
     case 'read':
       if (s) await s.read(m.jid);
       return undefined;
+    // MCP read_messages：只读本机缓存，不标已读、不联网
+    case 'findChat':
+      if (!s || !s.store) return { ok: false, reason: 'notrunning' };
+      return findChat(s.store, m.chat);
+    case 'history':
+      if (!s || !s.store) return { ok: false, reason: 'notrunning' };
+      return readHistory(s.store, m.jid, m.limit);
     case 'send':
       if (!s) throw new Error('这个号没有在运行');
       await s.send(m.jid, m.text);

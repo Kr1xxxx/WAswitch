@@ -1,7 +1,7 @@
-// 二层工具：读对话列表（list_chats）。
+// 二层工具：读对话列表（list_chats）。读聊天消息（read_messages）在 messages.js，共用这里的 ChatGate。
 //
 // 每次调用都要用户在 WAswitch 里确认：拒绝 / 允许这一次 / 10 分钟内允许。
-// “10 分钟内允许”按 MCP 会话 + 账号 + 是否含预览 记，不按客户端自报的名字记。
+// “10 分钟内允许”按 MCP 会话 + 账号 + 读什么（对话列表 / 聊天消息）+ 是否含预览 记，不按客户端自报的名字记。
 // 以下任一发生就清掉允许：预览开关从关变开、账号变成需要扫码、第二层开关关闭、软件重启（只存在内存里）。
 // 允许期间没人把关，所以同一账号每 5 秒最多读一次。
 // 读到的内容不落盘；设置页只记录谁、什么时候、读了哪个号、几个对话（也只在内存里）。
@@ -23,25 +23,26 @@ const REASONS = {
 };
 
 class ChatGate {
-  // hooks: confirmRead({ client, account, includePreview, timeoutMs }) -> 'deny' | 'once' | 'ten' | 'busy'
+  // hooks: confirmRead({ client, account, includePreview, timeoutMs, kind, chat, limit }) -> 'deny' | 'once' | 'ten' | 'busy'
+  // kind：'list' 读对话列表（默认）| 'messages' 读某个对话的聊天消息
   constructor({ hooks, now = Date.now, onChange = () => {} }) {
     this.hooks = hooks;
     this.now = now;
     this.onChange = onChange;
-    this.allows = new Map(); // `${session}|${account}|${preview}` -> { session, client, accountId, accountName, preview, until }
-    this.lastRead = new Map(); // accountId -> 时间
+    this.allows = new Map(); // `${session}|${account}|${kind}|${preview}` -> { session, client, accountId, accountName, kind, preview, until }
+    this.lastRead = new Map(); // `${kind}|${accountId}` -> 时间
     this.denials = new Map(); // `${session}|${account}` -> 最近一次拒绝时间
     this.denyHistory = new Map(); // session -> 最近的拒绝时间列表
     this.blockedUntil = new Map(); // session -> 不再弹框直到
-    this.log = []; // { at, client, accountName, count, preview }
+    this.log = []; // { at, client, account, count, preview, kind }
   }
 
-  key(session, accountId, preview) { return `${session}|${accountId}|${preview ? 1 : 0}`; }
+  key(session, accountId, preview, kind = 'list') { return `${session}|${accountId}|${kind}|${preview ? 1 : 0}`; }
 
   activeAllows() {
     const t = this.now();
     for (const [k, a] of this.allows) if (a.until <= t) this.allows.delete(k);
-    return [...this.allows.entries()].map(([key, a]) => ({ key, client: a.client, account: a.accountName, preview: a.preview, until: a.until }));
+    return [...this.allows.entries()].map(([key, a]) => ({ key, client: a.client, account: a.accountName, kind: a.kind, preview: a.preview, until: a.until }));
   }
 
   revoke(key) { this.allows.delete(key); this.onChange(); }
@@ -62,11 +63,11 @@ class ChatGate {
   previewTurnedOn() { this.clearAll(); }
 
   // 返回 null 表示可以读，否则返回给 AI 的说明
-  async check({ session, client, account, preview, timeoutMs }) {
+  async check({ session, client, account, preview, timeoutMs, kind = 'list', chat = '', limit = 0 }) {
     const t = this.now();
-    const last = this.lastRead.get(account.id);
+    const last = this.lastRead.get(`${kind}|${account.id}`);
     if (last && t - last < RATE_MS) return `同一账号每 5 秒最多读一次，请 ${Math.ceil((RATE_MS - (t - last)) / 1000)} 秒后再试。`;
-    const key = this.key(session, account.id, preview);
+    const key = this.key(session, account.id, preview, kind);
     const allow = this.allows.get(key);
     if (allow && allow.until > t) return null;
 
@@ -76,12 +77,12 @@ class ChatGate {
     const denied = this.denials.get(`${session}|${account.id}`);
     if (denied && t - denied < DENY_COOLDOWN_MS) return `用户刚拒绝过，请 ${Math.ceil((DENY_COOLDOWN_MS - (t - denied)) / 1000)} 秒后再试。`;
 
-    const answer = await this.hooks.confirmRead({ client, account: account.name, includePreview: preview, timeoutMs });
+    const answer = await this.hooks.confirmRead({ client, account: account.name, includePreview: preview, timeoutMs, kind, chat, limit });
     if (answer === 'busy') return '已经有一个确认框在等用户处理，请稍后再试。';
     // 拿不到会话 id 时，所有这类调用会共用一个允许，所以只当“允许这一次”
     if (answer === 'ten' && session === 'unknown') return null;
     if (answer === 'ten') {
-      this.allows.set(key, { session, client, accountId: account.id, accountName: account.name, preview, until: this.now() + ALLOW_MS });
+      this.allows.set(key, { session, client, accountId: account.id, accountName: account.name, kind, preview, until: this.now() + ALLOW_MS });
       this.onChange();
       return null;
     }
@@ -102,9 +103,9 @@ class ChatGate {
     }
   }
 
-  record({ client, account, count, preview }) {
-    this.lastRead.set(account.id, this.now());
-    this.log.unshift({ at: this.now(), client, account: account.name, count, preview });
+  record({ client, account, count, preview, kind = 'list' }) {
+    this.lastRead.set(`${kind}|${account.id}`, this.now());
+    this.log.unshift({ at: this.now(), client, account: account.name, count, preview, kind });
     this.log.length = Math.min(this.log.length, LOG_MAX);
     this.onChange();
   }

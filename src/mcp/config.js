@@ -19,7 +19,7 @@ function loadSettings(dir) {
     return {
       enabled: s.enabled === true,
       port: Number.isInteger(s.port) && s.port > 1024 && s.port < 65536 ? s.port : DEFAULT_PORT,
-      layer2: s.layer2 === true, // 第二层：读对话列表，默认关
+      layer2: s.layer2 === true, // 第二层「读对话」：list_chats 和 read_messages，默认关
       preview: s.preview === true, // 第二层里是否允许读最后一条消息预览，默认关
       layer2Acknowledged: s.layer2Acknowledged === true, // 看过隐私提示
       drafts: s.drafts === true, // 起草回复：把 AI 写的回复放进输入框（不发送），默认关

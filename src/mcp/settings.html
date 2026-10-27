@@ -46,7 +46,7 @@
 </head>
 <body>
   <h1>MCP 接口</h1>
-  <p class="hint">开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以列出账号、看未读数、切换、添加、改名和删除账号。读对话列表要另外打开第二层，起草回复、辅助工具（话术、翻译、客户时间）也要另外打开。不能发送消息。只接受本机连接，需要 token。</p>
+  <p class="hint">开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以列出账号、看未读数、切换、添加、改名和删除账号。读对话列表和聊天消息要另外打开第二层，起草回复、辅助工具（话术、翻译、客户时间）也要另外打开。不能发送消息。只接受本机连接，需要 token。</p>
 
   <label class="switch"><input id="enabled" type="checkbox"> 开启 MCP 接口</label>
   <div id="state" role="status"></div>
@@ -66,9 +66,9 @@
       <div class="actions"><button data-copy="claudeDesktop">复制配置</button></div>
     </div>
 
-    <h2>第二层：读对话列表</h2>
-    <label class="switch"><input id="layer2" type="checkbox"> 允许 AI 读取对话列表（每次都要你确认）</label>
-    <p class="hint">只读：不点开对话、不标已读、不保存到电脑。读到的内容会发给 AI 服务商。关着时 AI 看不到这个功能。</p>
+    <h2>第二层：读对话</h2>
+    <label class="switch"><input id="layer2" type="checkbox"> 允许 AI 读取对话列表和聊天消息（每次都要你确认）</label>
+    <p class="hint">只读：不点开别的对话、不标已读、不保存到电脑。读到的内容会发给 AI 服务商。读消息一次最多 50 条；网页版账号只能读当前打开的那个对话，轻量版账号可以读任意对话。关着时 AI 看不到这个功能。</p>
     <label class="switch sub"><input id="preview" type="checkbox"> 同时允许读取每个对话的最后一条消息预览（截到 100 字）</label>
     <div id="allowsBox">
       <p class="hint"><b>正在允许：</b></p>

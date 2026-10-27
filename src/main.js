@@ -27,6 +27,7 @@ const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
+const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
@@ -677,8 +678,13 @@ const mcpHooks = {
     if (!view || pendingLoad.has(id)) return { ok: false, reason: 'loading' };
     return waPage.readChatList(view.webContents, opts);
   },
+  // ---- 读聊天消息（read_messages）：网页版只读当前打开的对话，轻量版从本机缓存读任意已有对话（见 read-messages.js） ----
+  locateChat: (id, chat) => messageReader.locateChat(id, chat),
+  readMessages: (id, opts) => messageReader.readMessages(id, opts),
+
   // 返回 'deny' | 'once' | 'ten' | 'busy'。timeoutMs 内没人点算拒绝
-  confirmRead: async ({ client, account, includePreview, timeoutMs }) => {
+  // kind 'messages'：读某个对话的聊天消息（read_messages），弹窗写明会读到消息内容
+  confirmRead: async ({ client, account, includePreview, timeoutMs, kind, chat, limit }) => {
     if (confirmDialogOpen) return 'busy';
     confirmDialogOpen = true;
     const abort = new AbortController();
@@ -692,16 +698,29 @@ const mcpHooks = {
         defaultId: 0,
         cancelId: 0,
         noLink: true,
-        title: 'AI 想读取对话列表',
-        message: `允许 AI 读取「${account}」的对话列表吗？`,
-        detail: [
-          `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
-          includePreview
-            ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
-            : '会读取：对话名称、未读数、时间。不含消息内容。',
-          '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-          '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
-        ].join('\n'),
+        ...(kind === 'messages' ? {
+          title: 'AI 想读取聊天消息',
+          // 对话名称是对方或群里定的，去掉控制字符和改变文字方向的隐藏字符
+          // eslint-disable-next-line no-control-regex
+          message: `允许 AI 读取「${account}」里「${String(chat || '').replace(/[\u0000-\u001F\u007F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '').slice(0, 60)}」最近 ${limit} 条消息吗？`,
+          detail: [
+            `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
+            '会读到消息内容：每条消息的文字、时间、是不是你发的。',
+            '只读，不会点开别的对话，不会标为已读，不保存到电脑。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+            '“10 分钟内允许”只对这个连接、这个账号有效（期间读这个账号的其他对话也不再问），可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ].join('\n'),
+        } : {
+          title: 'AI 想读取对话列表',
+          message: `允许 AI 读取「${account}」的对话列表吗？`,
+          detail: [
+            `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
+            includePreview
+              ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
+              : '会读取：对话名称、未读数、时间。不含消息内容。',
+            '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
+            '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          ].join('\n'),
+        }),
       });
       if (abort.signal.aborted) return 'deny';
       return ['deny', 'once', 'ten'][response] || 'deny';
@@ -772,6 +791,24 @@ const draftPlacer = createDraftPlacer({
   activateForUser: async (id) => { notifier.showWindow(); await userActivate(id); },
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
+const messageReader = createMessageReader({
+  findAcc: (id) => findAcc(id),
+  isLite,
+  webContents: (id) => {
+    const view = views.get(id);
+    return view && !view.webContents.isDestroyed() && !view.webContents.isLoading() && !pendingLoad.has(id) && !problems.has(id) ? view.webContents : null;
+  },
+  waPage,
+  lite: () => liteHost,
+  liteOpenChat: (id) => {
+    const jid = liteOpen.get(id);
+    if (!jid) return null;
+    const v = liteViews.get(id);
+    const title = (v && v.jid === jid && v.title) || ((v && v.chats) || []).find((c) => c && c.jid === jid)?.name || '';
+    return { jid, title };
+  },
+});
+
 
 const regionName = (() => {
   let names = null;
@@ -2012,7 +2049,7 @@ function openEditor(id, prefill = null) {
 }
 
 // 返回 'removed' | 'cancelled' | 'busy' | 'not_found'。timeoutMs：超时没人点就当取消（MCP 调用用）
-// MCP 引起的确认框同一时间只弹一个（删除账号、读对话列表共用）
+// MCP 引起的确认框同一时间只弹一个（删除账号、读对话列表、读聊天消息共用）
 let confirmDialogOpen = false;
 async function removeAccount(id, { timeoutMs } = {}) {
   const acc = accounts.find((a) => a.id === id);
