@@ -1245,22 +1245,26 @@ function editorPage(id) {
       const opt = d.regions.find((r) => r.key === region.value) || (region.selectedOptions[0] && { label: region.selectedOptions[0].textContent });
       const auto = region.value === 'auto';
       tags.replaceChildren(
-        h('span', { class: 'tag' }, auto
-          ? (proxyInput.value.trim() ? '时区：还没识别，点“测试”自动选好' : '时区：跟本机一致')
-          : `时区：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
         h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
-        h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：用本机真实 IP'));
+        h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
     };
-    // 选直连：轻量号、或已经有别的直连号时提醒一句（同一出口 IP），不拦
-    const others = (d.otherDirect || []).map((n) => `「${n}」`).join('、');
+    // 选直连时提醒一句，不拦。网页号直连跟随系统代理，轻量号直连用这台电脑的真实 IP，
+    // 只有同一种直连的号才一定是同一个出口 IP
+    const names = (list) => (list || []).map((n) => `「${n}」`).join('、');
+    const webOthers = names(d.otherDirect);
+    const liteOthers = names(d.otherLiteDirect);
     const liteDirectHint = h('span', { class: 'hint', style: { color: '#B54708' } });
     const drawLiteDirect = () => {
       const direct = !proxyInput.value.trim();
-      liteDirectHint.hidden = !(direct && (mode === 'lite' || others));
+      const lite = mode === 'lite';
+      liteDirectHint.hidden = !(direct && (lite || webOthers));
       // 轻量号直连不用测试，“填了代理要先测试”那句只在填了代理时显示
-      proxyHint.hidden = direct && mode === 'lite';
-      liteDirectHint.textContent = others ? `提示：和${others}都是直连，用同一个出口 IP，有被关联的风险。` : '提示：轻量小号直连会用这台电脑的真实 IP，有被关联的风险。';
+      proxyHint.hidden = direct && lite;
+      liteDirectHint.textContent = lite
+        ? `提示：轻量号直连不经过系统代理，用这台电脑的真实 IP${liteOthers ? `，和${liteOthers}是同一个 IP` : ''}，有被关联的风险。`
+        : `提示：和${webOthers}都是直连，都跟随系统代理，出口 IP 相同，有被关联的风险。`;
     };
     const onProxyChange = () => {
       drawLiteDirect();
@@ -1272,7 +1276,7 @@ function editorPage(id) {
       drawPortNote();
       drawTags();
     };
-    const regionRow = h('label', { class: 'field' }, '时区', region, tags, h('span', { class: 'hint' }, `应该和代理出口所在地一致，点“测试”会自动选好。WhatsApp 界面语言：${d.uiLanguage || '中文'}（所有账号统一）。`));
+    const regionRow = h('label', { class: 'field' }, '时区', region, tags, h('span', { class: 'hint' }, `应该和出口所在地一致，点“测试”会自动选好（直连号按系统代理测）。WhatsApp 界面语言：${d.uiLanguage || '中文'}（所有账号统一）。`));
     const proxyHint = h('span', { class: 'hint' });
     const onModeChange = () => {
       const lite = mode === 'lite';
@@ -1306,14 +1310,12 @@ function editorPage(id) {
     region.addEventListener('change', drawTags);
 
     testBtn.onclick = async () => {
-      if (!proxyInput.value.trim()) {
-        result.replaceChildren(h('div', { class: 'note plain' }, mode === 'lite' ? '直连不需要测试，轻量号会直接用这台电脑的网络（不经过系统代理，Clash 要开 TUN 模式）。' : '直连不需要测试，这个账号会跟随电脑的系统代理：Clash 开着系统代理时走 Clash，关了就是本机网络。'));
-        return;
-      }
+      const direct = !proxyInput.value.trim();
       testBtn.disabled = true;
       testBtn.textContent = '测试中…';
-      result.replaceChildren(h('div', { class: 'note plain' }, '正在通过这个代理访问 ipinfo.io …'));
-      const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value });
+      result.replaceChildren(h('div', { class: 'note plain' }, !direct ? '正在通过这个代理访问 ipinfo.io …'
+        : mode === 'lite' ? '正在用这台电脑的网络（不经过系统代理）访问 ipinfo.io …' : '正在跟随系统代理访问 ipinfo.io …'));
+      const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value, mode });
       testBtn.disabled = false;
       testBtn.textContent = '重新测试';
       if (localProxyPort(proxyInput.value)) probePorts();
@@ -1321,12 +1323,17 @@ function editorPage(id) {
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
-      if (res.region) { addTzOption(res.region, res.regionLabel); region.value = res.region; text += ' 已按出口所在地选好时区。'; } else text += ' 出口时区无法识别，请手动选最接近的。';
+      if (res.direct === 'system') text = `直连 · 跟随系统代理 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
+      if (res.direct === 'real') text = `直连 · 这台电脑的真实 IP ${res.ip} · ${place} · ${res.ms} ms。`;
+      // 轻量号没有时区设置，不提时区
+      if (mode !== 'lite' && res.region) { addTzOption(res.region, res.regionLabel); region.value = res.region; text += ' 已按出口所在地选好时区。'; } else if (mode !== 'lite') text += ' 出口时区无法识别，请手动选最接近的。';
       if (res.sameAs) {
         text += res.sameAt
           ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
           : `\n注意：和「${res.sameAs}」的出口 IP 相同，两个号会被认为在同一个地方。`;
       }
+      if (res.direct === 'system') text += '\nClash 开着系统代理时是 Clash 当前节点的 IP，节点一换就变；关了就是这台电脑的真实 IP。';
+      if (res.direct === 'real') text += '\n轻量号直连不经过系统代理；想让它走 Clash，要开 Clash 的 TUN 模式。';
       result.replaceChildren(h('div', { class: `note ${res.sameAs ? 'bad' : 'ok'}`, style: { whiteSpace: 'pre-line' } }, text));
       drawTags();
     };

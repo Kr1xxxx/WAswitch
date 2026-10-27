@@ -126,14 +126,15 @@ async function testOnce(raw, password) {
   }
 }
 
-// 查本机直连时的出口 IP（主号没设代理时，用来确认轻量小号和主号不在同一个 IP）。
-// 只访问 ipinfo.io，不访问 WhatsApp。
-async function testDirect() {
-  const ses = session.fromPartition('proxytest-direct', { cache: false });
-  await ses.setProxy({ mode: 'direct' });
+// 不填代理时查出口 IP：mode 'direct' 是这台电脑的真实 IP（轻量直连号、主号没设代理时比 IP 用），
+// mode 'system' 跟随电脑的系统代理（直连网页号就是这么上网的）。只访问 ipinfo.io，不访问 WhatsApp。
+async function testNoProxy(mode) {
+  const ses = session.fromPartition(`proxytest-${mode}`, { cache: false });
+  await ses.setProxy({ mode });
+  const started = Date.now();
   try {
     const info = parseExit(await queryExit(ses, (_a, callback) => callback()));
-    return { ok: true, ip: info.ip, country: info.country };
+    return { ok: true, ip: info.ip, country: info.country, city: info.city, timezone: info.timezone, ms: Date.now() - started };
   } catch (e) {
     return exitError(e, null);
   } finally {
@@ -141,6 +142,8 @@ async function testDirect() {
     ses.closeAllConnections().catch(() => {});
   }
 }
+const testDirect = () => testNoProxy('direct');
+const testSystem = () => testNoProxy('system');
 
 // 测试/连接时实际要用的明文密码：按 passwordPlan 决定，沿用旧密码时才解密已保存的那份
 function passwordFor(oldRaw, oldEnc, newRaw, typed) {
@@ -150,5 +153,5 @@ function passwordFor(oldRaw, oldEnc, newRaw, typed) {
   return '';
 }
 
-module.exports = { parse, passwordPlan, keepOldPassword, passwordFor, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
+module.exports = { parse, passwordPlan, keepOldPassword, passwordFor, apply, test, testDirect, testSystem, encryptPassword, decryptPassword, credentialsFor };
 

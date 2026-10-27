@@ -16,13 +16,20 @@ function setupCheckIpc(ctx) {
     const list = visibleAccounts(); // 停着的号（被团队后台收回等）不运行、不显示，自检也不算它
     const byPort = new Map();
     const byIp = new Map();
-    const direct = list.filter((a) => !proxy.parse(a.proxy)).map((a) => a.name);
+    // 直连分两种：网页号跟随系统代理，轻量号用这台电脑的真实 IP。同一种直连的号一定是同一个出口 IP
+    const directWeb = list.filter((a) => !proxy.parse(a.proxy) && !isLite(a)).map((a) => a.name);
+    const directLite = list.filter((a) => !proxy.parse(a.proxy) && isLite(a)).map((a) => a.name);
     // 多个号直连是允许的，只提醒一句（黄色，不算出错）
-    if (direct.length > 1) items.push({ level: 'warn', title: `${direct.join('、')} 都是直连`, detail: '这几个号用同一个出口 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
+    if (directWeb.length > 1) items.push({ level: 'warn', title: `${directWeb.join('、')} 都是直连`, detail: '这几个号都跟随系统代理，出口 IP 相同，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
+    if (directLite.length > 1) items.push({ level: 'warn', title: `${directLite.join('、')} 都是轻量直连`, detail: '这几个号都用这台电脑的真实 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
     const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     for (const acc of list) {
       const p = proxy.parse(acc.proxy);
-      if (!p) { if (direct.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' }); continue; }
+      if (!p) {
+        if (!isLite(acc) && directWeb.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' });
+        if (isLite(acc) && directLite.length < 2) items.push({ level: 'warn', title: `${acc.name}：轻量直连`, detail: '没有设代理，不经过系统代理，用这台电脑的真实 IP（Clash 开 TUN 模式时走 Clash）。' });
+        continue;
+      }
       if (p.error) { items.push({ level: 'bad', title: `${acc.name}：代理设置有误`, detail: p.error }); continue; }
       const key = `${p.host}:${p.port}`;
       byPort.set(key, [...(byPort.get(key) || []), acc.name]);
