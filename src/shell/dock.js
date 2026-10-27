@@ -104,7 +104,7 @@ async function dockInsert() {
   dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
   dockRender(true);
 }
-// ⌃⇧↵ / 放进输入框：有译文就放（改过的就放改过的）；中文改了又没手动改译文，先重新翻
+// 放进输入框：有译文就放（改过的就放改过的）；中文改了又没手动改译文，先重新翻
 function dockInsertKey() {
   if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
@@ -366,9 +366,7 @@ function dockCompose() {
   input.addEventListener('input', () => { dk.text = input.value; });
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.shiftKey) { e.preventDefault(); dockInsertKey(); return; }
-    if (e.shiftKey && !mod) return; // 换行
+    if (e.shiftKey) return; // 换行
     e.preventDefault();
     if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点“重新翻译”', true);
     dockTranslate(false);
@@ -378,9 +376,7 @@ function dockCompose() {
     dk.out = out.value;
     if (!dk.edited) { dk.edited = true; const tag = $panel.querySelector('.dk-edited'); if (tag) tag.hidden = false; }
   });
-  out.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.isComposing) { e.preventDefault(); dockInsertKey(); } });
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
-  const mac = s.platform === 'darwin';
   return h('div', { class: 'dk-compose' },
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
     dockField(input, () => input.value, keyHint),
@@ -398,8 +394,7 @@ function dockCompose() {
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
     dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },
-      h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey },
-        '放进输入框', h('span', { class: 'dk-key' }, mac ? '⌘ ⇧ ↵' : 'Ctrl+Shift+Enter'))));
+      h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey }, '放进输入框')));
 }
 
 // 默认翻译服务没填密钥：顶上一条黄条，点“去填密钥”直接打开它的表单
