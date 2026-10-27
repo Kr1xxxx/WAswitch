@@ -29,16 +29,16 @@ class Notifier {
   init() {
     if (process.platform === 'win32') app.setAppUserModelId('com.waswitch.app');
     this.tray = new Tray(this.trayImage(false));
-    this.trayHasUnread = false;
+    this.trayState = 'plain';
     this.tray.on('click', () => this.showWindow());
     this.refresh();
   }
 
-  // Mac 菜单栏用黑白模板图（系统按深浅色自动变色），有未读时换成带圆点的那张；
-  // Windows 托盘不变
-  trayImage(unread) {
-    if (process.platform !== 'darwin') return nativeImage.createFromPath(asset('tray.png'));
-    const img = nativeImage.createFromPath(asset(unread ? 'trayUnreadTemplate.png' : 'trayTemplate.png'));
+  // Mac 菜单栏用黑白模板图（系统按深浅色自动变色），有未读或有号断线时换成带圆点的那张；
+  // Windows 托盘平时不变，有号断线时换成带红点的那张
+  trayImage(unread, offline = false) {
+    if (process.platform !== 'darwin') return nativeImage.createFromPath(asset(offline ? 'trayOffline.png' : 'tray.png'));
+    const img = nativeImage.createFromPath(asset(unread || offline ? 'trayUnreadTemplate.png' : 'trayTemplate.png'));
     img.setTemplateImage(true);
     return img;
   }
@@ -152,24 +152,31 @@ class Notifier {
     if (win) win.setTitle(total ? `(${total}) WAswitch` : 'WAswitch');
 
     if (!this.tray) return;
-    // Mac 菜单栏：有未读时图标带圆点，旁边显示未读数；没有未读就恢复普通图标
+    const accounts = this.hooks.getAccounts();
+    // 断线满 2 分钟的号（offline-watch.js 判断）
+    const isOffline = (id) => (this.hooks.isOffline ? this.hooks.isOffline(id) : false);
+    const down = accounts.filter((a) => isOffline(a.id)).length;
+    // 托盘图标：Mac 有未读或断线时带圆点，Windows 有号断线时带红点
+    const state = `${total ? 'u' : ''}${down ? 'd' : ''}` || 'plain';
+    if (state !== this.trayState) {
+      this.trayState = state;
+      this.tray.setImage(this.trayImage(!!total, !!down));
+    }
+    // Mac 菜单栏：图标旁边显示未读数，有号断线时加“断线”
     if (process.platform === 'darwin') {
-      if (!!total !== this.trayHasUnread) {
-        this.trayHasUnread = !!total;
-        this.tray.setImage(this.trayImage(this.trayHasUnread));
-      }
-      this.tray.setTitle(total ? String(total) : '', { fontType: 'monospacedDigit' });
+      const title = [total ? String(total) : '', down ? '断线' : ''].filter(Boolean).join(' ');
+      this.tray.setTitle(title, { fontType: 'monospacedDigit' });
     }
     const mem = this.hooks.totalMemory ? this.hooks.totalMemory() : 0;
     const memText = mem ? ` · 共占用 ${mem} MB` : '';
     const upd = this.hooks.trayText ? this.hooks.trayText() : '';
-    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}${upd ? `\n${upd}` : ''}`);
-    const accounts = this.hooks.getAccounts();
+    const downText = down ? `\n${down} 个号断线，客户消息收不到` : '';
+    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}${downText}${upd ? `\n${upd}` : ''}`);
     const items = accounts.map((acc) => {
       const n = this.unread.get(acc.id) || 0;
       const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
-        label: `${acc.name}${n ? `（${n}）` : ''}${this.muted(acc) ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
+        label: `${isOffline(acc.id) ? '⚠ ' : ''}${acc.name}${n ? `（${n}）` : ''}${isOffline(acc.id) ? ' · 断线' : ''}${this.muted(acc) ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });

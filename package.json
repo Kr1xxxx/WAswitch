@@ -13,6 +13,7 @@
     "check:view-race": "node scripts/check-view-race.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",
+    "check:offline": "node scripts/check-offline.js",
     "check:notify": "node scripts/check-notify.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",

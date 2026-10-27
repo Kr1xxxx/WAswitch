@@ -46,6 +46,8 @@ jobs:
         run: xvfb-run -a node scripts/check-qr-watch.js
       - name: 内存回收不会反复刷新
         run: npm run check:memory
+      - name: 断线提醒（满 2 分钟弹一次、恢复不弹）
+        run: npm run check:offline
       - name: 通知写出是哪个客户
         run: npm run check:notify
       - name: 自动更新自检

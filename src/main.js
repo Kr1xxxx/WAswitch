@@ -41,6 +41,7 @@ const { setupEditorIpc } = require('./editor-ipc');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
+const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
@@ -546,6 +547,7 @@ const notifier = new Notifier({
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
+  isOffline: (id) => offlineWatch.marked(id),
   quit: () => { quitting = true; app.quit(); },
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
   totalMemory: () => memoryManager.totalMB(),
@@ -845,10 +847,44 @@ function trackNet() {
   }
 }
 
+// ---------- 断线提醒 ----------
+// 登录过的号断线满 2 分钟：弹一次通知，托盘和托盘菜单标出来（规则在 offline-watch.js）。
+// 状态变化时（pushState）和每 15 秒各看一次；两次之间隔了很久说明电脑睡过，断线时间从现在重新算。
+const offlineWatch = new OfflineWatch();
+const OFFLINE_TICK_MS = 15 * 1000;
+let offlineLastTick = 0;
+function offlineIds() {
+  const ids = new Set();
+  for (const acc of visibleAccounts()) {
+    if (!acc.loggedIn) continue; // 还没登录过的新号：在设置阶段，不提醒
+    const down = isLite(acc)
+      ? LITE_OFFLINE.has(liteStates.get(acc.id)?.status || 'connecting')
+      : WEB_OFFLINE.has(problems.get(acc.id)?.kind);
+    if (down) ids.add(acc.id);
+  }
+  return ids;
+}
+function checkOffline() {
+  const now = Date.now();
+  if (offlineLastTick && now - offlineLastTick > OFFLINE_TICK_MS * 4) offlineWatch.restart();
+  offlineLastTick = now;
+  const { due, changed } = offlineWatch.update(offlineIds());
+  // 正开着窗口看着这个号：问题页就在眼前，不用再弹
+  const looking = (id) => !!win && id === activeId && page === 'account' && win.isVisible() && win.isFocused();
+  const pop = due.map(findAcc).filter((acc) => acc && !looking(acc.id));
+  for (const acc of pop) console.warn(`账号 ${acc.id} 断线满 2 分钟，已提醒`);
+  if (pop.length) {
+    const { title, body } = offlineMessage(pop.map((a) => a.name));
+    notifier.notifyApp(title, body, () => { notifier.showWindow(); userActivate(pop[0].id); });
+  }
+  if (changed) notifier.refresh();
+}
+
 function pushState() {
   team?.noteChange();
   crmReconcile();
   trackNet();
+  checkOffline();
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
     platform: process.platform,
@@ -2291,6 +2327,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('lock-screen', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
+    offlineWatch.restart();
     crmQueue?.sweep();
     setTimeout(reconnectStuck, 5000);
   });
@@ -2303,6 +2340,7 @@ app.whenReady().then(async () => {
     refresh();
   }
   memoryManager.start();
+  setInterval(checkOffline, OFFLINE_TICK_MS);
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setTimeout(checkLogins, 60 * 1000);
   setInterval(watchExits, EXIT_WATCH_MS);
