@@ -184,8 +184,9 @@ class LiteAccount {
   message(jid, name, text, { type = 'notify', id = null, ts = null } = {}) {
     const mid = id || `M${(this.msgId += 1)}`;
     const t = ts || (this.ts += 60);
-    this.store.updateChat({ id: jid, unreadCount: 1, conversationTimestamp: t });
-    this.store.addMessage({ key: { remoteJid: jid, id: mid, fromMe: false }, message: { conversation: text }, messageTimestamp: t, pushName: name }, { countUnread: type === 'notify' });
+    // 和 session.mjs 一样：在线的 chats.update 走 liveChat（正的增量不用），补发的 append 比缓存里最后一条新才算未读
+    this.store.liveChat({ id: jid, unreadCount: 1, conversationTimestamp: t });
+    this.store.addMessage({ key: { remoteJid: jid, id: mid, fromMe: false }, message: { conversation: text }, messageTimestamp: t, pushName: name }, { countUnread: type === 'notify' ? true : type === 'append' ? 'newer' : false });
     return mid;
   }
 

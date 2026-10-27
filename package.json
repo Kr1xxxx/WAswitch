@@ -9,6 +9,7 @@
     "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-search.js && node scripts/check-mcp-helpers.js && node scripts/check-mcp-customers.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
     "check:lite": "node scripts/run-check-lite.js",
+    "check:lite-unread": "node scripts/check-lite-unread.mjs",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:draft": "electron scripts/check-draft.js",
     "check:view-race": "node scripts/check-view-race.js",
