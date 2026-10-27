@@ -100,13 +100,13 @@ function compose() {
     if (s.targetFrom) { ui.pick = e.target.value; render(true); } else window.fl.setLang(s.accountId, e.target.value);
   } }, s.langs.map((l) => h('option', { value: l }, l)));
   lang.value = ui.pick || s.target;
-  const input = h('textarea', { rows: '2', maxlength: '4000', placeholder: '写中文。Ctrl+Enter 翻译，Ctrl+Shift+Enter 翻译并放进输入框', 'aria-label': '要翻译的文字' }, ui.text);
+  const input = h('textarea', { rows: '2', maxlength: '4000', placeholder: '写中文。Ctrl+Enter 翻译', 'aria-label': '要翻译的文字' }, ui.text);
   input.addEventListener('input', () => { ui.text = input.value; });
   const go = (insert) => {
     if (!ui.text.trim()) return say('先写要发的话', true);
     runCompose({ text: ui.text, modeId: modeSel.value, target: ui.pick || s.target, accountId: s.accountId }, insert); // 用最新的目标语言（输入时对话可能换了）
   };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(e.shiftKey); } });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); go(false); } });
   const out = h('textarea', { rows: '2', 'aria-label': '译文（可以改）', placeholder: '译文' }, ui.out);
   out.addEventListener('input', () => { ui.out = out.value; });
   return h('div', { class: 'compose' },
@@ -115,7 +115,7 @@ function compose() {
     input,
     h('div', { class: 'row' },
       ui.busy ? h('button', { class: 'btn', onclick: () => window.fl.cancel() }, '翻译中… 取消')
-        : h('button', { class: 'btn primary', title: '翻译后直接贴进当前聊天框，不会发送（Ctrl+Shift+Enter）', onclick: () => go(true) }, '翻译并放进输入框'),
+        : h('button', { class: 'btn primary', title: '翻译后直接贴进当前聊天框，不会发送', onclick: () => go(true) }, '翻译并放进输入框'),
       ui.busy ? null : h('button', { class: 'btn', onclick: () => go(false) }, '只翻译'),
       ui.out ? h('button', { class: 'btn', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: insertOut }, '放进输入框') : null,
       ui.out ? h('button', { class: 'btn', onclick: async () => { await window.fl.copy(ui.out); say('已复制'); } }, '复制') : null),

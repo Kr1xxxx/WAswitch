@@ -492,7 +492,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-acts { display: flex; gap: 8px; }
 .dk-acts .btn { height: 36px; padding: 0 14px; font-size: 13px; }
 .dk-insert { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
-.dk-key { font-size: 11px; opacity: .7; font-weight: 400; }
 
 .dk-row { display: flex; align-items: center; gap: 8px; }
 .dk-acts-mini { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
