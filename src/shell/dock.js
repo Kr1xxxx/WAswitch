@@ -139,7 +139,7 @@ function dockLangSel() {
   return lang;
 }
 
-// 翻译模型：选中就设为默认翻译服务商（和 设置 › 翻译、“收到的消息”旁边的下拉是同一个设置）
+// 翻译模型：选中就设为默认翻译服务商（和 设置 › 翻译 的默认服务商是同一个设置）
 function dockModelSel(cls, short = false) {
   const st = dk.st;
   const provs = st.providers || [];
@@ -264,22 +264,33 @@ function dockIncoming() {
   return list;
 }
 
-function dockInHead() {
+// 自动翻译开关（和收到用的模式，有两个以上才显示）放在工作台标签栏右边，翻译页没有单独的一行（shen 2026-10-27）
+function dockTabTools() {
+  const box = h('span', { class: 'wb-tools' });
   const st = dk.st;
-  const sw = h('input', { type: 'checkbox', class: 'dk-switch', role: 'switch', 'aria-label': '自动翻译收到的消息', checked: st.auto, disabled: !st.accountId,
+  if (!st || !st.hasProvider || !st.accountId) return box;
+  const sw = h('input', { type: 'checkbox', class: 'dk-switch', role: 'switch', 'aria-label': '自动翻译收到的消息', checked: st.auto,
     onchange: async (e) => {
       await window.wa.dockAuto(e.target.checked);
     } });
   const inModes = st.modes.in;
-  const inSel = inModes.length > 1 ? h('select', { class: 'dk-mini', 'aria-label': '收到用的模式', onchange: (e) => window.wa.dockInMode(e.target.value) }, inModes.map((m) => h('option', { value: m.id }, m.name))) : null;
+  const inSel = inModes.length > 1 ? h('select', { class: 'dk-mini', 'aria-label': '收到用的模式', title: '翻收到的消息用哪个模式', onchange: (e) => window.wa.dockInMode(e.target.value) }, inModes.map((m) => h('option', { value: m.id }, m.name))) : null;
   if (inSel) inSel.value = st.inModeId;
-  const modelSel = dockModelSel('dk-mini');
-  return h('div', { class: 'dk-head' },
-    h('span', { class: 'dk-label' }, '收到的消息'),
-    h('span', { class: 'grow' }),
-    inSel,
-    modelSel,
-    h('label', { class: 'dk-auto', title: '自动翻译这个号当前对话里新收到的消息' }, '自动翻译', sw));
+  box.append(...kids(inSel, h('label', { class: 'dk-auto', title: '自动翻译这个号当前对话里新收到的消息' }, '自动翻译', sw)));
+  return box;
+}
+// 状态变了就换标签栏右边的开关；焦点正在开关或下拉上时只改状态，不换元素（不然键盘焦点会丢）
+function dockSyncTabTools() {
+  const old = $panel.querySelector('.wb-tabs .wb-tools');
+  if (!old) return;
+  if (old.contains(document.activeElement) && dk.st) {
+    const sw = old.querySelector('.dk-switch');
+    if (sw) sw.checked = !!dk.st.auto;
+    const sel = old.querySelector('.dk-mini');
+    if (sel) sel.value = dk.st.inModeId;
+    return;
+  }
+  old.replaceWith(dockTabTools());
 }
 
 // 参考样式：灰色圆角框，复制图标在框内左下角，和输入区同一块灰底（shen 2026-10-26 去掉朗读）
@@ -357,6 +368,7 @@ function dockKeyBar() {
 // force=false：只刷新状态条和消息列表，正在写的回复不动
 function dockRender(force = false) {
   if (!dockVisible()) return;
+  dockSyncTabTools();
   const host = $panel.querySelector('.dk-host');
   if (!host) return;
   if (!dk.st || dk.st.accountId !== s.activeId) { if (!dk.fetching) { dk.fetching = true; dockFetch().finally(() => { dk.fetching = false; }); } if (!dk.st) { host.replaceChildren(h('div', { class: 'hint dk-hint' }, '加载中…')); return; } }
@@ -376,10 +388,10 @@ function dockRender(force = false) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
-    root.replaceChildren(...kids(dockKeyBar(), dockInHead(), list || dockIncoming(), msg, keep));
+    root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
     return;
   }
-  const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockInHead(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
   if (focusIn) { const box = el.querySelector('.dk-in'); box.focus(); box.selectionStart = box.selectionEnd = box.value.length; }

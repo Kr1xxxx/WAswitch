@@ -20,6 +20,7 @@ const errtext = require('./errtext');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
+const { unreadNames } = require('./notify-text');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
@@ -498,6 +499,7 @@ let lastTypedAt = 0;
 let liteHost = null;
 const liteStates = new Map(); // id -> { status, qr }
 const liteViews = new Map(); // id -> 后台进程推来的对话列表和当前对话
+const liteUnreadNames = new Map(); // id -> 后台进程推来的有未读的对话名字（通知里用）
 const liteOpen = new Map(); // id -> 正在看的对话
 let liteGuardHits = 0; // 网络护栏拦下的次数（隔离自检里显示）
 const isLite = (acc) => acc && acc.mode === 'lite';
@@ -524,8 +526,23 @@ const memoryManager = new memory.MemoryManager(settings, {
   onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
+// 新消息通知里写是哪几个对话：只要名字和未读数，不读消息内容。
+// 聊天锁定、账号出错、页面还在加载时返回 null，通知退回“有 N 个未读对话”
+async function unreadChatNames(acc) {
+  if (locked || problems.has(acc.id)) return null;
+  if (isLite(acc)) return liteUnreadNames.get(acc.id) || null;
+  const view = views.get(acc.id);
+  if (!view || pendingLoad.has(acc.id)) return null;
+  // 标题里的未读数先变，左边对话列表稍后才排好，等一下再读
+  await new Promise((r) => setTimeout(r, 600));
+  if (locked || views.get(acc.id) !== view || view.webContents.isDestroyed()) return null;
+  const r = await waPage.readChatList(view.webContents, { includePreview: false });
+  return r && r.ok ? unreadNames(r.chats) : null;
+}
+
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  unreadChats: (acc) => unreadChatNames(acc),
   onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
@@ -605,7 +622,7 @@ const mcpHooks = {
     const view = views.get(id);
     if (!view || problems.has(id)) return 'unknown';
     const state = await waPage.loginState(view.webContents);
-    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); noteLoggedIn(id, state); pushState(); }
+    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); noteLoggedIn(id, state); if (state === 'needs_qr') armQrWatch(); pushState(); }
     return state;
   },
   readChatList: async (id, opts) => {
@@ -1019,6 +1036,7 @@ function parkAccount(acc) {
   loginStates.delete(acc.id);
   liteStates.delete(acc.id);
   liteViews.delete(acc.id);
+  liteUnreadNames.delete(acc.id);
   liteOpen.delete(acc.id);
   mcp?.controller.gate.clearAccount(acc.id);
   notifier.forget(acc.id);
@@ -1161,13 +1179,15 @@ function watchNetwork() {
 
 const liteMe = new Map(); // 轻量模式：上次连上时的本号 id
 const phoneRead = new Set(); // 这次登录已经读过手机号的网页版账号
-async function checkLogins() {
-  let changed = false;
-  for (const acc of accounts) {
-    const view = views.get(acc.id);
-    if (!view || problems.has(acc.id)) continue;
+// 检查一个网页版账号的登录状态，变了返回 true。同一个号同时只查一次（慢检查和扫码快检查可能撞上）
+const loginChecking = new Set();
+async function checkLogin(acc) {
+  const view = views.get(acc.id);
+  if (!view || problems.has(acc.id) || loginChecking.has(acc.id)) return false;
+  loginChecking.add(acc.id);
+  try {
     const state = await waPage.loginState(view.webContents);
-    if (state === 'unknown') continue;
+    if (state === 'unknown') return false;
     // 登录后读一次自己的手机号（只读 localStorage，见 wa-page.js）；掉线后重新登录再读
     if (state === 'needs_qr') phoneRead.delete(acc.id);
     if (state === 'logged_in' && !phoneRead.has(acc.id)) {
@@ -1175,7 +1195,7 @@ async function checkLogins() {
       if (phone) { phoneRead.add(acc.id); setDetectedPhone(acc, phone); }
     }
     const before = loginStates.get(acc.id);
-    if (state === before) continue;
+    if (state === before) return false;
     if (state === 'needs_qr') mcp?.controller.gate.clearAccount(acc.id);
     if (state === 'needs_qr' && before === 'logged_in') team?.recordEvent(acc, 'dropped');
     if (state === 'logged_in' && before === 'needs_qr') team?.recordEvent(acc, 'recovered');
@@ -1185,9 +1205,44 @@ async function checkLogins() {
     }
     loginStates.set(acc.id, state);
     noteLoggedIn(acc.id, state);
-    changed = true;
+    if (state === 'needs_qr') armQrWatch();
+    return true;
+  } finally {
+    loginChecking.delete(acc.id);
   }
+}
+
+async function checkLogins(list = accounts) {
+  let changed = false;
+  for (const acc of list) if (await checkLogin(acc)) changed = true;
   if (changed) pushState();
+}
+
+// 扫码快检查：有网页版账号停在二维码页（或刚加载完、还不知道状态）时，每 3 秒看一次，
+// 扫完几秒内侧栏就变成已登录。没有这样的号、或窗口藏起来/最小化（没人在扫码）就停下，
+// 登录后的号只走 LOGIN_CHECK_MS 的慢检查。
+const QR_CHECK_MS = 3000;
+const QR_FRESH_MS = 60 * 1000; // 页面加载完 1 分钟内状态还没认出来，也算可能在等扫码
+let qrWatchTimer = null;
+function qrWatchList() {
+  const now = Date.now();
+  return accounts.filter((a) => {
+    if (isLite(a) || isParked(a) || !views.has(a.id) || problems.has(a.id) || pendingLoad.has(a.id)) return false;
+    const st = loginStates.get(a.id);
+    if (st === 'needs_qr') return true;
+    return st !== 'logged_in' && now - (webLoadedAt.get(a.id) || 0) < QR_FRESH_MS;
+  });
+}
+function armQrWatch() {
+  if (qrWatchTimer || quitting) return;
+  qrWatchTimer = setTimeout(qrWatchTick, QR_CHECK_MS);
+}
+async function qrWatchTick() {
+  const list = qrWatchList();
+  if (!list.length || !win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) { qrWatchTimer = null; return; }
+  await checkLogins(list);
+  qrWatchTimer = null;
+  armQrWatch();
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
@@ -1445,7 +1500,7 @@ async function createView(acc, loadDelay = 0) {
 
   let failed = false;
   let failToken = null;
-  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
+  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); armQrWatch(); });
   wc.on('did-start-loading', () => {
     failed = false;
     failToken = null;
@@ -1692,9 +1747,10 @@ function bindLiteEvents() {
     if (prev !== status && status === 'stuck') notifier.notify(acc, '连接反复出错，已停止重连。点这里打开这个号重试。');
     refresh();
   });
-  liteHost.on('unread', ({ id, count }) => {
+  liteHost.on('unread', ({ id, count, chats }) => {
     const acc = findAcc(id);
     if (!acc) return;
+    liteUnreadNames.set(id, unreadNames(chats));
     notifier.update(acc, count, { isActive: id === activeId && page === 'account' });
     pushState();
   });
@@ -1871,6 +1927,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   loginStates.delete(id);
   liteStates.delete(id);
   liteViews.delete(id);
+  liteUnreadNames.delete(id);
   liteOpen.delete(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
@@ -2202,7 +2259,8 @@ app.whenReady().then(async () => {
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
   win.on('hide', layout);
-  win.on('show', layout);
+  win.on('show', () => { layout(); armQrWatch(); });
+  win.on('restore', armQrWatch); // 窗口回来时，等扫码的号重新开始快检查
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
   win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {
