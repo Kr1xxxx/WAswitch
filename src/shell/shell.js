@@ -496,9 +496,11 @@ function renderTop() {
     !lite ? zoomChip(acc) : null,
     clockChip(acc),
     acc.memMB ? h('span', { class: 'chip', title: memTitle(acc, lite) }, `${acc.memMB} MB`) : null,
-    h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
-    h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
-    h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
+    // 右边三个按钮放成一组：刷新、工作台、账号菜单（shen 2026-10-27 把刷新挪到最前）
+    h('span', { class: 'top-acts' },
+      h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
+      h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
+      h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id, 'top') }, icon('more', 15)))));
 }
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；

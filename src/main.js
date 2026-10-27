@@ -2722,12 +2722,13 @@ onShell('open-link', (url) => { if (isSafeLink(url)) shell.openExternal(url); })
 onShell('open-source', () => shell.openExternal(SOURCE_URL));
 
 // 右键账号或点顶栏“⋯”：编辑 / 刷新 / 通知 / 删除
-onShell('context', (id) => {
+// 顶栏“⋯”旁边已经有常驻的刷新按钮，从顶栏打开时菜单里不再放“刷新”（shen 2026-10-27）；右键侧栏的号照旧有
+onShell('context', (id, from) => {
   const acc = findAcc(id);
   if (!acc) return;
   Menu.buildFromTemplate([
     { label: '编辑名称、颜色和代理…', click: () => openEditor(id) },
-    { label: isLite(acc) ? '重新连接' : '刷新', click: () => (problems.has(id) || isLite(acc) ? retryNow(id) : views.get(id)?.webContents.reload()) },
+    ...(from === 'top' ? [] : [{ label: isLite(acc) ? '重新连接' : '刷新', click: () => (problems.has(id) || isLite(acc) ? retryNow(id) : views.get(id)?.webContents.reload()) }]),
     {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
