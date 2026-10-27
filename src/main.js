@@ -28,6 +28,7 @@ const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
+const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
@@ -497,7 +498,7 @@ let editorNonce = 0;
 let editorColor = null;
 let quitting = false;
 // MCP 想切号或打开添加页、但用户正在打字时，先挂起，在窗口顶部问用户
-let aiRequest = null; // { kind: 'switch' | 'add', id?, name?, region? }
+let aiRequest = null; // { kind: 'switch' | 'add' | 'draft' | 'open', id?, name?, region? }（draft 见 draft-place.js，open 见 chat-open.js）
 let lastTypedAt = 0;
 
 // 轻量模式（在 app ready 之后创建）
@@ -770,6 +771,8 @@ const mcpHooks = {
 
   // ---- 起草回复：放进输入框，不发送（见 draft-place.js） ----
   placeDraft: (args) => draftPlacer.place(args),
+  // ---- 打开对话：网页版跳到 /send?phone=，轻量模式直接选中（见 chat-open.js） ----
+  openChat: (args) => chatOpener.open(args),
 
   // ---- 客户资料：搜索本机客户名单（见 mcp/customers.js），只读 ----
   // 和面板一样不含停着的号名下的客户；账号名只给看得见的号
@@ -881,6 +884,33 @@ const messageReader = createMessageReader({
   },
 });
 
+
+// MCP 打开对话（open_chat）。网页版只让页面跳到 WhatsApp 自己的网址，不注入脚本
+const chatOpener = createChatOpener({
+  findAcc: (id) => findAcc(id),
+  isLite,
+  userBusy: () => userBusy(),
+  problem: (id) => problems.has(id),
+  activate: (id) => { page = 'account'; activate(id, { focus: false }); },
+  activateForUser: async (id) => { notifier.showWindow(); await userActivate(id); },
+  webContents: (id) => {
+    const view = views.get(id);
+    return view && !view.webContents.isDestroyed() && !pendingLoad.has(id) ? view.webContents : null;
+  },
+  waPage,
+  navigate: (id, url) => {
+    const view = views.get(id);
+    if (!view || view.webContents.isDestroyed() || !isWhatsAppUrl(url)) return false;
+    view.webContents.loadURL(url).catch(() => {}); // 失败由 did-fail-load 处理
+    return true;
+  },
+  liteChats: (id) => (liteViews.get(id)?.chats || []).filter((c) => c && typeof c.jid === 'string'),
+  liteOpen: (id, jid) => { liteOpen.set(id, jid); syncLiteWatch(); pushState(); },
+  request: () => aiRequest,
+  setRequest: (req, ms) => setAiRequest(req, ms),
+  clearRequest: () => setAiRequest(null),
+  wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+});
 
 const regionName = (() => {
   let names = null;
@@ -2105,6 +2135,12 @@ function aiRequestForShell() {
     if (locked) return { kind: 'draft', locked: true };
     return { kind: 'draft', name: acc.name, chat: aiRequest.chat, preview: aiRequest.text.replace(/\s+/g, ' ').slice(0, 120), note: aiRequest.note || '' };
   }
+  if (aiRequest.kind === 'open') {
+    const acc = findAcc(aiRequest.id);
+    if (!acc) return null;
+    // 锁着时不显示号码
+    return { kind: 'open', name: acc.name, phone: locked ? '' : `+${aiRequest.phone}`, warn: !!aiRequest.warn };
+  }
   const acc = findAcc(aiRequest.id);
   return acc ? { kind: 'switch', name: acc.name } : null;
 }
@@ -2644,6 +2680,7 @@ onShell('mcp:open', () => mcpModule?.openSettings());
 onShell('ai:answer', (yes) => {
   const req = aiRequest;
   if (req && req.kind === 'draft') { draftPlacer.answer(yes === true); return; }
+  if (req && req.kind === 'open') { chatOpener.answer(yes === true); return; }
   setAiRequest(null);
   if (yes === true && req) runAiRequest(req, true);
 });

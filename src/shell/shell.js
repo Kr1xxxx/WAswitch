@@ -552,6 +552,15 @@ function renderAi() {
       r.locked ? null : h('button', { class: 'btn primary', title: '放进输入框，不会发送，发送自己按', onclick: () => window.wa.aiAnswer(true) }, '放进输入框'));
     return;
   }
+  if (r.kind === 'open') {
+    // AI 想打开和某个号码的对话。网页版输入框里有没发的字时提醒会刷新页面
+    const who = r.phone ? `和 ${r.phone} 的对话` : '一个对话（解锁后查看号码）';
+    $ai.replaceChildren(
+      h('span', { class: `grow${r.warn ? ' bad' : ''}` }, `AI 想在「${r.name}」里打开${who}${r.warn ? '。要刷新这个号的页面，输入框里没发的字可能会丢' : ''}`),
+      h('button', { class: 'btn', onclick: () => window.wa.aiAnswer(false) }, '忽略'),
+      h('button', { class: 'btn primary', onclick: () => window.wa.aiAnswer(true) }, '打开'));
+    return;
+  }
   const what = r.kind === 'add'
     ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
     : `AI 想切到「${r.name}」`;

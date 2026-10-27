@@ -55,9 +55,12 @@ function render(s) {
   const draftLog = $('draftLog');
   draftLog.innerHTML = '';
   const RESULT = { placed: '已放进输入框', pending: '在窗口顶部等你确认', busy: '上一条还没处理，没放', gone: '账号不存在' };
+  const OPENED = { opened: '已打开', already: '本来就开着', pending: '在窗口顶部等你确认', busy: '顶部还有请求没处理，没开', failed: '没打开', gone: '账号不存在' };
   for (const d of s.draftLog || []) {
     const li = document.createElement('li');
-    li.textContent = `${time(d.at)} ${d.client} 给「${d.account}」的「${d.chat}」起草了 ${d.chars} 字：${RESULT[d.result] || d.result}`;
+    li.textContent = d.kind === 'open'
+      ? `${time(d.at)} ${d.client} 在「${d.account}」打开和 ${d.chat} 的对话：${OPENED[d.result] || d.result}`
+      : `${time(d.at)} ${d.client} 给「${d.account}」的「${d.chat}」起草了 ${d.chars} 字：${RESULT[d.result] || d.result}`;
     draftLog.appendChild(li);
   }
   $('draftLogBox').hidden = !(s.draftLog || []).length;

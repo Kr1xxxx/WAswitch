@@ -153,8 +153,11 @@ class McpController {
     this.settings.drafts = !!on;
     cfg.saveSettings(this.dataDir, this.settings);
     for (const s of this.sessions.values()) {
-      if (!s.draftTool) continue;
-      if (on) s.draftTool.enable(); else s.draftTool.disable();
+      // open_chat 和 draft_reply 同属“起草”这一组，共用一个开关
+      for (const t of [s.draftTool, s.openTool]) {
+        if (!t) continue;
+        if (on) t.enable(); else t.disable();
+      }
     }
     this.onChange();
   }
@@ -223,8 +226,9 @@ class McpController {
     const { registerSearchTools } = require('./search');
     const { registerCustomerTools } = require('./customers');
     const { registerHelperTools } = require('./helpers');
+    const { registerOpenChatTool } = require('./open-chat');
     const { registerCustomerEditTools } = require('./customer-edit');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerMessageTools, registerDraftTools, registerSearchTools, registerCustomerTools, registerHelperTools, registerCustomerEditTools };
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerMessageTools, registerDraftTools, registerSearchTools, registerCustomerTools, registerHelperTools, registerCustomerEditTools, registerOpenChatTool };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -318,10 +322,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, searchTool: null, messageTool: null, draftTool: null, customerTool: null, helperTools: [], customerEditTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, searchTool: null, messageTool: null, draftTool: null, openTool: null, customerTool: null, helperTools: [], customerEditTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话、用 read_messages 读某个对话最近的消息（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“修改客户资料”后，可以用 update_customer 改客户的标签、备注、跟进时间或新建客户，每次修改用户都能撤销；打开“客户资料”后，可以用 search_customers 按名字、号码或标签搜客户名单（每次要用户确认）。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话、用 read_messages 读某个对话最近的消息（每次要用户确认）；打开“起草回复和打开对话”后，可以用 open_chat 打开和某个号码的对话、用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“修改客户资料”后，可以用 update_customer 改客户的标签、备注、跟进时间或新建客户，每次修改用户都能撤销；打开“客户资料”后，可以用 search_customers 按名字、号码或标签搜客户名单（每次要用户确认）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     const readOpts = {
@@ -345,7 +349,14 @@ class McpController {
         return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
       },
     });
-    if (!this.settings.drafts) entry.draftTool.disable();
+    entry.openTool = this.sdk.registerOpenChatTool(server, this.hooks, {
+      log: this.drafts,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
+    if (!this.settings.drafts) { entry.draftTool.disable(); entry.openTool.disable(); }
     entry.customerTool = this.sdk.registerCustomerTools(server, this.hooks, {
       gate: this.customerGate,
       confirmTimeoutMs: CONFIRM_TIMEOUT_MS,

@@ -72,7 +72,9 @@ function makeLitePage(id) {
     const switched = !lastMsgKey.startsWith(`${view.jid}:`);
     lastMsgKey = key;
     const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
-    title.replaceChildren(h('b', null, view.title || (chats.find((c) => c.jid === view.jid) || {}).name || ''));
+    // 本机还没聊过的号码（AI 用 open_chat 打开的）没有名字，显示号码
+    const bare = /@s\.whatsapp\.net$/.test(view.jid || '') ? `+${view.jid.split('@')[0]}` : '';
+    title.replaceChildren(h('b', null, view.title || (chats.find((c) => c.jid === view.jid) || {}).name || bare));
     msgs.replaceChildren(...items.map((m) => h('div', { class: `lite-msg${m.me ? ' me' : ''}` },
       m.from ? h('small', { class: 'from' }, m.from) : null,
       h('span', { class: 'text' }, linkify(m.text)),
