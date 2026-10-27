@@ -373,7 +373,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .pn-due { color: #8a5a00; font-size: 12px; }
 .pn-due.late { color: var(--danger); }
 .pn-foot { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
-#topbar .icon-btn.on { background: #eceef1; color: var(--text); }
+/* 顶栏右边的三个按钮挨在一起，和左边的小标签用一条细线隔开 */
+#topbar .top-acts { display: flex; align-items: center; gap: 2px; padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--line); height: 22px; }
+#topbar .icon-btn { color: var(--soft); }
+#topbar .icon-btn:hover { background: rgba(0,0,0,.06); color: var(--text); }
+#topbar .icon-btn.on { background: #e3e6ea; color: var(--text); }
+#topbar .icon-btn.on:hover { background: #dadee3; }
 /* 翻译 */
 .pn-form.tr { padding: 8px 0 0; }
 .tr-row { display: flex; gap: 6px; align-items: center; }
