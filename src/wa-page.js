@@ -209,6 +209,45 @@ const READ_CHAT_CODE = `(() => {
   };
   const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0; return h.toString(36); };
   const chatPart = 'chat:' + title.replace(/_/g, ' ');
+  // 发送人名字（data-pre-plain-text 里冒号前那段）只在这里用来认方向，不带出隔离环境
+  const norm = (v) => String(v || '').replace(/[\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]/g, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const nameOf = (n) => {
+    const b = first(n, S.body) || (n.matches('[data-pre-plain-text]') ? n : null);
+    const m = b ? /^\\[[^\\]]*\\]\\s*(.*?):\\s*$/.exec(b.getAttribute('data-pre-plain-text') || '') : null;
+    return m ? norm(m[1]) : '';
+  };
+  // 气泡靠右就是自己发的（从右到左的界面反过来）。只读位置，不改页面；读不出位置（不可见、没有样式）就返回 null
+  const rtl = (document.documentElement.getAttribute('dir') || document.body.getAttribute('dir') || '') === 'rtl';
+  const mr = main.getBoundingClientRect();
+  const sideOf = (n) => {
+    if (mr.width < 200) return null;
+    const r = (first(n, S.body) || n).getBoundingClientRect();
+    if (!r.width || r.width > mr.width - 48) return null;
+    const left = r.left - mr.left;
+    const right = mr.right - r.right;
+    if (Math.abs(left - right) < 24) return null;
+    return (left > right) !== rtl;
+  };
+  // 认不出方向的消息再看两样：气泡在哪一边；发送人名字和认得出的消息、对话标题对不对得上
+  const resolve = (list) => {
+    for (const e of list) if (e.out === null) e.out = sideOf(e.n);
+    const dir = new Map();
+    for (const e of list) {
+      e.name = nameOf(e.n);
+      if (!e.name || e.out === null) continue;
+      dir.set(e.name, dir.has(e.name) && dir.get(e.name) !== e.out ? 'mixed' : e.out);
+    }
+    const tn = norm(title);
+    // 有人的名字就是对话标题、而且是收到的：这是私聊，别的名字只能是自己
+    const oneToOne = !!tn && (dir.get(tn) === false || (!dir.has(tn) && list.some((e) => e.name === tn)));
+    for (const e of list) {
+      if (e.out !== null || !e.name) continue;
+      const d = dir.get(e.name);
+      if (d === true || d === false) e.out = d;
+      else if (e.name === tn) e.out = false;
+      else if (oneToOne) e.out = true;
+    }
+  };
   const top = [];
   // 第一遍：带 data-id 的消息
   const all = main.querySelectorAll(S.msg);
@@ -216,26 +255,32 @@ const READ_CHAT_CODE = `(() => {
     const id = n.getAttribute('data-id') || '';
     if (!id) continue;
     if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
-    let out = dirOf(n, id);
-    if (out === null) {
-      if (!n.querySelector('[data-pre-plain-text]')) continue; // 既认不出方向也没有正文，多半不是消息
-      out = false;
-    }
+    const out = dirOf(n, id);
+    if (out === null && !n.querySelector('[data-pre-plain-text]')) continue; // 既认不出方向也没有正文，多半不是消息
+    top.push({ n, rawId: id, out });
+  }
+  resolve(top);
+  for (const e of top) {
+    if (e.out === null) e.out = false; // 实在认不出：当成收到的，客户的消息不能漏
     // 新格式编号没有 true_/false_ 前缀：补成同样的形状，悬浮窗靠中间那段认出换了对话
-    const full = /^(true|false)_/.test(id) ? id : (out ? 'true_' : 'false_') + chatPart + '_' + id;
-    top.push({ n, id: full, out });
+    e.id = /^(true|false)_/.test(e.rawId) ? e.rawId : (e.out ? 'true_' : 'false_') + chatPart + '_' + e.rawId;
   }
   // 第二遍：没有 data-id 时，按正文块或气泡读，编号用内容算出来（同样的话出现几次就加序号）
   if (!top.length) {
-    const seen = new Map();
     for (const n of main.querySelectorAll('[data-pre-plain-text], ' + S.mIn + ', ' + S.mOut)) {
       if (n.parentElement && n.parentElement.closest('[data-pre-plain-text], ' + S.mIn + ', ' + S.mOut)) continue;
-      const out = dirOf(n, '') === true;
-      const { text, pre } = textOf(n);
+      top.push({ n, out: dirOf(n, '') });
+    }
+    resolve(top);
+    const seen = new Map();
+    for (const e of top) {
+      const out = e.out === true;
+      const { text, pre } = textOf(e.n);
       const key = (out ? 'o' : 'i') + pre + '|' + text;
       const k = (seen.get(key) || 0) + 1;
       seen.set(key, k);
-      top.push({ n, id: (out ? 'true_' : 'false_') + chatPart + '_h' + hash(key) + '.' + k, out });
+      e.out = out;
+      e.id = (out ? 'true_' : 'false_') + chatPart + '_h' + hash(key) + '.' + k;
     }
   }
   // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话

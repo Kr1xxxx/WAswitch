@@ -274,6 +274,26 @@ async function persisted() {
   assert.deepStrictEqual(lsent, [], '重启后不再调模型');
   assert.deepStrictEqual(l.fc.viewOf('L').items.map((x) => x.tr), ['译:Hallo, ist das noch verfügbar?', '译:Wie dieses hier', '译:[ok] danke']);
   fs.rmSync(ldir, { recursive: true, force: true });
+  assert(!lsent.includes('Ja'), '轻量号自己发的（fromMe）不调模型');
+  assert(!l.fc.viewOf('L').items.some((x) => x.text === 'Ja'), '轻量号自己发的不在翻译列表里');
+  assert.strictEqual(l.fc.accs.get('L').day.n, 0, '重启后读到存盘的译文，自己发的也不算额度');
+  // 自己发的消息上一次被当成收到的（刚发出去还认不出方向）：认出来后撤掉排队、退回额度
+  {
+    let release;
+    const got = [];
+    const fc2 = new FloatCore({ translate: (text) => { got.push(text); return new Promise((res) => { release = () => res({ text: `译:${text}`, warn: [] }); }); } });
+    const one = { id: 'false_chat:Anna_3EB1', out: false, text: 'Hallo' };
+    const mine = { id: 'false_chat:Anna_3EB2', out: false, text: 'Bis morgen' };
+    fc2.ingest('W', { title: 'Anna', msgs: [one, mine] }, { auto: true, dailyCap: 500 });
+    await sleep(5);
+    assert.strictEqual(fc2.accs.get('W').day.n, 2);
+    fc2.ingest('W', { title: 'Anna', msgs: [one, { ...mine, id: 'true_chat:Anna_3EB2', out: true }] }, { auto: true, dailyCap: 500 });
+    assert.strictEqual(fc2.accs.get('W').day.n, 1, '退回自己那条占的额度');
+    assert.deepStrictEqual(fc2.viewOf('W').items.map((x) => x.text), ['Hallo']);
+    release();
+    await sleep(5);
+    assert.deepStrictEqual(got, ['Hallo'], '自己发的不调模型');
+  }
   console.log('轻量号翻译自检通过');
 }
 
@@ -347,6 +367,33 @@ core().then(() => {
       + '<div role="row"><div><div data-pre-plain-text="[10:02, 26/10/2026] Moi: ">Bonne journée</div><span data-icon="msg-check"></span></div></div>'; 1`);
     const r8 = await waPage.readOpenChat(w.webContents);
     assert.deepStrictEqual(r8.msgs.map((m) => [m.out, m.text]), [[false, 'Salut'], [true, 'Bonne journée']]);
+    // 页面改版、方向标记全没了（没有前缀、没有 class、没有勾）：看气泡靠哪边
+    const row = (side, name, t) => '<div role="row" style="display:flex;justify-content:flex-' + (side === 'r' ? 'end' : 'start') + '"><div data-id="3EB' + Math.random().toString(36).slice(2, 8) + '"><div data-pre-plain-text="[10:00, 26/10/2026] ' + name + ': " style="width:220px"><span dir="ltr">' + t + '</span></div></div></div>';
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Kunde Berlin">Kunde Berlin</span></header>'
+      + ${JSON.stringify(row('l', 'Anna', 'Ist das noch da?') + row('r', 'Ich', 'Ja, noch da.') + row('l', 'Anna', 'Super, danke'))}; 1`);
+    const r9 = await waPage.readOpenChat(w.webContents);
+    assert.deepStrictEqual(r9.msgs.map((m) => [m.out, m.text]), [[false, 'Ist das noch da?'], [true, 'Ja, noch da.'], [false, 'Super, danke']]);
+    // 读不出位置时看名字：私聊里对方名字就是对话标题，别的名字只能是自己
+    const flat = (id, name, t, extra = '') => '<div role="row"><div data-id="' + id + '"><div data-pre-plain-text="[10:00, 26/10/2026] ' + name + ': "><span dir="ltr">' + t + '</span></div>' + extra + '</div></div>';
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Anna Müller">Anna Müller</span></header>'
+      + ${JSON.stringify(flat('3EC1', 'Anna Müller', 'Hallo') + flat('3EC2', 'Max', 'Gern geschehen') + flat('3EC3', 'Anna Müller', 'Tschüss'))}; 1`);
+    const r10 = await waPage.readOpenChat(w.webContents);
+    assert.deepStrictEqual(r10.msgs.map((m) => [m.out, m.text]), [[false, 'Hallo'], [true, 'Gern geschehen'], [false, 'Tschüss']]);
+    // 群里：认得出的自己那条（带勾）的名字，同名的也是自己；别人的名字照样当收到的，客户消息不漏
+    await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Team Lyon">Team Lyon</span></header>'
+      + ${JSON.stringify(flat('3ED1', 'Pierre', 'On commande ?') + flat('3ED2', 'Moi', 'Oui', '<span data-icon="msg-dblcheck"></span>') + flat('3ED3', 'Moi', 'Demain matin') + flat('3ED4', 'Lucie', 'Parfait'))}; 1`);
+    const r11 = await waPage.readOpenChat(w.webContents);
+    assert.deepStrictEqual(r11.msgs.map((m) => [m.out, m.text]), [[false, 'On commande ?'], [true, 'Oui'], [true, 'Demain matin'], [false, 'Parfait']]);
+    assert(!JSON.stringify([r9, r10, r11]).includes('Moi') && !JSON.stringify([r9, r10, r11]).includes('Max'), '发送人名字不带出隔离环境');
+    // 读到的结果交给翻译：自己发的不显示、不调模型、不算每天的额度
+    {
+      const called = [];
+      const fcw = new FloatCore({ translate: async (text) => { called.push(text); return { text: '译', warn: [] }; } });
+      for (const rr of [r9, r10, r11]) { fcw.ingest('W', rr, { auto: true, dailyCap: 500 }); await new Promise((res) => setTimeout(res, 10)); }
+      assert.deepStrictEqual(called, ['Ist das noch da?', 'Super, danke', 'Hallo', 'Tschüss', 'On commande ?', 'Parfait']);
+      assert.strictEqual(fcw.accs.get('W').day.n, 6, '只有收到的算额度');
+      assert.deepStrictEqual(fcw.viewOf('W').items.map((x) => x.text), ['On commande ?', 'Parfait'], '翻译列表只有客户的');
+    }
     // 有消息行但一条都认不出：才算读不到
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');

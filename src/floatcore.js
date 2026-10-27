@@ -96,6 +96,27 @@ class FloatCore {
     this.queue.push({ accId, h: item.h });
   }
 
+  // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
+  // 还在排队没开始翻的撤掉，并退回占用的自动翻译额度
+  dropOwn(accId, st, id) {
+    if (!id.startsWith('true_')) return;
+    const h = hashOf(accId, 'false_' + id.slice(5));
+    const item = st.items.get(h);
+    if (!item) return;
+    if (item.state === 'running') return;
+    if (item.state === 'queued') {
+      const i = this.queue.findIndex((q) => q.accId === accId && q.h === h);
+      if (i >= 0 && this.queue[i].manual) return; // 用户自己点的翻译，照常翻
+      if (i >= 0) {
+        this.queue.splice(i, 1);
+        if (st.day.n > 0) st.day.n -= 1;
+        st.minute.pop();
+        if (st.paused === 'day') st.paused = '';
+      }
+    }
+    st.items.delete(h);
+  }
+
   // 读到一次当前对话。read: { title, msgs: [{ id, out, text }] }。opts: { auto, dailyCap }
   // 返回 true 表示悬浮窗要刷新
   ingest(accId, read, opts) {
@@ -105,7 +126,8 @@ class FloatCore {
     const newChat = chat !== st.chat;
     const fresh = [];
     for (const m of msgs) {
-      if (m.out || !String(m.text || '').trim()) continue;
+      if (m.out) { this.dropOwn(accId, st, m.id); continue; }
+      if (!String(m.text || '').trim()) continue;
       const h = hashOf(accId, m.id);
       if (st.items.has(h)) continue;
       const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
