@@ -36,6 +36,14 @@
     th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid var(--line); }
     th { color: var(--muted); font-weight: 600; font-size: 12px; }
     [hidden] { display: none !important; }
+    .ailog { list-style: none; padding: 0; max-height: 320px; overflow-y: auto; }
+    .ailog li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .ailog .what { min-width: 0; overflow-wrap: anywhere; }
+    .ailog .meta { color: var(--muted); font-size: 12px; }
+    .ailog .done { color: var(--muted); font-size: 12px; flex: none; }
+    .ailog li button { flex: none; margin-left: 0; }
+    #undoMsg.ok { color: var(--ok); }
+    #undoMsg.bad { color: var(--danger); }
     button.copy-ok, button.copy-ok:hover { color: #15803D; border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
     .copy-ok svg { animation: copy-pop .34s cubic-bezier(.2, .9, .3, 1.35); }
     .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw .28s .06s ease-out forwards; }
@@ -46,7 +54,7 @@
 </head>
 <body>
   <h1>MCP 接口</h1>
-  <p class="hint">开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以列出账号、看未读数、切换、添加、改名和删除账号。读对话列表、找对话和读聊天消息要另外打开第二层，起草回复、辅助工具（话术、翻译、客户时间）也要另外打开。不能发送消息。只接受本机连接，需要 token。</p>
+  <p class="hint">开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以列出账号、看未读数、切换、添加、改名和删除账号。读对话列表、找对话和读聊天消息要另外打开第二层，起草回复、辅助工具（话术、翻译、客户时间）、客户资料（搜索、修改）也要另外打开。不能发送消息。只接受本机连接，需要 token。</p>
 
   <label class="switch"><input id="enabled" type="checkbox"> 开启 MCP 接口</label>
   <div id="state" role="status"></div>
@@ -87,9 +95,23 @@
       <ul id="draftLog"></ul>
     </div>
 
+    <h2>搜索客户资料</h2>
+    <label class="switch"><input id="customers" type="checkbox"> 允许 AI 搜索客户名单（每次都要你确认）</label>
+    <p class="hint">按名字、手机号或标签搜，会读到电话、标签、备注和跟进时间，这些内容会发给 AI 服务商。只读，不改资料。关着时 AI 看不到这个功能。</p>
+    <div id="customerAllowsBox">
+      <p class="hint"><b>正在允许：</b></p>
+      <ul id="customerAllows"></ul>
+    </div>
+    <div id="customerLogBox">
+      <p class="hint"><b>最近搜索（只在内存里，退出软件即清空）：</b></p>
+      <ul id="customerLog"></ul>
+    </div>
     <h2>辅助工具：话术、翻译、客户时间</h2>
     <label class="switch"><input id="helpers" type="checkbox"> 允许 AI 读话术库、用软件的翻译设置翻译文字、按号码查客户当地时间</label>
     <p class="hint">不弹窗确认。话术内容会发给 AI 服务商；翻译用的是你在 设置 › 翻译 里配的服务商和额度（每个连接每分钟最多 20 次），只翻 AI 给的文字，不读聊天；客户时间只按号码算，不读页面。都不会发送消息。关着时 AI 看不到这三个工具。</p>
+    <h2>修改客户资料</h2>
+    <label class="switch"><input id="customerEdit" type="checkbox"> 允许 AI 改客户的标签、备注、跟进时间，或新建客户</label>
+    <p class="hint">不会弹窗问你，每次改动都记在下面的「AI 操作记录」里，可以一键撤销。AI 不能删除客户。关着时 AI 看不到这个功能。</p>
 
     <h2>已连接的客户端</h2>
     <table>
@@ -100,6 +122,13 @@
     <div class="actions"><button id="regenerate">断开全部并更换 token</button></div>
     <p class="hint">更换 token 后（包括把 MCP 接口关掉再打开），Claude Code 需要用新命令重新添加；Claude Desktop 不用改。</p>
   </div>
+
+  <section id="aiLogBox" hidden>
+    <h2>AI 操作记录</h2>
+    <p class="hint">AI 改过的客户资料（存在这台电脑上，最多留 100 条）。撤销只改回之后没人再动过的内容。</p>
+    <p id="undoMsg" class="hint" role="status"></p>
+    <ul id="aiLog" class="ailog"></ul>
+  </section>
 
   <script src="settings.js"></script>
 </body>

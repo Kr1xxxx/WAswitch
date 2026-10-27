@@ -62,13 +62,92 @@ function render(s) {
   }
   $('draftLogBox').hidden = !(s.draftLog || []).length;
 
+  $('customers').checked = !!s.customers;
+  const cAllows = $('customerAllows');
+  cAllows.innerHTML = '';
+  for (const a of s.customerAllows || []) {
+    const li = document.createElement('li');
+    li.textContent = `允许客户端（自称 ${a.client}）搜索客户资料，到 ${time(a.until)}`;
+    const btn = document.createElement('button');
+    btn.textContent = '撤销';
+    btn.onclick = async () => render(await window.mcp.revokeCustomers(a.key));
+    li.appendChild(btn);
+    cAllows.appendChild(li);
+  }
+  $('customerAllowsBox').hidden = !(s.customerAllows || []).length;
+  const cLog = $('customerLog');
+  cLog.innerHTML = '';
+  for (const r of s.customerLog || []) {
+    const li = document.createElement('li');
+    li.textContent = `${time(r.at)} ${r.client} 搜了 ${r.query}，返回 ${r.count} 个客户`;
+    cLog.appendChild(li);
+  }
+  $('customerLogBox').hidden = !(s.customerLog || []).length;
   $('helpers').checked = !!s.helpers;
+  $('customerEdit').checked = !!s.customerEdit;
+  renderAiLog(s.aiLog || []);
+}
+
+// AI 操作记录：每条写清改了谁、改了什么（之前 → 之后），后面一个“撤销”按钮
+const when = (t) => new Date(t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const short = (v, n = 40) => { const t = String(v).replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n)}…` : t; };
+function showValue(field, v) {
+  if (field === 'tags') return v && v.length ? v.join('、') : '无';
+  if (field === 'followUpAt') return v ? when(v) : '无';
+  return v ? `「${short(v)}」` : '空';
+}
+function renderAiLog(list) {
+  const ul = $('aiLog');
+  ul.innerHTML = '';
+  for (const e of list) {
+    const li = document.createElement('li');
+    const what = document.createElement('div');
+    what.className = 'what';
+    const head = document.createElement('div');
+    head.textContent = e.op === 'create'
+      ? `新建客户「${e.customer}」${e.account ? `（${e.account}）` : ''}`
+      : `改了「${e.customer}」${e.account ? `（${e.account}）` : ''}`;
+    what.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'meta';
+    body.textContent = e.changes.map((c) => (e.op === 'create'
+      ? `${c.label}：${showValue(c.field, c.after)}`
+      : `${c.label}：${showValue(c.field, c.before)} → ${showValue(c.field, c.after)}`)).join('；');
+    what.appendChild(body);
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${when(e.at)} · ${e.client}${e.undone && e.undoNote !== '已撤销' ? ` · ${e.undoNote}` : ''}`;
+    what.appendChild(meta);
+    li.appendChild(what);
+    if (e.undone) {
+      const done = document.createElement('span');
+      done.className = 'done';
+      done.textContent = '已撤销';
+      li.appendChild(done);
+    } else {
+      const btn = document.createElement('button');
+      btn.textContent = '撤销';
+      btn.onclick = async () => {
+        btn.disabled = true;
+        const r = await window.mcp.undo(e.id);
+        const msg = $('undoMsg');
+        msg.textContent = r.message;
+        msg.className = `hint ${r.ok ? 'ok' : 'bad'}`;
+        render(r.view);
+      };
+      li.appendChild(btn);
+    }
+    ul.appendChild(li);
+  }
+  $('aiLogBox').hidden = !list.length;
 }
 
 $('layer2').onchange = async (e) => render(await window.mcp.setLayer2(e.target.checked));
 $('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target.checked));
 $('drafts').onchange = async (e) => render(await window.mcp.setDrafts(e.target.checked));
+$('customers').onchange = async (e) => render(await window.mcp.setCustomers(e.target.checked));
 $('helpers').onchange = async (e) => render(await window.mcp.setHelpers(e.target.checked));
+$('customerEdit').onchange = async (e) => render(await window.mcp.setCustomerEdit(e.target.checked));
 
 $('enabled').onchange = async (e) => render(await window.mcp.setEnabled(e.target.checked));
 $('regenerate').onclick = async () => render(await window.mcp.regenerate());

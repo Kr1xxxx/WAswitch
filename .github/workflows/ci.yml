@@ -42,6 +42,8 @@ jobs:
         run: npm run check:review
       - name: 轻量模式自检（Electron 内置 Node 和系统 Node 各一遍）
         run: npm run check:lite
+      - name: 轻量号未读条数和弹窗（连发多条、断线补发）
+        run: npm run check:lite-unread
       - name: 隔离自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
       - name: 读取对话列表自检
