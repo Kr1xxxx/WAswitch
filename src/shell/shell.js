@@ -774,13 +774,15 @@ let trNetTimer = 0;
 let trNetBusy = false; // 正在存：重画时旧输入框的失焦不再存一次
 let trNetLastUrl = ''; // 上次存好的代理地址：切到直连再切回来时帮你填上
 let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
+// 翻译页默认是简单版：只填密钥。点“详细设置”才显示服务商、网络、纠错、模式这些（记在本机）
+let trAdvanced = LS('trAdvanced') === '1';
+let trKeyFocus = ''; // 简单版里“去填密钥”：光标放进这个服务商的密钥框
 const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
 // 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
 async function trOpenKey(pid) {
   if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
   const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
-  trEdit = p ? { ...p } : trEdit;
-  trFocusKey = !!p;
+  if (trAdvanced) { trEdit = p ? { ...p } : trEdit; trFocusKey = !!p; } else trKeyFocus = p ? p.id : '';
   trSay = '';
   settingsTab = 'translate';
   window.wa.showPage('settings');
@@ -880,6 +882,35 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
+// 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
+function trKeysBox(c, apply) {
+  if (!c.providers.length) return h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有翻译服务商，点上面的“详细设置”添加。'));
+  const order = (p) => (p.id === c.primaryId ? 0 : p.id === c.fallbackId ? 1 : p.id === c.fixId ? 2 : 3);
+  const tag = (t) => h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, t);
+  return h('div', { class: 'box tr-keys' }, [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => {
+    const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
+      placeholder: p.hasKey ? `已填（尾号 ${p.keyTail}），不改就留空` : '粘贴 API 密钥' });
+    const save = async () => {
+      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return; }
+      const r = await window.wa.trProviderSave({ id: p.id, preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, thinking: p.thinking });
+      if (!r.error) { trSay = `「${p.name}」的密钥已保存`; trTestRes[p.id] = ''; }
+      apply(r);
+    };
+    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
+    const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
+    const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
+    return h('div', { class: 'tr-krow' },
+      h('div', { class: 'meta' },
+        h('span', { class: 'title' }, h('b', null, p.name), ...roles),
+        h('span', { class: 'desc' }, p.hasKey ? `已填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}` : `还没填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}`),
+        trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
+        link),
+      h('span', { class: 'hstack', style: { gap: '6px' } }, key,
+        h('button', { class: 'btn primary sm', onclick: save }, '保存'),
+        h('button', { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试')));
+  }));
+}
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
   const c = tr.cfg;
@@ -934,11 +965,26 @@ function translatePage(page) {
       if (!url.trim()) { trNetDraft = { url: '' }; trNetSay = '填好代理地址才会保存'; trNetErr = false; const el = document.getElementById('tr-net-say'); if (el) el.textContent = trNetSay; return; }
       saveNet('proxy', url);
     } });
-  page.append(...kids(
-    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在下面关掉。你的回复翻好后要自己按发送，不会自动发出。')),
+  const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
+    trAdvanced = !trAdvanced; LS('trAdvanced', trAdvanced ? '1' : '0'); trSay = '';
+    if (!trAdvanced) { trEdit = null; trModeEdit = null; }
+    render(true);
+  } }, trAdvanced ? '回到简单设置' : '详细设置');
+  const head = [
+    h('div', { class: 'col', style: { gap: '6px' } },
+      h('div', { class: 'tr-head' }, h('h1', null, '翻译'), toggle),
+      h('p', { class: 'lead' }, `在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在${trAdvanced ? '下面' : '“详细设置”里'}关掉。你的回复翻好后要自己按发送，不会自动发出。`)),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
+  ];
+  if (!trAdvanced) {
+    page.append(...kids(...head,
+      h('h2', { class: 'ov-h2' }, 'API 密钥'),
+      h('p', { class: 'hint' }, '填好密钥就能翻译。服务商、网络、纠错、翻译模式都已经设好，一般不用改；要改点右上角“详细设置”。'),
+      trKeysBox(c, apply)));
+    return;
+  }
+  page.append(...kids(...head,
     h('h2', { class: 'ov-h2' }, '服务商'),
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
