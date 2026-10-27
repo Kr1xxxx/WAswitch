@@ -503,7 +503,7 @@ function renderTop() {
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；
 // 没有收起按钮了（shen 2026-10-27），收起用顶栏的“工作台”按钮或 Ctrl/Cmd + Shift + K
 function panelHead() {
-  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'replies', false);
+  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'translate', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
@@ -1028,8 +1028,7 @@ function translatePage(page) {
     s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
         h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
-        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
-          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
+        sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
@@ -1060,7 +1059,7 @@ function renderPanel(force = false) {
   if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
-  const tab = s.panelTab || 'replies';
+  const tab = s.panelTab || 'translate';
   const sig = `${s.activeId}|${tab}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
   if (!force && sig === pn.sig && $panel.firstChild) return;
   if (!force && pn.tab === tab && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
@@ -1535,7 +1534,7 @@ function settingsPage() {
   } else if (settingsTab === 'notify') {
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '通知'),
-        h('p', { class: 'lead' }, '通知标题显示账号名，点通知直接打开那个号。不显示消息内容。')),
+        h('p', { class: 'lead' }, '通知标题显示账号名，正文写是哪几个对话（比如“Emma Schneider、John Miller 等 3 个未读对话”），点通知直接打开那个号。只写对话名字，不显示消息内容；聊天锁定时只写未读数。')),
       h('div', null, s.accounts.length ? s.accounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center' } },
         h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
         h('span', { class: 'meta' }, a.name),

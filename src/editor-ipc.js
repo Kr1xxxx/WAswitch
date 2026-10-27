@@ -133,10 +133,13 @@ function setupEditorIpc(ctx) {
     // 测试过的出口所在地显示在侧栏
     let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
     // 网页版时区还没定（“跟随本机”）：没测过就先测一次，按出口所在地填好时区。
-    // 直连号按系统代理测（它就是这么上网的）。测不通也照样保存；用户自己选了地区的不改
+    // 直连号按系统代理测（它就是这么上网的）。测不通也照样保存；用户自己选了地区的不改。
+    // 代理号只改名字、备注、颜色时不测（不然每次保存都要等几秒）：只有新号、代理或密码变了、
+    // 还不知道出口所在地、或刚从别的地区改回“跟随本机”时才测
+    const exitUnknown = !acc || acc.proxy !== proxyStored || (plan.kind === 'new' && !keepOld) || !acc.exitLabel || acc.fingerprint.region !== 'auto';
     let directTested = !parsed && lastTest && lastTest.proxy === '(system)' ? lastTest : null;
     if (mode === 'web' && region === 'auto') {
-      if (parsed && !tested) {
+      if (parsed && !tested && exitUnknown) {
         const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
         if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: regionForTimezone(res.timezone) };
       } else if (!parsed && !directTested) {

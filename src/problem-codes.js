@@ -3,6 +3,7 @@
 const PROBLEM_CODES = {
   proxy: 'P1', // 代理连不上（网页号）
   proxyDown: 'P1', // 代理连不上（轻量号）
+  unreachable: 'P1', // 轻量号：代理端口通，但当前节点连不上 WhatsApp（直连轻量号用 N1）
   config: 'P2', // 代理设置有误
   teamProxy: 'P3', // 管理员分的号，还没填代理
   network: 'N1', // WhatsApp 页面打不开

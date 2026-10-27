@@ -8,12 +8,12 @@ const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { needsKey } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = require('./trstore');
-const { FloatCore } = require('./floatcore');
+const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 
 function setupTranslateIpc(ctx) {
   const {
-    handleShell, onShell, findAcc, isLite, views, problems, parkedCustomer, panelShown,
+    handleShell, onShell, findAcc, isLite, views, problems, parkedCustomer, panelShown, liteChat,
     layout, pushState, focusActive, lockLocalPage, insertText,
   } = ctx;
 
@@ -200,7 +200,9 @@ function setupTranslateIpc(ctx) {
   function floatCanRead() {
     if (!readerOn() || ctx.page !== 'account' || ctx.locked || !ctx.win || !ctx.win.isVisible() || ctx.win.isMinimized()) return null;
     const acc = findAcc(ctx.activeId);
-    if (!acc || isLite(acc) || problems.has(acc.id)) return null;
+    if (!acc || problems.has(acc.id)) return null;
+    // 轻量号：消息本来就在软件里（后台进程推来的当前对话），不用读网页
+    if (isLite(acc)) return liteChat(acc.id).status === 'open' ? { acc, lite: true } : null;
     const view = views.get(acc.id);
     if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return null;
     return { acc, wc: view.webContents };
@@ -213,8 +215,11 @@ function setupTranslateIpc(ctx) {
     if (target) {
       floatBusy = true;
       let r;
-      try { r = await waPage.readOpenChat(target.wc); } finally { floatBusy = false; }
+      try {
+        if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc);
+      } finally { floatBusy = false; }
       if (!readerOn() || target.acc.id !== ctx.activeId) { scheduleFloat(500); return; }
+      if (r.why === 'wait') { scheduleFloat(300); return; } // 轻量号刚点开对话，消息还没推过来
       if (r.ok) {
         // 打开的对话里还没有消息也算读到了（悬浮窗会提示没有文字消息）
         floatFails = 0;
@@ -440,7 +445,7 @@ function setupTranslateIpc(ctx) {
     if (!acc || accountId !== ctx.activeId) return floatState();
     const v = floatCore.viewOf(acc.id);
     if (v.chatKey && v.title === title) ctx.translator.setChatLang(`${acc.id}:${v.chatKey}`, lang || '', 'manual');
-    else if (!v.chatKey) ctx.translator.setAccountLang(acc.id, lang || ''); // 读不到对话（轻量模式等）：改这个号的默认语言，空 = 回到自动
+    else if (!v.chatKey) ctx.translator.setAccountLang(acc.id, lang || ''); // 读不到对话：改这个号的默认语言，空 = 回到自动
     pushFloat();
     return floatState();
   });
@@ -482,6 +487,8 @@ function setupTranslateIpc(ctx) {
     setupFloatCore,
     pushFloat,
     layoutFloat,
+    // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒
+    liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatOpen() { return floatOpen; },
     get floatCore() { return floatCore; },
     get trStore() { return trStore; },

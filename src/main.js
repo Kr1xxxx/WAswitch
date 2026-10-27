@@ -17,8 +17,10 @@ const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
+const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
+const { unreadNames } = require('./notify-text');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
@@ -496,6 +498,7 @@ let lastTypedAt = 0;
 let liteHost = null;
 const liteStates = new Map(); // id -> { status, qr }
 const liteViews = new Map(); // id -> 后台进程推来的对话列表和当前对话
+const liteUnreadNames = new Map(); // id -> 后台进程推来的有未读的对话名字（通知里用）
 const liteOpen = new Map(); // id -> 正在看的对话
 let liteGuardHits = 0; // 网络护栏拦下的次数（隔离自检里显示）
 const isLite = (acc) => acc && acc.mode === 'lite';
@@ -522,8 +525,23 @@ const memoryManager = new memory.MemoryManager(settings, {
   onUpdate: () => { notifier.refresh(); pushState(); },
 });
 
+// 新消息通知里写是哪几个对话：只要名字和未读数，不读消息内容。
+// 聊天锁定、账号出错、页面还在加载时返回 null，通知退回“有 N 个未读对话”
+async function unreadChatNames(acc) {
+  if (locked || problems.has(acc.id)) return null;
+  if (isLite(acc)) return liteUnreadNames.get(acc.id) || null;
+  const view = views.get(acc.id);
+  if (!view || pendingLoad.has(acc.id)) return null;
+  // 标题里的未读数先变，左边对话列表稍后才排好，等一下再读
+  await new Promise((r) => setTimeout(r, 600));
+  if (locked || views.get(acc.id) !== view || view.webContents.isDestroyed()) return null;
+  const r = await waPage.readChatList(view.webContents, { includePreview: false });
+  return r && r.ok ? unreadNames(r.chats) : null;
+}
+
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  unreadChats: (acc) => unreadChatNames(acc),
   onNew: (e) => addNotifLog(e),
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
@@ -707,7 +725,7 @@ function checkIdleLock() {
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
 let panelOpen = false;
-let panelTab = 'replies'; // replies | customers | translate
+let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
 let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
@@ -951,13 +969,13 @@ function teamStatusOf(acc) {
   const health = proxyHealth.get(acc.id);
   let state;
   if (acc.teamNeedsProxy) state = 'needs_proxy';
-  else if (problem) state = problem.kind === 'proxy' || problem.kind === 'proxyDown' ? 'proxy_down' : problem.kind === 'banned' ? 'banned' : 'error';
+  else if (problem) state = ['proxy', 'proxyDown', 'unreachable'].includes(problem.kind) ? 'proxy_down' : problem.kind === 'banned' ? 'banned' : 'error';
   else if (loginStates.get(acc.id) === 'needs_qr') state = 'needs_qr';
   else state = accountStatus(acc.id) === 'ready' ? 'ready' : accountStatus(acc.id) === 'not_loaded' ? 'stopped' : 'loading';
   return {
     state,
     unread: notifier.unread.get(acc.id) || 0,
-    proxy_ok: acc.proxy ? (problem && (problem.kind === 'proxy' || problem.kind === 'proxyDown') ? false : health ? health.ok : null) : null,
+    proxy_ok: acc.proxy ? (problem && ['proxy', 'proxyDown', 'unreachable'].includes(problem.kind) ? false : health ? health.ok : null) : null,
     proxy_ms: acc.proxy && health ? health.ms : null,
     exit_ip: acc.proxy ? exitIps.get(acc.id) || '' : '',
     exit_country: acc.proxy && health ? health.country : '',
@@ -982,6 +1000,7 @@ function parkAccount(acc) {
   loginStates.delete(acc.id);
   liteStates.delete(acc.id);
   liteViews.delete(acc.id);
+  liteUnreadNames.delete(acc.id);
   liteOpen.delete(acc.id);
   mcp?.controller.gate.clearAccount(acc.id);
   notifier.forget(acc.id);
@@ -1063,7 +1082,7 @@ function reconnectStuck() {
   for (const [id, p] of problems) if (!p.config) { clearRetry(id); reconnect(id); }
   // 轻量账号：代理断开、正在连、正在重连或停止重连的，马上重试一次
   for (const acc of visibleAccounts().filter(isLite)) {
-    if (['proxyDown', 'connecting', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
+    if (['proxyDown', 'unreachable', 'connecting', 'reconnecting', 'crashed', 'stuck', 'qrExpired'].includes(liteStates.get(acc.id)?.status)) startLite(acc);
   }
 }
 
@@ -1158,21 +1177,24 @@ const RELOAD_QUIET_MS = 15 * 1000;
 const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 
 // 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
-function loadProblem(acc, code, desc) {
+// port：出错后探一下本机端口的结果 { open, socks }（见 portProbeFor）。端口通着还连不上，就是 Clash 当前节点挂了
+function loadProblem(acc, code, desc, port) {
   const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? ` · ${acc.proxy}` : ''}`;
   const kind = errtext.netKind(desc);
   const p = acc.proxy ? proxy.parse(acc.proxy) : null;
   if (PROXY_ERRORS.has(code) || (p && !p.error && ['proxyDown', 'proxyNode', 'proxyAuth', 'refused'].includes(kind))) {
     const local = p && !p.error && errtext.isLocal(p.host);
-    const node = kind === 'proxyNode' || kind === 'dns';
+    const nodeDead = local && kind === 'proxyDown' && !!(port && port.open && port.socks);
+    const node = kind === 'proxyNode' || kind === 'dns' || nodeDead;
     const auth = kind === 'proxyAuth';
     const title = auth ? `${acc.name}的代理用户名或密码不对`
       : node ? (local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理打不开 WhatsApp`)
         : p && !p.error ? (local ? `${acc.name}连不上 Clash 的 ${p.port} 端口` : `${acc.name}连不上代理 ${p.host}:${p.port}`) : `${acc.name}连不上代理`;
     const why = auth ? '请在编辑里改好代理的用户名和密码。'
+      : nodeDead ? `Clash 开着，${p.port} 端口也通，但这个端口对应的节点连不出去。去 Clash 给这个端口换个节点。`
       : node ? (local ? 'Clash 开着，但当前节点打不开 WhatsApp，在 Clash 里换个节点试试。' : '代理连上了，但通过它打不开 WhatsApp，代理那边的网络可能有问题。')
         : local ? '通常是 Clash 没开，或者 Clash 里没开这个端口。' : '代理可能停了，或者地址、端口不对。';
-    return { kind: 'proxy', title, short: '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
+    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
   }
   if (acc.proxy && (kind === 'dns' || kind === 'timeout' || kind === 'reset')) {
     return { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `${errtext.netReason(desc, { proxy: p && !p.error ? p : null })}。`, detail: raw, retrying: true };
@@ -1186,6 +1208,14 @@ function loadProblem(acc, code, desc) {
     cert: ['安全连接出错', '连不上', '可能是网络被拦截，或者电脑时间不对。请检查电脑的日期和时间。'],
   }[kind] || ['WhatsApp 页面打不开', '连不上', '网络有问题，可能是没联网或代理不通。'];
   return { kind: 'network', title: plain[0], short: plain[1], text: plain[2], detail: raw, retrying: true };
+}
+
+// 本机端口代理报“连不上代理”时，先探一下端口：分清是 Clash/端口没开，还是端口开着但节点挂了。
+// 只连本机，最多等 0.8 秒；不是本机端口或不是这类错误就不探
+async function portProbeFor(acc, desc) {
+  const p = acc.proxy ? proxy.parse(acc.proxy) : null;
+  if (!p || p.error || !errtext.isLocal(p.host) || errtext.netKind(desc) !== 'proxyDown') return null;
+  try { return await ports.probe(Number(p.port), { host: p.host.replace(/^\[|\]$/g, '') }); } catch { return null; }
 }
 
 // ---------- 缩放（每个号单独记） ----------
@@ -1396,9 +1426,11 @@ async function createView(acc, loadDelay = 0) {
   });
 
   let failed = false;
+  let failToken = null;
   wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
   wc.on('did-start-loading', () => {
     failed = false;
+    failToken = null;
     if (Date.now() >= quietUntil) baseline = notifier.unread.get(acc.id) || 0; // 连续刷新时保留第一次的原数
     quietUntil = Date.now() + RELOAD_QUIET_MS;
   });
@@ -1406,8 +1438,15 @@ async function createView(acc, loadDelay = 0) {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
-    setProblem(acc.id, loadProblem(acc, code, desc));
-    scheduleRetry(acc.id);
+    const token = {};
+    failToken = token;
+    portProbeFor(acc, desc).then((port) => {
+      // 探端口期间又开始了新的加载（重试、换代理）或者这个号已经关了：这次结果作废
+      if (failToken !== token || wc.isDestroyed() || views.get(acc.id)?.webContents !== wc) return;
+      if (port) console.warn(`账号 ${acc.id} 的 ${port.port} 端口：${port.open ? (port.socks ? '开着，节点不通' : '开着，但不是 socks5') : '没开'}`);
+      setProblem(acc.id, loadProblem(acc, code, desc, port));
+      scheduleRetry(acc.id);
+    });
   });
   // Ctrl + 鼠标滚轮（或触控板缩放手势）：和快捷键走同一条路，记下的比例和顶栏一直对得上
   wc.on('zoom-changed', (_e, dir) => { if (!locked) stepZoom(acc.id, dir === 'in' ? 1 : -1); });
@@ -1542,6 +1581,32 @@ const LITE_PROBLEMS = {
     text: `${acc.name} 设置的线路 ${acc.proxy} 没有响应。轻量模式不会改用直连。请检查 Clash 是否在运行、端口是否正确。`,
     retrying: true,
   }),
+  // 代理端口通，但 30 秒还没连上 WhatsApp（或连续失败 3 次）：多半是 Clash 当前节点挂了
+  unreachable: (acc, { detail } = {}) => {
+    const raw = detail ? `${detail}${acc.proxy ? ` · ${acc.proxy}` : ''}` : '';
+    if (!acc.proxy) {
+      return {
+        kind: 'network', // 直连号没有代理可改，用“连不上”的代码 N1
+        title: `${acc.name}连不上 WhatsApp`,
+        short: '连不上',
+        text: '这个号是直连轻量号，用这台电脑自己的网络，不经过系统代理。可能是电脑没联网，或者要把 Clash 改成 TUN 模式。',
+        detail: raw,
+        retrying: true,
+      };
+    }
+    const p = proxy.parse(acc.proxy);
+    const ok = p && !p.error;
+    const local = ok && errtext.isLocal(p.host);
+    return {
+      title: local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理连不上 WhatsApp`,
+      short: '节点不通',
+      text: local
+        ? `这个号先暂停联网，不会改用直连，手机上的消息不会丢。Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
+        : `这个号先暂停联网，不会改用直连，手机上的消息不会丢。代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
+      detail: raw,
+      retrying: true,
+    };
+  },
   loggedOut: () => ({
     title: '这个号已退出登录',
     short: '已退出登录',
@@ -1591,16 +1656,16 @@ function userIsReading(id, jid) {
 }
 
 function bindLiteEvents() {
-  liteHost.on('state', ({ id, status, qr, me }) => {
+  liteHost.on('state', ({ id, status, qr, me, detail, fresh }) => {
     const acc = findAcc(id);
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
-    liteStates.set(id, { status, qr: status === 'qr' ? qr : null });
+    liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
     const make = LITE_PROBLEMS[status];
-    if (make) problems.set(id, { kind: status, ...make(acc) });
+    if (make) problems.set(id, { kind: status, ...make(acc, { detail: typeof detail === 'string' ? detail.slice(0, 300) : '' }) });
     else if (status === 'open' || status === 'qr') problems.delete(id);
     // 掉线、被封：不管有没有关通知都提醒
     if (prev !== status && status === 'loggedOut') notifier.notify(acc, '已退出登录，需要重新扫码。点这里打开这个号。');
@@ -1609,9 +1674,10 @@ function bindLiteEvents() {
     if (prev !== status && status === 'stuck') notifier.notify(acc, '连接反复出错，已停止重连。点这里打开这个号重试。');
     refresh();
   });
-  liteHost.on('unread', ({ id, count }) => {
+  liteHost.on('unread', ({ id, count, chats }) => {
     const acc = findAcc(id);
     if (!acc) return;
+    liteUnreadNames.set(id, unreadNames(chats));
     notifier.update(acc, count, { isActive: id === activeId && page === 'account' });
     pushState();
   });
@@ -1619,6 +1685,7 @@ function bindLiteEvents() {
     if (!findAcc(v.id)) return;
     liteViews.set(v.id, v);
     pushState();
+    trIpc.liteChanged(v.id); // 面板“翻译”页马上显示新消息
   });
   liteHost.on('incoming', ({ id, jid }) => {
     notifier.lastNewAt = Date.now(); // 自动装更新要看 10 分钟内有没有新消息
@@ -1651,6 +1718,7 @@ function liteStateForShell() {
     id: acc.id,
     status: st.status || 'connecting',
     qr: st.qr || null,
+    fresh: st.fresh !== false, // 这次启动后还没连上过：写“正在连接”，不写“连接断开”
     openJid: liteOpen.get(acc.id) || null,
     view: view ? { rev: view.rev, chats: view.chats, jid: view.jid, title: view.title, messages: view.messages } : null,
   };
@@ -1786,6 +1854,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   loginStates.delete(id);
   liteStates.delete(id);
   liteViews.delete(id);
+  liteUnreadNames.delete(id);
   liteOpen.delete(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
@@ -2257,8 +2326,9 @@ handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
 onShell('panel:tab', (tab) => {
-  if (!['replies', 'customers', 'translate'].includes(tab)) return;
+  if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
+  if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
   panelOpen = true;
   refresh();
 });
@@ -2368,6 +2438,8 @@ const ctx = {
   get editorColor() { return editorColor; },
   get liteGuardHits() { return liteGuardHits; },
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
+  // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
+  liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),
   nextName, nextColor, cleanNote, cleanPhone, applyPhone, COLORS, LITE_SCHEMES, newLiteKey, WA_URL, webrtcPolicy,
   regionName, exitIps, exitChanges, recordExit, views, problems, notifier,
   saveAccounts, startAccount, startLite, createView, destroyView, refresh, pushState, layout, focusActive, lockLocalPage, insertText,

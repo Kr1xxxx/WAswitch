@@ -1,0 +1,118 @@
+// 编辑页保存（src/editor-ipc.js 的 editor:save）什么时候去测代理出口。
+// 审计第 5 条：网页版 + 代理 + 地区“跟随本机”时，只改名字也每次都测一遍，保存要等几秒。
+// 不开 Electron：假的 electron 模块 + 假的 ctx，数 proxy.test 被调了几次。
+const assert = require('assert');
+const Module = require('module');
+
+const fakeElectron = {
+  dialog: { showMessageBox: async () => ({}) },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (s) => Buffer.from(`enc:${s}`),
+    decryptString: (b) => b.toString().replace(/^enc:/, ''),
+  },
+  net: {},
+  session: {},
+};
+const origLoad = Module._load;
+Module._load = function (request, ...rest) {
+  if (request === 'electron') return fakeElectron;
+  return origLoad.call(this, request, ...rest);
+};
+
+const proxy = require('../src/proxy');
+const { setupEditorIpc } = require('../src/editor-ipc');
+
+let tests = 0;
+proxy.test = async () => { tests++; return { ok: true, ip: '9.9.9.9', country: 'US', timezone: 'America/New_York' }; };
+
+const handlers = {};
+const COLORS = ['#25d366'];
+const ctx = {
+  accounts: [],
+  handleShell: (name, fn) => { handlers[name] = fn; },
+  findAcc: (id) => ctx.accounts.find((a) => a.id === id),
+  isParked: () => false,
+  isLite: (a) => a.mode === 'lite',
+  visibleAccounts: () => ctx.accounts,
+  nextName: () => '新账号',
+  nextColor: () => COLORS[0],
+  cleanNote: (s) => String(s || ''),
+  cleanPhone: (s) => String(s || ''),
+  applyPhone: (acc, phone) => { acc.phone = phone; },
+  COLORS,
+  LITE_SCHEMES: ['socks5', 'http'],
+  newLiteKey: () => 'k',
+  regionName: (c) => c,
+  exitIps: new Map(),
+  exitChanges: new Map(),
+  recordExit: (acc, ip) => { acc.lastExit = { ip, at: 1 }; },
+  problems: new Map(),
+  saveAccounts: () => {},
+  startAccount: async () => {},
+  startLite: () => {},
+  createView: async () => {},
+  destroyView: () => {},
+  refresh: () => {},
+  notifier: { refresh: () => {} },
+};
+setupEditorIpc(ctx);
+const save = handlers['editor:save'];
+
+function webAcc(extra) {
+  return {
+    id: 'a1', name: '旧名字', note: '', phone: '', color: COLORS[0], proxy: 'socks5://127.0.0.1:7891', proxyPassword: '',
+    exitLabel: 'US', fingerprint: { region: 'auto' }, mode: 'web', primary: true, allowCalls: false, ...extra,
+  };
+}
+const form = (extra) => ({ id: 'a1', name: '新名字', color: COLORS[0], proxy: 'socks5://127.0.0.1:7891', region: 'auto', mode: 'web', ...extra });
+
+(async () => {
+  // 1. 只改名字：出口所在地已知，不发请求
+  ctx.accounts = [webAcc()];
+  tests = 0;
+  assert.deepStrictEqual(await save(form()), { ok: true });
+  assert.strictEqual(tests, 0, '只改名字不该测代理');
+  assert.strictEqual(ctx.accounts[0].name, '新名字');
+  assert.strictEqual(ctx.accounts[0].fingerprint.region, 'auto');
+
+  // 2. 改了代理：要测，并按出口填好时区
+  ctx.accounts = [webAcc()];
+  tests = 0;
+  await save(form({ proxy: 'socks5://127.0.0.1:7892' }));
+  assert.strictEqual(tests, 1, '改了代理要测');
+  assert.strictEqual(ctx.accounts[0].exitLabel, 'US');
+  assert.notStrictEqual(ctx.accounts[0].fingerprint.region, 'auto');
+
+  // 3. 代理没变，但还不知道出口所在地（上次测失败）：要测
+  ctx.accounts = [webAcc({ exitLabel: '' })];
+  tests = 0;
+  await save(form());
+  assert.strictEqual(tests, 1, '出口所在地为空要测');
+
+  // 4. 填了新密码：要测
+  ctx.accounts = [webAcc({ proxy: 'http://bob@1.2.3.4:8080' })];
+  tests = 0;
+  await save(form({ proxy: 'http://bob@1.2.3.4:8080', password: 'pw2' }));
+  assert.strictEqual(tests, 1, '换了密码要测');
+
+  // 5. 刚从别的地区改回“跟随本机”：要测
+  ctx.accounts = [webAcc({ fingerprint: { region: 'DE' } })];
+  tests = 0;
+  await save(form());
+  assert.strictEqual(tests, 1, '改回跟随本机要测');
+
+  // 6. 自己选了地区：不测
+  ctx.accounts = [webAcc({ fingerprint: { region: 'DE' } })];
+  tests = 0;
+  await save(form({ region: 'DE' }));
+  assert.strictEqual(tests, 0, '自己选了地区不该测');
+
+  // 7. 新建网页版 + 代理 + 跟随本机：要测
+  ctx.accounts = [];
+  tests = 0;
+  await save({ name: '新号', color: COLORS[0], proxy: 'socks5://127.0.0.1:7893', region: 'auto', mode: 'web' });
+  assert.strictEqual(tests, 1, '新建账号要测');
+
+  console.log('check-editor-save: ok');
+})().catch((e) => { console.error(e); process.exit(1); });

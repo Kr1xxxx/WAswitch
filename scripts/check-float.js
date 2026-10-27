@@ -2,7 +2,7 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, hashOf } = require('../src/floatcore');
+const { FloatCore, fromLite, hashOf } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `${out}_${chat}_ID${n}`, out, text });
@@ -236,6 +236,45 @@ async function persisted() {
   assert(st.load('A', 'c1').data.k === 1, '新位置读得到');
   fs.rmSync(base, { recursive: true, force: true });
   console.log('译文存盘自检通过');
+
+  // 轻量号：不读网页，直接用后台进程推来的当前对话；图片、语音的类型标签不翻，带说明文字的只翻说明
+  const jid = '4915112345678@s.whatsapp.net';
+  assert.strictEqual(fromLite(null, null).why, 'nochat');
+  assert.strictEqual(fromLite({ jid: 'other@s.whatsapp.net', messages: [] }, jid).why, 'wait', '刚点开、还没推过来');
+  const lv = { jid, title: '', chats: [{ jid, name: '' }], messages: [
+    { id: 'A1', me: false, ts: 1761559200, text: 'Hallo, ist das noch verfügbar?' },
+    { id: 'A2', me: true, ts: 1761559260, text: 'Ja' },
+    { id: 'A3', me: false, ts: 1761559320, text: '[图片]' },
+    { id: 'A4', me: false, ts: 1761559380, text: '[图片] Wie dieses hier' },
+    { id: 'A_5', me: false, ts: 1761559440, text: '[ok] danke' },
+  ] };
+  const lr = fromLite(lv, jid);
+  assert(lr.ok);
+  assert.strictEqual(lr.title, '+4915112345678', '没名字用号码，客户名单能对上');
+  assert.deepStrictEqual(lr.msgs.map((m) => [m.out, m.text]), [[false, 'Hallo, ist das noch verfügbar?'], [true, 'Ja'], [false, 'Wie dieses hier'], [false, '[ok] danke']]);
+  assert(lr.msgs.every((m) => m.id.split('_').length === 3 && m.id.split('_')[1] === jid), '编号能认出是哪个对话');
+  assert(Number.isInteger(lr.msgs[0].t.h) && Number.isInteger(lr.msgs[0].t.mi));
+  assert.strictEqual(fromLite({ ...lv, title: 'Lukas' }, jid).title, 'Lukas');
+  // 和网页号走同一套：自动翻、存盘、重启后直接显示
+  const ldir = fs.mkdtempSync(path.join(os.tmpdir(), 'trlite-'));
+  const lsent = [];
+  const lmake = () => {
+    const store = new TrStore(ldir);
+    return { store, fc: new FloatCore({ store, translate: async (text) => { lsent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  let l = lmake();
+  l.fc.ingest('L', lr, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(lsent, ['Hallo, ist das noch verfügbar?', 'Wie dieses hier', '[ok] danke']);
+  l.store.flush();
+  l = lmake();
+  lsent.length = 0;
+  l.fc.ingest('L', fromLite(lv, jid), { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(lsent, [], '重启后不再调模型');
+  assert.deepStrictEqual(l.fc.viewOf('L').items.map((x) => x.tr), ['译:Hallo, ist das noch verfügbar?', '译:Wie dieses hier', '译:[ok] danke']);
+  fs.rmSync(ldir, { recursive: true, force: true });
+  console.log('轻量号翻译自检通过');
 }
 
 core().then(() => {
