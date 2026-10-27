@@ -42,7 +42,9 @@ function render(s) {
   log.innerHTML = '';
   for (const r of s.readLog) {
     const li = document.createElement('li');
-    li.textContent = `${time(r.at)} ${r.client} 读了「${r.account}」${r.count} 个对话${r.preview ? '（含预览）' : ''}`;
+    li.textContent = r.kind === 'search'
+      ? `${time(r.at)} ${r.client} 在「${r.account}」里找「${r.query}」，找到 ${r.count} 个对话${r.preview ? '（含预览）' : ''}`
+      : `${time(r.at)} ${r.client} 读了「${r.account}」${r.count} 个对话${r.preview ? '（含预览）' : ''}`;
     log.appendChild(li);
   }
   $('logBox').hidden = !s.readLog.length;
