@@ -188,8 +188,8 @@ function toCsv(kind, rows) {
   return `\ufeff${[head, ...body].join('\r\n')}\r\n`; // 开头写 BOM，Excel 打开中文不乱码
 }
 
-// 简单 CSV 解析（支持引号、引号里的逗号和换行）
-function parseCsv(text) {
+// 简单 CSV 解析（支持引号、引号里的逗号和换行）。sep 是分隔符，默认逗号
+function parseCsv(text, sep = ',') {
   const rows = [];
   let row = [];
   let cell = '';
@@ -199,7 +199,7 @@ function parseCsv(text) {
     if (q) {
       if (c === '"' && text[i + 1] === '"') { cell += '"'; i += 1; } else if (c === '"') q = false; else cell += c;
     } else if (c === '"') q = true;
-    else if (c === ',') { row.push(cell); cell = ''; } else if (c === '\n' || c === '\r') {
+    else if (c === sep) { row.push(cell); cell = ''; } else if (c === '\n' || c === '\r') {
       if (c === '\r' && text[i + 1] === '\n') i += 1;
       row.push(cell); rows.push(row); row = []; cell = '';
     } else cell += c;
@@ -207,6 +207,37 @@ function parseCsv(text) {
   if (cell || row.length) { row.push(cell); rows.push(row); }
   return rows.filter((r) => r.some((c) => c.trim()));
 }
+// 看第一行（引号外）哪种分隔符最多：逗号；制表符（Excel「Unicode 文本」）；分号（德法等地区的 Excel CSV）
+function guessSep(text) {
+  const n = { ',': 0, '\t': 0, ';': 0 };
+  let q = false;
+  for (const c of text) {
+    if (c === '"') q = !q;
+    else if (!q && (c === '\n' || c === '\r')) break;
+    else if (!q && c in n) n[c] += 1;
+  }
+  return Object.keys(n).reduce((a, b) => (n[b] > n[a] ? b : a), ',');
+}
+
+// 把文件内容按编码转成文字：UTF-8（有没有 BOM 都行）、UTF-16LE/BE（Excel「Unicode 文本」）。
+// 认不出的编码（比如 GBK、ANSI）返回 null，不硬读成乱码
+function decodeText(buf) {
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) buf = buf.subarray(3);
+  else if (buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString('utf16le');
+  else if (buf[0] === 0xfe && buf[1] === 0xff) return Buffer.from(buf.subarray(2)).swap16().toString('utf16le');
+  else if (buf.length >= 4 && buf.length % 2 === 0) {
+    // 没有 BOM 的 UTF-16：英文字符的另一半字节是 0
+    let even = 0;
+    let odd = 0;
+    const n = Math.min(buf.length, 512);
+    for (let i = 0; i < n; i += 1) if (buf[i] === 0) { if (i % 2) odd += 1; else even += 1; }
+    if (odd > n / 8 && odd > even * 4) return buf.toString('utf16le');
+    if (even > n / 8 && even > odd * 4) return Buffer.from(buf).swap16().toString('utf16le');
+  }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return null; }
+}
+const SAVE_AS_UTF8 = '在 Excel 里「另存为 → CSV UTF-8（逗号分隔）」再导入';
+
 // 导出时加的单引号去掉
 const unquote = (t) => (/^'[=+\-@\t\r]/.test(t) ? t.slice(1) : t);
 
@@ -216,7 +247,9 @@ function readImport(kind, file) {
   try { stat = fs.statSync(file); } catch { return { error: '文件打不开' }; }
   if (!stat.isFile()) return { error: '不是文件' };
   if (stat.size > IMPORT_MAX_BYTES) return { error: '文件超过 1 MB' };
-  let text = fs.readFileSync(file, 'utf8').replace(/^\ufeff/, '');
+  let text = decodeText(fs.readFileSync(file));
+  if (text === null) return { error: `文件编码认不出（可能是 GBK 或 ANSI），请${SAVE_AS_UTF8}` };
+  text = text.replace(/^\ufeff/, '');
   let rows = [];
   if (/\.json$/i.test(file)) {
     let raw;
@@ -230,11 +263,11 @@ function readImport(kind, file) {
       return o;
     });
   } else {
-    const table = parseCsv(text);
+    const table = parseCsv(text, guessSep(text));
     if (!table.length) return { error: '文件是空的' };
     const head = table[0].map((c) => unquote(c.trim()));
     const idx = COLUMNS[kind].map(([k, label]) => [k, head.findIndex((c) => c === label || c.toLowerCase() === k.toLowerCase())]);
-    if (idx.every(([, i]) => i < 0)) return { error: `第一行要有列名：${COLUMNS[kind].map(([, l]) => l).join('、')}` };
+    if (idx.every(([, i]) => i < 0)) return { error: `第一行没找到列名，至少要有一列叫：${COLUMNS[kind].map(([, l]) => l).join('、')}（可以先导出一份当模板）。Excel 文件请${SAVE_AS_UTF8}` };
     rows = table.slice(1).map((r) => {
       const o = {};
       for (const [k, i] of idx) if (i >= 0 && r[i] !== undefined) o[k] = unquote(r[i]);
@@ -247,4 +280,4 @@ function readImport(kind, file) {
   return { rows };
 }
 
-module.exports = { KINDS, Records, toCsv, readImport, parseCsv, csvCell };
+module.exports = { KINDS, Records, toCsv, readImport, parseCsv, csvCell, decodeText };
