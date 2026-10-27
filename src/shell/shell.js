@@ -500,7 +500,8 @@ function renderTop() {
     h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id) }, icon('more', 15))));
 }
 
-// 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）
+// 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；
+// 没有收起按钮了（shen 2026-10-27），收起用顶栏的“工作台”按钮或 Ctrl/Cmd + Shift + K
 function panelHead() {
   const tabFx = fxChanged('wb-tab-head', s.panelTab || 'replies', false);
   const tab = (id, label, ic) => {
@@ -511,7 +512,7 @@ function panelHead() {
   return h('div', { class: 'wb-tabs', role: 'tablist', 'aria-label': '工作台' },
     tab('customers', '客户资料'), tab('replies', '话术'), tab('translate', '翻译', 'translate'),
     h('span', { class: 'grow' }),
-    h('button', { class: 'icon-btn', title: '收起', 'aria-label': '收起工作台', onclick: () => window.wa.panelToggle(false) }, icon('back', 14)));
+    s.panelTab === 'translate' ? dockTabTools() : null);
 }
 function refreshPanelHead() {
   const old = $panel.querySelector('.wb-tabs');
