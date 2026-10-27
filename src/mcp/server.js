@@ -15,6 +15,7 @@ const { ChatGate } = require('./chats');
 const { DraftLog } = require('./drafts');
 const { CustomerGate } = require('./customers');
 const { TranslateLimit } = require('./helpers');
+const { AiLog } = require('./customer-edit');
 
 const CONFIRM_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_BODY = 1024 * 1024;
@@ -71,6 +72,8 @@ class McpController {
     this.customerGate = new CustomerGate({ hooks, onChange: () => this.onChange() });
     // 辅助工具里翻译的限速（每个连接），只在内存里
     this.trLimit = new TranslateLimit();
+    // AI 操作记录（改客户资料），存在本机，可撤销
+    this.aiLog = new AiLog({ dir: dataDir, hooks, onChange: () => this.onChange() });
   }
 
   status() {
@@ -91,6 +94,8 @@ class McpController {
       customerAllows: this.customerGate.activeAllows(),
       customerLog: this.customerGate.log,
       helpers: this.settings.helpers,
+      customerEdit: this.settings.customerEdit,
+      aiLog: this.aiLog.view(),
       allows: this.gate.activeAllows(),
       readLog: this.gate.log,
       clients: [...this.sessions.values()].map((s) => {
@@ -176,6 +181,17 @@ class McpController {
     this.onChange();
   }
 
+  // 修改客户资料开关，关着时 update_customer 不出现在列表里。AI 操作记录不受开关影响，随时能撤销
+  setCustomerEdit(on) {
+    this.settings.customerEdit = !!on;
+    cfg.saveSettings(this.dataDir, this.settings);
+    for (const s of this.sessions.values()) {
+      if (!s.customerEditTool) continue;
+      if (on) s.customerEditTool.enable(); else s.customerEditTool.disable();
+    }
+    this.onChange();
+  }
+
   setPreview(on) {
     const turnedOn = !this.settings.preview && !!on;
     this.settings.preview = !!on;
@@ -206,7 +222,8 @@ class McpController {
     const { registerSearchTools } = require('./search');
     const { registerCustomerTools } = require('./customers');
     const { registerHelperTools } = require('./helpers');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerSearchTools, registerCustomerTools, registerHelperTools };
+    const { registerCustomerEditTools } = require('./customer-edit');
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerSearchTools, registerCustomerTools, registerHelperTools, registerCustomerEditTools };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -248,6 +265,7 @@ class McpController {
     this.drafts.clearSession(id);
     this.customerGate.clearSession(id);
     this.trLimit.clearSession(id);
+    this.aiLog.clearSession(id);
     try { await s.transport.close(); } catch { /* 已经断开 */ }
     try { await s.server.close(); } catch { /* 已经断开 */ }
   }
@@ -299,10 +317,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, searchTool: null, draftTool: null, customerTool: null, helperTools: [], connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, searchTool: null, draftTool: null, customerTool: null, helperTools: [], customerEditTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“客户资料”后，可以用 search_customers 搜本机客户名单（每次要用户确认）。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表、用 search_chats 按名字或号码跨账号找对话（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送；打开“辅助工具”后，可以读话术（list_quick_replies）、用软件的翻译设置翻译文字（translate_text）、按号码查客户当地时间（get_customer_time）；打开“修改客户资料”后，可以用 update_customer 改客户的标签、备注、跟进时间或新建客户，每次修改用户都能撤销；打开“客户资料”后，可以用 search_customers 按名字、号码或标签搜客户名单（每次要用户确认）。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     const readOpts = {
@@ -337,6 +355,14 @@ class McpController {
     if (!this.settings.customers) entry.customerTool.disable();
     entry.helperTools = this.sdk.registerHelperTools(server, this.hooks, { limit: this.trLimit });
     if (!this.settings.helpers) for (const t of entry.helperTools) t.disable();
+    entry.customerEditTool = this.sdk.registerCustomerEditTools(server, this.hooks, {
+      log: this.aiLog,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
+    if (!this.settings.customerEdit) entry.customerEditTool.disable();
     const transport = new this.sdk.StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id) => {

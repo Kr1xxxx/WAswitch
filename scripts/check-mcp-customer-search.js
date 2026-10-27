@@ -82,6 +82,11 @@ async function main() {
   await new Promise((r) => setTimeout(r, 200));
   check(listChanged > 0 && (await toolNames()).includes('search_customers'), '打开「客户资料」：通知客户端，出现 search_customers');
   check(JSON.parse(fs.readFileSync(path.join(dir, 'mcp.json'), 'utf8')).customers === true, '开关存进 mcp.json');
+  check(!(await toolNames()).includes('update_customer'), '只开「搜索客户资料」不会带出 update_customer（两个开关互不影响）');
+  ctl.setCustomerEdit(true);
+  ctl.setCustomerEdit(false);
+  await new Promise((r) => setTimeout(r, 200));
+  check((await toolNames()).includes('search_customers'), '开关「修改客户资料」不影响 search_customers');
   const tool = (await client.listTools()).tools.find((t) => t.name === 'search_customers');
   const props = Object.keys(tool.inputSchema.properties || {}).sort();
   check(JSON.stringify(props) === JSON.stringify(['id', 'limit', 'query', 'tag']), `参数只有 query、tag、id、limit（${props.join(', ')}）`);
