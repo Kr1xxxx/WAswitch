@@ -36,6 +36,7 @@ const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
 const { problemCode } = require('./problem-codes');
 const { setupEditorIpc } = require('./editor-ipc');
+const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
 
@@ -444,14 +445,15 @@ async function watchExits() {
   if (exitWatchRunning || quitting) return;
   exitWatchRunning = true;
   try {
-    for (const acc of [...accounts]) {
-      if (!acc.proxy || quitting || !findAcc(acc.id)) continue;
+    // 停着的号（被收回/电脑停用）不测：不用它的代理凭据联网，不上报，不改它的记录
+    for (const acc of visibleAccounts()) {
+      if (!acc.proxy || quitting || isParked(acc) || !findAcc(acc.id)) continue;
       const prev = exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : '');
       const prevLabel = acc.exitLabel;
       const proxyAtStart = acc.proxy;
       const res = await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword));
-      // 测的时候代理被改了或者号被删了：结果作废
-      if (!findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
+      // 测的时候代理被改了、号被删了或被收回：结果作废
+      if (isParked(acc) || !findAcc(acc.id) || acc.proxy !== proxyAtStart) continue;
       noteProxyHealth(acc, res);
       // 记延迟：成功记往返毫秒数；失败只记“失败”，不记错误原文（里面可能有代理地址）
       if (res.ok) {
@@ -999,10 +1001,8 @@ async function unparkAccount(acc) {
 
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
-  let id = Date.now();
-  while (accounts.some((a) => a.id === String(id))) id += 1;
   const acc = {
-    id: String(id), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,

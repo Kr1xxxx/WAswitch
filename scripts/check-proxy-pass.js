@@ -1,6 +1,6 @@
 // 编辑账号时代理密码保留/换新/清空的判断（src/proxy-parse.js 的 passwordPlan），保存和测试共用
 const assert = require('assert');
-const { passwordPlan } = require('../src/proxy-parse');
+const { passwordPlan, keepOldPassword } = require('../src/proxy-parse');
 
 const OLD = 'http://alice@1.2.3.4:8080';
 // 什么都没改、没填新密码：沿用旧密码
@@ -23,5 +23,16 @@ assert.deepStrictEqual(passwordPlan(OLD, '', ''), { kind: 'none' });
 assert.deepStrictEqual(passwordPlan(OLD, '1.2.3.4:8080', ''), { kind: 'none' });
 // 新账号（没有旧地址）没填密码
 assert.deepStrictEqual(passwordPlan('', 'http://alice@1.2.3.4:8080', ''), { kind: 'none' });
+
+// 审计第 4 条：重新填了同一个密码 → 沿用原来的加密密码，不算改了（不重建页面）
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice@1.2.3.4:8080', 'pw'), 'pw'), true);
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice:pw@1.2.3.4:8080', ''), 'pw'), true);
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice@1.2.3.4:8080', ''), 'pw'), true);
+// 填了不同的密码、原来没有密码或解不开 → 重新加密
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice@1.2.3.4:8080', 'pw2'), 'pw'), false);
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice@1.2.3.4:8080', 'pw'), ''), false);
+// 清掉密码的情况（审计第 1 条）不受影响：不会把旧密码留给新代理
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://bob@5.6.7.8:8080', ''), 'pw'), false);
+assert.strictEqual(keepOldPassword(passwordPlan(OLD, '', ''), 'pw'), false);
 
 console.log('check-proxy-pass: ok');
