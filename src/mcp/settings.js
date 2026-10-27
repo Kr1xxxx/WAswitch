@@ -59,11 +59,14 @@ function render(s) {
     draftLog.appendChild(li);
   }
   $('draftLogBox').hidden = !(s.draftLog || []).length;
+
+  $('helpers').checked = !!s.helpers;
 }
 
 $('layer2').onchange = async (e) => render(await window.mcp.setLayer2(e.target.checked));
 $('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target.checked));
 $('drafts').onchange = async (e) => render(await window.mcp.setDrafts(e.target.checked));
+$('helpers').onchange = async (e) => render(await window.mcp.setHelpers(e.target.checked));
 
 $('enabled').onchange = async (e) => render(await window.mcp.setEnabled(e.target.checked));
 $('regenerate').onclick = async () => render(await window.mcp.regenerate());

@@ -750,6 +750,12 @@ const mcpHooks = {
 
   // ---- 起草回复：放进输入框，不发送（见 draft-place.js） ----
   placeDraft: (args) => draftPlacer.place(args),
+
+  // ---- 辅助工具：话术、翻译（客户时间在 mcp/helpers.js 里按号码算，不用 hooks） ----
+  listQuickReplies: () => (replyStore ? replyStore.list().map(({ id, title, text, updatedAt }) => ({ id, title, text, updatedAt })) : []),
+  translateModes: () => (modeStore ? modeStore.list() : []),
+  // 和面板里点“翻译”走同一条队列（自动翻译正在跑时等它这一条），不带对话上下文
+  translate: ({ text, mode, target, source }) => trIpc.userTranslate({ text, mode, target, source }),
 };
 
 // 轻量模式的输入框在软件界面里：请界面填进去，界面回 'ok' | 'not_empty' | 'chat' | 'none'

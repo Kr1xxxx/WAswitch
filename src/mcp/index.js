@@ -103,6 +103,8 @@ function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatu
     controller.setDrafts(on);
     return view();
   });
+  // 辅助工具：不弹窗，设置页上写清楚会发什么出去
+  handle('mcp:set-helpers', (_e, on) => { controller.setHelpers(on); return view(); });
   handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];
