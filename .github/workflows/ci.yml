@@ -64,6 +64,8 @@ jobs:
         run: npm run check:records
       - name: 导入文件编码自检
         run: npm run check:import
+      - name: 下载自检
+        run: npm run check:downloads
 
   package-win:
     runs-on: windows-latest
