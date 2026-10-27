@@ -89,7 +89,70 @@ async function core() {
   fc.forget('A');
   assert.strictEqual(fc.viewOf('A').items.length, 0);
   console.log('悬浮翻译逻辑自检通过');
+  await keyRetry();
   await persisted();
+}
+
+// 填好密钥后：“没填密钥 / 密钥不对”失败的自动重翻；别的原因失败的不动；照每天上限；别的对话里的忘掉；纠错失败的恢复原译文
+async function keyRetry() {
+  const now = Date.parse('2026-10-24T10:00:00Z');
+  let mode = 'nokey';
+  const sent = [];
+  const fc = new FloatCore({ now: () => now, translate: async (text) => {
+    sent.push(text);
+    if (mode === 'nokey') return text.includes('quota') ? { error: '智谱账户没余额了', kind: 'quota' } : { error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' };
+    return { text: `译:${text}`, warn: [] };
+  } });
+  // 另一个对话先失败一条，然后切走
+  fc.ingest('K', { title: 'old', msgs: [msg(1, false, '900@c.us', 'old chat')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  const msgs = [msg(1, false, '901@c.us', 'a'), msg(2, false, '901@c.us', 'b quota'), msg(3, false, '901@c.us', 'c')];
+  fc.ingest('K', { title: 'Emma', msgs }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  let items = fc.viewOf('K').items;
+  assert.deepStrictEqual(items.map((x) => x.state), ['error', 'error', 'error']);
+  assert.strictEqual(items[0].errPid, 'zp');
+  // 别的服务商的密钥：不重翻
+  mode = 'ok';
+  sent.length = 0;
+  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: (pid) => pid === 'dl' }), []);
+  // 智谱的密钥填好了：只重翻缺密钥的两条，没余额那条不动
+  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: (pid) => pid === 'zp' }), ['K']);
+  await sleep(20);
+  assert.deepStrictEqual(sent.sort(), ['a', 'c']);
+  items = fc.viewOf('K').items;
+  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'error', 'done']);
+  assert.strictEqual(items[0].tr, '译:a');
+  assert.strictEqual(items[1].err, '智谱账户没余额了');
+  // 切回之前的对话：失败的那条按新消息补翻
+  sent.length = 0;
+  fc.ingest('K', { title: 'old', msgs: [msg(1, false, '900@c.us', 'old chat')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['old chat']);
+  assert.strictEqual(fc.viewOf('K').items[0].tr, '译:old chat');
+  // 每天上限到了：不重翻，旧报错也不再显示，退回“翻译”按钮
+  const fc2 = new FloatCore({ now: () => now, translate: async () => ({ error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' }) });
+  fc2.ingest('L', { title: 'x', msgs: [msg(1, false, '902@c.us'), msg(2, false, '902@c.us')] }, { auto: true, dailyCap: 3 });
+  await sleep(20);
+  let n = 0;
+  fc2.deps.translate = async (text) => { n += 1; return { text: `译:${text}`, warn: [] }; };
+  fc2.retryKeyErrors({ dailyCap: 3, match: () => true });
+  await sleep(20);
+  assert.strictEqual(n, 1);
+  assert.deepStrictEqual(fc2.viewOf('L').items.map((x) => [x.state, x.err]), [['done', ''], ['manual', '']]);
+  assert.strictEqual(fc2.viewOf('L').paused, 'day');
+  // 纠错失败（密钥问题）：原译文恢复，不再请求
+  const fc3 = new FloatCore({ now: () => now, translate: async (text, o) => (o.fix ? { error: '智谱的密钥不对或没有权限', kind: 'auth', providerId: 'zp' } : { text: `译:${text}`, warn: [] }) });
+  fc3.ingest('M', { title: 'x', msgs: [msg(1, false, '903@c.us')] }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  const hm = fc3.viewOf('M').items[0].h;
+  fc3.manual('M', hm, true);
+  await sleep(20);
+  assert.strictEqual(fc3.viewOf('M').items[0].state, 'error');
+  fc3.deps.translate = async () => { throw new Error('不该再请求'); };
+  fc3.retryKeyErrors({ dailyCap: 500, match: () => true });
+  assert.deepStrictEqual([fc3.viewOf('M').items[0].state, fc3.viewOf('M').items[0].tr], ['done', '译:hola 1']);
+  console.log('填好密钥自动重翻自检通过');
 }
 
 // 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留

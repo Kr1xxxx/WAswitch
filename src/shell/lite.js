@@ -114,7 +114,7 @@ function makeLitePage(id) {
         h('div', { class: 'col', style: { gap: '12px' } },
           h('h2', null, '用手机扫码登录'),
           h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫左边的二维码')),
-          h('p', { class: 'hint' }, `${acc.direct ? '直连（本机网络）' : `通过 ${acc.proxyLabel} 连接`}。二维码每隔一会儿自动更新。`),
+          h('p', { class: 'hint' }, `${acc.direct ? '直连（这台电脑的真实 IP）' : `通过 ${acc.proxyLabel} 连接`}。二维码每隔一会儿自动更新。`),
           h('div', { class: 'note bad' }, '轻量模式不是官方客户端，这个号有被封的风险。请先用不重要的号试用两周。'))));
     } else if (st === 'qrExpired') {
       status.replaceChildren(h('div', { class: 'panel' },
