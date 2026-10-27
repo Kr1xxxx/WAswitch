@@ -4,16 +4,22 @@
 // 这个数字是“有未读消息的对话数”。不读取页面内容，也不往页面注入脚本。
 //
 // WhatsApp 自己的网页通知被关掉（看不出是哪个号），改由这里发：
-// 某个账号的未读数增加时，弹出“账号名：有 N 个未读对话”，点一下就切到这个账号。
+// 某个账号的未读数增加时，弹出“账号名：Emma Schneider、John Miller 等 3 个未读对话”，点一下就切到这个账号。
+// 名字来自 hooks.unreadChats（网页号在隔离环境里只读对话列表，轻量号来自后台进程），
+// 只有名字和未读数，不读消息内容；读不到就写“有 N 个未读对话”。
 const { app, Tray, Menu, Notification, nativeImage } = require('electron');
 const path = require('path');
+const { unreadBody } = require('./notify-text');
+
+const NAMES_TIMEOUT_MS = 2000; // 读名字最多等这么久，超时就用原来的文案
 
 const asset = (name) => path.join(__dirname, '..', 'assets', name);
 
 class Notifier {
-  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit() }
+  // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), unreadChats(acc) }
   constructor(hooks) {
     this.hooks = hooks;
+    this.popSeq = new Map(); // id -> 最近一次要弹的通知编号，读名字期间又有新消息就只弹新的
     this.unread = new Map(); // id -> 未读对话数
     this.tray = null;
     this.active = new Set(); // 正在显示的通知，防止被回收后点击失效
@@ -65,14 +71,39 @@ class Notifier {
     const win = this.hooks.getWindow();
     const userIsLooking = isActive && win && win.isVisible() && win.isFocused();
     const popped = count > before && !this.muted(acc) && !userIsLooking;
-    if (popped) this.notify(acc, `有 ${count} 个未读对话`);
+    if (popped) this.notifyUnread(acc, count);
     // 通知记录：只记哪个号、什么时候、几个未读，以及有没有弹出来；不记消息内容
     if (count > before && this.hooks.onNew) this.hooks.onNew({ id: acc.id, count, popped });
     this.refresh();
   }
 
+  // 先读有未读的对话名字再弹；读不到或超时就用原来的“有 N 个未读对话”
+  async notifyUnread(acc, count) {
+    const seq = (this.popSeq.get(acc.id) || 0) + 1;
+    this.popSeq.set(acc.id, seq);
+    let names = null;
+    if (this.hooks.unreadChats) {
+      let timer;
+      try {
+        names = await Promise.race([
+          Promise.resolve().then(() => this.hooks.unreadChats(acc)),
+          new Promise((r) => { timer = setTimeout(() => r(null), NAMES_TIMEOUT_MS); }),
+        ]);
+      } catch {
+        names = null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // 等名字的这段时间里这个号又来了新消息（会另弹一条），或者未读已经清零、号被删了，这条就不弹了
+    if (this.popSeq.get(acc.id) !== seq) return;
+    if (!(this.unread.get(acc.id) > 0)) return;
+    this.notify(acc, unreadBody(count, names));
+  }
+
   forget(id) {
     this.unread.delete(id);
+    this.popSeq.delete(id);
     this.refresh();
   }
 

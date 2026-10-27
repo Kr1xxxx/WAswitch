@@ -251,7 +251,9 @@ export class Session {
     const unread = this.store.unreadChats();
     if (unread !== this.lastUnread) {
       this.lastUnread = unread;
-      this.post({ type: 'unread', id: this.id, count: unread });
+      // 带上最近几个有未读的对话名字，主进程写进通知；只有名字，不带消息内容
+      const chats = this.store.summary().filter((c) => c.unread > 0).slice(0, 5).map((c) => ({ name: c.name, unread: c.unread }));
+      this.post({ type: 'unread', id: this.id, count: unread, chats });
     }
     if (!this.watched) return;
     const jid = this.watchJid;
