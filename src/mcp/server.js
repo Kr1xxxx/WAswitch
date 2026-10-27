@@ -135,8 +135,11 @@ class McpController {
     this.settings.drafts = !!on;
     cfg.saveSettings(this.dataDir, this.settings);
     for (const s of this.sessions.values()) {
-      if (!s.draftTool) continue;
-      if (on) s.draftTool.enable(); else s.draftTool.disable();
+      // open_chat 和 draft_reply 同属“起草”这一组，共用一个开关
+      for (const t of [s.draftTool, s.openTool]) {
+        if (!t) continue;
+        if (on) t.enable(); else t.disable();
+      }
     }
     this.onChange();
   }
@@ -168,7 +171,8 @@ class McpController {
     const { registerAccountTools } = require('./tools');
     const { registerChatTools } = require('./chats');
     const { registerDraftTools } = require('./drafts');
-    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools };
+    const { registerOpenChatTool } = require('./open-chat');
+    this.sdk = { McpServer, StreamableHTTPServerTransport, isInitializeRequest, registerAccountTools, registerChatTools, registerDraftTools, registerOpenChatTool };
 
     const server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => reply(res, e.status || 500, e.status ? e.message : '内部错误'));
@@ -259,10 +263,10 @@ class McpController {
       await this.dropSession(oldest[0]);
     }
 
-    const entry = { transport: null, server: null, chatTool: null, draftTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
+    const entry = { transport: null, server: null, chatTool: null, draftTool: null, openTool: null, connectedAt: Date.now(), lastSeen: Date.now(), calls: 0 };
     const server = new this.sdk.McpServer(
       { name: 'waswitch', version: this.version },
-      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复”后，可以用 draft_reply 把一条回复放进输入框，由用户自己按发送。不能发送消息，也不能群发。' },
+      { instructions: '管理 WAswitch 里的多个 WhatsApp 账号。账号管理随时可用；用户在设置里打开第二层后，可以用 list_chats 读对话列表（每次要用户确认）；打开“起草回复和打开对话”后，可以用 open_chat 打开和某个号码的对话、用 draft_reply 把一条回复放进输入框，由用户自己按发送。不能发送消息，也不能群发。' },
     );
     this.sdk.registerAccountTools(server, this.hooks, { confirmTimeoutMs: CONFIRM_TIMEOUT_MS });
     entry.chatTool = this.sdk.registerChatTools(server, this.hooks, {
@@ -283,7 +287,14 @@ class McpController {
         return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
       },
     });
-    if (!this.settings.drafts) entry.draftTool.disable();
+    entry.openTool = this.sdk.registerOpenChatTool(server, this.hooks, {
+      log: this.drafts,
+      sessionInfo: (extra) => {
+        const c = server.server.getClientVersion();
+        return { session: extra.sessionId || 'unknown', client: c ? `${c.name}${c.version ? ` ${c.version}` : ''}` : '未知客户端' };
+      },
+    });
+    if (!this.settings.drafts) { entry.draftTool.disable(); entry.openTool.disable(); }
     const transport = new this.sdk.StreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (id) => {
