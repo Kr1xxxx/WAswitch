@@ -20,7 +20,7 @@ const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
-const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
+const { Translator, DEFAULT_MODES, retireModes, needsKey } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
 const { FloatCore } = require('./floatcore');
 const { detectLang } = require('./langdetect');
@@ -2567,6 +2567,8 @@ function floatState() {
     auto: !!(acc && floatAuto(acc.id)),
     dailyCap: cfg.dailyCap,
     hasProvider: !!primary,
+    // 默认翻译服务还没填密钥：翻译页顶上显示黄条和“去填密钥”
+    needKey: primary && needsKey(primary) ? { id: primary.id, name: primary.name || '翻译服务', others: (cfg.providers || []).some((p) => p.id !== primary.id && !needsKey(p)) } : null,
     providerName: primary ? primary.name : '',
     primaryId: primary ? primary.id : '',
     fallbackId: cfg.fallbackId || '',
