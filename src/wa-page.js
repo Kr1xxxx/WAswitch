@@ -360,6 +360,113 @@ async function readChatPeer(wc) {
   }
 }
 
+// 新版 WhatsApp 的私聊编号很多是隐私编号（123…@lid），存了名字的联系人标题又是名字，顶栏就认不出号码。
+// 这时到 WhatsApp 自己的本地数据库（IndexedDB 的 model-storage）里只读查一下：
+//   1. 名字里带 lid / pn / contact 的表，按隐私编号取那一条，找里面的手机号（phoneNumber 等字段）
+//   2. 还没有：在联系人表里找名字和标题一样的联系人，只有一个号码对得上才用
+// 只读：不带版本号打开（不会建库、不会升级），只开 readonly 事务，读完马上关；WhatsApp 要升级数据库时让开。
+// 库不存在就不打开（不先查一下的话 open 会建一个空库）。号码只回到主进程，不写日志。
+const LOOKUP_DB = 'model-storage';
+const LOOKUP_CODE = (lid, title) => `(async () => {
+  const LID = ${JSON.stringify(lid)};
+  const TITLE = ${JSON.stringify(title)};
+  const out = { pn: '', why: '', stores: [] };
+  const PN = /^(\\d{7,15})(?::\\d+)?@(?:c\\.us|s\\.whatsapp\\.net)$/;
+  const wid = (v) => {
+    if (!v) return '';
+    if (typeof v === 'string') { const m = PN.exec(v.trim()); return m ? m[1] : ''; }
+    if (typeof v === 'object') {
+      if (typeof v._serialized === 'string') return wid(v._serialized);
+      if (typeof v.user === 'string' && typeof v.server === 'string') return wid(v.user + '@' + v.server);
+    }
+    return '';
+  };
+  // 一条记录里的手机号：先看常见字段名，再看其它字段（只认“号码@c.us / @s.whatsapp.net”这种写法）
+  const pnOf = (rec, withId) => {
+    if (!rec || typeof rec !== 'object') return '';
+    for (const k of ['phoneNumber', 'pn', 'phone', 'pnJid', 'phoneNumberJid', 'phoneJid']) { const d = wid(rec[k]); if (d) return d; }
+    for (const [k, v] of Object.entries(rec)) { if (k === 'id' && !withId) continue; const d = wid(v); if (d) return d; }
+    return '';
+  };
+  const norm = (s) => String(s || '').normalize('NFKC').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const req = (r) => new Promise((ok, bad) => { r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); });
+  try {
+    if (typeof indexedDB === 'undefined' || !indexedDB.databases) { out.why = 'noidb'; return out; }
+    const dbs = await indexedDB.databases();
+    if (!dbs.some((d) => d && d.name === ${JSON.stringify(LOOKUP_DB)})) { out.why = 'nodb'; return out; }
+    const db = await new Promise((ok, bad) => {
+      const r = indexedDB.open(${JSON.stringify(LOOKUP_DB)});
+      r.onupgradeneeded = () => { try { r.transaction.abort(); } catch {} };
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => bad(r.error);
+      r.onblocked = () => bad(new Error('blocked'));
+    });
+    db.onversionchange = () => db.close();
+    try {
+      const names = Array.from(db.objectStoreNames);
+      out.stores = names.slice(0, 60);
+      const byLid = names.filter((n) => /lid|pn|contact/i.test(n) && !/message|msg/i.test(n));
+      if (LID) {
+        for (const n of byLid) {
+          const st = db.transaction(n, 'readonly').objectStore(n);
+          let rec = null;
+          try { rec = await req(st.get(LID)); } catch {}
+          let d = pnOf(rec, false);
+          if (!d) {
+            for (const ix of Array.from(st.indexNames).filter((x) => /lid/i.test(x))) {
+              try { d = pnOf(await req(st.index(ix).get(LID)), true); } catch {}
+              if (d) break;
+            }
+          }
+          if (d) { out.pn = d; out.why = 'lid:' + n; return out; }
+        }
+      }
+      const t = norm(TITLE);
+      const contact = names.find((n) => n === 'contact') || names.find((n) => /^contacts?$/i.test(n));
+      if (t && contact) {
+        const found = new Set();
+        let seen = 0;
+        await new Promise((ok) => {
+          const c = db.transaction(contact, 'readonly').objectStore(contact).openCursor();
+          c.onerror = () => ok();
+          c.onsuccess = () => {
+            const cur = c.result;
+            if (!cur || seen++ > 20000 || found.size > 1) return ok();
+            const v = cur.value;
+            if (v && typeof v === 'object' && [v.name, v.shortName, v.verifiedName, v.pushname].some((x) => x && norm(x) === t)) {
+              const d = pnOf(v, true);
+              if (d) found.add(d);
+            }
+            cur.continue();
+          };
+        });
+        if (found.size === 1) { out.pn = [...found][0]; out.why = 'name'; return out; }
+        out.why = found.size > 1 ? 'samename' : 'notfound';
+        return out;
+      }
+      out.why = 'notfound';
+      return out;
+    } finally { db.close(); }
+  } catch (e) {
+    out.why = 'error:' + String((e && e.name) || e).slice(0, 40);
+    return out;
+  }
+})()`;
+
+// 返回 { digits, why, stores }；digits 是查到的号码（只有数字，含国家码），查不到是 ''
+async function lookupPeerPhone(wc, { chat = '', title = '' } = {}) {
+  if (wc.isDestroyed() || wc.isLoading()) return { digits: '', why: 'loading', stores: [] };
+  const lid = /^\d{5,25}@lid$/.test(String(chat)) ? String(chat) : '';
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: LOOKUP_CODE(lid, String(title || '').slice(0, 100)) }]);
+    const digits = r && typeof r.pn === 'string' && /^\d{7,15}$/.test(r.pn) ? r.pn : '';
+    const stores = r && Array.isArray(r.stores) ? r.stores.filter((s) => typeof s === 'string').map((s) => s.slice(0, 40)) : [];
+    return { digits, why: r && typeof r.why === 'string' ? r.why.slice(0, 60) : 'bad', stores };
+  } catch {
+    return { digits: '', why: 'error', stores: [] };
+  }
+}
+
 // 自己的手机号：WhatsApp Web 登录后把本机账号的 id（如 "8613800000000:12@c.us"）存在 localStorage 里。
 // 只读这两个键，不读别的、不写任何东西。读不到就返回空，用户可以在编辑账号里自己填。
 const OWN_NUMBER_KEYS = ['last-wid-md', 'last-wid'];
@@ -433,5 +540,5 @@ async function composeState(wc, probe = '') {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, readOwnNumber, composeFocus, composeState, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
 

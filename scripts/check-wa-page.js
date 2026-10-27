@@ -79,6 +79,50 @@ app.whenReady().then(async () => {
   const peer = await waPage.readChatPeer(cw);
   check(peer && peer.title === 'Carlos García' && peer.chat === '111@c.us', `readChatPeer：读到对话标题和对话编号（${JSON.stringify(peer)}）`);
   check(await cw.executeJavaScript('document.documentElement.outerHTML') === peerBefore, 'readChatPeer 前后页面 HTML 完全相同');
+  // 隐私编号 @lid + 存了名字的联系人：到 WhatsApp 自己的本地数据库里只读查号码
+  await cw.executeJavaScript("new Promise((ok) => { const r = indexedDB.deleteDatabase('model-storage'); r.onsuccess = r.onerror = r.onblocked = () => ok(); })");
+  const noDb = await waPage.lookupPeerPhone(cw, { chat: '98765432101234@lid', title: 'Lena Fischer' });
+  check(noDb.digits === '' && noDb.why === 'nodb', `本地数据库还不存在：查不到，原因 nodb（${JSON.stringify(noDb)}）`);
+  check(!(await cw.executeJavaScript('indexedDB.databases()')).some((d) => d.name === 'model-storage'), '查的时候没有建出空的 model-storage 库');
+  await cw.executeJavaScript(`new Promise((ok, bad) => {
+    const r = indexedDB.open('model-storage', 810);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      const c = db.createObjectStore('contact', { keyPath: 'id' });
+      c.put({ id: '4915112345678@c.us', name: 'Lena Fischer', shortName: 'Lena' });
+      c.put({ id: '98765432101234@lid', name: 'Lena Fischer', phoneNumber: '4915112345678@c.us' });
+      c.put({ id: '111222333444555@lid', pushname: 'Mike', phoneNumber: { server: 'c.us', user: '12125550142', _serialized: '12125550142@c.us' } });
+      c.put({ id: '33612345678@c.us', name: 'Anna Schmidt' });
+      c.put({ id: '447700900123@c.us', name: 'Anna Schmidt' });
+      c.put({ id: '5511912345678@c.us', name: 'Marta Rossi' });
+      db.createObjectStore('message', { keyPath: 'id' }).put({ id: '55555@lid', from: '34600000000@c.us' });
+    };
+    r.onsuccess = () => { r.result.close(); ok(); };
+    r.onerror = () => bad(r.error);
+  })`);
+  const idbBefore = await cw.executeJavaScript('document.documentElement.outerHTML');
+  const byLid = await waPage.lookupPeerPhone(cw, { chat: '98765432101234@lid', title: 'Lena Fischer' });
+  check(byLid.digits === '4915112345678' && byLid.why === 'lid:contact', `@lid：按隐私编号在联系人表里查到号码（${JSON.stringify(byLid)}）`);
+  check(byLid.stores.includes('contact') && byLid.stores.includes('message'), '顺便带回表名（写日志排查用，不带号码）');
+  const byObj = await waPage.lookupPeerPhone(cw, { chat: '111222333444555@lid', title: 'Mike' });
+  check(byObj.digits === '12125550142', `@lid：号码字段是对象（{ user, server }）也认（${byObj.digits}）`);
+  const byName = await waPage.lookupPeerPhone(cw, { chat: '', title: 'Marta Rossi' });
+  check(byName.digits === '5511912345678' && byName.why === 'name', `没有对话编号：按标题在联系人表里找同名联系人（${JSON.stringify(byName)}）`);
+  const byName2 = await waPage.lookupPeerPhone(cw, { chat: '70000000000001@lid', title: 'lena  fischer' });
+  check(byName2.digits === '4915112345678', `@lid 表里没有这条：按名字找，大小写空格不同也认（${byName2.digits}）`);
+  const twins = await waPage.lookupPeerPhone(cw, { chat: '70000000000002@lid', title: 'Anna Schmidt' });
+  check(twins.digits === '' && twins.why === 'samename', `两个同名联系人号码不同：不猜（${JSON.stringify(twins)}）`);
+  const none = await waPage.lookupPeerPhone(cw, { chat: '70000000000003@lid', title: 'Nobody Here' });
+  check(none.digits === '' && none.why === 'notfound', '查不到：返回空');
+  const lidMsg = await waPage.lookupPeerPhone(cw, { chat: '55555@lid', title: '' });
+  check(lidMsg.digits === '', '不读消息表（消息表里的号码不算）');
+  check(await cw.executeJavaScript('document.documentElement.outerHTML') === idbBefore, '查号码前后页面 HTML 完全相同');
+  const after = await cw.executeJavaScript(`new Promise((ok) => { const r = indexedDB.open('model-storage'); r.onsuccess = () => { const db = r.result; const v = db.version; const t = db.transaction('contact').objectStore('contact').count(); t.onsuccess = () => { db.close(); ok({ v, n: t.result }); }; }; })`);
+  check(after.v === 810 && after.n === 6, `查号码没有改库（版本 ${after.v}，联系人 ${after.n} 条）`);
+  // WhatsApp 自己要升级数据库时，我们的连接已经关了，不会卡住它
+  const up = await cw.executeJavaScript(`new Promise((ok) => { const r = indexedDB.open('model-storage', 811); r.onblocked = () => ok('blocked'); r.onsuccess = () => { r.result.close(); ok('ok'); }; r.onerror = () => ok('error'); setTimeout(() => ok('timeout'), 3000); })`);
+  check(up === 'ok', `查完以后页面自己升级数据库不被挡住（${up}）`);
+
   const focusOn = (sel) => cw.executeJavaScript(`document.querySelector(${JSON.stringify(sel)}).focus(); void 0`);
   check(await waPage.composeFocus(cw) === 'other', '焦点哪里都不在：不是输入框');
   await focusOn('#side [contenteditable]');

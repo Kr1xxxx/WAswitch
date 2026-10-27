@@ -60,6 +60,7 @@ export class ChatStore {
     this.msgs = new Map(); // jid -> [{ id, me, ts, text, from }]
     this.names = new Map(); // jid -> 联系人名称
     this.unreadKeys = new Map(); // jid -> 未读消息的 key（发已读回执用，不写盘）
+    this.altPn = new Map(); // 隐私编号 @lid -> 消息里带的真实号码 jid（remoteJidAlt，只在内存）
     this.sent = new Map(); // 消息 id -> 自己发出的消息原文（protobuf，base64），最近 MAX_SENT 条
     this.save = debounced(() => {
       try { writeSealed(this.file, this.key, this.toJSON()); } catch (e) { onError(e); }
@@ -132,6 +133,7 @@ export class ChatStore {
     const key = msg.key || {};
     const jid = key.remoteJid;
     if (ignoredJid(jid) || !key.id) return null;
+    if (String(jid).endsWith('@lid') && typeof key.remoteJidAlt === 'string' && key.remoteJidAlt.endsWith('@s.whatsapp.net')) this.altPn.set(jid, key.remoteJidAlt);
     const text = textOf(msg.message);
     if (text === null) return null;
     const list = this.msgs.get(jid) || [];

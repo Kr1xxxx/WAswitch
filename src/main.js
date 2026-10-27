@@ -2823,6 +2823,7 @@ const ctx = {
   get editorPrefill() { return editorPrefill; },
   get editorColor() { return editorColor; },
   get liteGuardHits() { return liteGuardHits; },
+  get liteHost() { return liteHost; },
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
   // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
   liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),

@@ -168,6 +168,12 @@ class LiteProc {
     return this.request({ type: 'chats', id }, 10000);
   }
 
+  // 顶栏“客户当地时间”：打开的对话的真实号码（@lid 也查）。号没在运行时返回 ''
+  peerNumber(id, jid) {
+    if (!this.sessions.has(id) || !this.proc) return Promise.resolve('');
+    return this.request({ type: 'peer', id, jid }, 5000);
+  }
+
   // MCP read_messages：按名称或号码找对话、读最近的消息（只读本机缓存）
   ask(msg) {
     if (!this.sessions.has(msg.id)) return Promise.resolve({ ok: false, reason: 'notrunning' });
@@ -252,6 +258,11 @@ class LiteHost extends EventEmitter {
   chatList(id) {
     const p = this.procOf(id);
     return p ? p.chatList(id) : Promise.resolve(null);
+  }
+
+  peerNumber(id, jid) {
+    const p = this.procOf(id);
+    return p ? p.peerNumber(id, jid) : Promise.resolve('');
   }
 
   findChat(id, chat) {

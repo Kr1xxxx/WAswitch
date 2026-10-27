@@ -1,6 +1,6 @@
 // 顶栏“客户当地时间”：从当前对话认出客户号码，按国家码和区号查时区（数据见 phone-zones.js）。
 // 号码只在主进程用，送给界面的只有时区和城市名，不带号码。
-// 认不出（没号码、群聊、新版隐私编号 @lid 又没存号码）返回 null，顶栏照旧显示账号所在地 / 本机时间。
+// 认不出（没号码、群聊、隐私编号 @lid 又查不到号码）返回 null，顶栏照旧显示账号所在地的时间（没有就显示纽约时间）。
 const ZONES = require('./phone-zones');
 
 let table = null; // 前缀 -> { tz, approx }
@@ -46,12 +46,14 @@ function fromText(text) {
   return /^\d{7,15}$/.test(d) ? d : '';
 }
 
-// 当前对话的客户在哪个时区。依次看：对话编号里的号码 → 标题本身是号码（没存名字的联系人）→ 客户名单里同名客户填的电话
-// input: { chat, title, customerPhone }
+// 当前对话的客户在哪个时区。依次看：对话编号里的号码 → 标题本身是号码（没存名字的联系人）
+// → 查到的号码（隐私编号 @lid 时从 WhatsApp 本地数据 / 轻量号的映射里查，只有数字）→ 客户名单里同名客户填的电话
+// input: { chat, title, lookedUp, customerPhone }
 function peerZone(input = {}) {
   const id = fromChatId(input.chat);
   if (id.group) return null;
-  const digits = id.digits || fromText(input.title) || fromText(input.customerPhone);
+  const looked = /^\d{7,15}$/.test(String(input.lookedUp || '')) ? String(input.lookedUp) : '';
+  const digits = id.digits || fromText(input.title) || looked || fromText(input.customerPhone);
   return digits ? zoneOfNumber(digits) : null;
 }
 

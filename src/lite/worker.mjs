@@ -64,6 +64,8 @@ async function handle(m) {
       return undefined;
     case 'chats':
       return s ? s.chatList() : null;
+    case 'peer':
+      return s ? s.peerNumber(m.jid) : '';
     case 'shutdown':
       for (const x of sessions.values()) x.stop();
       sessions.clear();
