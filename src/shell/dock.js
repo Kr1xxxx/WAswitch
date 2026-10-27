@@ -311,7 +311,7 @@ function dockSyncTabTools() {
 }
 
 // 参考样式：灰色圆角框，复制图标在框内左下角，和输入区同一块灰底（shen 2026-10-26 去掉朗读）
-function dockField(box, getText) {
+function dockField(box, getText, hint) {
   const copyBtn = h('button', { class: 'dk-tool', title: '复制', 'aria-label': '复制', onclick: async () => {
     const text = getText();
     if (!text) return;
@@ -319,7 +319,7 @@ function dockField(box, getText) {
     copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
-    h('div', { class: 'dk-tools' }, copyBtn)));
+    h('div', { class: 'dk-tools' }, copyBtn, hint ? h('span', { class: 'dk-keyhint' }, hint) : null)));
 }
 
 function dockCompose() {
@@ -333,7 +333,9 @@ function dockCompose() {
     if (dk.out && !dk.edited && dk.text.trim()) return dockTranslate(false);
     dockRender(true);
   } }, m.name)) : [];
-  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', placeholder: '用中文写要回的话。Enter 翻译，Shift+Enter 换行', 'aria-label': '要回的话（中文）' }, dk.text);
+  // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
+  const keyHint = '回车翻译 · Shift + 回车换行';
+  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', placeholder: '用中文写要回的话', 'aria-label': '要回的话（中文）', 'aria-description': keyHint }, dk.text);
   input.addEventListener('input', () => { dk.text = input.value; });
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
@@ -354,7 +356,7 @@ function dockCompose() {
   const mac = s.platform === 'darwin';
   return h('div', { class: 'dk-compose' },
     h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
-    dockField(input, () => input.value),
+    dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       h('span', { class: 'dk-label' }, '→'), dockLangSel(), dockModelSel('dk-lang', true),
       h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改'),
