@@ -603,7 +603,7 @@ const mcpHooks = {
     const view = views.get(id);
     if (!view || problems.has(id)) return 'unknown';
     const state = await waPage.loginState(view.webContents);
-    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); noteLoggedIn(id, state); pushState(); }
+    if (state !== 'unknown' && state !== loginStates.get(id)) { loginStates.set(id, state); noteLoggedIn(id, state); if (state === 'needs_qr') armQrWatch(); pushState(); }
     return state;
   },
   readChatList: async (id, opts) => {
@@ -1125,13 +1125,15 @@ function watchNetwork() {
 
 const liteMe = new Map(); // 轻量模式：上次连上时的本号 id
 const phoneRead = new Set(); // 这次登录已经读过手机号的网页版账号
-async function checkLogins() {
-  let changed = false;
-  for (const acc of accounts) {
-    const view = views.get(acc.id);
-    if (!view || problems.has(acc.id)) continue;
+// 检查一个网页版账号的登录状态，变了返回 true。同一个号同时只查一次（慢检查和扫码快检查可能撞上）
+const loginChecking = new Set();
+async function checkLogin(acc) {
+  const view = views.get(acc.id);
+  if (!view || problems.has(acc.id) || loginChecking.has(acc.id)) return false;
+  loginChecking.add(acc.id);
+  try {
     const state = await waPage.loginState(view.webContents);
-    if (state === 'unknown') continue;
+    if (state === 'unknown') return false;
     // 登录后读一次自己的手机号（只读 localStorage，见 wa-page.js）；掉线后重新登录再读
     if (state === 'needs_qr') phoneRead.delete(acc.id);
     if (state === 'logged_in' && !phoneRead.has(acc.id)) {
@@ -1139,7 +1141,7 @@ async function checkLogins() {
       if (phone) { phoneRead.add(acc.id); setDetectedPhone(acc, phone); }
     }
     const before = loginStates.get(acc.id);
-    if (state === before) continue;
+    if (state === before) return false;
     if (state === 'needs_qr') mcp?.controller.gate.clearAccount(acc.id);
     if (state === 'needs_qr' && before === 'logged_in') team?.recordEvent(acc, 'dropped');
     if (state === 'logged_in' && before === 'needs_qr') team?.recordEvent(acc, 'recovered');
@@ -1149,9 +1151,44 @@ async function checkLogins() {
     }
     loginStates.set(acc.id, state);
     noteLoggedIn(acc.id, state);
-    changed = true;
+    if (state === 'needs_qr') armQrWatch();
+    return true;
+  } finally {
+    loginChecking.delete(acc.id);
   }
+}
+
+async function checkLogins(list = accounts) {
+  let changed = false;
+  for (const acc of list) if (await checkLogin(acc)) changed = true;
   if (changed) pushState();
+}
+
+// 扫码快检查：有网页版账号停在二维码页（或刚加载完、还不知道状态）时，每 3 秒看一次，
+// 扫完几秒内侧栏就变成已登录。没有这样的号、或窗口藏起来/最小化（没人在扫码）就停下，
+// 登录后的号只走 LOGIN_CHECK_MS 的慢检查。
+const QR_CHECK_MS = 3000;
+const QR_FRESH_MS = 60 * 1000; // 页面加载完 1 分钟内状态还没认出来，也算可能在等扫码
+let qrWatchTimer = null;
+function qrWatchList() {
+  const now = Date.now();
+  return accounts.filter((a) => {
+    if (isLite(a) || isParked(a) || !views.has(a.id) || problems.has(a.id) || pendingLoad.has(a.id)) return false;
+    const st = loginStates.get(a.id);
+    if (st === 'needs_qr') return true;
+    return st !== 'logged_in' && now - (webLoadedAt.get(a.id) || 0) < QR_FRESH_MS;
+  });
+}
+function armQrWatch() {
+  if (qrWatchTimer || quitting) return;
+  qrWatchTimer = setTimeout(qrWatchTick, QR_CHECK_MS);
+}
+async function qrWatchTick() {
+  const list = qrWatchList();
+  if (!list.length || !win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) { qrWatchTimer = null; return; }
+  await checkLogins(list);
+  qrWatchTimer = null;
+  armQrWatch();
 }
 
 // 页面加载失败时，代理类错误要明确告诉用户，而不是一片空白
@@ -1409,7 +1446,7 @@ async function createView(acc, loadDelay = 0) {
 
   let failed = false;
   let failToken = null;
-  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); });
+  wc.on('did-stop-loading', () => { webLoadedAt.set(acc.id, Date.now()); armQrWatch(); });
   wc.on('did-start-loading', () => {
     failed = false;
     failToken = null;
@@ -2138,7 +2175,8 @@ app.whenReady().then(async () => {
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台
   win.on('hide', layout);
-  win.on('show', layout);
+  win.on('show', () => { layout(); armQrWatch(); });
+  win.on('restore', armQrWatch); // 窗口回来时，等扫码的号重新开始快检查
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
   win.on('blur', () => { unfocusedSince = Date.now(); });
   win.on('focus', () => {

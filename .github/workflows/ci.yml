@@ -40,6 +40,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
       - name: 页面崩溃重建和保存设置同时发生
         run: xvfb-run -a node scripts/check-view-race.js
+      - name: 扫码后侧栏几秒内变成已登录
+        run: xvfb-run -a node scripts/check-qr-watch.js
       - name: 内存回收不会反复刷新
         run: npm run check:memory
       - name: 自动更新自检

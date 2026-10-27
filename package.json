@@ -11,6 +11,7 @@
     "check:lite": "node scripts/run-check-lite.js",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:view-race": "node scripts/check-view-race.js",
+    "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
