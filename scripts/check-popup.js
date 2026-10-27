@@ -10,6 +10,8 @@ const { app, ipcMain, screen } = require('electron');
 const { PopupWindow } = require('../src/popup');
 
 app.disableHardwareAcceleration(); // xvfb 下没有显卡，透明窗口截图要走软件渲染
+// 弹窗窗口空闲后会被关掉，这是测试里唯一的窗口；不接这个事件 Electron 会在窗口全关时直接退出（exit 0），后半段就不会跑
+app.on('window-all-closed', () => {});
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const SHOT_DIR = process.env.SHOT_DIR || '';
@@ -152,6 +154,6 @@ app.whenReady().then(async () => {
   assert(await until(() => popup.win && popup.ready && popup.win.isVisible()), '关掉后来新提醒：重新建窗口');
   assert.match(await page('document.querySelector(".nt .who").textContent'), /售后 US/, '号自己的提醒：标题是账号名');
 
-  console.log('通知弹窗自检通过');
+  fs.writeSync(2, '通知弹窗自检通过\n'); // 写到 stderr：app.exit 会把还没刷出去的 stdout 丢掉
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });
