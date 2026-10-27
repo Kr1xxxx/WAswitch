@@ -21,7 +21,7 @@ const dk = {
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
-  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文只露半截、模糊
+  openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文完全隐藏
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
   seenTitle: null,
   unread: 0,
@@ -193,32 +193,29 @@ function dockMeta(it) {
     h('span', { class: 'dk-time' }, it.t || ''));
 }
 
-// 有译文时原文默认折叠：只露上半截（约一半高，至少一行），整块模糊，展开箭头就叠在模糊正中；
-// 点箭头或模糊处展开全文，展开后箭头在原文下面，再点收起（shen 2026-10-27）。没译文就直接显示原文
-// 原地切换，不重画列表：高度平滑过渡，被点的这条上沿不动，列表不跳
+// 有译文时原文默认完全隐藏，折叠箭头放在中文译文左边：点箭头在译文上面展开原文，再点收起（shen 2026-10-27）。
+// 没译文就直接显示原文。原地切换 class，不重画列表：高度平滑过渡，被点的这条上沿不动，列表不跳
+// 返回 { box, btn }：box 是原文（放在译文上面），btn 是箭头（放在译文左边）
 function dockOrig(key, text, hasTr) {
-  if (!hasTr) return h('span', { class: 'dk-orig' }, text);
-  const open = dk.openOrig.has(key);
+  if (!hasTr) return { box: h('span', { class: 'dk-orig' }, text), btn: null };
   const btn = h('button', { class: 'dk-fold-btn' });
-  // 高度由一份看不见的同文副本撑起：字号、换行都一样，只是行高减半，所以正好是原文的一半高；展开时行高恢复
-  const clip = h('span', { class: 'dk-fold-clip' }, h('span', { class: 'dk-orig dk-fold-ghost', 'aria-hidden': 'true' }, text), h('span', { class: 'dk-orig dk-fold-text' }, text));
-  const box = h('span', { class: 'dk-fold' }, clip, btn);
+  const body = h('span', { class: 'dk-orig dk-fold-text' }, text);
+  const box = h('span', { class: 'dk-fold' }, body);
   const set = (o) => {
     box.classList.toggle('open', o);
+    box.setAttribute('aria-hidden', String(!o));
     btn.setAttribute('aria-expanded', String(o));
     btn.setAttribute('aria-label', o ? '收起原文' : '展开原文');
     btn.title = o ? '收起原文' : '展开原文';
   };
-  const flip = () => {
+  btn.addEventListener('click', () => {
     const o = !dk.openOrig.has(key);
     if (o) dk.openOrig.add(key); else dk.openOrig.delete(key);
     dockHoldScroll(box);
     set(o);
-  };
-  set(open);
-  btn.addEventListener('click', flip);
-  clip.addEventListener('click', () => { if (!box.classList.contains('open')) flip(); });
-  return box;
+  });
+  set(dk.openOrig.has(key));
+  return { box, btn };
 }
 // 展开/收起的那一下先关掉浏览器的滚动锚定：不然它可能拿这条下面的译文当锚点，把整列往上推
 function dockHoldScroll(el) {
@@ -239,7 +236,9 @@ function dockItemRow(it, last) {
   const sp = foot ? null : dockSpacer();
   // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
   const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
-  const tr = it.state === 'done' ? [trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp), dockItemActs(it),
+  const orig = dockOrig(it.h, it.text, it.state === 'done' && !!it.tr);
+  const trText = trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp);
+  const tr = it.state === 'done' ? [orig.btn ? h('span', { class: 'dk-trline' }, orig.btn, trText) : trText, dockItemActs(it),
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, '翻译中…', sp)
       : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ',
@@ -247,7 +246,7 @@ function dockItemRow(it, last) {
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
   return h('div', { class: `${cls}${foot ? ' foot' : ''}`, 'data-h': it.h },
-    dockOrig(it.h, it.text, it.state === 'done' && !!it.tr),
+    orig.box,
     tr,
     warn,
     dockMeta(it));

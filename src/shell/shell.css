@@ -447,23 +447,20 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: 10px; padding: 0 4px; line-height: 15px; }
 .dk-item:has(.dk-edited, .dk-fixed) .dk-spacer { width: 112px; }
 .dk-orig { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
-/* 原文折叠：看不见的副本行高减半撑出原文一半高（至少一行），真原文盖在上面、裁掉下半截、整块模糊，展开箭头叠在模糊正中；
-   展开时副本行高恢复，显示全文，箭头移到原文下面。宽度两种状态一样，切换时只有高度平滑变化 */
-.dk-fold { position: relative; display: block; align-self: stretch; min-width: 0; margin-bottom: 2px; transition: padding-bottom var(--fx) var(--fx-ease); }
-.dk-fold.open { padding-bottom: 16px; }
-.dk-fold-clip { position: relative; display: block; min-height: calc(12px * 1.4); overflow: hidden; border-radius: 4px; cursor: pointer; }
-.dk-fold.open .dk-fold-clip { cursor: auto; }
-.dk-fold-ghost { display: block; line-height: .7; visibility: hidden; user-select: none; pointer-events: none; transition: line-height var(--fx) var(--fx-ease); }
-.dk-fold.open .dk-fold-ghost { line-height: 1.4; }
-.dk-fold-text { position: absolute; left: 0; top: 0; right: 0; filter: blur(3px); opacity: .75; user-select: none; transition: filter var(--fx) ease, opacity var(--fx) ease; }
-.dk-fold.open .dk-fold-text { filter: none; opacity: 1; user-select: text; }
-.dk-fold-clip::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(240,242,245,.1), rgba(240,242,245,.5)); pointer-events: none; transition: opacity var(--fx) ease; }
-.dk-fold.open .dk-fold-clip::after { opacity: 0; }
-.dk-fold-btn { position: absolute; left: 50%; top: 50%; width: 26px; height: 14px; margin: -7px 0 0 -13px; padding: 0; border: 0; border-radius: 7px; background: rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(11,20,26,.08), 0 1px 2px rgba(11,20,26,.12); color: var(--muted); cursor: pointer; transition: top var(--fx) var(--fx-ease), color .12s; }
-.dk-fold.open .dk-fold-btn { top: calc(100% - 8px); }
-.dk-fold-btn::before { content: ''; position: absolute; left: 10px; top: 2.5px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--fx) var(--fx-ease), top var(--fx) var(--fx-ease); }
-.dk-fold.open .dk-fold-btn::before { top: 5px; transform: rotate(135deg); }
-.dk-fold-btn:hover { color: var(--text); background: #fff; }
+/* 原文折叠（shen 2026-10-27）：默认完全隐藏，箭头在中文译文左边；展开时原文出现在译文上面，和译文左对齐。
+   收起时原文不占宽度（气泡只跟译文一样宽），高度 0 ↔ 自动平滑过渡 */
+.dk-fold { position: relative; display: block; align-self: stretch; min-width: 0; height: 0; overflow: hidden; padding-left: 16px; opacity: 0; visibility: hidden; interpolate-size: allow-keywords;
+  transition: height var(--fx) var(--fx-ease), opacity var(--fx) ease, margin-bottom var(--fx) var(--fx-ease), visibility 0s linear var(--fx); }
+.dk-fold.open { height: auto; opacity: 1; visibility: visible; margin-bottom: 2px; transition: height var(--fx) var(--fx-ease), opacity var(--fx) ease, margin-bottom var(--fx) var(--fx-ease), visibility 0s; }
+.dk-fold-text { display: block; position: absolute; left: 16px; top: 0; white-space: nowrap; }
+.dk-fold.open .dk-fold-text { position: static; white-space: pre-wrap; }
+.dk-trline { display: flex; align-items: flex-start; gap: 2px; min-width: 0; }
+.dk-trline .dk-tr { min-width: 0; }
+.dk-fold-btn { flex: none; position: relative; width: 16px; height: 16px; margin: 2px 0 0 -2px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; transition: color .12s, background .12s; }
+.dk-fold-btn::before { content: ''; position: absolute; left: 4px; top: 5.5px; width: 5px; height: 5px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-135deg); transition: transform var(--fx) var(--fx-ease), left var(--fx) var(--fx-ease), top var(--fx) var(--fx-ease); }
+.dk-fold-btn[aria-expanded="true"]::before { left: 5.5px; top: 4px; transform: rotate(-45deg); }
+.dk-fold-btn:hover { color: var(--text); background: rgba(0,0,0,.06); }
+.dk-fold-btn:focus-visible { outline: 2px solid #15803D; outline-offset: 1px; }
 .dk-tr { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
 .dk-tr.bad { color: var(--danger); font-size: 12px; }
 .dk-link { border: 0; background: transparent; padding: 0; font: inherit; font-size: 12px; color: #15803D; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
