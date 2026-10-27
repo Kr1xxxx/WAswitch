@@ -42,6 +42,7 @@ const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
+const { setupPeerClock } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
@@ -2545,6 +2546,8 @@ const ctx = {
 
 // ---- 翻译和悬浮翻译窗（在 translate-ipc.js） ----
 const trIpc = setupTranslateIpc(ctx);
+// ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
+setupPeerClock(ctx);
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));

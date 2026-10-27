@@ -331,6 +331,30 @@ async function readOpenChat(wc) {
   }
 }
 
+// 顶栏“客户当地时间”用：当前打开的对话是谁。只读标题和第一条消息 data-id 中间那段（对话编号，
+// 私聊是“号码@c.us”，群是“…@g.us”），不读消息内容。号码只留在主进程，见 customer-time.js
+const READ_PEER_CODE = `(() => {
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle })};
+  const main = document.querySelector(S.main);
+  if (!main) return null;
+  let title = '';
+  for (const sel of S.title) { const el = main.querySelector(sel); if (el) { title = String(el.getAttribute('title') || el.textContent || '').trim().slice(0, 100); break; } }
+  const m = main.querySelector('[data-id^="false_"], [data-id^="true_"]');
+  const parts = m ? String(m.getAttribute('data-id') || '').split('_') : [];
+  return { title, chat: (parts[1] || '').slice(0, 100) };
+})()`;
+
+async function readChatPeer(wc) {
+  if (wc.isDestroyed() || wc.isLoading()) return null;
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: READ_PEER_CODE }]);
+    if (!r || typeof r !== 'object') return null;
+    return { title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '' };
+  } catch {
+    return null;
+  }
+}
+
 // 自己的手机号：WhatsApp Web 登录后把本机账号的 id（如 "8613800000000:12@c.us"）存在 localStorage 里。
 // 只读这两个键，不读别的、不写任何东西。读不到就返回空，用户可以在编辑账号里自己填。
 const OWN_NUMBER_KEYS = ['last-wid-md', 'last-wid'];
@@ -377,5 +401,5 @@ async function composeFocus(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readOwnNumber, composeFocus, parseWid, READ_CHAT_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, readOwnNumber, composeFocus, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
 

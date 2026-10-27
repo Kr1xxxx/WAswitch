@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('wa', {
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
+  onPeerZone: (cb) => ipcRenderer.on('peer:zone', (_e, z) => cb(z)),
   switchTo: (id) => ipcRenderer.send('switch', id),
   aiAnswer: (yes) => ipcRenderer.send('ai:answer', yes === true),
   add: () => ipcRenderer.send('add'),

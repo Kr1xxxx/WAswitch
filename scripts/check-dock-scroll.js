@@ -22,7 +22,15 @@ const scenario = async (mode) => {
   await wait(300);
   const list = () => document.querySelector('.dk-list');
   if (list().scrollHeight - list().clientHeight < 200) return { error: '列表太短，测不出滚动' };
-  if (mode === 'middle') { list().scrollTop = Math.round((list().scrollHeight - list().clientHeight) / 2); await wait(100); }
+  // 先等页面真的出了两帧：CI 机器忙时动画帧会晚来，不等就会一帧都没记到
+  const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+  await frame(); await frame();
+  if (mode === 'middle') {
+    // scroll 事件要到下一帧才发：等它真的发出来（工作台靠它知道用户不在底部），机器忙时 100ms 不一定够
+    const scrolled = new Promise((r) => list().addEventListener('scroll', () => r(), { once: true }));
+    list().scrollTop = Math.round((list().scrollHeight - list().clientHeight) / 2);
+    await scrolled; await frame(); await wait(100);
+  }
   const frames = [];
   let on = true;
   const watch = () => {
@@ -33,7 +41,7 @@ const scenario = async (mode) => {
     frames.push({ top: l.scrollTop, gap: l.scrollHeight - l.scrollTop - l.clientHeight, first: vis ? vis.dataset.h : '', off: vis ? Math.round(vis.getBoundingClientRect().top - top) : 0 });
     if (on) requestAnimationFrame(watch);
   };
-  requestAnimationFrame(watch);
+  watch(); // 先同步记一帧当起点，后面每一帧接着记
   for (let i = 0; i < items.length; i++) {
     items[i].state = 'running'; push();
     await wait(80);
