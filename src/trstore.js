@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { writeJsonAtomic } = require('./atomic');
 
 const KEEP_IN_MEMORY = 20; // 内存里最多留 20 个对话的译文
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
@@ -62,9 +63,7 @@ class TrStore {
     const [acc, chat] = k.split('/');
     try {
       fs.mkdirSync(path.join(this.dir, acc), { recursive: true });
-      const f = this.file(acc, chat);
-      fs.writeFileSync(`${f}.tmp`, JSON.stringify(e.data));
-      fs.renameSync(`${f}.tmp`, f);
+      writeJsonAtomic(this.file(acc, chat), e.data);
       e.dirty = false;
     } catch (err) { console.warn(`译文保存失败：${err.message}`); }
   }

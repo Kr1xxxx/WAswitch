@@ -3,6 +3,7 @@
 // 删除标记最多留 2 万条。这两个文件不进日志、不进自检输出。
 const fs = require('fs');
 const crypto = require('crypto');
+const { writeJsonAtomic } = require('./atomic');
 
 const TOMBSTONE_MAX = 20000;
 const IMPORT_MAX_BYTES = 1024 * 1024;
@@ -103,8 +104,7 @@ class Records {
       const drop = new Set(dead.sort((a, b) => a.updatedAt - b.updatedAt).slice(0, dead.length - TOMBSTONE_MAX).map((r) => r.id));
       this.items = this.items.filter((r) => !drop.has(r.id));
     }
-    fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items, null, 1));
-    fs.renameSync(`${this.file}.tmp`, this.file);
+    writeJsonAtomic(this.file, this.items, 1);
   }
 
   list() {

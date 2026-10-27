@@ -46,6 +46,8 @@ jobs:
         run: npm run check:updater
       - name: 代理端口检测自检
         run: npm run check:ports
+      - name: 安全写文件自检
+        run: npm run check:atomic
 
   package-win:
     runs-on: windows-latest

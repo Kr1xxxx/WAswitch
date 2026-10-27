@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { writeJsonAtomic } = require('./atomic');
 
 const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
@@ -390,9 +391,7 @@ class Translator {
   }
 
   save() {
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.cfg, null, 2));
-    fs.renameSync(tmp, this.file);
+    writeJsonAtomic(this.file, this.cfg, 2);
   }
 
   provider(id) { return this.load().providers.find((p) => p.id === id) || null; }
