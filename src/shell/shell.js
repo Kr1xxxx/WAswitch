@@ -671,6 +671,8 @@ async function panelLoad() {
   try { pn.data = await window.wa.panelData(); pn.loaded = true; } catch {}
   renderPanel(true);
 }
+// 导入结果：新加几条，已经有的、内容不全的各跳过几条
+const importSay = (r, unit) => `导入了 ${r.added} ${unit}${r.dup ? `，${r.dup} ${unit}已经有了` : ''}${r.bad ? `，${r.bad} ${unit}内容不全跳过` : ''}`;
 function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }
 async function panelInsert(text) {
   const acc = active();
@@ -1045,7 +1047,7 @@ function translatePage(page) {
         h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除翻译模式「${delName(m.name)}」？`, detail: '删除后不能恢复。' })) return; apply(await window.wa.tmodeDelete(m.id)); } }, '删除'))))),
     h('div', { class: 'hstack' },
       h('button', { class: 'btn', onclick: () => { trModeEdit = { direction: 'out', temperature: 0.3 }; trSay = ''; render(true); } }, '+ 新建模式'),
-      h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelImport('tmodes'); if (!r) return; if (r.error) trSay = `导入失败：${r.error}`; else { trSay = `导入了 ${r.added} 个${r.skipped ? `，跳过 ${r.skipped} 个` : ''}`; tr.modes = r.modes; } render(true); } }, '导入'),
+      h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelImport('tmodes'); if (!r) return; if (r.error) trSay = `导入失败：${r.error}`; else { trSay = importSay(r, '个'); tr.modes = r.modes; } render(true); } }, '导入'),
       h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelExport('tmodes', 'json'); if (r) { trSay = `导出了 ${r.count} 个`; render(true); } } }, '导出'))));
 }
 
@@ -1087,10 +1089,10 @@ function renderPanel(force = false) {
       if (!r) return;
       if (r.error) return panelSay(`导入失败：${r.error}`, true);
       pn.data = r.data;
-      return panelSay(`导入了 ${r.added} 条${r.skipped ? `，跳过 ${r.skipped} 条` : ''}`);
+      return panelSay(importSay(r, '条'));
     }
     const r = await window.wa.panelExport(kind, what);
-    if (r) panelSay(`导出了 ${r.count} 条`);
+    if (r) panelSay(`导出了 ${r.count} 条${r.parked ? `（含已停用账号的 ${r.parked} 条）` : ''}`);
   };
   $panel.replaceChildren(...kids(
     panelHead(),

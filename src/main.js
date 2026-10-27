@@ -2300,7 +2300,14 @@ const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmod
 handleShell('panel:export', async ({ kind, format } = {}) => {
   if (!STORE_LABEL[kind]) return null;
   const store = storeOf(kind);
-  const rows = kind === 'customers' ? panelData().customers : store.list();
+  // 客户：停着的号（团队收回等）名下的也导出，账号名照写，方便收回前后都能备份
+  let rows = store.list();
+  let parked = 0;
+  if (kind === 'customers') {
+    const names = new Map(accounts.map((a) => [a.id, a.name]));
+    parked = rows.filter(parkedCustomer).length;
+    rows = rows.map((c) => ({ ...c, accountName: names.get(c.accountId) || '' }));
+  }
   const json = format === 'json';
   const stamp = new Date().toISOString().slice(0, 10);
   const r = await dialog.showSaveDialog(win, {
@@ -2313,7 +2320,7 @@ handleShell('panel:export', async ({ kind, format } = {}) => {
     ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
     : records.toCsv(kind, rows);
   fs.writeFileSync(r.filePath, out);
-  return { count: rows.length };
+  return { count: rows.length, parked };
 });
 handleShell('panel:import', async ({ kind } = {}) => {
   if (!STORE_LABEL[kind]) return null;
@@ -2325,16 +2332,13 @@ handleShell('panel:import', async ({ kind } = {}) => {
   if (r.canceled || !r.filePaths[0]) return null;
   const res = records.readImport(kind, r.filePaths[0]);
   if (res.error) return { error: res.error };
-  const store = storeOf(kind);
-  let added = 0;
-  for (const row of res.rows) {
-    const data = { ...row, id: undefined };
-    // 客户：文件里的账号编号对得上就用它，否则记到当前账号
-    if (kind === 'customers') data.accountId = typeof row.accountId === 'string' && findAcc(row.accountId) ? row.accountId : activeId || '';
-    if (store.upsert(data, { save: false, imported: true })) added += 1;
-  }
-  store.save();
-  return { added, skipped: res.rows.length - added, data: panelData(), modes: modeStore.list() };
+  // 客户：文件里的账号编号本机还有（包括停着的号）就用它，否则记到当前账号。
+  // 同一账号下电话（没电话按名字）已经有的跳过，同一个文件导两次不会多出来
+  const rows = kind === 'customers'
+    ? res.rows.map((row) => ({ ...row, accountId: typeof row.accountId === 'string' && accounts.some((a) => a.id === row.accountId) ? row.accountId : activeId || '' }))
+    : res.rows;
+  const { added, dup, bad } = storeOf(kind).importRows(rows);
+  return { added, dup, bad, skipped: dup + bad, data: panelData(), modes: modeStore.list() };
 });
 // ---------- 拆出去的接口模块（editor-ipc.js、check-ipc.js、translate-ipc.js）共用的上下文 ----------
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
