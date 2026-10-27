@@ -541,6 +541,17 @@ function renderAi() {
   $ai.hidden = !r;
   if (fxChanged('ai', !!r, false) && r) fxPlay($ai, 'fx-down');
   if (!r) return;
+  if (r.kind === 'draft') {
+    // AI 起草了一条回复：给用户看开头，点“放进输入框”才放，发送永远自己按
+    const what = r.locked ? 'AI 起草了一条回复（解锁后查看）'
+      : r.note ? r.note
+      : `AI 给「${r.name}」的「${r.chat}」起草了回复：${r.preview}`;
+    $ai.replaceChildren(
+      h('span', { class: `grow${r.note ? ' bad' : ''}`, title: r.locked ? null : `${r.chat}：${r.preview}` }, what),
+      h('button', { class: 'btn', onclick: () => window.wa.aiAnswer(false) }, '忽略'),
+      r.locked ? null : h('button', { class: 'btn primary', title: '放进输入框，不会发送，发送自己按', onclick: () => window.wa.aiAnswer(true) }, '放进输入框'));
+    return;
+  }
   const what = r.kind === 'add'
     ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
     : `AI 想切到「${r.name}」`;

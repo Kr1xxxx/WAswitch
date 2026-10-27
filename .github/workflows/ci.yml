@@ -24,6 +24,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: MCP 自检
         run: npm run check:mcp
+      - name: MCP 起草回复自检（真粘贴，确认不发送）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-draft.js
       - name: 翻译自检
         run: npm run check:translate
       - name: 客户当地时间自检

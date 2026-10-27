@@ -7,7 +7,7 @@
 // 小号可以用“轻量模式”（src/lite）：不开网页，在一个共用的后台进程里直接连 WhatsApp，省内存。
 // 主号只能用网页版。轻量小号可以走代理，也可以直连（用户自己选，有风险提示）。
 // 走代理的轻量号在带网络护栏的后台进程里，任何直连都会被拦下；直连的轻量号在另一个单独的进程里。
-const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard, screen, net: electronNet } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, session, shell, Menu, dialog, powerMonitor, safeStorage, clipboard, ClipboardItem, screen, net: electronNet } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -26,6 +26,7 @@ const records = require('./records');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
+const { createDraftPlacer } = require('./draft-place');
 const { setupMcp } = require('./mcp');
 const { LiteHost } = require('./lite/host');
 const { isSafeLink } = require('./links');
@@ -708,7 +709,62 @@ const mcpHooks = {
       confirmDialogOpen = false;
     }
   },
+
+  // ---- 起草回复：放进输入框，不发送（见 draft-place.js） ----
+  placeDraft: (args) => draftPlacer.place(args),
 };
+
+// 轻量模式的输入框在软件界面里：请界面填进去，界面回 'ok' | 'not_empty' | 'chat' | 'none'
+const liteFillWaits = new Map();
+let liteFillSeq = 0;
+function liteFill(id, jid, text, { force = false, focus = false } = {}) {
+  if (!shellView || shellView.webContents.isDestroyed()) return Promise.resolve('none');
+  liteFillSeq += 1;
+  const n = liteFillSeq;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { liteFillWaits.delete(n); resolve('none'); }, 3000);
+    liteFillWaits.set(n, (r) => { clearTimeout(timer); liteFillWaits.delete(n); resolve(r); });
+    shellView.webContents.send('draft:lite-fill', { n, id, jid, text, force: !!force, focus: !!focus });
+  });
+}
+
+// 这个号正显示着、没锁、页面正常：读页面期间这些变了就不放
+const draftShown = (id) => !!findAcc(id) && id === activeId && page === 'account' && !locked && !problems.has(id);
+const draftPlacer = createDraftPlacer({
+  findAcc: (id) => findAcc(id),
+  isLite,
+  autoBlock: (id) => {
+    if (!win || !win.isVisible() || win.isMinimized()) return 'hidden';
+    if (locked) return 'locked';
+    if (id !== activeId || page !== 'account') return 'not_shown';
+    if (problems.has(id)) return 'problem';
+    if (userBusy()) return 'busy';
+    return '';
+  },
+  stillShown: draftShown,
+  webContents: (id) => {
+    const view = views.get(id);
+    return view && !view.webContents.isDestroyed() && !pendingLoad.has(id) ? view.webContents : null;
+  },
+  waPage,
+  clipboard,
+  ClipboardItem,
+  liteOpenChat: (id) => {
+    const jid = liteOpen.get(id);
+    if (!jid) return null;
+    const v = liteViews.get(id);
+    const title = (v && v.jid === jid && v.title) || ((v && v.chats) || []).find((c) => c.jid === jid)?.name || '';
+    return { jid, title };
+  },
+  liteChats: (id) => (liteViews.get(id)?.chats || []).filter((c) => c && typeof c.jid === 'string'),
+  liteOpen: (id, jid) => { liteOpen.set(id, jid); syncLiteWatch(); pushState(); },
+  liteFill,
+  request: () => aiRequest,
+  setRequest: (req, ms) => setAiRequest(req, ms),
+  clearRequest: () => setAiRequest(null),
+  activateForUser: async (id) => { notifier.showWindow(); await userActivate(id); },
+  wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+});
 
 const regionName = (() => {
   let names = null;
@@ -1874,10 +1930,11 @@ function userBusy() {
 // 横幅 30 秒没人点就自动消失，算忽略。MCP 工具不等用户回答，立刻返回“已询问”
 const AI_ASK_MS = 30 * 1000;
 let aiTimer = null;
-function setAiRequest(req) {
+// ms：起草回复的横幅留得久一点（见 draft-place.js）
+function setAiRequest(req, ms = AI_ASK_MS) {
   clearTimeout(aiTimer);
   aiRequest = req;
-  if (req) aiTimer = setTimeout(() => { aiRequest = null; refresh(); }, AI_ASK_MS);
+  if (req) aiTimer = setTimeout(() => { aiRequest = null; refresh(); }, ms);
   refresh();
 }
 
@@ -1909,6 +1966,13 @@ function runAiRequest(req, byUser) {
 function aiRequestForShell() {
   if (!aiRequest) return null;
   if (aiRequest.kind === 'add') return { kind: 'add', name: aiRequest.name || '' };
+  if (aiRequest.kind === 'draft') {
+    const acc = findAcc(aiRequest.id);
+    if (!acc) return null;
+    // 锁着时不显示客户名字和草稿内容
+    if (locked) return { kind: 'draft', locked: true };
+    return { kind: 'draft', name: acc.name, chat: aiRequest.chat, preview: aiRequest.text.replace(/\s+/g, ' ').slice(0, 120), note: aiRequest.note || '' };
+  }
   const acc = findAcc(aiRequest.id);
   return acc ? { kind: 'switch', name: acc.name } : null;
 }
@@ -2420,6 +2484,7 @@ onShell('app:restart', () => relaunchApp());
 // 用户在顶部横幅里回答 AI 的切换请求
 onShell('ai:answer', (yes) => {
   const req = aiRequest;
+  if (req && req.kind === 'draft') { draftPlacer.answer(yes === true); return; }
   setAiRequest(null);
   if (yes === true && req) runAiRequest(req, true);
 });
@@ -2492,7 +2557,8 @@ async function insertText(accountId, text) {
   if (after) return after;
   if (focus !== 'compose') return 'focus';
   const view = views.get(accountId);
-  clipboard.writeText(text.slice(0, 4000));
+  await clipboard.writeText(text.slice(0, 4000)); // 剪贴板接口是异步的：写完再贴
+  if (insertBlocked(accountId)) return 'changed';
   view.webContents.focus();
   view.webContents.paste();
   return 'ok';
@@ -2602,6 +2668,10 @@ onShell('popup:test', () => {
 onShell('open-logs', () => { const dir = log.logDir(); if (dir) shell.openPath(dir); });
 
 // 轻量模式聊天页
+onShell('draft:lite-filled', (n, r) => {
+  const done = liteFillWaits.get(n);
+  if (done) done(['ok', 'not_empty', 'chat', 'none'].includes(r) ? r : 'none');
+});
 onShell('lite:open', ({ id, jid } = {}) => {
   const acc = findAcc(id);
   if (!isLite(acc) || typeof jid !== 'string' || !jid || jid.length > 200) return;

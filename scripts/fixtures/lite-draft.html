@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>lite</title></head><body>
+<!-- 只加载软件界面里的轻量模式聊天页（src/shell/lite.js），给 MCP 起草回复的自检用（scripts/check-draft.js）。
+     h()、rawDetail() 和 window.wa 是最小的替身；liteSend 被调用就记下来，证明没有发送。 -->
+<script>
+  function h(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'style') Object.assign(el.style, v);
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'value') el.value = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+  function rawDetail(t) { return h('span', null, t); }
+  window.__sent = [];
+  window.__fill = null;
+  window.__filled = [];
+  window.wa = {
+    liteSend: async (id, jid, text) => { window.__sent.push({ id, jid, text }); return {}; },
+    liteOpen: () => {}, openLink: () => {}, retry: () => {},
+    onLiteFill: (cb) => { window.__fill = cb; },
+    liteFilled: (n, r) => { window.__filled.push({ n, r }); },
+  };
+</script>
+<script src="../../src/shell/lite.js"></script>
+</body></html>

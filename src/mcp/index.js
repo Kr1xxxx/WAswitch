@@ -76,6 +76,23 @@ function setupMcp({ hooks, lockLocalPage }) {
     controller.setPreview(on);
     return view();
   });
+  // 起草回复：第一次打开时说明一下（放进输入框，不发送）
+  ipcMain.handle('mcp:set-drafts', async (e, on) => {
+    if (on && !controller.settings.drafts) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(e.sender), {
+        type: 'question',
+        buttons: ['取消', '打开'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '打开起草回复',
+        message: '打开后，AI 可以把写好的回复放进聊天输入框',
+        detail: '只放进输入框，不会发送：发不发、什么时候发，都由你自己按。一次只能起草一条，不能群发。\n\n只有你正看着那个对话、30 秒内没打字、输入框是空的时候才会直接放进去；其他时候会在窗口顶部给你看草稿，你点“放进输入框”才放。网页版放的时候会借用一下剪贴板，放完换回去。',
+      });
+      if (response !== 1) return view();
+    }
+    controller.setDrafts(on);
+    return view();
+  });
   ipcMain.handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   ipcMain.handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];

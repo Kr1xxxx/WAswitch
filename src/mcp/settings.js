@@ -46,10 +46,22 @@ function render(s) {
     log.appendChild(li);
   }
   $('logBox').hidden = !s.readLog.length;
+
+  $('drafts').checked = s.drafts;
+  const draftLog = $('draftLog');
+  draftLog.innerHTML = '';
+  const RESULT = { placed: '已放进输入框', pending: '在窗口顶部等你确认', busy: '上一条还没处理，没放', gone: '账号不存在' };
+  for (const d of s.draftLog || []) {
+    const li = document.createElement('li');
+    li.textContent = `${time(d.at)} ${d.client} 给「${d.account}」的「${d.chat}」起草了 ${d.chars} 字：${RESULT[d.result] || d.result}`;
+    draftLog.appendChild(li);
+  }
+  $('draftLogBox').hidden = !(s.draftLog || []).length;
 }
 
 $('layer2').onchange = async (e) => render(await window.mcp.setLayer2(e.target.checked));
 $('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target.checked));
+$('drafts').onchange = async (e) => render(await window.mcp.setDrafts(e.target.checked));
 
 $('enabled').onchange = async (e) => render(await window.mcp.setEnabled(e.target.checked));
 $('regenerate').onclick = async () => render(await window.mcp.regenerate());

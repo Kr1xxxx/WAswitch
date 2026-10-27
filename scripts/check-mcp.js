@@ -1,5 +1,7 @@
 // MCP 接口自检：不需要 Electron、不需要 WhatsApp 账号，用假的账号数据跑一遍。
 // 检查：token 文件权限、7 个一层工具、安全校验（token / Host / Origin / 路径）、二层 list_chats 的开关和确认、
+// 起草回复 draft_reply 的开关、一次一条、不发送、
+
 // stdio 桥接、关闭后清理。
 // 运行：npm run check:mcp
 const fs = require('fs');
@@ -25,7 +27,7 @@ function fakeHooks() {
   const state = {
     removeAnswer: 'cancelled', removeCalls: [],
     login: { a1: 'logged_in', a2: 'needs_qr' },
-    confirmAnswers: [], confirmCalls: [], readCalls: [],
+    confirmAnswers: [], confirmCalls: [], readCalls: [], draftAnswers: [], draftCalls: [],
     chatList: {
       ok: true, filtered: false, total: 3, unrecognized: 0,
       chats: [
@@ -58,6 +60,11 @@ function fakeHooks() {
     confirmRead: async (opts) => {
       state.confirmCalls.push(opts);
       return state.confirmAnswers.shift() || 'deny';
+    },
+    // 起草回复：main.js 里由 draft-place.js 真正去放，这里只记下调用
+    placeDraft: async (args) => {
+      state.draftCalls.push(args);
+      return state.draftAnswers.shift() || { result: 'placed' };
     },
     removeAccount: async (id, opts) => {
       state.removeCalls.push(opts);
@@ -316,6 +323,64 @@ async function main() {
   const okUnknown = await ctl.gate.check({ session: 'unknown', client: 'x', account: { id: 'a2', name: '客服号' }, preview: false, timeoutMs: 1000 });
   check(okUnknown === null && ctl.status().allows.length === 0, '没有会话 id 时“10 分钟内允许”只当一次');
   ctl.setPreview(false);
+
+  // ---------- 起草回复：draft_reply ----------
+  check(!(await toolNames()).includes('draft_reply') && ctl.status().drafts === false, '起草回复默认关：工具列表里没有 draft_reply');
+  const changedD = listChanged;
+  ctl.setDrafts(true);
+  await new Promise((r) => setTimeout(r, 200));
+  check(listChanged > changedD && (await toolNames()).includes('draft_reply'), '打开起草回复：通知客户端，出现 draft_reply');
+  check(JSON.parse(fs.readFileSync(path.join(dir, 'mcp.json'), 'utf8')).drafts === true, '起草回复开关存进 mcp.json');
+  const dtool = (await client.listTools()).tools.find((t) => t.name === 'draft_reply');
+  const props = Object.keys(dtool.inputSchema.properties).sort();
+  check(JSON.stringify(props) === JSON.stringify(['chat', 'id', 'text']), `draft_reply 只有 id、chat、text 三个参数，没有批量参数（${props.join(', ')}）`);
+  check(dtool.inputSchema.properties.text.type === 'string' && dtool.inputSchema.properties.text.maxLength === 4000, 'text 是一段文字，最多 4000 字');
+  check(/不会发送/.test(dtool.description) && /不能群发/.test(dtool.description), '工具说明写明不会发送、不能群发');
+  check(dtool.annotations && dtool.annotations.destructiveHint === false, '工具标注为非破坏性');
+
+  let dclock = 5_000_000;
+  ctl.drafts.now = () => dclock;
+  const draft = (args) => client.callTool({ name: 'draft_reply', arguments: args });
+  const dc = st0.draftCalls;
+  st0.login.a2 = 'logged_in';
+  const d1 = json(await draft({ id: 'a2', chat: 'Anna Müller', text: 'Hi Anna,\r\nthe price is 120 EUR.\u202E' }));
+  check(d1.ok && d1.placed === true && d1.sent === false && /自己按发送/.test(d1.next), '直接放进输入框时返回 placed: true、sent: false，并提醒用户自己按发送');
+  check(dc.length === 1 && dc[0].accountId === 'a2' && dc[0].chat === 'Anna Müller' && /check-mcp/.test(dc[0].client), 'placeDraft 收到账号、对话和客户端名称');
+  check(dc[0].text === 'Hi Anna,\nthe price is 120 EUR.', '草稿去掉了改变文字方向的隐藏字符，换行统一成 \\n');
+
+  const d2 = await draft({ id: 'a2', chat: 'Anna Müller', text: 'again' });
+  check(d2.isError && /3 秒/.test(d2.content[0].text) && dc.length === 1, '同一个连接 3 秒内第二次起草被限制');
+  dclock += 4000;
+  st0.draftAnswers.push({ result: 'pending', why: '用户正在打字' });
+  const d3 = json(await draft({ id: 'a2', chat: '+49 151 2345678', text: 'Guten Tag' }));
+  check(d3.placed === false && d3.pending === true && d3.why === '用户正在打字' && /不要重复调用/.test(d3.next), '不能直接放时返回 pending，说明原因，提醒不要重复调用');
+  dclock += 4000;
+  st0.draftAnswers.push({ result: 'busy' });
+  const d4 = await draft({ id: 'a2', chat: 'Anna Müller', text: 'second' });
+  check(d4.isError && /一次只能起草一条/.test(d4.content[0].text), '上一条还在等用户处理时，新草稿被拒绝（一次一条）');
+  dclock += 4000;
+  st0.draftAnswers.push({ result: 'placed', unconfirmed: true });
+  const d5 = json(await draft({ id: 'a2', chat: 'Anna Müller', text: 'Hello' }));
+  check(d5.placed === true && /没能确认/.test(d5.next), '粘贴后没确认到时如实告诉 AI');
+
+  const before6 = dc.length;
+  dclock += 4000;
+  const d6 = await draft({ id: 'nope', chat: 'x', text: 'y' });
+  dclock += 4000;
+  const d7 = await draft({ id: 'a2', chat: 'x', text: '  \n ' });
+  st0.login.a2 = 'needs_qr';
+  dclock += 4000;
+  const d8 = await draft({ id: 'a2', chat: 'x', text: 'y' });
+  st0.login.a2 = 'logged_in';
+  const d9 = await draft({ id: 'a2', chat: 'x', text: 'y'.repeat(4001) });
+  check(d6.isError && d7.isError && d8.isError && /重新扫码/.test(d8.content[0].text) && d9.isError && dc.length === before6,
+    '账号不存在、内容为空、需要扫码、超过 4000 字：都不放');
+  const dl = ctl.status().draftLog;
+  check(dl.length >= 4 && dl.every((l) => !('text' in l) && typeof l.chars === 'number') && dl[0].result === 'placed', '起草记录只记字数和结果，不记内容');
+  const changedD2 = listChanged;
+  ctl.setDrafts(false);
+  await new Promise((r) => setTimeout(r, 200));
+  check(listChanged > changedD2 && !(await toolNames()).includes('draft_reply'), '关闭起草回复：通知客户端，工具消失');
 
   check(ctl.status().clients.some((c) => c.name.startsWith('check-mcp')), '设置页能看到已连接的客户端');
   await client.close();

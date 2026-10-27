@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('wa', {
   onPeerZone: (cb) => ipcRenderer.on('peer:zone', (_e, z) => cb(z)),
   switchTo: (id) => ipcRenderer.send('switch', id),
   aiAnswer: (yes) => ipcRenderer.send('ai:answer', yes === true),
+  // MCP 起草回复：主进程请界面把草稿填进轻量模式的输入框，界面回结果
+  onLiteFill: (cb) => ipcRenderer.on('draft:lite-fill', (_e, req) => cb(req)),
+  liteFilled: (n, r) => ipcRenderer.send('draft:lite-filled', n, r),
   add: () => ipcRenderer.send('add'),
   edit: (id) => ipcRenderer.send('edit', id),
   context: (id, from) => ipcRenderer.send('context', id, from),

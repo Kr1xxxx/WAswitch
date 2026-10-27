@@ -401,5 +401,32 @@ async function composeFocus(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, readOwnNumber, composeFocus, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
+// MCP 起草回复用：输入框的状态。只读，不移动焦点、不改页面。
+// probe 是草稿开头的一小段（空白已合并），用来确认粘贴已经生效，再把剪贴板换回去。
+// 返回 { focus: 'compose' | 'other', box, empty, has } | null（页面在加载或读不到）
+const COMPOSE_CODE = (probe) => `(() => {
+  const S = ${JSON.stringify(SELECTORS.composeBox)};
+  const el = document.activeElement;
+  const focus = el && el.isContentEditable && S.some((s) => el.closest(s)) ? 'compose' : 'other';
+  let box = null;
+  for (const s of S) { box = document.querySelector(s); if (box) break; }
+  if (!box) return { focus, box: false, empty: true, has: false };
+  const norm = (x) => String(x || '').replace(/\\s+/g, ' ').trim();
+  const t = norm(box.innerText || box.textContent);
+  const probe = ${JSON.stringify(String(probe || ''))};
+  return { focus, box: true, empty: !t, has: !!probe && t.includes(probe) };
+})()`;
+
+async function composeState(wc, probe = '') {
+  if (wc.isDestroyed() || wc.isLoading()) return null;
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: COMPOSE_CODE(probe) }]);
+    if (!r || typeof r !== 'object') return null;
+    return { focus: r.focus === 'compose' ? 'compose' : 'other', box: r.box === true, empty: r.empty === true, has: r.has === true };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, readOwnNumber, composeFocus, composeState, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
 
