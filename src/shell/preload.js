@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('wa', {
   panelToggle: (on) => ipcRenderer.send('panel:toggle', typeof on === 'boolean' ? on : null),
   panelTab: (tab) => ipcRenderer.send('panel:tab', tab),
   panelData: () => ipcRenderer.invoke('panel:data'),
+  onPanelChanged: (cb) => ipcRenderer.on('panel:changed', () => cb()),
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
   dockGet: () => ipcRenderer.invoke('dock:get'),
   dockItem: (h, fix) => ipcRenderer.invoke('dock:item', { h, fix: fix === true }),

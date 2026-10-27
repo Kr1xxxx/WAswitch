@@ -23,6 +23,7 @@ const { Notifier } = require('./notify');
 const { PopupWindow } = require('./popup');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
+const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
@@ -857,6 +858,14 @@ function panelData() {
     })),
   };
 }
+// MCP 修改客户资料（update_customer）和撤销用的接口，见 customer-mcp.js。改完让界面刷新客户名单
+Object.assign(mcpHooks, customerHooks({
+  store: () => customerStore,
+  findAcc: (id) => findAcc(id),
+  parked: parkedCustomer,
+  onChange: () => { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('panel:changed'); },
+}));
+
 // 跟进提醒：每分钟看一次，到时间的弹通知，只写名字（通知会显示在锁屏上，不写电话和备注）
 // 一次最多弹 3 条，其余合成一条“还有 N 条跟进提醒”
 function checkFollowUps() {

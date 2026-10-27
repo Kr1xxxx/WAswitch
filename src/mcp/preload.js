@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('mcp', {
   setPreview: (on) => ipcRenderer.invoke('mcp:set-preview', on),
   setDrafts: (on) => ipcRenderer.invoke('mcp:set-drafts', on),
   setHelpers: (on) => ipcRenderer.invoke('mcp:set-helpers', on),
+  setCustomerEdit: (on) => ipcRenderer.invoke('mcp:set-customer-edit', on),
+  undo: (id) => ipcRenderer.invoke('mcp:undo', id),
   revoke: (key) => ipcRenderer.invoke('mcp:revoke', key),
   copy: (key) => ipcRenderer.invoke('mcp:copy', key),
   onUpdate: (cb) => ipcRenderer.on('mcp:update', (_e, s) => cb(s)),
