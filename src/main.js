@@ -707,7 +707,7 @@ function checkIdleLock() {
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
 let panelOpen = false;
-let panelTab = 'replies'; // replies | customers | translate
+let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
 let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
@@ -2257,8 +2257,9 @@ handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
 onShell('panel:tab', (tab) => {
-  if (!['replies', 'customers', 'translate'].includes(tab)) return;
+  if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
+  if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
   panelOpen = true;
   refresh();
 });
