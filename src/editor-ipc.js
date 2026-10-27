@@ -36,8 +36,9 @@ function setupEditorIpc(ctx) {
       // 新账号：还没有主号时默认就是主号
       primary: acc ? acc.primary : !ctx.accounts.some((a) => a.primary),
       primaryName: ctx.accounts.find((a) => a.primary && a.id !== id)?.name || '',
-      // 别的直连号（编辑页选直连时提醒一句同一出口 IP）
-      otherDirect: visibleAccounts().filter((a) => a.id !== id && !a.proxy).map((a) => a.name),
+      // 别的直连号（编辑页选直连时提醒一句同一出口 IP）：网页版跟随系统代理，轻量版用真实 IP，分开算
+      otherDirect: visibleAccounts().filter((a) => a.id !== id && !a.proxy && !isLite(a)).map((a) => a.name),
+      otherLiteDirect: visibleAccounts().filter((a) => a.id !== id && !a.proxy && isLite(a)).map((a) => a.name),
       liteAvailable: canEncrypt(safeStorage),
       platform: process.platform,
     };
@@ -50,22 +51,26 @@ function setupEditorIpc(ctx) {
     return list.map((p) => ({ ...p, usedBy: used[p.port] || [] }));
   });
 
-  // 主号的出口 IP（轻量小号不能和主号用同一个 IP）。主号没设代理时查本机直连的出口。
+  // 主号的出口 IP（轻量小号不能和主号用同一个 IP）。主号没设代理时跟随系统代理，按系统代理查。
   async function primaryExit(exceptId) {
     const primary = ctx.accounts.find((a) => a.primary && a.id !== exceptId);
     if (!primary) return { ip: null };
     if (primary.proxy && exitIps.has(primary.id)) return { ip: exitIps.get(primary.id), name: primary.name };
-    const res = primary.proxy ? await proxy.test(primary.proxy, proxy.decryptPassword(primary.proxyPassword)) : await proxy.testDirect();
+    const res = primary.proxy ? await proxy.test(primary.proxy, proxy.decryptPassword(primary.proxyPassword)) : await proxy.testSystem();
     if (!res.ok) return { error: `查不到主号「${primary.name}」的出口 IP（${res.error}），没法确认这个号和主号不在同一个 IP，暂时不能保存。请确认主号的网络正常后再试。` };
     if (primary.proxy) recordExit(primary, res.ip);
     return { ip: res.ip, name: primary.name };
   }
 
-  // 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同
-  handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
+  // 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同。
+  // 不填代理也能测：网页号按系统代理查（它就是这么上网的），轻量号查这台电脑的真实 IP
+  handleShell('editor:test', async ({ id, proxy: proxyText, password, mode } = {}) => {
     const acc = findAcc(id);
-    const pass = proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password);
-    const res = await proxy.test(String(proxyText || ''), pass);
+    const direct = !String(proxyText || '').trim();
+    const lite = acc ? isLite(acc) : mode === 'lite';
+    let res;
+    if (direct) res = lite ? await proxy.testDirect() : await proxy.testSystem();
+    else res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
     if (!res.ok) return res;
     res.region = regionForTimezone(res.timezone);
     if (res.region) res.regionLabel = regionLabel(res.region);
@@ -74,7 +79,9 @@ function setupEditorIpc(ctx) {
     const before = same ? null : ctx.accounts.find((a) => a.id !== id && a.lastExit && a.lastExit.ip === res.ip);
     if (same) res.sameAs = same.name;
     else if (before) { res.sameAs = before.name; res.sameAt = before.lastExit.at; }
-    lastTest = { proxy: proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
+    if (direct) res.direct = lite ? 'real' : 'system';
+    // 直连的测试结果用两个记号区分：系统代理（网页号）和真实 IP（轻量号），保存时只认网页号那种
+    lastTest = { proxy: direct ? (lite ? '(real)' : '(system)') : proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
     return res;
   });
 
@@ -125,14 +132,19 @@ function setupEditorIpc(ctx) {
     }
     // 测试过的出口所在地显示在侧栏
     let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
-    // 网页版选了“跟随本机”又设了代理：没测过就先测一次，按出口所在地填好时区。
-    // 测不通也照样保存；用户自己选了地区的不改
-    if (mode === 'web' && parsed && region === 'auto') {
-      if (!tested) {
+    // 网页版时区还没定（“跟随本机”）：没测过就先测一次，按出口所在地填好时区。
+    // 直连号按系统代理测（它就是这么上网的）。测不通也照样保存；用户自己选了地区的不改
+    let directTested = !parsed && lastTest && lastTest.proxy === '(system)' ? lastTest : null;
+    if (mode === 'web' && region === 'auto') {
+      if (parsed && !tested) {
         const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
         if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: regionForTimezone(res.timezone) };
+      } else if (!parsed && !directTested) {
+        const res = await proxy.testSystem();
+        if (res.ok) directTested = { region: regionForTimezone(res.timezone) };
       }
-      if (tested && tested.region) region = tested.region;
+      const pick = parsed ? tested : directTested;
+      if (pick && pick.region) region = pick.region;
     }
 
     let liteKey = '';
