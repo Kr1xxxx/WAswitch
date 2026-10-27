@@ -1,0 +1,8 @@
+PM skills (69 folders, everything except ponytail*): copied from https://github.com/phuryn/pm-skills
+(commit 07b34f6, 2026-10-16), MIT license, see PM-SKILLS-LICENSE.txt.
+Cloud sessions skip marketplace plugins, so the skills live in the repo. Update by re-copying */skills/*/.
+
+Only change: code-review is renamed to pm-code-review (folder and name: line) so it does not
+replace Claude Code's built-in /code-review. Its text still says /pm-ai-shipping:code-review; use /pm-code-review.
+The plugin's slash commands (commands/*.md) are not copied: 8 of them share a name with a skill,
+and the skills cover the same work.
