@@ -12,6 +12,7 @@
     "check:lite-unread": "node scripts/check-lite-unread.mjs",
     "check:wa-page": "electron scripts/check-wa-page.js",
     "check:draft": "electron scripts/check-draft.js",
+    "check:read-messages": "electron scripts/check-read-messages.js",
     "check:view-race": "node scripts/check-view-race.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",

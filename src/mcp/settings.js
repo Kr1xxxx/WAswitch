@@ -30,7 +30,7 @@ function render(s) {
   allows.innerHTML = '';
   for (const a of s.allows) {
     const li = document.createElement('li');
-    li.textContent = `允许客户端（自称 ${a.client}）读「${a.account}」${a.preview ? '（含预览）' : ''}，到 ${time(a.until)}`;
+    li.textContent = `允许客户端（自称 ${a.client}）读「${a.account}」的${a.kind === 'messages' ? '聊天消息' : `对话列表${a.preview ? '（含预览）' : ''}`}，到 ${time(a.until)}`;
     const btn = document.createElement('button');
     btn.textContent = '撤销';
     btn.onclick = async () => render(await window.mcp.revoke(a.key));
@@ -44,6 +44,8 @@ function render(s) {
     const li = document.createElement('li');
     li.textContent = r.kind === 'search'
       ? `${time(r.at)} ${r.client} 在「${r.account}」里找「${r.query}」，找到 ${r.count} 个对话${r.preview ? '（含预览）' : ''}`
+      : r.kind === 'messages'
+      ? `${time(r.at)} ${r.client} 读了「${r.account}」的 ${r.count} 条消息`
       : `${time(r.at)} ${r.client} 读了「${r.account}」${r.count} 个对话${r.preview ? '（含预览）' : ''}`;
     log.appendChild(li);
   }
