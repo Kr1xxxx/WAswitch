@@ -352,6 +352,22 @@ export class Session {
     }));
   }
 
+  // 顶栏“客户当地时间”用：对话的真实号码（只有数字）。隐私编号 @lid 先看消息里带的 remoteJidAlt，再查 Baileys 的 lid 映射
+  async peerNumber(jid) {
+    jid = String(jid || '');
+    let m = /^(\d{6,20})(?::\d+)?@s\.whatsapp\.net$/.exec(jid);
+    if (m) return m[1];
+    if (!jid.endsWith('@lid')) return '';
+    m = /^(\d{6,20})(?::\d+)?@s\.whatsapp\.net$/.exec(String(this.store?.altPn.get(jid) || ''));
+    if (m) return m[1];
+    try {
+      m = /^(\d{6,20})(?::\d+)?@s\.whatsapp\.net$/.exec(String((await this.sock?.signalRepository?.lidMapping?.getPNForLID?.(jid)) || ''));
+    } catch {
+      return '';
+    }
+    return m ? m[1] : '';
+  }
+
   async send(jid, text) {
     text = String(text || '').trim();
     if (this.status === 'loggedOut') throw new Error('这个号已退出登录，请重新扫码');
