@@ -60,6 +60,27 @@ function render(s) {
   }
   $('draftLogBox').hidden = !(s.draftLog || []).length;
 
+  $('customers').checked = !!s.customers;
+  const cAllows = $('customerAllows');
+  cAllows.innerHTML = '';
+  for (const a of s.customerAllows || []) {
+    const li = document.createElement('li');
+    li.textContent = `允许客户端（自称 ${a.client}）搜索客户资料，到 ${time(a.until)}`;
+    const btn = document.createElement('button');
+    btn.textContent = '撤销';
+    btn.onclick = async () => render(await window.mcp.revokeCustomers(a.key));
+    li.appendChild(btn);
+    cAllows.appendChild(li);
+  }
+  $('customerAllowsBox').hidden = !(s.customerAllows || []).length;
+  const cLog = $('customerLog');
+  cLog.innerHTML = '';
+  for (const r of s.customerLog || []) {
+    const li = document.createElement('li');
+    li.textContent = `${time(r.at)} ${r.client} 搜了 ${r.query}，返回 ${r.count} 个客户`;
+    cLog.appendChild(li);
+  }
+  $('customerLogBox').hidden = !(s.customerLog || []).length;
   $('helpers').checked = !!s.helpers;
   $('customerEdit').checked = !!s.customerEdit;
   renderAiLog(s.aiLog || []);
@@ -122,6 +143,7 @@ function renderAiLog(list) {
 $('layer2').onchange = async (e) => render(await window.mcp.setLayer2(e.target.checked));
 $('preview').onchange = async (e) => render(await window.mcp.setPreview(e.target.checked));
 $('drafts').onchange = async (e) => render(await window.mcp.setDrafts(e.target.checked));
+$('customers').onchange = async (e) => render(await window.mcp.setCustomers(e.target.checked));
 $('helpers').onchange = async (e) => render(await window.mcp.setHelpers(e.target.checked));
 $('customerEdit').onchange = async (e) => render(await window.mcp.setCustomerEdit(e.target.checked));
 

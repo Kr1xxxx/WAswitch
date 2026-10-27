@@ -7,10 +7,12 @@ contextBridge.exposeInMainWorld('mcp', {
   setLayer2: (on) => ipcRenderer.invoke('mcp:set-layer2', on),
   setPreview: (on) => ipcRenderer.invoke('mcp:set-preview', on),
   setDrafts: (on) => ipcRenderer.invoke('mcp:set-drafts', on),
+  setCustomers: (on) => ipcRenderer.invoke('mcp:set-customers', on),
   setHelpers: (on) => ipcRenderer.invoke('mcp:set-helpers', on),
   setCustomerEdit: (on) => ipcRenderer.invoke('mcp:set-customer-edit', on),
   undo: (id) => ipcRenderer.invoke('mcp:undo', id),
   revoke: (key) => ipcRenderer.invoke('mcp:revoke', key),
+  revokeCustomers: (key) => ipcRenderer.invoke('mcp:revoke-customers', key),
   copy: (key) => ipcRenderer.invoke('mcp:copy', key),
   onUpdate: (cb) => ipcRenderer.on('mcp:update', (_e, s) => cb(s)),
 });
