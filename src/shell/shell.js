@@ -138,7 +138,7 @@ const $lock = document.getElementById('lock');
 const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
-let settingsTab = 'memory';
+let settingsTab = 'general';
 let checkResult = null;
 let checkRunning = false;
 // 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
@@ -290,9 +290,11 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['translate', '翻译'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
-        h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
-          id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))));
+      h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
+        i ? h('div', { class: 'tab-group' }, title) : null,
+        ...tabs.map(([id, label]) =>
+          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+            id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
   const label = s.collapsed ? '展开侧栏' : '收起侧栏';
@@ -349,6 +351,17 @@ function checkUpdateBtn() {
 // 下载中显示进度，下载好显示“重启更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
 let updateHidden = '';
 const updateReady = () => !!(s.update && s.update.status === 'downloaded');
+// 设置侧栏分组：常用设置在前，诊断和其他在后。
+// 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
+function settingsGroups() {
+  const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
+  return [
+    ['设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
+    ['诊断', [['check', '隔离自检'], ['net', '连接记录']]],
+    ['其他', [showTeam ? ['team', '团队'] : null, ['about', '关于']].filter(Boolean)],
+  ];
+}
+
 function openAbout() { settingsTab = 'about'; window.wa.showPage('settings'); render(true); }
 function updateCard() {
   const u = s.update;
@@ -1421,7 +1434,7 @@ function settingsPage() {
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
         setRow('显示检查更新按钮', '在侧栏底部齿轮旁边，点一下立刻检查新版本。有新版会在后台下载，好了提醒你，不会自己重启。',
           sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
-        setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
+        setRow('聊天锁', `这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。随时按 ${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`,
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
@@ -1464,7 +1477,8 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
-        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
+        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
+        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹')),
       h('span', { class: 'hint' }, '日志里记着出错原因和问题代码，没有聊天内容和号码。'));
@@ -1502,7 +1516,7 @@ function teamPage(t, accounts = []) {
 
   if (t.joined && !t.revoked) {
     const ok = !t.offline && !t.lastError;
-    wrap.append(
+    wrap.append(...kids(
       h('div', { class: 'kv' },
         h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, t.server),
         h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
@@ -1520,7 +1534,7 @@ function teamPage(t, accounts = []) {
         } }, teamForm.busy ? '同步中…' : '立即同步'),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
       result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null);
+      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
     if (t.privateAccounts.length && t.allowPrivate) {
       wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
         t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
@@ -1544,7 +1558,7 @@ function teamPage(t, accounts = []) {
   if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
   const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
   const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
-  wrap.append(
+  wrap.append(...kids(
     h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
     h('label', { class: 'field' }, '登记码（管理员在后台生成，15 分钟内有效）', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
     h('label', { class: 'field' }, '这台电脑的名字（给管理员看）', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
@@ -1562,7 +1576,7 @@ function teamPage(t, accounts = []) {
       if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
       render(true);
     } }, teamForm.busy ? '登记中…' : '登记')),
-    result);
+    result));
   return wrap;
 }
 
