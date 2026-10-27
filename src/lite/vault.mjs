@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { initAuthCreds, BufferJSON, proto } from 'baileys';
+import atomic from '../atomic.js';
 
 const MAGIC = Buffer.from('WAS1');
 
@@ -33,9 +34,8 @@ export function readSealed(file, key) {
 
 export function writeSealed(file, key, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, encrypt(key, Buffer.from(JSON.stringify(value, BufferJSON.replacer))), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  // 先写临时文件、强制落盘再改名：断电后不会留下空的登录凭据（那样要重新扫码）
+  atomic.writeFileAtomic(file, encrypt(key, Buffer.from(JSON.stringify(value, BufferJSON.replacer))), { mode: 0o600 });
 }
 
 // 防抖写盘

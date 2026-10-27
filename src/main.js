@@ -13,6 +13,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const log = require('./log');
+const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
@@ -189,8 +190,7 @@ function loadGroups() {
 }
 function saveGroups() {
   const file = groupsFile();
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(groups, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, groups, 2);
 }
 const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
 // 是否不弹通知：账号自己关了，或者所在分组整组关了
@@ -256,8 +256,7 @@ function createGroup(moveId) {
 
 function saveAccounts() {
   const file = storeFile();
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(accounts, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  writeJsonAtomic(file, accounts, 2);
 }
 
 function loadAccounts() {
@@ -273,7 +272,7 @@ function loadAccounts() {
     } catch (e) {
       // 文件损坏时先备份，不直接覆盖，也不清理任何数据
       const backup = `${file}.broken-${Date.now()}`;
-      fs.copyFileSync(file, backup);
+      try { fs.copyFileSync(file, backup); } catch (err) { console.warn(`备份 accounts.json 失败：${err.message}`); }
       console.warn(`accounts.json 无法读取（${e.message}），已备份到 ${backup}`);
       list = [];
       accountsFileOk = false;
@@ -390,6 +389,12 @@ function liteDir(id) {
 // 启动时删掉已删除账号残留的分区文件夹（删除账号时文件可能还被占用，删不掉）
 function cleanupPartitions() {
   if (!accountsFileOk) return;
+  // accounts.json 以前读坏过（留着 .broken- 备份）：之后员工又加了号、文件又“正常”了，
+  // 但里面只有新号，其他号的登录数据还在等着从备份恢复，绝不能当残留删掉。备份被处理掉之前一直不清理
+  if (hasBrokenBackup(storeFile())) {
+    console.warn('发现 accounts.json 的损坏备份，跳过清理残留账号数据');
+    return;
+  }
   let liteNames = [];
   try { liteNames = fs.readdirSync(path.join(app.getPath('userData'), 'lite')); } catch { /* 没有轻量模式账号 */ }
   const keepLite = new Set(accounts.filter((a) => a.mode === 'lite').map((a) => a.id));
@@ -1227,9 +1232,7 @@ function saveNotifLogSoon() {
   notifLogTimer = setTimeout(() => {
     notifLogTimer = null;
     try {
-      const file = notifLogFile();
-      fs.writeFileSync(`${file}.tmp`, JSON.stringify(notifLog));
-      fs.renameSync(`${file}.tmp`, file);
+      writeJsonAtomic(notifLogFile(), notifLog);
     } catch (e) { console.warn('通知记录保存失败', e.message); }
   }, 2000);
 }
@@ -3301,7 +3304,7 @@ app.on('before-quit', (event) => {
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
     notifLogTimer = null;
-    try { fs.writeFileSync(notifLogFile(), JSON.stringify(notifLog || [])); } catch {}
+    try { writeJsonAtomic(notifLogFile(), notifLog || []); } catch {}
   }
   if (liteHost && liteHost.running() && !liteFlushed) {
     event.preventDefault();

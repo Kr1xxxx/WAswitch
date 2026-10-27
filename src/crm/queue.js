@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { canEncrypt } = require('../secure-storage');
+const { writeFileAtomic } = require('../atomic');
 
 const FILE = 'crm-queue.bin';
 const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
@@ -189,9 +190,7 @@ class CrmQueue {
       if (!this.canEncrypt()) throw new Error('系统不能加密，队列不写盘');
       this.trim();
       const data = { v: 1, accs: Object.fromEntries(this.accs) };
-      const tmp = `${this.file}.tmp`;
-      fs.writeFileSync(tmp, this.safe.encryptString(JSON.stringify(data)), { mode: 0o600 });
-      fs.renameSync(tmp, this.file);
+      writeFileAtomic(this.file, this.safe.encryptString(JSON.stringify(data)), { mode: 0o600 });
     } catch (e) {
       this.onError(e);
     }
