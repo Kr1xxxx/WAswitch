@@ -162,15 +162,19 @@ function parseLatestYml(text) {
 async function request(url, opts = {}) {
   return requestWith(await updaterSession(), url, opts);
 }
-function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS } = {}) {
+// signal：可选的 AbortSignal，用户点“取消”时中断下载
+function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS, signal } = {}) {
   return new Promise((resolve, reject) => {
     if (!allowedUrl(url)) { reject(new Error(`不允许的下载地址：${safeHost(url)}`)); return; }
+    if (signal?.aborted) { reject(Object.assign(new Error('已取消'), { cancelled: true })); return; }
     const req = net.request({ url, session: ses, redirect: 'manual', useSessionCookies: false });
     // 连接或下载中途挂住：idleMs 内没有任何数据就放弃
     let timer = null;
     let settled = false;
-    const ok = (v) => { if (settled) return; settled = true; clearTimeout(timer); resolve(v); };
-    const bad = (e) => { if (settled) return; settled = true; clearTimeout(timer); reject(e); };
+    const onAbort = () => { req.abort(); bad(Object.assign(new Error('已取消'), { cancelled: true })); };
+    const ok = (v) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', onAbort); resolve(v); };
+    const bad = (e) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(e); };
+    signal?.addEventListener('abort', onAbort);
     const arm = () => {
       clearTimeout(timer);
       timer = setTimeout(() => { req.abort(); bad(new Error('连接 GitHub 超时')); }, idleMs);
@@ -181,7 +185,7 @@ function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects
       clearTimeout(timer); // 下一跳有自己的超时
       req.abort();
       if (redirects <= 0) { bad(new Error('重定向次数太多')); return; }
-      requestWith(ses, next, { onData, maxBytes, redirects: redirects - 1, idleMs }).then(ok, bad);
+      requestWith(ses, next, { onData, maxBytes, redirects: redirects - 1, idleMs, signal }).then(ok, bad);
     });
     req.on('response', (res) => {
       if (res.statusCode !== 200) {
@@ -587,4 +591,4 @@ function sha512Of(file) {
   });
 }
 
-module.exports = { Updater, UPDATER_PARTITION, MAC_INSTALL_SCRIPT, appBundlePath, replaceBlocker, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };
+module.exports = { Updater, request, OWNER, REPO, UPDATER_PARTITION, MAC_INSTALL_SCRIPT, appBundlePath, replaceBlocker, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };

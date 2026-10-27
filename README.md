@@ -164,11 +164,16 @@ npm run check:lite
 npx electron scripts/check-isolation.js
 ```
 
-## MCP 接口（可选，默认关闭）
+## MCP 接口（可选，单独下载，默认关闭）
 
 开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以通过 [MCP](https://modelcontextprotocol.io) 管理 WAswitch 里的账号。
 
-开启方法：托盘图标右键 →“MCP 接口设置…”→ 勾选“开启 MCP 接口”。设置窗口会生成 Claude Code 的添加命令和 Claude Desktop 的配置，复制即可。
+MCP 不在安装包里。开启方法：设置 › AI 接口 → 点“下载”（约 0.7 MB，从 GitHub 直连下载，按安装包里带的 sha512 校验）→ 下载后打开“开启 MCP”开关。点“详细设置…”（或托盘图标右键 →“MCP 接口设置…”）会生成 Claude Code 的添加命令和 Claude Desktop 的配置，复制即可。
+
+- MCP 文件的版本跟着软件走：软件更新后，下载过的电脑会自动在后台下配套的新文件，开关状态不变。
+- 下载的文件放在软件数据目录的 `modules/mcp/` 下，每次加载前都再校验一次，对不上就删掉、不加载。
+- “卸载”会关掉 MCP、断开所有 AI 客户端、删掉下载的文件和 token；各项开关的设置保留。
+- 从源码运行（开发版）时直接用仓库里的 `src/mcp`，不下载。发版时 CI 用 `scripts/build-mcp.js` 打包这个文件并上传到 Release。
 
 当前开放的工具（一层：账号管理，不读取聊天内容）：
 
@@ -217,7 +222,7 @@ npx electron scripts/check-isolation.js
 - 设置窗口显示当前已连接的客户端和调用次数。
 - 关闭时不加载任何 MCP 代码，不占内存。
 
-Claude Desktop 只支持 stdio，所以通过 `bin/waswitch-mcp.js` 桥接。它每次连接时从 `mcp-token.json` 读最新的 token，换 token 后不用改配置。
+Claude Desktop 只支持 stdio，所以通过桥接程序（下载的 MCP 文件加 `--waswitch-mcp-bridge` 参数运行，源码在 `bin/waswitch-mcp.js`）。它每次连接时从 `mcp-token.json` 读最新的 token，换 token 后不用改配置。
 
 自检（不需要 Electron 和 WhatsApp 账号）：
 

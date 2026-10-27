@@ -368,7 +368,7 @@ function settingsGroups() {
   return [
     ['设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
     ['诊断', [['check', '隔离自检'], ['net', '连接记录']]],
-    ['其他', [showTeam ? ['team', '团队'] : null, ['about', '关于']].filter(Boolean)],
+    ['其他', [showTeam ? ['team', '团队'] : null, ['mcp', 'AI 接口'], ['about', '关于']].filter(Boolean)],
   ];
 }
 
@@ -1600,6 +1600,8 @@ function settingsPage() {
     translatePage(page);
   } else if (settingsTab === 'team') {
     page.append(teamPage(s.team, s.accounts));
+  } else if (settingsTab === 'mcp') {
+    mcpPage(page, s.mcp);
   } else if (settingsTab === 'check') {
     const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
       checkRunning = true; render(true);
@@ -1646,6 +1648,57 @@ function settingsPage() {
       h('span', { class: 'hint' }, '日志里记着出错原因和问题代码，没有聊天内容和号码。'));
   }
   return page;
+}
+
+// ---------- 设置 › AI 接口（MCP） ----------
+// MCP 不在安装包里：先下载（校验 sha512），下载后开关默认关，要自己打开。
+let mcpUninstallAsk = 0; // 点了一次“卸载”的时间，4 秒内再点才真卸载
+function mcpUninstallRow() {
+  const asking = Date.now() - mcpUninstallAsk < 4000;
+  return setRow('卸载 MCP', '关掉 MCP，断开所有 AI 客户端，删掉下载的文件。各项开关的设置会留着。',
+    h('button', { class: 'btn', onclick: () => {
+      if (Date.now() - mcpUninstallAsk < 4000) { mcpUninstallAsk = 0; window.wa.mcpUninstall(); return; }
+      mcpUninstallAsk = Date.now();
+      render(true);
+      setTimeout(() => render(true), 4100);
+    } }, asking ? '再点一次确认卸载' : '卸载'));
+}
+function mcpPage(page, m) {
+  page.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, 'AI 接口（MCP）'),
+    h('p', { class: 'lead' }, '让 Claude 这类 AI 助手连上 WAswitch：看账号状态、在你允许后读对话列表。AI 不能自己发消息。这个功能要单独下载，下载后还要在这里打开才生效。')));
+  if (!m || m.status === 'unavailable') {
+    page.append(h('div', { class: 'note warn' }, '这个版本没带 MCP 的下载信息。更新到新版后就能下载。'));
+    return;
+  }
+  const rows = h('div');
+  if (m.legacy) page.append(h('div', { class: 'note warn' }, 'MCP 现在要单独下载。你之前开着 MCP：下载后在这里重新打开，AI 客户端里的连接命令或配置也要重新复制一次。'));
+  if (m.status === 'none' || m.status === 'error') {
+    rows.append(setRow('下载 MCP', `约 ${m.sizeMB} MB，从 GitHub 直连下载并校验。下载后默认关着。`,
+      h('button', { class: 'btn primary', onclick: () => window.wa.mcpDownload() }, m.status === 'error' ? '重试' : '下载')));
+    if (m.status === 'error') rows.append(h('div', { class: 'note bad', role: 'status' }, `${m.error}${m.updating ? ' 软件更新后要配套的新版 MCP，30 分钟后会自动再试。' : ''}`));
+  } else if (m.status === 'downloading') {
+    rows.append(h('div', { class: 'update-box busy', role: 'status' },
+      h('div', { class: 'upd-main' },
+        h('span', { class: 'upd-mark' }, h('span', { class: 'spin', 'aria-hidden': 'true' })),
+        h('div', { class: 'upd-text' }, h('b', null, m.updating ? `软件更新了，正在下载配套的 MCP ${m.version}` : `正在下载 MCP ${m.version}`), h('span', null, '不影响收发消息。')),
+        h('button', { class: 'btn', onclick: () => window.wa.mcpCancel() }, '取消')),
+      h('div', { class: 'upd-progress' },
+        h('div', { class: 'progress' }, h('span', { style: { width: `${m.percent}%` } })),
+        h('span', { class: 'pct' }, `${m.percent}%`))));
+  } else {
+    // ready（已下载）或 dev（从源码运行）
+    rows.append(...[
+      setRow('开启 MCP', m.running ? `运行中：${m.url}` : '打开后，本机的 AI 客户端可以连上 WAswitch。默认只开放账号管理，读对话要在详细设置里另外打开。',
+        sw(m.enabled, '开启 MCP', (v) => window.wa.mcpEnable(v))),
+      m.runError ? h('div', { class: 'note bad', role: 'status' }, `没能开启：${m.runError}`) : null,
+      setRow('详细设置', '连接命令、读对话开关、谁读过什么。',
+        h('button', { class: 'btn', onclick: () => window.wa.mcpOpen() }, '打开…')),
+      m.status === 'dev' ? null : mcpUninstallRow(),
+    ].filter(Boolean));
+  }
+  if (m.status === 'error' && m.installed) rows.append(mcpUninstallRow());
+  page.append(rows);
+  page.append(h('span', { class: 'hint' }, m.status === 'dev' ? '开发版：直接用源码里的 MCP，不下载。' : `MCP 版本跟着软件走（${m.version}）。软件更新后，下载过的电脑会自动下配套的新版，开关不变。`));
 }
 
 // 关于页的「译文位置」：收到的消息的译文存在哪、占多大（每次打开关于页最多 10 秒读一次）

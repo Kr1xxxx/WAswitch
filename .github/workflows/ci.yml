@@ -81,6 +81,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # 和发版一样：MCP 不进安装包，只带它的校验值
+      - name: 打包 MCP 模块
+        run: npm run build:mcp
       # 没有代码签名证书：不自动找签名证书
       - name: 打包（Windows 安装包）
         run: npx electron-builder --win nsis --publish never
@@ -92,5 +95,7 @@ jobs:
           grep -q '^sha512: ' dist/latest.yml
           ls dist/*.exe.blockmap
           grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+      - name: 安装包里没有 MCP 代码和它的库，只有校验值和设置窗口的页面
+        run: node scripts/check-packaged-mcp.js dist/win-unpacked/resources/app.asar
       - name: 打包后启动冒烟
         run: node scripts/smoke-packaged.js dist/win-unpacked/WAswitch.exe

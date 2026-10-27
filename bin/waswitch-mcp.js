@@ -44,7 +44,7 @@ async function main() {
   async function getClient() {
     if (client) return client;
     const t = readToken() || conf;
-    if (!t) throw new Error('找不到 WAswitch 的连接文件。请打开 WAswitch，在托盘菜单“MCP 接口设置”里开启 MCP。');
+    if (!t) throw new Error('找不到 WAswitch 的连接文件。请打开 WAswitch，在 设置 › AI 接口 里下载并开启 MCP。');
     const c = new Client({ name: 'waswitch-mcp-bridge', version: '0.1.0' });
     const transport = new StreamableHTTPClientTransport(new URL(t.url), {
       requestInit: { headers: { Authorization: `Bearer ${t.token}` } },
