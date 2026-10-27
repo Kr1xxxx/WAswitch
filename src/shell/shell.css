@@ -168,6 +168,20 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .preset { height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid #e3e6ea; background: #fff; font-size: 12px; color: var(--soft); }
 .preset.on { border-color: var(--text); background: var(--text); color: #fff; }
+.preset { display: inline-flex; align-items: center; gap: 6px; }
+/* 本机端口状态：小圆点 + 文字（能用 / 没开 / 已被某号使用） */
+.preset .pst { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.preset .pst::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #c4c9d0; }
+.preset.st-ok .pst { color: var(--ok); }
+.preset.st-ok .pst::before { background: #12b76a; }
+.preset.st-off .pst::before { background: #c4c9d0; }
+.preset.st-used .pst { color: #B54708; }
+.preset.st-used .pst::before { background: #f79009; }
+.preset.st-bad .pst { color: var(--danger); }
+.preset.st-bad .pst::before { background: #f04438; }
+.preset.on .pst { color: rgba(255, 255, 255, .8); }
+.preset-refresh { height: 28px; padding: 0 6px; border: none; background: none; font-size: 12px; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.preset-refresh:disabled { text-decoration: none; opacity: .7; }
 .hstack { display: flex; gap: 8px; align-items: center; }
 .hstack > input { flex: 1; }
 .note { padding: 10px 12px; border-radius: 10px; font-size: 13px; font-weight: 400; line-height: 1.55; }

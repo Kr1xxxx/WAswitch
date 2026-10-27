@@ -4,7 +4,26 @@
 
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
 const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
-const PRESETS = [['直连', ''], ['Clash 7891', 'socks5://127.0.0.1:7891'], ['Clash 7892', 'socks5://127.0.0.1:7892'], ['Clash 7893', 'socks5://127.0.0.1:7893'], ['带密码的 http', 'http://用户名@代理IP:端口']];
+// 代理预设：直连 + Clash 本机端口（7891–7893 一直显示，7890–7899 里别的端口开着或被别的号用着才显示）+ 带密码模板
+const PORT_DEFAULT = [7891, 7892, 7893];
+const PORT_RANGE = [7890, 7891, 7892, 7893, 7894, 7895, 7896, 7897, 7898, 7899];
+const portUrl = (port) => `socks5://127.0.0.1:${port}`;
+// 本机端口代理的端口号（socks5://127.0.0.1:7891 → { port: 7891, socks: true }），别的地址返回 null
+function localProxyPort(raw) {
+  const m = /^(socks5|socks4|https?):\/\/(?:127\.0\.0\.1|localhost):(\d{2,5})\/?$/i.exec(String(raw || '').trim());
+  return m ? { port: Number(m[2]), socks: m[1].toLowerCase().startsWith('socks') } : null;
+}
+// 名字太长时截短（完整的放在悬停提示里）
+const shortName = (n) => (n.length > 8 ? `${n.slice(0, 7)}…` : n);
+const usedText = (names) => `已被「${shortName(names[0])}」${names.length > 1 ? `等 ${names.length} 个号` : ''}使用`;
+// 一个端口在预设按钮上的状态：[class, 文字, 悬停说明]
+function portStatus(st) {
+  if (!st) return ['wait', '检测中…', '正在检测这个端口有没有开'];
+  if (st.usedBy.length) return ['used', usedText(st.usedBy), `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP。${st.open ? '' : '（端口现在也没开）'}`];
+  if (!st.open) return ['off', '没开', '这个端口现在没开：Clash 没开，或者还没在 Clash 里开这个端口'];
+  if (!st.socks) return ['bad', '不能用', '端口被别的程序占着，或者要密码，不能当 socks5 代理用'];
+  return ['ok', '能用', '端口开着，可以当代理用。点“测试”看出口 IP'];
+}
 let liveColor = null; // 编辑页里点了色块、还没保存的颜色（窗口背景先跟着变）
 
 // 固定的图标，不含任何外部数据
@@ -1031,15 +1050,58 @@ function editorPage(id) {
       'aria-label': COLOR_NAMES[i] + (c === color ? '，已选' : ''),
       onclick: () => { color = c; liveColor = c; document.body.style.background = tint(c); drawSwatches(); },
     })));
-    const drawPresets = () => presets.replaceChildren(...PRESETS.map(([label, v]) => h('button', {
-      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}`, type: 'button',
+    // 本机 7890–7899 端口检测结果：{ 7891: { open, socks, usedBy } }；null 表示还在检测
+    let portState = null;
+    let probing = 0;
+    const probePorts = async () => {
+      const n = ++probing;
+      try {
+        const list = await window.wa.editorPorts(d.id);
+        if (n !== probing) return;
+        portState = Object.fromEntries(list.map((p) => [p.port, p]));
+      } catch { if (n === probing) portState = {}; }
+      drawPresets();
+      drawPortNote();
+    };
+    const presetBtn = (label, v, status) => h('button', {
+      class: `preset${proxyInput.value.trim() === v ? ' on' : ''}${status ? ` st-${status[0]}` : ''}`, type: 'button', title: status ? status[2] : null,
       onclick: () => {
         proxyInput.value = v;
         onProxyChange();
         // 带密码的模板：选中“用户名@代理IP:端口”，直接输入替换
         if (v.includes('用户名')) { proxyInput.focus(); proxyInput.setSelectionRange(7, v.length); }
       },
-    }, label)));
+    }, label, status ? h('span', { class: 'pst' }, status[1]) : null);
+    const drawPresets = () => {
+      const cur = localProxyPort(proxyInput.value);
+      const shown = PORT_RANGE.filter((p) => PORT_DEFAULT.includes(p) || (cur && cur.port === p)
+        || (portState && portState[p] && ((portState[p].open && portState[p].socks) || portState[p].usedBy.length)));
+      presets.replaceChildren(
+        presetBtn('直连', ''),
+        ...shown.map((p) => presetBtn(`Clash ${p}`, portUrl(p), portStatus(portState ? portState[p] : null))),
+        presetBtn('带密码的 http', 'http://用户名@代理IP:端口'),
+        h('button', { class: 'preset-refresh', type: 'button', title: '重新检测本机 7890–7899 端口', disabled: !portState, onclick: () => { portState = null; drawPresets(); drawPortNote(); probePorts(); } }, portState ? '重新检测' : '检测中…'));
+    };
+    // 选了（或手动填了）本机端口时，按检测结果说一句：没开怎么办、被谁用了、7890 是 Clash 主端口
+    const portNote = h('div', { role: 'status' });
+    const drawPortNote = () => {
+      const cur = localProxyPort(proxyInput.value);
+      const st = cur && portState ? portState[cur.port] : null;
+      const lines = [];
+      if (st && !st.open) {
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点“重新检测”或“测试”。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
+      } else if (st && cur.socks && !st.socks) {
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口被别的程序占着，或者要密码，不能当 socks5 代理用。请换一个端口，详见 `, clashLink(), '。'));
+      }
+      if (st && st.usedBy.length) {
+        lines.push(h('div', { class: 'note warn' }, `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP，有被关联的风险。建议给这个号单独开一个端口。`));
+      }
+      if (cur && cur.port === 7890 && (!st || st.open)) {
+        lines.push(h('div', { class: 'note plain' }, '7890 一般是 Clash 自己的端口，跟着 Clash 界面上选的节点走，节点一换出口 IP 就变，也可能和直连号同一个 IP。建议按 ', clashLink(), ' 给这个号单独开一个端口。'));
+      }
+      portNote.replaceChildren(...lines);
+      portNote.hidden = !lines.length;
+    };
     const drawTags = () => {
       const opt = d.regions.find((r) => r.key === region.value) || (region.selectedOptions[0] && { label: region.selectedOptions[0].textContent });
       const auto = region.value === 'auto';
@@ -1068,6 +1130,7 @@ function editorPage(id) {
       result.replaceChildren();
       tested = null;
       drawPresets();
+      drawPortNote();
       drawTags();
     };
     const regionRow = h('label', { class: 'field' }, '时区', region, tags, h('span', { class: 'hint' }, `应该和代理出口所在地一致，点“测试”会自动选好。WhatsApp 界面语言：${d.uiLanguage || '中文'}（所有账号统一）。`));
@@ -1114,6 +1177,7 @@ function editorPage(id) {
       const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value });
       testBtn.disabled = false;
       testBtn.textContent = '重新测试';
+      if (localProxyPort(proxyInput.value)) probePorts();
       if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error)); return; }
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
@@ -1142,6 +1206,10 @@ function editorPage(id) {
 
     drawSwatches();
     onProxyChange();
+    probePorts();
+    // 去 Clash 里改完配置再切回来：自动重新检测一次（离开编辑页后自己移除）
+    const onFocus = () => { if (!root.isConnected) { window.removeEventListener('focus', onFocus); return; } probePorts(); };
+    window.addEventListener('focus', onFocus);
     // 有改动就告诉主进程：离开编辑页（切号、点通知等）前会先问一句
     let dirty = false;
     const markDirty = () => { if (!dirty) { dirty = true; window.wa.editorDirty(true); } };
@@ -1162,7 +1230,7 @@ function editorPage(id) {
         primaryRow,
         h('div', { class: 'field' },
           h('span', { class: 'field-head' }, '网络线路（代理）', h('a', { href: '#', class: 'help', onclick: (e) => { e.preventDefault(); window.wa.openLink(CLASH_DOC); } }, '怎么在 Clash 里开端口？')),
-          presets, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint, liteDirectHint),
+          presets, portNote, h('div', { class: 'hstack' }, proxyInput, testBtn), result, proxyHint, liteDirectHint),
         passwordRow,
         callsRow,
         regionRow,

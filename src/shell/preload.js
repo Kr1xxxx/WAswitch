@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('wa', {
   openSource: () => ipcRenderer.send('open-source'),
   editorLoad: (id) => ipcRenderer.invoke('editor:load', id),
   editorTest: (data) => ipcRenderer.invoke('editor:test', data),
+  editorPorts: (id) => ipcRenderer.invoke('editor:ports', id),
   editorSave: (data) => ipcRenderer.invoke('editor:save', data),
   liteOpen: (id, jid) => ipcRenderer.send('lite:open', { id, jid }),
   liteSend: (id, jid, text) => ipcRenderer.invoke('lite:send', { id, jid, text }),

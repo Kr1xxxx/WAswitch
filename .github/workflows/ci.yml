@@ -44,6 +44,8 @@ jobs:
         run: npm run check:memory
       - name: 自动更新自检
         run: npm run check:updater
+      - name: 代理端口检测自检
+        run: npm run check:ports
 
   package-win:
     runs-on: windows-latest
