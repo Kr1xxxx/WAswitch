@@ -48,6 +48,8 @@ jobs:
         run: npm run check:ports
       - name: 安全写文件和新账号 id 自检
         run: npm run check:atomic
+      - name: 导入文件编码自检
+        run: npm run check:import
 
   package-win:
     runs-on: windows-latest
