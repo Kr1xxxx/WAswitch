@@ -565,3 +565,13 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .dk-keybar > span { flex: 1; }
 .dk-keybar .pn-btn { flex: none; }
 .tr-keylink { font-size: 12px; }
+/* 翻译页：简单版只填密钥，右上角“详细设置”切换 */
+.btn.sm { height: 32px; padding: 0 14px; font-size: 13px; }
+.tr-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tr-keys { gap: 0; padding: 4px 18px; }
+.tr-krow { display: flex; gap: 16px; align-items: flex-start; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.tr-krow:last-child { border-bottom: none; }
+.tr-krow .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.tr-krow .title { display: flex; align-items: center; }
+.tr-krow .desc { font-size: 13px; line-height: 1.6; color: var(--muted); }
+.tr-krow input { width: 240px; }
