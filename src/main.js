@@ -2320,7 +2320,7 @@ handleShell('panel:import', async ({ kind } = {}) => {
   const r = await dialog.showOpenDialog(win, {
     title: STORE_LABEL[kind][2],
     properties: ['openFile'],
-    filters: [{ name: 'CSV 或 JSON', extensions: ['csv', 'json'] }],
+    filters: [{ name: 'CSV、文本或 JSON', extensions: ['csv', 'txt', 'tsv', 'json'] }],
   });
   if (r.canceled || !r.filePaths[0]) return null;
   const res = records.readImport(kind, r.filePaths[0]);
