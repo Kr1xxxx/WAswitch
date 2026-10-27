@@ -60,8 +60,8 @@ function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatu
         buttons: ['取消', '我知道了，打开'],
         defaultId: 0,
         cancelId: 0,
-        title: '打开第二层：读对话列表',
-        message: '打开后，AI 可以在你确认后读取对话列表',
+        title: '打开第二层：读对话',
+        message: '打开后，AI 可以在你确认后读取对话列表、按名字或号码找对话',
         detail: '读到的对话名称（以及你另外打开的消息预览）会发给你用的 AI 服务商，例如 Anthropic。聊天对方不会知道。\n\n每次读取都会弹窗让你确认；读取是只读的，不会点开对话、不会标已读，内容不会保存到电脑上。',
       });
       if (response !== 1) return view();
@@ -103,6 +103,8 @@ function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatu
     controller.setDrafts(on);
     return view();
   });
+  // 辅助工具：不弹窗，设置页上写清楚会发什么出去
+  handle('mcp:set-helpers', (_e, on) => { controller.setHelpers(on); return view(); });
   handle('mcp:revoke', (_e, key) => { controller.gate.revoke(key); return view(); });
   handle('mcp:copy', (_e, key) => {
     const text = snippets(controller.status())[key];

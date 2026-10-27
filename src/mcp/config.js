@@ -23,9 +23,10 @@ function loadSettings(dir) {
       preview: s.preview === true, // 第二层里是否允许读最后一条消息预览，默认关
       layer2Acknowledged: s.layer2Acknowledged === true, // 看过隐私提示
       drafts: s.drafts === true, // 起草回复：把 AI 写的回复放进输入框（不发送），默认关
+      helpers: s.helpers === true, // 辅助工具：读话术、翻译文字、查客户当地时间，默认关
     };
   } catch {
-    return { enabled: false, port: DEFAULT_PORT, layer2: false, preview: false, layer2Acknowledged: false, drafts: false };
+    return { enabled: false, port: DEFAULT_PORT, layer2: false, preview: false, layer2Acknowledged: false, drafts: false, helpers: false };
   }
 }
 

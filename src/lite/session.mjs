@@ -12,7 +12,7 @@ import makeWASocket, { Browsers, DisconnectReason } from 'baileys';
 import QRCode from 'qrcode';
 import { makeTransport, makeDirectTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
-import { ChatStore } from './store.mjs';
+import { ChatStore, phoneOf } from './store.mjs';
 import { waVersion, resetVersionCache } from './version.mjs';
 import { crmItem } from './crm.mjs';
 
@@ -341,6 +341,15 @@ export class Session {
     if (keys.length && this.sock && this.status === 'open') {
       try { await this.sock.readMessages(keys); } catch (e) { this.log(`已读回执失败：${e.message}`); }
     }
+  }
+
+  // MCP 搜索对话用：本机保存的全部对话，只读。号码只给个人对话，群和隐藏号码的对话没有
+  chatList() {
+    if (!this.store) return null;
+    return this.store.summary(2000).map((c) => ({
+      name: c.name, number: phoneOf(c.jid), unread: c.unread, ts: c.ts, group: c.group,
+      preview: String(c.preview || '').slice(0, 160),
+    }));
   }
 
   async send(jid, text) {
