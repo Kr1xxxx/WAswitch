@@ -1259,6 +1259,8 @@ async function networkSignature() {
 }
 async function onNetworkChange() {
   console.log('检测到网络或系统代理变化，重新连接');
+  // 接下来几分钟里未读数掉了又回来是重连，不是新消息：弹过的不再弹（网页号、轻量号都一样）
+  for (const acc of visibleAccounts()) notifier.hold(acc.id);
   for (const acc of visibleAccounts()) {
     if (isLite(acc)) continue;
     const ses = session.fromPartition(`persist:wa-${acc.id}`);
@@ -1587,6 +1589,8 @@ async function createView(acc, loadDelay = 0) {
     // 连续刷新时保留第一次的原数；软件刚打开时用上次记下的数
     if (Date.now() >= quietUntil) baseline = notifier.unread.has(acc.id) ? notifier.unread.get(acc.id) : savedUnread(acc.id);
     quietUntil = Date.now() + RELOAD_QUIET_MAX_MS;
+    // 重试加载可能拖过 2 分钟（线路断了很久）：通知那边也记着刷新前的未读数，回来时弹过的不再弹
+    notifier.hold(acc.id, baseline);
   });
   let settleRun = 0;
   wc.on('did-finish-load', async () => {
@@ -1605,6 +1609,7 @@ async function createView(acc, loadDelay = 0) {
   wc.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return; // -3 是被新的加载打断，不算错误
     failed = true;
+    notifier.hold(acc.id); // 线路不通、等着重试：这期间标题里的数字没了不算读掉
     console.warn(`账号 ${acc.id} 页面加载失败：${code} ${desc}`);
     const token = {};
     failToken = token;
@@ -1829,6 +1834,8 @@ function bindLiteEvents() {
     if (!acc || !isLite(acc)) return;
     const prev = liteStates.get(id)?.status;
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
+    // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
+    if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
