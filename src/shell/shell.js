@@ -767,6 +767,12 @@ let trEdit = null; // 正在编辑的服务商 { id?, preset, name, baseUrl, mod
 let trModeEdit = null;
 let trSay = '';
 let trTestRes = {};
+let trNetDraft = null; // 选了“指定代理”但代理地址还没存好：{ url }
+let trNetSay = ''; // “翻译的网络”这一行的提示：已保存 / 出错原因
+let trNetErr = false;
+let trNetTimer = 0;
+let trNetBusy = false; // 正在存：重画时旧输入框的失焦不再存一次
+let trNetLastUrl = ''; // 上次存好的代理地址：切到直连再切回来时帮你填上
 let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
 // 翻译页默认是简单版：只填密钥。点“详细设置”才显示服务商、网络、纠错、模式这些（记在本机）
 let trAdvanced = LS('trAdvanced') === '1';
@@ -921,9 +927,44 @@ function translatePage(page) {
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
-  const netSel = h('select', { 'aria-label': '翻译走的网络' }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
-  netSel.value = c.network.mode;
-  const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
+  // 翻译的网络：改了就保存（选项一改就存，代理地址点别处或按回车存），不用再点“应用”
+  if (c.network.mode === 'proxy' && c.network.proxyUrl) trNetLastUrl = c.network.proxyUrl;
+  const netSay = h('span', { id: 'tr-net-say', class: 'hint', role: 'status', style: { color: trNetErr ? 'var(--danger)' : '' } }, trNetSay);
+  const saveNet = async (mode, url) => {
+    trNetBusy = true;
+    let r;
+    try { r = await window.wa.trNetwork(mode, url); } finally { trNetBusy = false; }
+    clearTimeout(trNetTimer);
+    if (r.error) { trNetSay = r.error; trNetErr = true; trNetDraft = mode === 'proxy' ? { url } : null; }
+    else {
+      trNetSay = '已保存'; trNetErr = false; trNetDraft = null;
+      // 两秒后把“已保存”收掉：只改这一行的文字，不重画整页（别把正在别处打字的光标弄丢）
+      trNetTimer = setTimeout(() => { if (trNetSay === '已保存') { trNetSay = ''; const el = document.getElementById('tr-net-say'); if (el) el.textContent = ''; } }, 2000);
+    }
+    tr.cfg = r.config; tr.modes = r.modes; render(true);
+  };
+  const netMode = trNetDraft ? 'proxy' : c.network.mode;
+  const netUrl = trNetDraft ? trNetDraft.url : (c.network.proxyUrl || '');
+  const netSel = h('select', { 'aria-label': '翻译走的网络', onchange: (e) => {
+    const v = e.target.value;
+    if (v !== 'proxy') { saveNet(v, ''); return; }
+    // 选了“指定代理”：框里已经有地址就直接存，没有就等填好
+    const url = (trNetDraft && trNetDraft.url) || trNetLastUrl;
+    if (url.trim()) { saveNet('proxy', url); return; }
+    trNetDraft = { url: '' }; trNetSay = ''; trNetErr = false; render(true);
+    const el = document.getElementById('tr-net-url'); if (el) el.focus();
+  } }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
+  netSel.value = netMode;
+  const proxyIn = h('input', { id: 'tr-net-url', 'aria-label': '翻译代理地址', value: netUrl, placeholder: 'http://127.0.0.1:7890', style: { width: '200px', flex: 'none' },
+    oninput: (e) => { if (trNetDraft) trNetDraft.url = e.target.value; },
+    onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+    onblur: (e) => {
+      if (trNetBusy || !e.target.isConnected) return;
+      const url = e.target.value;
+      if (c.network.mode === 'proxy' && !trNetDraft && url.trim() === (c.network.proxyUrl || '')) return; // 没改
+      if (!url.trim()) { trNetDraft = { url: '' }; trNetSay = '填好代理地址才会保存'; trNetErr = false; const el = document.getElementById('tr-net-say'); if (el) el.textContent = trNetSay; return; }
+      saveNet('proxy', url);
+    } });
   const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
     trAdvanced = !trAdvanced; LS('trAdvanced', trAdvanced ? '1' : '0'); trSay = '';
     if (!trAdvanced) { trEdit = null; trModeEdit = null; }
@@ -962,8 +1003,10 @@ function translatePage(page) {
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
         fixP && (/^hy-mt/i.test(fixP.model) || fixP.preset === 'deepl') ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
     setRow('翻译的网络', '和 WhatsApp 账号分开。OpenRouter 在国内一般要选代理。',
-      h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
-        h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
+      // “已保存”跟在后面；出错的话比较长，放到下面一行
+      h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px', marginTop: '-7px' } },
+        h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
+        trNetErr ? netSay : null)),
     s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
         h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
