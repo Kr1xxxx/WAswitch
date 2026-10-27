@@ -3229,6 +3229,7 @@ handleShell('check:fix', async ({ id, region } = {}) => {
 
 // 关于页：检查更新、重启以更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动重启安装
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动重启
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）

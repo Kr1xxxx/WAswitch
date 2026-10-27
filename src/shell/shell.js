@@ -323,7 +323,7 @@ function checkUpdateBtn() {
     error: '检查更新 · 上次没检查成功',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
-    onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheck(); } }, icon('sync', 16));
+    onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheckOnly(); } }, icon('sync', 16));
 }
 
 // ---------- 侧栏里的更新提示 ----------
@@ -739,7 +739,7 @@ function trProviderForm() {
     if (list) {
       modelSel.replaceChildren(...list.map((m) => h('option', { value: m }, m)));
       modelSel.value = list.includes(want) ? want : list[0];
-      modelBox.replaceChildren(h('label', { class: 'inline' }, '模型', modelSel));
+      modelBox.replaceChildren(modelSel);
     } else { modelIn.value = want || ''; modelBox.replaceChildren(modelIn); }
   };
   const key = h('input', { type: 'password', value: '', autocomplete: 'off', placeholder: e.hasKey ? `已设置（尾号 ${e.keyTail}），不改就留空` : 'API 密钥' });
@@ -758,16 +758,16 @@ function trProviderForm() {
   for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
   for (const el of [name, base, key]) el.style.width = '260px';
   const isMt = /^hy-mt/i.test(model.value);
-  // DeepL 是机器翻译：没有地址、模型、深度思考可选，换类型时重画表单
+  // DeepL 是机器翻译：没有地址、模型、深度思考可选；各类型的说明也不一样，换类型时重画表单
   const deepl = preset.value === 'deepl';
-  preset.addEventListener('change', () => { if (deepl !== (preset.value === 'deepl')) render(true); });
+  preset.addEventListener('change', () => render(true));
   return h('div', { class: 'box tr-form' },
     h('b', null, e.id ? '修改服务商' : '添加服务商'),
     setRow('类型', deepl ? 'DeepL 只做翻译，不会按“模式”改语气，也不会纠错。适合当备用。' : '选好会自动填地址和模型。', preset),
     setRow('名称', '可不填。', name),
-    deepl ? null : setRow('接口地址', '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。', base),
+    deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '一般不用改。', base),
     deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : '腾讯混元填腾讯云 TokenHub 的密钥。会加密保存。', key),
+    setRow('API 密钥', deepl ? 'DeepL 网站账户里的 API 密钥。免费版（以 :fx 结尾）和付费版都行，会自动选对地址。会加密保存。' : `${{ hunyuan: '填腾讯云 TokenHub 的密钥。', zhipu: '智谱开放平台（bigmodel.cn）里的 API 密钥。' }[preset.value] || ''}会加密保存。`, key),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '翻译用不上，选“禁用”更快。', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
@@ -824,7 +824,7 @@ function translatePage(page) {
     if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
     apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
   } },
-    h('option', { value: '' }, '用默认的'), c.providers.map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
+    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => p.preset !== 'deepl' || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
@@ -833,7 +833,7 @@ function translatePage(page) {
   const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
   page.append(...kids(
     h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。只翻译你放进翻译框的文字，不会自动发出。')),
+      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。客户发来的消息会自动翻成中文；你的回复翻好后要自己按发送，不会自动发出。')),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
     h('h2', { class: 'ov-h2' }, '服务商'),
@@ -1313,11 +1313,11 @@ function settingsPage() {
       h('div', null,
         setRow('关闭窗口时缩到托盘', '关掉窗口后继续在后台收消息。',
           sw(st.closeToTray, '关闭窗口时缩到托盘', (v) => window.wa.setSetting('closeToTray', v))),
-        s.canLoginItem ? setRow('开机自动启动', '',
+        s.canLoginItem ? setRow('开机自动启动', '开机后缩在托盘里，在后台收消息。',
           sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null,
         setRow('侧栏只显示图标', '给聊天留更多空间。',
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
-        setRow('显示检查更新按钮', '在侧栏底部设置和通知中间，点一下立刻检查新版本。',
+        setRow('显示检查更新按钮', '在侧栏底部齿轮旁边，点一下立刻检查新版本。有新版会在后台下载，好了提醒你，不会自己重启。',
           sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
         setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
