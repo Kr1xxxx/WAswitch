@@ -265,7 +265,8 @@ function dockIncoming() {
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
-  if (st.readable === 'nochat') add(hint('先在左边点开一个聊天，这里就会显示客户的消息。'));
+  if (st.readable === 'qr') add(hint('扫码登录后可用。登录后点开一个聊天，这里就会显示客户的消息。'));
+  else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天，这里就会显示客户的消息。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));

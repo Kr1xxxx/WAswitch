@@ -171,10 +171,11 @@ function parsePre(raw) {
 const MAX_MSGS = 20;
 const READ_CHAT_CODE = `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
-  if (!main) return { ok: false, why: 'nochat' };
+  // 没打开对话：还停在二维码页（没登录）时单独说，翻译页提示“扫码登录后可用”
+  if (!main) return { ok: false, why: !first(document, S.loggedIn) && first(document, S.qr) ? 'qr' : 'nochat' };
   const t = first(main, S.title);
   const title = t ? String(t.getAttribute('title') || t.textContent || '').trim().slice(0, 100) : '';
   // 能读就读：方向先看编号前缀 true_/false_，再看气泡 class，都认不出就当成收到的
