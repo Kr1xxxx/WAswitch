@@ -138,7 +138,7 @@ const $lock = document.getElementById('lock');
 const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
-let settingsTab = 'memory';
+let settingsTab = 'general';
 let checkResult = null;
 let checkRunning = false;
 // 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
@@ -290,9 +290,11 @@ function renderSide() {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
       h('div', { class: 'label' }, '设置'),
-      h('div', { class: 'list' }, [['memory', '内存'], ['notify', '通知'], ['general', '通用'], ['check', '隔离自检'], ['net', '连接记录'], ['translate', '翻译'], ['team', '团队'], ['about', '关于']].map(([id, label]) =>
-        h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
-          id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))));
+      h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
+        i ? h('div', { class: 'tab-group' }, title) : null,
+        ...tabs.map(([id, label]) =>
+          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+            id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
   const label = s.collapsed ? '展开侧栏' : '收起侧栏';
@@ -349,6 +351,17 @@ function checkUpdateBtn() {
 // 下载中显示进度，下载好显示“重启更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
 let updateHidden = '';
 const updateReady = () => !!(s.update && s.update.status === 'downloaded');
+// 设置侧栏分组：常用设置在前，诊断和其他在后。
+// 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
+function settingsGroups() {
+  const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
+  return [
+    ['设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
+    ['诊断', [['check', '隔离自检'], ['net', '连接记录']]],
+    ['其他', [showTeam ? ['team', '团队'] : null, ['about', '关于']].filter(Boolean)],
+  ];
+}
+
 function openAbout() { settingsTab = 'about'; window.wa.showPage('settings'); render(true); }
 function updateCard() {
   const u = s.update;
@@ -754,14 +767,22 @@ let trEdit = null; // 正在编辑的服务商 { id?, preset, name, baseUrl, mod
 let trModeEdit = null;
 let trSay = '';
 let trTestRes = {};
+let trNetDraft = null; // 选了“指定代理”但代理地址还没存好：{ url }
+let trNetSay = ''; // “翻译的网络”这一行的提示：已保存 / 出错原因
+let trNetErr = false;
+let trNetTimer = 0;
+let trNetBusy = false; // 正在存：重画时旧输入框的失焦不再存一次
+let trNetLastUrl = ''; // 上次存好的代理地址：切到直连再切回来时帮你填上
 let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
+// 翻译页默认是简单版：只填密钥。点“详细设置”才显示服务商、网络、纠错、模式这些（记在本机）
+let trAdvanced = LS('trAdvanced') === '1';
+let trKeyFocus = ''; // 简单版里“去填密钥”：光标放进这个服务商的密钥框
 const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
 // 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
 async function trOpenKey(pid) {
   if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
   const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
-  trEdit = p ? { ...p } : trEdit;
-  trFocusKey = !!p;
+  if (trAdvanced) { trEdit = p ? { ...p } : trEdit; trFocusKey = !!p; } else trKeyFocus = p ? p.id : '';
   trSay = '';
   settingsTab = 'translate';
   window.wa.showPage('settings');
@@ -861,6 +882,35 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
+// 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
+function trKeysBox(c, apply) {
+  if (!c.providers.length) return h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有翻译服务商，点上面的“详细设置”添加。'));
+  const order = (p) => (p.id === c.primaryId ? 0 : p.id === c.fallbackId ? 1 : p.id === c.fixId ? 2 : 3);
+  const tag = (t) => h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, t);
+  return h('div', { class: 'box tr-keys' }, [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => {
+    const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
+      placeholder: p.hasKey ? `已填（尾号 ${p.keyTail}），不改就留空` : '粘贴 API 密钥' });
+    const save = async () => {
+      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return; }
+      const r = await window.wa.trProviderSave({ id: p.id, preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, thinking: p.thinking });
+      if (!r.error) { trSay = `「${p.name}」的密钥已保存`; trTestRes[p.id] = ''; }
+      apply(r);
+    };
+    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
+    const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
+    const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
+    return h('div', { class: 'tr-krow' },
+      h('div', { class: 'meta' },
+        h('span', { class: 'title' }, h('b', null, p.name), ...roles),
+        h('span', { class: 'desc' }, p.hasKey ? `已填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}` : `还没填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}`),
+        trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
+        link),
+      h('span', { class: 'hstack', style: { gap: '6px' } }, key,
+        h('button', { class: 'btn primary sm', onclick: save }, '保存'),
+        h('button', { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试')));
+  }));
+}
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
   const c = tr.cfg;
@@ -877,14 +927,64 @@ function translatePage(page) {
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
-  const netSel = h('select', { 'aria-label': '翻译走的网络' }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
-  netSel.value = c.network.mode;
-  const proxyIn = h('input', { value: c.network.proxyUrl || '', placeholder: 'http://127.0.0.1:7890', style: { width: '200px' } });
-  page.append(...kids(
-    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '翻译'),
-      h('p', { class: 'lead' }, '在右侧面板的“翻译”里用。客户发来的消息会自动翻成中文；你的回复翻好后要自己按发送，不会自动发出。')),
+  // 翻译的网络：改了就保存（选项一改就存，代理地址点别处或按回车存），不用再点“应用”
+  if (c.network.mode === 'proxy' && c.network.proxyUrl) trNetLastUrl = c.network.proxyUrl;
+  const netSay = h('span', { id: 'tr-net-say', class: 'hint', role: 'status', style: { color: trNetErr ? 'var(--danger)' : '' } }, trNetSay);
+  const saveNet = async (mode, url) => {
+    trNetBusy = true;
+    let r;
+    try { r = await window.wa.trNetwork(mode, url); } finally { trNetBusy = false; }
+    clearTimeout(trNetTimer);
+    if (r.error) { trNetSay = r.error; trNetErr = true; trNetDraft = mode === 'proxy' ? { url } : null; }
+    else {
+      trNetSay = '已保存'; trNetErr = false; trNetDraft = null;
+      // 两秒后把“已保存”收掉：只改这一行的文字，不重画整页（别把正在别处打字的光标弄丢）
+      trNetTimer = setTimeout(() => { if (trNetSay === '已保存') { trNetSay = ''; const el = document.getElementById('tr-net-say'); if (el) el.textContent = ''; } }, 2000);
+    }
+    tr.cfg = r.config; tr.modes = r.modes; render(true);
+  };
+  const netMode = trNetDraft ? 'proxy' : c.network.mode;
+  const netUrl = trNetDraft ? trNetDraft.url : (c.network.proxyUrl || '');
+  const netSel = h('select', { 'aria-label': '翻译走的网络', onchange: (e) => {
+    const v = e.target.value;
+    if (v !== 'proxy') { saveNet(v, ''); return; }
+    // 选了“指定代理”：框里已经有地址就直接存，没有就等填好
+    const url = (trNetDraft && trNetDraft.url) || trNetLastUrl;
+    if (url.trim()) { saveNet('proxy', url); return; }
+    trNetDraft = { url: '' }; trNetSay = ''; trNetErr = false; render(true);
+    const el = document.getElementById('tr-net-url'); if (el) el.focus();
+  } }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
+  netSel.value = netMode;
+  const proxyIn = h('input', { id: 'tr-net-url', 'aria-label': '翻译代理地址', value: netUrl, placeholder: 'http://127.0.0.1:7890', style: { width: '200px', flex: 'none' },
+    oninput: (e) => { if (trNetDraft) trNetDraft.url = e.target.value; },
+    onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+    onblur: (e) => {
+      if (trNetBusy || !e.target.isConnected) return;
+      const url = e.target.value;
+      if (c.network.mode === 'proxy' && !trNetDraft && url.trim() === (c.network.proxyUrl || '')) return; // 没改
+      if (!url.trim()) { trNetDraft = { url: '' }; trNetSay = '填好代理地址才会保存'; trNetErr = false; const el = document.getElementById('tr-net-say'); if (el) el.textContent = trNetSay; return; }
+      saveNet('proxy', url);
+    } });
+  const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
+    trAdvanced = !trAdvanced; LS('trAdvanced', trAdvanced ? '1' : '0'); trSay = '';
+    if (!trAdvanced) { trEdit = null; trModeEdit = null; }
+    render(true);
+  } }, trAdvanced ? '回到简单设置' : '详细设置');
+  const head = [
+    h('div', { class: 'col', style: { gap: '6px' } },
+      h('div', { class: 'tr-head' }, h('h1', null, '翻译'), toggle),
+      h('p', { class: 'lead' }, `在右侧面板的“翻译”里用。每个号默认都会把客户发来的消息自动翻成中文，不想要的号在${trAdvanced ? '下面' : '“详细设置”里'}关掉。你的回复翻好后要自己按发送，不会自动发出。`)),
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
     !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
+  ];
+  if (!trAdvanced) {
+    page.append(...kids(...head,
+      h('h2', { class: 'ov-h2' }, 'API 密钥'),
+      h('p', { class: 'hint' }, '填好密钥就能翻译。服务商、网络、纠错、翻译模式都已经设好，一般不用改；要改点右上角“详细设置”。'),
+      trKeysBox(c, apply)));
+    return;
+  }
+  page.append(...kids(...head,
     h('h2', { class: 'ov-h2' }, '服务商'),
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
@@ -903,8 +1003,15 @@ function translatePage(page) {
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
         fixP && (/^hy-mt/i.test(fixP.model) || fixP.preset === 'deepl') ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
     setRow('翻译的网络', '和 WhatsApp 账号分开。OpenRouter 在国内一般要选代理。',
-      h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netSel.value === 'proxy' ? proxyIn : null,
-        h('button', { class: 'btn', onclick: async () => apply(await window.wa.trNetwork(netSel.value, proxyIn.value)) }, '应用'))),
+      // “已保存”跟在后面；出错的话比较长，放到下面一行
+      h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px', marginTop: '-7px' } },
+        h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
+        trNetErr ? netSay : null)),
+    s.accounts.length ? setRow('自动翻译收到的消息', '默认都开。关掉的号不再自动翻，手动点“翻译”照常能用。和右侧面板“翻译”里的开关是同一个。',
+      h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
+        h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        a.mode === 'lite' ? h('span', { class: 'hint', title: '轻量模式读不到对话，不能自动翻译' }, '轻量模式不支持')
+          : sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '超了就停到第二天，手动翻译不受影响。',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
@@ -1337,19 +1444,20 @@ function settingsPage() {
   const page = h('div', { class: 'page narrow' });
   if (settingsTab === 'memory') {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
-    const select = h('select', { 'aria-label': '回收阈值', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
-      s.recycleChoices.map((n) => h('option', { value: n }, `${n} MB`)));
-    select.value = String(st.recycleMB || st.recycleLastMB || 1024);
+    const autoOn = st.autoRecycle !== false;
+    const select = h('select', { 'aria-label': '单个账号刷新线', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
+      [0, ...s.recycleChoices].map((n) => h('option', { value: n }, n ? `${n} MB` : '不限')));
+    select.value = String(st.recycleMB ?? 1024);
     const capSelect = h('select', { 'aria-label': '总内存上限', onchange: (e) => window.wa.setSetting('capMB', Number(e.target.value)) },
       (s.capChoices || [0, 4096]).map((n) => h('option', { value: n }, n ? mb(n) : '不限')));
     capSelect.value = String(st.capMB ?? 4096);
-    const over = st.capMB > 0 && (s.totalMB || 0) > st.capMB;
+    const over = autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB;
     page.append(
       h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '内存'),
         h('p', { class: 'lead' }, '账号不会休眠，一直在线收消息。')),
       h('div', { class: 'box' },
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
-          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
+          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
@@ -1371,13 +1479,14 @@ function settingsPage() {
           render(true);
         } }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
-      setRow('总内存上限', '所有账号加起来超过这个数，就自动刷新占用最多的后台账号。正在看的和有未读的不动。',
-        capSelect,
-        st.capMB > 0 && s.capAdvice ? h('span', { class: 'bad-text', role: 'status' },
-          `账号多，这个上限太低，暂时不起作用。建议调到${s.capAdvice > 0 ? ` ${mb(s.capAdvice)}` : '“不限”'}。`) : null),
-      setRow('单个账号超量自动刷新', '一个后台账号用的内存超过设定值，就自动刷新它。',
-        sw(st.recycleMB > 0, '单个账号超量自动刷新', (v) => window.wa.setSetting('recycleMB', v ? st.recycleLastMB || 1024 : 0)),
-        st.recycleMB > 0 ? h('label', { class: 'inline' }, '超过', select, '时刷新') : null),
+      setRow('自动回收后台账号', '后台账号内存涨多了，就自动刷新一下。不退出登录，不漏消息；正在看的和有未读的不动。',
+        sw(autoOn, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v)),
+        autoOn ? h('div', { class: 'col', style: { gap: '2px' } },
+          h('label', { class: 'inline' }, '单个后台账号超过', select, '时刷新它'),
+          h('label', { class: 'inline' }, '所有账号加起来超过', capSelect, '时刷新占用最多的'),
+          st.capMB > 0 && s.capAdvice ? h('span', { class: 'inline', role: 'status' },
+            h('span', { class: 'bad-text' }, '账号多，总上限够不着，现在不起作用。'),
+            h('button', { class: 'btn', style: { height: '28px', padding: '0 12px' }, onclick: () => window.wa.setSetting('capMB', 0) }, '改为不限')) : null) : null),
       setRow(h('span', null, '省内存模式 ', h('span', { class: 'badge-warn' }, '重启后生效')), '再省一些内存，但滚动没那么顺滑。',
         h('span', { class: 'hstack', style: { gap: '10px' } },
           s.restartNeeded ? h('button', { class: 'btn primary', style: { height: '32px', padding: '0 14px' }, onclick: () => window.wa.restart() }, '立即重启') : null,
@@ -1419,7 +1528,7 @@ function settingsPage() {
           sw(st.sidebarCollapsed, '侧栏只显示图标', (v) => window.wa.setSetting('sidebarCollapsed', v))),
         setRow('显示检查更新按钮', '在侧栏底部齿轮旁边，点一下立刻检查新版本。有新版会在后台下载，好了提醒你，不会自己重启。',
           sw(st.showUpdateButton, '显示检查更新按钮', (v) => window.wa.setSetting('showUpdateButton', v))),
-        setRow('聊天锁', '这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。',
+        setRow('聊天锁', `这么久不动电脑，就遮住聊天，右滑解锁。消息照常收。随时按 ${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定。`,
           h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
             (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭')))),
         setRow('快捷键', `${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + 1 到 9 切换到第几个账号；${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + L 立即锁定聊天。`, h('span'))));
@@ -1466,7 +1575,8 @@ function settingsPage() {
         h('span', null, '译文位置'), h('div', { class: 'col', style: { gap: '2px' } },
           h('div', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, trDir ? trDir.dir : '正在读取…'),
           trDir ? h('div', { class: 'hint', style: { fontSize: '12px' } }, `共 ${fmtBytes(trDir.bytes)}，${trDir.files} 个对话`) : null),
-        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch'))),
+        h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
+        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹'),
@@ -1520,7 +1630,7 @@ function teamPage(t, accounts = []) {
 
   if (t.joined && !t.revoked) {
     const ok = !t.offline && !t.lastError;
-    wrap.append(
+    wrap.append(...kids(
       h('div', { class: 'kv' },
         h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, t.server),
         h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
@@ -1538,7 +1648,7 @@ function teamPage(t, accounts = []) {
         } }, teamForm.busy ? '同步中…' : '立即同步'),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
       result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null);
+      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
     if (t.privateAccounts.length && t.allowPrivate) {
       wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
         t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
@@ -1562,7 +1672,7 @@ function teamPage(t, accounts = []) {
   if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
   const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
   const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
-  wrap.append(
+  wrap.append(...kids(
     h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
     h('label', { class: 'field' }, '登记码（管理员在后台生成，15 分钟内有效）', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
     h('label', { class: 'field' }, '这台电脑的名字（给管理员看）', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
@@ -1580,7 +1690,7 @@ function teamPage(t, accounts = []) {
       if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
       render(true);
     } }, teamForm.busy ? '登记中…' : '登记')),
-    result);
+    result));
   return wrap;
 }
 
@@ -1683,6 +1793,9 @@ function render(forceContent = false) {
   renderTop();
   renderLock();
   renderPanel();
+  // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
+  const onTr = s.page === 'settings' && settingsTab === 'translate';
+  if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
   const key = s.page === 'editor' ? `editor:${s.editorId || 'new'}:${s.editorNonce}` : s.page;

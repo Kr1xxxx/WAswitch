@@ -315,6 +315,7 @@ h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
 .icon-btn { position: relative; }
 .dot.new { top: 3px; right: 3px; min-width: 0; width: 10px; height: 10px; padding: 0; border-color: #E6E9ED; background: #1FAF6E; }
 #side .tab { display: flex; align-items: center; justify-content: space-between; }
+#side .tab-group { margin-top: 8px; padding: 10px 10px 4px; border-top: 1px solid rgba(0,0,0,.08); font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .06em; }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; background: #1FAF6E; }
 
 /* 编辑页：标题旁的帮助链接、底部固定的按钮栏（窗口不高时也看得到“保存”） */
@@ -382,6 +383,10 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .tr-recent summary { cursor: pointer; padding: 4px 0; }
 .tr-old { text-align: left; font: inherit; cursor: pointer; margin-top: 6px; width: 100%; }
 .tr-old .x { max-height: 2.6em; }
+.tr-auto { flex: none; gap: 8px; min-width: 200px; max-width: 260px; }
+.tr-auto-row { justify-content: space-between; gap: 10px; }
+.tr-auto-name .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 8px; }
+.tr-auto-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-prow { display: flex; gap: 10px; align-items: center; padding: 6px 0; min-width: 0; }
 .tr-prow > :nth-child(2), .tr-prow > :nth-child(3) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-prow > :first-child { flex: none; max-width: 40%; }
@@ -560,3 +565,13 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .dk-keybar > span { flex: 1; }
 .dk-keybar .pn-btn { flex: none; }
 .tr-keylink { font-size: 12px; }
+/* 翻译页：简单版只填密钥，右上角“详细设置”切换 */
+.btn.sm { height: 32px; padding: 0 14px; font-size: 13px; }
+.tr-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tr-keys { gap: 0; padding: 4px 18px; }
+.tr-krow { display: flex; gap: 16px; align-items: flex-start; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.tr-krow:last-child { border-bottom: none; }
+.tr-krow .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.tr-krow .title { display: flex; align-items: center; }
+.tr-krow .desc { font-size: 13px; line-height: 1.6; color: var(--muted); }
+.tr-krow input { width: 240px; }

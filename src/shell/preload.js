@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('wa', {
   panelImport: (kind) => ipcRenderer.invoke('panel:import', { kind }),
   floatToggle: (on) => ipcRenderer.send('float:toggle', typeof on === 'boolean' ? on : null),
   trDailyCap: (n) => ipcRenderer.invoke('tr:dailycap', n),
+  trAuto: (accountId, on) => ipcRenderer.invoke('tr:auto', { accountId, on: on === true }),
   trConfig: () => ipcRenderer.invoke('tr:config'),
   trProviderSave: (data) => ipcRenderer.invoke('tr:provider:save', data),
   trProviderDelete: (id) => ipcRenderer.invoke('tr:provider:delete', id),
