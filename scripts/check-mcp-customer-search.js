@@ -1,6 +1,6 @@
 // MCP「客户资料」自检：search_customers 的搜索规则、开关（默认关）、每次确认、10 分钟内允许、只读、不落盘。
 // 不需要 Electron：用假的账号和客户数据跑真的 MCP 服务器和官方客户端。
-// 运行：node scripts/check-mcp-customers.js（npm run check:mcp 里也会跑）
+// 运行：node scripts/check-mcp-customer-search.js（npm run check:mcp 里也会跑）
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
