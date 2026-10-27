@@ -3046,7 +3046,7 @@ async function primaryExit(exceptId) {
 // 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同
 handleShell('editor:test', async ({ id, proxy: proxyText, password } = {}) => {
   const acc = findAcc(id);
-  const pass = String(password || '') || (acc ? proxy.decryptPassword(acc.proxyPassword) : '');
+  const pass = proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password);
   const res = await proxy.test(String(proxyText || ''), pass);
   if (!res.ok) return res;
   res.region = regionForTimezone(res.timezone);
@@ -3095,12 +3095,11 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
   // 后台分来的号第一次保存：填了代理必须测试通过；不填就是直连（编辑页有一行风险提示，不拦）
   if (acc && acc.teamNeedsProxy && mode === 'web' && parsed && !testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
 
-  // 密码：新填的优先；地址里带的其次；都没有则保留原来的（地址变了用户名也变了就清掉）
-  let encPassword = acc ? acc.proxyPassword : '';
+  // 密码：新填的优先；地址里带的其次；都没有时，只有主机、端口、用户名都没变才保留原来的，否则清掉
+  const plan = proxy.passwordPlan(acc ? acc.proxy : '', String(proxyText || ''), password);
+  let encPassword = plan.kind === 'old' ? acc.proxyPassword : '';
   try {
-    const newPass = String(password || '') || (parsed && parsed.password) || '';
-    if (newPass) encPassword = proxy.encryptPassword(newPass);
-    if (!parsed || !parsed.username) encPassword = '';
+    if (plan.kind === 'new') encPassword = proxy.encryptPassword(plan.password);
   } catch (e) {
     return { error: e.message };
   }
@@ -3110,7 +3109,7 @@ handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyTe
   // 测不通也照样保存；用户自己选了地区的不改
   if (mode === 'web' && parsed && region === 'auto') {
     if (!tested) {
-      const res = await proxy.test(String(proxyText || ''), String(password || '') || (parsed.password) || (acc ? proxy.decryptPassword(acc.proxyPassword) : ''));
+      const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
       if (res.ok) tested = { proxy: parsed.rules, ip: res.ip, label: regionName(res.country), region: regionForTimezone(res.timezone) };
     }
     if (tested && tested.region) region = tested.region;

@@ -9,36 +9,10 @@
 const { net, safeStorage, session } = require('electron');
 const { canEncrypt } = require('./secure-storage');
 const errtext = require('./errtext');
+const { parse, passwordPlan } = require('./proxy-parse');
 
 // 地址写错时用的“黑洞”代理：所有请求都会失败，而不是直连
 const BLACKHOLE = 'socks5://127.0.0.1:9';
-
-function parse(raw) {
-  const text = (raw || '').trim();
-  if (!text) return null;
-  // 没写协议时不猜：Clash 说明里开的是 socks 端口，按 http 去连会一直失败，报错又看不出原因
-  if (!text.includes('://')) return { error: `请写上代理类型，例如 socks5://${text}（Clash 的端口一般用 socks5://）` };
-  let url;
-  try { url = new URL(text); } catch { return { error: '代理地址格式不对' }; }
-  const scheme = url.protocol.replace(':', '');
-  if (!['http', 'https', 'socks4', 'socks5'].includes(scheme)) return { error: `不支持的代理类型：${scheme}` };
-  if (!url.hostname || !url.port) return { error: '代理地址需要包含 IP 和端口，例如 socks5://127.0.0.1:7891' };
-  const username = decodeURIComponent(url.username || '');
-  const password = decodeURIComponent(url.password || '');
-  if (scheme.startsWith('socks') && (username || password)) {
-    return { error: 'socks 代理不支持用户名密码，请改用 http:// 代理，或在 Clash 里转成本地端口' };
-  }
-  return {
-    scheme,
-    host: url.hostname,
-    port: Number(url.port),
-    rules: `${scheme}://${url.hostname}:${url.port}`,
-    username,
-    password,
-    // 保存到 accounts.json 的形式：不含密码
-    display: `${scheme}://${username ? `${encodeURIComponent(username)}@` : ''}${url.hostname}:${url.port}`,
-  };
-}
 
 // 密码用系统钥匙串（Windows DPAPI / macOS Keychain）加密后再写盘
 function encryptPassword(password) {
@@ -168,5 +142,13 @@ async function testDirect() {
   }
 }
 
-module.exports = { parse, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
+// 测试/连接时实际要用的明文密码：按 passwordPlan 决定，沿用旧密码时才解密已保存的那份
+function passwordFor(oldRaw, oldEnc, newRaw, typed) {
+  const plan = passwordPlan(oldRaw, newRaw, typed);
+  if (plan.kind === 'new') return plan.password;
+  if (plan.kind === 'old') return decryptPassword(oldEnc);
+  return '';
+}
+
+module.exports = { parse, passwordPlan, passwordFor, apply, test, testDirect, encryptPassword, decryptPassword, credentialsFor };
 
