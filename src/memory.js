@@ -20,7 +20,8 @@ const fs = require('fs');
 // settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
   lowMemoryMode: false, // 关闭显卡加速
-  recycleMB: 1024, // 后台账号超过这个值就自动刷新，0 表示不自动刷新（聊天多的号常态 400–700 MB）
+  autoRecycle: true, // 总开关：自动回收后台账号。关掉后下面两条线都不起作用
+  recycleMB: 1024, // 后台账号超过这个值就自动刷新，0 表示不限（聊天多的号常态 400–700 MB）
   closeToTray: true, // 关闭窗口时缩到托盘
   openAtLogin: false, // 开机自动启动（启动后缩在托盘）
   sidebarCollapsed: false, // 侧栏只显示图标
@@ -68,10 +69,13 @@ function loadSettings() {
       if (raw.recycleLastMB === 800) raw.recycleLastMB = DEFAULTS.recycleLastMB;
       if (raw.capMB === 2048) raw.capMB = DEFAULTS.capMB;
     }
+    // 老版本没有总开关：两条线都关着的，就当总开关是关的
+    const autoRecycle = typeof raw.autoRecycle === 'boolean' ? raw.autoRecycle : !(raw.recycleMB === 0 && raw.capMB === 0);
     // 第 3 版：聊天锁默认从 5 分钟改成 15 分钟（5 分钟太短，回个电话就锁了），还停在 5 分钟的改成 15
     if (ver < 3 && raw.lockMinutes === 5) raw.lockMinutes = DEFAULTS.lockMinutes;
     return {
       lowMemoryMode: bool('lowMemoryMode'),
+      autoRecycle,
       recycleMB: nearestRecycle(raw.recycleMB),
       closeToTray: bool('closeToTray'),
       openAtLogin: bool('openAtLogin'),
@@ -198,7 +202,8 @@ class MemoryManager {
     const done = new Set();
 
     // 单个账号超过阈值
-    const limit = this.settings.recycleMB;
+    const on = this.settings.autoRecycle !== false;
+    const limit = on ? this.settings.recycleMB : 0;
     if (limit) {
       for (const [id, view] of this.hooks.views) {
         const wc = view.webContents;
@@ -212,7 +217,7 @@ class MemoryManager {
     }
 
     // 所有账号加起来超过总上限：从涨得最多的后台账号开始刷新
-    const cap = this.settings.capMB;
+    const cap = on ? this.settings.capMB : 0;
     this.capAdvice = 0;
     if (cap) {
       // 刷新也降不下去的部分：网页账号的底数 + 轻量模式等其他占用
