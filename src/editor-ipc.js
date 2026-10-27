@@ -114,9 +114,11 @@ function setupEditorIpc(ctx) {
 
     // 密码：新填的优先；地址里带的其次；都没有时，只有主机、端口、用户名都没变才保留原来的，否则清掉
     const plan = proxy.passwordPlan(acc ? acc.proxy : '', String(proxyText || ''), password);
-    let encPassword = plan.kind === 'old' ? acc.proxyPassword : '';
+    // 重新填了同一个密码也算没改，沿用原来那份（下面比较 changed 时才不会误判）
+    const keepOld = !!acc && proxy.keepOldPassword(plan, plan.kind === 'new' ? proxy.decryptPassword(acc.proxyPassword) : '');
+    let encPassword = keepOld ? acc.proxyPassword : '';
     try {
-      if (plan.kind === 'new') encPassword = proxy.encryptPassword(plan.password);
+      if (plan.kind === 'new' && !keepOld) encPassword = proxy.encryptPassword(plan.password);
     } catch (e) {
       return { error: e.message };
     }
