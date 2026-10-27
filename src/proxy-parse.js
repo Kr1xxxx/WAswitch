@@ -41,4 +41,12 @@ function passwordPlan(oldRaw, newRaw, typed) {
   return same ? { kind: 'old' } : { kind: 'none' };
 }
 
-module.exports = { parse, passwordPlan };
+// 保存时能不能沿用原来的加密密码：系统加密同一个密码每次得到的结果都不一样，
+// 所以重新填了和原来相同的密码时要沿用旧的那份，否则会被当成“密码改了”而重建页面、重新登录。
+//   oldPlain：原来保存的密码解密后的明文（没有或解不开时为空）。
+function keepOldPassword(plan, oldPlain) {
+  if (plan.kind === 'old') return true;
+  return plan.kind === 'new' && !!oldPlain && plan.password === oldPlain;
+}
+
+module.exports = { parse, passwordPlan, keepOldPassword };
