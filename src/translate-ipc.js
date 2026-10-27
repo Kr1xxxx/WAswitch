@@ -30,10 +30,25 @@ function setupTranslateIpc(ctx) {
   }
   const trState = () => ({ config: ctx.translator.publicConfig(), modes: ctx.modeStore.list() });
   handleShell('tr:config', () => trState());
-  handleShell('tr:provider:save', (data) => { const r = ctx.translator.saveProvider(data); pushFloat(); return { ...r, ...trState() }; });
+  // 密钥填好、测通，或换了默认服务后：之前因为“没填密钥 / 密钥不对”失败的收到消息自动重翻（别的原因失败的不动）
+  // changedId：刚改的服务商。报错的服务商是它、或已经不是默认服务了，才重翻；默认服务还没密钥就不翻
+  function retryKeyErrors(changedId = '') {
+    if (!floatCore) return;
+    const cfg = ctx.translator.load();
+    const primary = ctx.translator.provider(cfg.primaryId);
+    if (!primary || needsKey(primary)) return;
+    const touched = floatCore.retryKeyErrors({ dailyCap: cfg.dailyCap, match: (pid) => !pid || pid === changedId || pid !== primary.id });
+    if (touched.length) pushFloat();
+  }
+  handleShell('tr:provider:save', (data) => {
+    const r = ctx.translator.saveProvider(data);
+    if (r.ok && data && typeof data.key === 'string' && data.key.trim()) retryKeyErrors(r.id);
+    pushFloat();
+    return { ...r, ...trState() };
+  });
   handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') ctx.translator.deleteProvider(id); pushFloat(); return trState(); });
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
-  handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); pushFloat(); return trState(); });
+  handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
   handleShell('tr:network', async (net) => {
     // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
@@ -48,11 +63,18 @@ function setupTranslateIpc(ctx) {
     if (r.ok) { try { await applyTranslateNet(); } catch { return { error: '代理设置没生效', ...trState() }; } }
     return { ...r, ...trState() };
   });
-  handleShell('tr:test', (id) => (typeof id === 'string' ? ctx.translator.test(id) : { error: '找不到这个服务商' }));
+  handleShell('tr:test', async (id) => {
+    if (typeof id !== 'string') return { error: '找不到这个服务商' };
+    // 和用户点的翻译一样排在自动翻译前面（刚保存密钥时自动重翻可能正在跑）
+    const r = await userTranslate(null, () => ctx.translator.test(id));
+    if (r && r.ok) retryKeyErrors(id);
+    return r;
+  });
   // 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
   // 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
   const userTr = { waiting: 0, running: false, gen: 0 };
-  async function userTranslate(args) {
+  // run：真正要做的事（默认翻译；测试服务商也走这里排队）
+  async function userTranslate(args, run = (a) => ctx.translator.translate(a)) {
     const gen = userTr.gen;
     const until = Date.now() + 35000;
     userTr.waiting += 1;
@@ -62,7 +84,7 @@ function setupTranslateIpc(ctx) {
         if (!ctx.translator.busy) {
           userTr.running = true;
           let r;
-          try { r = await ctx.translator.translate(args); } finally { userTr.running = false; }
+          try { r = await run(args); } finally { userTr.running = false; }
           // 面板和悬浮窗同时点：后一个继续等
           if (!(r && r.kind === 'busy')) return r;
         }

@@ -122,9 +122,38 @@ class FloatCore {
     if (!item || item.state === 'queued' || item.state === 'running') return false;
     item.state = 'queued';
     item.err = '';
+    item.errKind = '';
     this.queue.unshift({ accId, h, manual: true, fix: fix === true });
     this.pump();
     return true;
+  }
+
+  // 密钥填好（或换了默认服务）后：因为“没填密钥 / 密钥不对”失败的消息自动重翻一次。
+  // 别的原因（额度、网络、模型名……）失败的不动。opts: { dailyCap, match(errPid) -> 要不要重翻 }
+  // 正显示在面板上的：照自动翻译的上限排队（超了就退回“翻译”按钮，不再显示旧报错）；
+  // 别的对话里的：直接忘掉，下次打开那个对话按新消息处理。返回改动了的号
+  retryKeyErrors(opts = {}) {
+    const touched = [];
+    for (const [accId, st] of this.accs) {
+      let hit = false;
+      for (const [h, item] of [...st.items]) {
+        if (item.state !== 'error' || item.errKind !== 'auth') continue;
+        if (opts.match && !opts.match(item.errPid || '')) continue;
+        hit = true;
+        item.err = ''; item.errKind = ''; item.errPid = '';
+        // 纠错失败的：原来的译文还在，直接恢复，不再请求
+        if (item.tr) { item.state = 'done'; continue; }
+        if (!st.view.includes(h)) { st.items.delete(h); continue; }
+        if (this.canAuto(st, opts.dailyCap ?? Infinity)) {
+          this.takeAuto(st);
+          item.state = 'queued';
+          this.queue.push({ accId, h });
+        } else item.state = 'manual';
+      }
+      if (hit) touched.push(accId);
+    }
+    if (touched.length) this.pump();
+    return touched;
   }
 
   // 纠错建议：采用（替换译文）或不用
@@ -190,7 +219,7 @@ class FloatCore {
         if (!this.accs.get(job.accId)) continue; // 号被删了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
-        else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
+        else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
         this.onChange(job.accId);
       }
     } finally {
