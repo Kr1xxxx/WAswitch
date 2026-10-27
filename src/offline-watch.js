@@ -69,9 +69,9 @@ class OfflineWatch {
   }
 }
 
-// 轻量号哪些状态算“断线”：在连、在重连、代理不通、后台进程重启中、需要手动处理的停止状态。
+// 轻量号哪些状态算“断线”：在连、在重连、代理不通、节点不通、后台进程重启中、需要手动处理的停止状态。
 // 扫码相关（需要扫码不是断网）不算；退出登录、被封、反复失败已经当场弹过，不再算。
-const LITE_OFFLINE = new Set(['connecting', 'reconnecting', 'proxyDown', 'crashed', 'crashLoop', 'replaced', 'outdated']);
+const LITE_OFFLINE = new Set(['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed', 'crashLoop', 'replaced', 'outdated']);
 // 网页号：P1 代理连不上、N1 页面打不开
 const WEB_OFFLINE = new Set(['proxy', 'network']);
 
