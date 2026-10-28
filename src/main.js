@@ -105,6 +105,8 @@ const PANEL_W = 380; // 右侧工作台（客户资料 / 话术 / 翻译）的�
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
 const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+// 账号头像的 emoji（打包在 src/emoji 里）
+const EMOJI = require('./emoji/list');
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
 // 开机自启时是否直接缩在托盘（在 app ready 之后判断）。
@@ -328,6 +330,13 @@ function loadAccounts() {
     acc.teamCrm = acc.teamCrm === true && !!acc.teamId;
     acc.teamExpected = typeof acc.teamExpected === 'string' && /^[A-Z]{2}$/.test(acc.teamExpected) ? acc.teamExpected : '';
   });
+  // 头像 emoji：老版本没有，或者存的不在这一套里，随机给一个别的号没用的（加载后会写回文件，只换一次）
+  const usedEmoji = list.map((a) => a.emoji).filter((e) => EMOJI.valid(e));
+  list.forEach((acc) => {
+    if (EMOJI.valid(acc.emoji)) return;
+    acc.emoji = EMOJI.pick(usedEmoji);
+    usedEmoji.push(acc.emoji);
+  });
   // 只能有一个主号；没有时把第一个网页版账号设为主号
   const primaries = list.filter((a) => a.primary);
   primaries.slice(1).forEach((a) => { a.primary = false; });
@@ -372,6 +381,10 @@ function nextName() {
   let n = accounts.length + 1;
   while (used.has(`账号 ${n}`)) n += 1;
   return `账号 ${n}`;
+}
+
+function nextEmoji() {
+  return EMOJI.pick(accounts.map((a) => a.emoji));
 }
 
 function nextColor() {
@@ -530,6 +543,7 @@ let page = 'account'; // account | editor | settings | welcome
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
+let editorEmoji = null; // 新建账号时编辑页先随机给的 emoji，重新渲染编辑页时不变
 let quitting = false;
 // MCP 想切号或打开添加页、但用户正在打字时，先挂起，在窗口顶部问用户
 let aiRequest = null; // { kind: 'switch' | 'add' | 'draft' | 'open', id?, name?, region? }（draft 见 draft-place.js，open 见 chat-open.js）
@@ -584,7 +598,7 @@ async function readUnreadChats(acc) {
 // 自带通知弹窗（屏幕右上角）。所有提醒都走它，不用系统通知
 const popup = new PopupWindow({
   getWindow: () => win,
-  account: (id) => { const a = accounts.find((x) => x.id === id); return a ? { name: a.name, color: a.color } : null; },
+  account: (id) => { const a = accounts.find((x) => x.id === id); return a ? { name: a.name, color: a.color, emoji: a.emoji } : null; },
   locked: () => locked,
   settings: () => settings,
   onOpen: (card) => notifier.open(card),
@@ -1222,6 +1236,7 @@ function pushState() {
         note: acc.note,
         phone: acc.phone,
         color: acc.color,
+        emoji: acc.emoji,
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
@@ -1360,7 +1375,7 @@ async function unparkAccount(acc) {
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
   const acc = {
-    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
@@ -2193,6 +2208,7 @@ function openEditor(id, prefill = null) {
   editorPrefill = acc ? null : prefill;
   editorId = acc ? acc.id : null;
   editorColor = acc ? acc.color : nextColor();
+  editorEmoji = acc ? acc.emoji : nextEmoji();
   editorNonce += 1;
   editorIpc.resetTest();
   editorDirty = false;
@@ -2885,6 +2901,7 @@ const ctx = {
   get customerStore() { return customerStore; },
   get editorPrefill() { return editorPrefill; },
   get editorColor() { return editorColor; },
+  get editorEmoji() { return editorEmoji; },
   get liteGuardHits() { return liteGuardHits; },
   get liteHost() { return liteHost; },
   offerUndo,

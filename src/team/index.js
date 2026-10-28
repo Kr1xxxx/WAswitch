@@ -148,7 +148,7 @@ class TeamSync {
       offline: this.joined() && !this.state.revoked && this.failures > 0,
       held: this.state.held.length,
       teamCount: accs.filter((a) => a.teamId && !a.teamHidden).length,
-      privateAccounts: accs.filter((a) => !a.teamId).map((a) => ({ id: a.id, name: a.name, color: a.color })),
+      privateAccounts: accs.filter((a) => !a.teamId).map((a) => ({ id: a.id, name: a.name, color: a.color, emoji: a.emoji })),
       uploadFields: UPLOAD_FIELDS,
       neverUpload: NEVER_UPLOAD,
       lastUpload: this.state.lastUpload ? JSON.stringify(this.state.lastUpload, null, 2) : '',

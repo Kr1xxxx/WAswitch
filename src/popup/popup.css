@@ -67,6 +67,7 @@ body { font: var(--fs-m)/1.4 var(--font-ui); color: var(--nt-ink); user-select: 
 time { margin-left: auto; color: var(--nt-sub); font-size: var(--fs-s); white-space: nowrap; flex: none; }
 .meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--nt-sub); font-size: var(--fs-s); }
 .acc { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.acc .emo { width: 14px; height: 14px; flex: none; }
 .acc i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
 .txt { opacity: .86; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
 .locked .txt { color: var(--nt-sub); opacity: 1; }
