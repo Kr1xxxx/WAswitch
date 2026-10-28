@@ -50,6 +50,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
+      - name: 翻译页 ⇄（没翻过先认原文语言）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-tp-swap.js
       - name: 翻译页重翻、补翻、纠错时转圈可取消
         run: xvfb-run -a npx electron --no-sandbox scripts/check-trpage-busy.js
       - name: 团队后台和团队模式自检
