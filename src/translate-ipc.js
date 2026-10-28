@@ -234,6 +234,7 @@ function setupTranslateIpc(ctx) {
     }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
     floatCore = new FloatCore({
       store: trStore,
+      keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
       translate: (text, { fix, context, prev } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';

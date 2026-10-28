@@ -31,6 +31,15 @@ const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d
 // 消息上显示的时间（WhatsApp 页面上写的“几点几分”），认不出就空着
 const hhmm = (t) => (t && Number.isInteger(t.h) && Number.isInteger(t.mi) ? `${String(t.h).padStart(2, '0')}:${String(t.mi).padStart(2, '0')}` : '');
 
+// 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
+const noWords = (text) => !/\p{L}/u.test(String(text));
+// 以前默认模式「看懂客户」会在译文后面另起一行写【要点】总结（shen 2026-10-28 不要）：存着的旧译文显示时去掉那段
+function dropGist(tr) {
+  const t = String(tr || '');
+  const i = t.search(/\n\s*【要点】/);
+  return i > 0 && t.slice(0, i).trim() ? t.slice(0, i).trim() : t;
+}
+
 // 轻量号的消息里图片、语音等是一个类型标签（见 lite/store.mjs 的 LABELS），本身不用翻；带说明文字的只翻说明
 const LITE_LABEL = /^\[(?:图片|视频|语音|文件|贴纸|名片|位置|实时位置|投票|活动|暂不支持的消息，请在手机上查看)\]\s*/;
 
@@ -130,6 +139,11 @@ class FloatCore {
     st.items.delete(h);
   }
 
+  // 存着的译文里的【要点】留着不删：用户现在用的「收到」模式自己要要点（deps.keepGist），或者客户原文里本来就有【要点】
+  keepGist(text) {
+    return String(text).includes('【要点】') || !!(this.deps.keepGist && this.deps.keepGist());
+  }
+
   // 读到一次当前对话。read: { title, msgs: [{ id, out, text }] }。opts: { auto, dailyCap }
   // 返回 true 表示悬浮窗要刷新
   ingest(accId, read, opts) {
@@ -151,8 +165,10 @@ class FloatCore {
       if (st.items.has(h)) continue;
       const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
-      const saved = this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
-      if (saved) { item.state = 'done'; item.tr = saved.tr; item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
+      const skip = noWords(item.text);
+      const saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
+      if (skip) item.state = 'skip';
+      else if (saved) { item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
       st.items.set(h, item);
       fresh.push(item);
     }
@@ -208,7 +224,7 @@ class FloatCore {
       if (!item) {
         const rec = store.getKey(accId, ck, x.k);
         if (!rec) continue; // 没翻过的不补（没存原文，补回来也显示不出来）
-        item = { h: x.h, ck, k: x.k, text: '', t: x.t, state: 'done', tr: rec.tr, edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '' };
+        item = { h: x.h, ck, k: x.k, text: '', t: x.t, state: 'done', tr: rec.edited || this.keepGist('') ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '' };
         st.items.set(x.h, item);
       }
       out.push(x.h);
@@ -251,7 +267,7 @@ class FloatCore {
   manual(accId, h, fix = false) {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
-    if (!item || !item.text || item.state === 'queued' || item.state === 'running') return false; // 补回来的旧译文没有原文，不能重翻
+    if (!item || !item.text || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文没有原文，不能重翻
     item.state = 'queued';
     item.err = '';
     item.errKind = '';
@@ -304,7 +320,7 @@ class FloatCore {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
     const t = String(text || '').slice(0, 4000);
-    if (!item || !t.trim() || item.state === 'queued' || item.state === 'running') return false;
+    if (!item || !t.trim() || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false;
     item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = '';
     this.save(accId, item);
     this.onChange(accId);
@@ -370,4 +386,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, fromLite, hashOf, chatOf, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };
+module.exports = { FloatCore, fromLite, hashOf, chatOf, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };
