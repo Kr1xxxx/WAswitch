@@ -12,6 +12,7 @@
 const { BrowserWindow, screen, powerMonitor } = require('electron');
 const path = require('path');
 const { PopupQueue } = require('./popup-queue');
+const EMOJI = require('./emoji/list');
 
 const CARD_W = 344;
 const PAD = { top: 4, right: 8, bottom: 24, left: 24 }; // 卡片四周留给阴影的透明边
@@ -187,7 +188,7 @@ class PopupWindow {
     const { shown, more } = this.queue.view();
     const cards = shown.map((c) => {
       const acc = c.accId ? this.hooks.account(c.accId) : null;
-      const accChip = acc ? { name: acc.name, color: acc.color } : null;
+      const accChip = acc ? { name: acc.name, color: acc.color, emoji: EMOJI.valid(acc.emoji) ? acc.emoji : '' } : null;
       if (isMsg(c)) {
         const hide = locked && c.kind === 'msg';
         return {

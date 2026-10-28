@@ -7,6 +7,7 @@ const ports = require('./ports');
 const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 const { canEncrypt } = require('./secure-storage');
 const { newAccountId } = require('./account-id');
+const EMOJI = require('./emoji/list');
 
 function setupEditorIpc(ctx) {
   const {
@@ -14,6 +15,8 @@ function setupEditorIpc(ctx) {
     COLORS, LITE_SCHEMES, newLiteKey, regionName, exitIps, exitChanges, recordExit, problems,
     saveAccounts, startAccount, startLite, createView, destroyView, refresh, notifier,
   } = ctx;
+  // 新号的图标：随机挑一个别的号没用的
+  const nextEmoji = () => EMOJI.pick(ctx.accounts.map((a) => a.emoji));
   let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
   const groupIdOf = (acc) => (acc && acc.groupId && ctx.groups.some((g) => g.id === acc.groupId) ? acc.groupId : '');
 
@@ -26,6 +29,7 @@ function setupEditorIpc(ctx) {
       note: acc ? acc.note : '',
       phone: acc ? acc.phone : '',
       color: acc ? acc.color : ctx.editorColor || nextColor(),
+      emoji: acc ? acc.emoji : ctx.editorEmoji || nextEmoji(),
       proxy: acc ? acc.proxy : '',
       hasPassword: !!(acc && acc.proxyPassword),
       region: acc ? acc.fingerprint.region : (fingerprint.regions[ctx.editorPrefill?.region] ? ctx.editorPrefill.region : 'auto'),
@@ -89,12 +93,13 @@ function setupEditorIpc(ctx) {
     return res;
   });
 
-  handleShell('editor:save', async ({ id, name, note, phone, color, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls, groupId } = {}) => {
+  handleShell('editor:save', async ({ id, name, note, phone, color, emoji, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls, groupId } = {}) => {
     name = String(name || '').trim().slice(0, 40);
     note = cleanNote(note);
     phone = cleanPhone(phone);
     if (!name) return { error: '请填写名称' };
     if (!COLORS.includes(color)) color = nextColor();
+    if (!EMOJI.valid(emoji)) emoji = findAcc(id)?.emoji || nextEmoji();
     const parsed = proxy.parse(String(proxyText || ''));
     if (parsed && parsed.error) return { error: parsed.error };
     if (!isValidRegion(region)) region = 'auto';
@@ -168,7 +173,7 @@ function setupEditorIpc(ctx) {
     const teamFirstSave = !!(acc && acc.teamNeedsProxy);
     if (teamFirstSave) { acc.teamNeedsProxy = false; problems.delete(acc.id); }
     if (!acc) {
-      acc = { id: newAccountId(ctx.accounts), name, note, phone, phoneManual: !!phone, color, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
+      acc = { id: newAccountId(ctx.accounts), name, note, phone, phoneManual: !!phone, color, emoji, proxy: proxyStored, proxyPassword: encPassword, exitLabel: tested ? tested.label : '', fingerprint: fingerprint.generate(region), muted: false, mode, primary: wantPrimary, liteKey, loggedIn: false, allowCalls: callsWanted };
       ctx.accounts.push(acc);
       if (tested) recordExit(acc, tested.ip);
       saveAccounts();
@@ -184,6 +189,7 @@ function setupEditorIpc(ctx) {
       acc.note = note;
       applyPhone(acc, phone);
       acc.color = color;
+      acc.emoji = emoji;
       acc.proxy = proxyStored;
       acc.proxyPassword = encPassword;
       saveAccounts();
@@ -203,6 +209,7 @@ function setupEditorIpc(ctx) {
       acc.note = note;
       applyPhone(acc, phone);
       acc.color = color;
+      acc.emoji = emoji;
       acc.proxy = proxyStored;
       acc.proxyPassword = encPassword;
       // 只改地区（时区），浏览器标识保持不变

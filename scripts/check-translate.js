@@ -420,43 +420,57 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'你好'}]})}];
   q=await t9.test(dr.id); assert(q.ok); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'ZH-HANS');
   fs.rmSync(d9,{recursive:true,force:true});
-  // DeepL 每个密钥每月 10 万字符：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥重新算，换回来接着算
+  // DeepL 每个使用者每月 10 万字符（可改）：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥、加第二个 DeepL 都接着算
   const d10=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   let now10=new Date(2026,9,28,12).getTime();
   const t10=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
   const zid10=t10.saveProvider({preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',key:'zk'}).id;
   const did10=t10.saveProvider({preset:'deepl',key:'k1:fx'}).id;
   t10.setRoles({primaryId:did10,fallbackId:zid10});
-  const use10=()=>t10.publicConfig().providers.find(p=>p.id===did10).usage;
-  assert.deepEqual(use10(),{used:0,cap:100000});
+  const use10=(id=did10)=>t10.publicConfig().providers.find(p=>p.id===id).usage;
+  assert.deepEqual(use10(),{used:0,cap:100000}); assert.equal(t10.publicConfig().deeplCap,100000);
   assert(!('usage' in t10.publicConfig().providers.find(p=>p.id===zid10)));
-  assert(!('usageKey' in t10.publicConfig().providers.find(p=>p.id===did10)),'hash 不给界面');
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
   q=await t10.translate({text:'你好😀',mode:{prompt:'p'},target:'英语'}); assert.equal(q.text,'Hello');
   assert.equal(use10().used,3,'按字符数（表情算 1 个）');
   calls=[]; behave=[{status:500,body:'{}'},{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
   q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'}); assert.equal(use10().used,3,'失败不记数');
-  t10.load().deeplUsage[t10.provider(did10).usageKey].chars=99999;
+  // 换密钥接着算；第二个 DeepL 服务商看到的是同一个数
+  t10.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
+  const did10b=t10.saveProvider({preset:'deepl',name:'DeepL 2',key:'k3:fx'}).id;
+  assert.equal(use10().used,3); assert.equal(use10(did10b).used,3);
+  t10.load().deeplUsage.chars=99999;
   calls=[]; behave=[{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
   q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'});
   assert.equal(q.text,'Hi'); assert.equal(q.fallback,true); assert.equal(calls.length,1); assert(!calls[0].url.includes('deepl'),'超额不发给 DeepL');
-  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语',providerId:did10});
-  assert.equal(q.kind,'quota'); assert(q.error.includes('10 万'));
+  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语',providerId:did10b});
+  assert.equal(q.kind,'quota'); assert(q.error.includes('10 万'),q.error);
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
   q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi'); assert.equal(use10().used,100000,'正好用满还能翻');
+  // 上限可改：DeepL 表单里保存，或单独改；填错不改
+  assert(t10.setDeeplCap(500).error); assert(t10.setDeeplCap('x').error); assert.equal(t10.publicConfig().deeplCap,100000);
+  assert(t10.setDeeplCap(200000).ok); assert.equal(use10().cap,200000);
+  t10.saveProvider({id:did10,preset:'deepl',monthCap:150000}); assert.equal(use10().cap,150000);
+  assert(t10.saveProvider({id:did10,preset:'deepl',name:'改名',monthCap:500}).error,'上限填错整个不存'); assert.equal(t10.provider(did10).name,'DeepL'); assert.equal(use10().cap,150000);
+  t10.saveProvider({id:zid10,preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',monthCap:5000}); assert.equal(use10().cap,150000,'别的服务商不改上限');
+  t10.setDeeplCap(100000);
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
+  t10.setDeeplCap(250000);
+  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi','调高上限后又能翻');
+  t10.setDeeplCap(15000);
+  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert(q.error.includes('15000 字符'),q.error);
   now10=new Date(2026,10,1,0,5).getTime();
   assert.equal(use10().used,0,'11 月 1 号清零');
-  t10.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
-  await t10.translate({text:'好好',mode:{prompt:'p'},target:'英语'}); assert.equal(use10().used,2);
-  t10.saveProvider({id:did10,preset:'deepl',key:'k1:fx'}); assert.equal(use10().used,0,'k1 这个月还没用');
   const raw10=JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'));
-  assert.equal(Object.keys(raw10.deeplUsage).length,1,'上个月的记录删掉了');
-  assert(!JSON.stringify(raw10).includes('k1:fx')&&!JSON.stringify(raw10).includes('k2:fx'),'不存明文密钥');
-  // 重新读文件后用量还在
+  assert.equal(raw10.deeplCap,15000); assert.equal(raw10.deeplUsage.month,'2026-10');
+  assert(!JSON.stringify(raw10).includes('k1:fx'),'不存明文密钥');
+  // 重新读文件后用量和上限还在；#216 那版按密钥分开记的，同一个月合起来
+  t10.load().deeplUsage={month:'2026-11',chars:42}; t10.save();
   const t10b=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  t10b.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
-  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,2);
+  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,42); assert.equal(t10b.publicConfig().deeplCap,15000);
+  fs.writeFileSync(path.join(d10,'translate.json'),JSON.stringify({...raw10,deeplCap:'oops',deeplUsage:{aaaaaaaaaaaaaaaa:{month:'2026-10',chars:9},bbbbbbbbbbbbbbbb:{month:'2026-11',chars:5},cccccccccccccccc:{month:'2026-11',chars:7}}}));
+  const t10c=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
+  assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.used,12); assert.equal(t10c.publicConfig().deeplCap,100000);
   fs.rmSync(d10,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
