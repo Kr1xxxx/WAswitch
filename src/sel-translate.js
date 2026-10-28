@@ -9,6 +9,7 @@
 // 视图第一次用时才建，收起后 30 秒没再用就关掉省内存（按钮和译文窗是同一个视图）。
 // 轻量号的聊天页本来就是软件自己的界面，按钮和译文窗直接画在 shell 里（lite.js，共用 seltr/card.js）。
 const path = require('path');
+const RADIX = require('./colors/radix');
 const { WebContentsView, ipcMain } = require('electron');
 
 const PAD = 6; // 视图四周留给阴影的透明边
@@ -66,7 +67,7 @@ function createSelTranslate(deps) {
     view = new WebContentsView({
       webPreferences: { preload: path.join(__dirname, 'seltr', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
     });
-    view.setBackgroundColor('#00000000');
+    view.setBackgroundColor(RADIX.TRANSPARENT);
     view.setVisible(false);
     deps.lockLocalPage(view.webContents);
     view.webContents.loadFile(path.join(__dirname, 'seltr', 'index.html'));

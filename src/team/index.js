@@ -12,6 +12,7 @@ const path = require('path');
 const { canEncrypt } = require('../secure-storage');
 const { writeJsonAtomic } = require('../atomic');
 const errtext = require('../errtext');
+const RADIX = require('../colors/radix');
 
 const PROTOCOL = 1;
 const FILE = 'team.json';
@@ -388,7 +389,7 @@ class TeamSync {
       this.state.held = this.state.held.filter((id) => id !== s.team_id);
       const fields = {
         name: typeof s.name === 'string' && s.name.trim() ? s.name.trim().slice(0, 40) : null,
-        color: typeof s.color === 'string' && COLOR_RE.test(s.color) ? s.color : null,
+        color: RADIX.accountColor(s.color) || null, // 后台存的旧颜色换成新的
         note: typeof s.note === 'string' ? s.note.slice(0, 500) : '',
         expected: typeof s.expected_country === 'string' && /^[A-Z]{2}$/.test(s.expected_country) ? s.expected_country : '',
         crm: s.crm_sync === true,
