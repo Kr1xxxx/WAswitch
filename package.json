@@ -8,6 +8,7 @@
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
     "check:middot": "node scripts/check-no-middot.js",
+    "check:agents": "node scripts/check-agents-md.js",
     "check:ime-enter": "node scripts/check-ime-enter.js",
     "check:emoji": "node scripts/check-emoji.js",
     "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-search.js && node scripts/check-mcp-customer-search.js && node scripts/check-mcp-helpers.js && node scripts/check-mcp-customers.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
@@ -45,6 +46,7 @@
     "check:sel-translate": "electron scripts/check-sel-translate.js",
     "check:tp-swap": "electron scripts/check-tp-swap.js",
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
+    "check:tr-wait": "electron scripts/check-tr-wait.js",
     "check:tr-keys": "electron scripts/check-tr-keys.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"

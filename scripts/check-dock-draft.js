@@ -133,6 +133,23 @@ const part3 = async () => {
   out.typingOld = window.__drafts.slice(n).filter((x) => x.chat === C);
   out.typingNew = window.__last(D);
   out.typingBox = window.__box();
+  // 2b) 给 D 连着写一段（字和字之间不到 2.5 秒）→ 去 WhatsApp 点开 E → 1 秒内点回回复框接着打：D 还是整段，E 只拿新打的
+  const E = 'eeeeeeeeeeeeeeee';
+  window.__type('.dk-in', '，明天发货');
+  await window.__wait(400);
+  document.activeElement.blur();
+  await window.__wait(300);
+  const nb = window.__drafts.length;
+  window.__type('.dk-in', 'Hi Lukas'); // __type 先 focus 再打
+  window.__push({ title: 'Lukas Becker', chatKey: E, draft: null });
+  await window.__wait(450);
+  out.burstOld = window.__drafts.slice(nb).filter((x) => x.chat === D);
+  out.burstOldLast = window.__last(D);
+  out.burstNew = window.__last(E);
+  // 回到 D 接着测
+  document.activeElement.blur();
+  window.__push({ title: 'Sophie Martin', chatKey: D, draft: out.burstOldLast.d });
+  await window.__wait(100);
   // 3) 放进输入框以后：草稿删掉（框里这次还在）；再改就又存
   window.__enter();
   await window.__wait(300);
@@ -201,9 +218,12 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r3.typingOld.map((x) => x.d && x.d.text), ['给新客户的'], `上一个对话留打字之前的那份 ${JSON.stringify(r3.typingOld)}`);
   assert(r3.typingNew && r3.typingNew.d.text === '补一句', `刚换对话就打的字归到新对话 ${JSON.stringify(r3.typingNew)}`);
   assert.strictEqual(r3.typingBox.text, '补一句');
+  assert(r3.burstOld.every((x) => x.d), `连着打的那段不能被删 ${JSON.stringify(r3.burstOld)}`);
+  assert.strictEqual(r3.burstOldLast.d.text, '补一句，明天发货', '上一个对话还是整段');
+  assert(r3.burstNew && r3.burstNew.d.text === 'Hi Lukas', `新对话只拿点回来以后打的 ${JSON.stringify(r3.burstNew)}`);
   assert.strictEqual(r3.used.d, null, `放进输入框后草稿删掉 ${JSON.stringify(r3.used)}`);
-  assert.strictEqual(r3.usedBox.text, '补一句', '这次框里还在');
-  assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句!', '放进去以后再改就又存');
+  assert.strictEqual(r3.usedBox.text, '补一句，明天发货', '这次框里还在');
+  assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句，明天发货!', '放进去以后再改就又存');
   assert(r3.langKept, '换目标语言不换回复框');
   assert.deepStrictEqual(errs, [], '页面没有报错');
   console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留）');
