@@ -9,8 +9,10 @@ const ROOT = path.join(__dirname, '..');
 const DIRS = ['src', 'server/src', 'server/public', 'build/art'];
 const EXT = new Set(['.js', '.mjs', '.cjs', '.html']);
 const SKIP = new Set(['node_modules', 'fonts']);
-// e.key === 'Enter'、e.code === 'NumpadEnter'、keyCode/which === 13、switch 里的 case 'Enter'
-const ENTER = /\.(?:key|code)\s*[!=]==?\s*(['"`])(?:Numpad)?Enter\1|(?:\.keyCode|\.which)\s*[!=]==?\s*13\b|case\s+(['"`])(?:Numpad)?Enter\2/g;
+// 认这几种写法：e.key === 'Enter'（解构出来的 key === 'Enter' 也算）、code === 'NumpadEnter'、keyCode/which === 13、
+// switch 里的 case 'Enter'、['Enter', 'NumpadEnter'].includes(e.key)。
+// 守卫写在辅助函数里、或者处理函数单独命名再 addEventListener 的，这里看不出来，会报：就照报错写在处理里面。
+const ENTER = /\b(?:key|code)\s*[!=]==?\s*(['"`])(?:Numpad)?Enter\1|(?:\.keyCode|\.which)\s*[!=]==?\s*13\b|case\s+(['"`])(?:Numpad)?Enter\2|\[[^\]\n]*(['"`])(?:Numpad)?Enter\3[^\]\n]*\]\s*\.includes\(/g;
 const HANDLER = /key(?:down|up|press)/gi;
 const BACK = 2000; // 往回最多找这么多字去找处理函数的开头
 
@@ -22,7 +24,8 @@ function findBad(text) {
     if (lineEnd < 0) lineEnd = text.length;
     const from = Math.max(0, m.index - BACK);
     let start = lineStart;
-    for (const h of text.slice(from, m.index).matchAll(HANDLER)) start = Math.min(lineStart, from + h.index);
+    // 取离这个回车判断最近的那个 keydown/keyup/keypress，前面别的处理里的守卫不算
+    for (const h of text.slice(from, m.index).matchAll(HANDLER)) start = from + h.index;
     const region = text.slice(start, lineEnd);
     if (!/isComposing/.test(region) || !/\b229\b/.test(region)) {
       bad.push({ line: text.slice(0, m.index).split('\n').length, code: text.slice(lineStart, lineEnd).trim() });
@@ -39,6 +42,9 @@ const selfTest = [
   ["el.addEventListener('keydown', (e) => {\n  if (e.isComposing || e.keyCode === 229) return;\n  if (e.key === 'Enter') go();\n});", 0],
   ["onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) go(); },", 0],
   ["el.onkeydown = (e) => { switch (e.key) { case 'Enter': go(); } };", 1],
+  ["el.addEventListener('keydown', (e) => { if (['Enter', 'NumpadEnter'].includes(e.key)) go(); });", 1],
+  ["el.addEventListener('keydown', ({ key }) => { if (key === 'Enter') go(); });", 1],
+  ["a.addEventListener('keydown', (e) => { if (e.isComposing || e.keyCode === 229) return; });\nb.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });", 1],
 ];
 for (const [code, want] of selfTest) {
   const got = findBad(code).length;

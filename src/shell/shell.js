@@ -2177,7 +2177,7 @@ function lockPage() {
   thumb.addEventListener('pointerup', end);
   thumb.addEventListener('pointercancel', end);
   thumb.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
+    if (e.isComposing || e.keyCode === 229) return; // 滑块不会有输入法选字，这行是为了所有回车处理一个写法（check:ime-enter）
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); unlock(); }
   });
   lockEl = h('div', { class: 'lockpage' },
