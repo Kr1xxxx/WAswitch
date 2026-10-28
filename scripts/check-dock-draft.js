@@ -43,8 +43,9 @@ const part1 = async () => {
   window.__type('.dk-out', '!');
   await window.__wait(450);
   out.edited = window.__last('aaaaaaaaaaaaaaaa');
-  // 正在打字时换到对话 B：马上存 A，回复框换成 B 的（空的）
+  // 打完字去 WhatsApp 点开对话 B（焦点离开回复框）：马上存 A，回复框换成 B 的（空的）
   window.__type('.dk-in', '。');
+  document.activeElement.blur();
   const n = window.__drafts.length;
   window.__push({ title: 'Lukas Becker', chatKey: 'bbbbbbbbbbbbbbbb', draft: null });
   out.flushNow = window.__drafts.slice(n);
@@ -53,6 +54,7 @@ const part1 = async () => {
   window.__type('.dk-in', 'Wann kommt die Perücke?');
   await window.__wait(450);
   out.typedB = window.__last('bbbbbbbbbbbbbbbb');
+  document.activeElement.blur();
   // 切回 A：主进程给 A 存的草稿
   window.__push({ draft: out.flushNow[0] && out.flushNow[0].d });
   await window.__wait(50);
@@ -102,6 +104,56 @@ const part2 = async (draft) => {
   return out;
 };
 
+// Fable 审计 2026-10-28：空对话、刚换对话就打字、放进输入框后、换目标语言
+const part3 = async () => {
+  const A = 'aaaaaaaaaaaaaaaa'; const C = 'cccccccccccccccc'; const D = 'dddddddddddddddd';
+  window.__cbs.state({ accounts: [{ id: 'a1', name: 'Shop', color: '#3b82f6' }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
+  window.__push({ draft: { text: '给 Emma 的', out: '' } });
+  await window.__wait(300);
+  const out = {};
+  // 1) 打开还没有消息的新对话（chatKey 空）：回复框清空，这里写的不存到 Emma 名下；新客户发来消息、认出对话后归到它
+  window.__push({ title: 'New Lead', chatKey: '', items: [] });
+  await window.__wait(50);
+  out.emptyBox = window.__box();
+  window.__type('.dk-in', '给新客户的');
+  await window.__wait(450);
+  out.emptySent = (window.__drafts || []).filter((x) => x.chat === A && x.d && /新客户/.test(x.d.text)).length;
+  document.activeElement.blur();
+  window.__push({ title: 'New Lead', chatKey: C, draft: null });
+  await window.__wait(450);
+  out.emptyCarried = window.__last(C);
+  out.emptyCarriedBox = window.__box();
+  // 2) 刚点开对话 D、还没读到就点进回复框接着打字：这一阵打的字归到 D，C 留打字之前的那份
+  await window.__wait(2700); // 上一阵打字已经过去
+  window.__type('.dk-in', ' 补一句');
+  const n = window.__drafts.length;
+  out.hasFocus = document.hasFocus();
+  window.__push({ title: 'Sophie Martin', chatKey: D, draft: null });
+  await window.__wait(450);
+  out.typingOld = window.__drafts.slice(n).filter((x) => x.chat === C);
+  out.typingNew = window.__last(D);
+  out.typingBox = window.__box();
+  // 3) 放进输入框以后：草稿删掉（框里这次还在）；再改就又存
+  window.__enter();
+  await window.__wait(300);
+  window.__insertResult = 'ok';
+  document.querySelector('.dk-insert').click();
+  await window.__wait(450);
+  out.used = window.__last(D);
+  out.usedBox = window.__box();
+  window.__type('.dk-in', '!');
+  await window.__wait(450);
+  out.editedAfter = window.__last(D);
+  // 4) 换目标语言（dock:lang 返回的状态也走 dockAdopt）：回复框不变
+  window.__dock = window.__base({ title: 'Sophie Martin', chatKey: D, draft: null, target: '德语', targetSrc: 'manual' });
+  const before = window.__box().text;
+  const sel = document.querySelectorAll('.dk-bar-sel')[1];
+  sel.value = '德语'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+  await window.__wait(100);
+  out.langKept = window.__box().text === before;
+  return out;
+};
+
 let w = null;
 const errs = [];
 app.whenReady().then(async () => {
@@ -133,9 +185,27 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual([r2.restored.text, r2.restored.out, r2.restored.edited], ['您好，有货', 'EN:您好，有货!', true], `重启后恢复 ${JSON.stringify(r2.restored)}`);
   assert.strictEqual(r2.sentOnLoad, 0, '恢复时不重复存');
   assert.strictEqual(r2.noKeySent, 0, '还没认出对话时不存');
-  assert(r2.carried && r2.carried.acc === 'a2' && r2.carried.d.text === 'Thanks!', `认出对话后归到那个对话 ${JSON.stringify(r2.carried)}`);
-  assert.strictEqual(r2.carriedBox.text, 'Thanks!', '没认出对话时写的字不被旧草稿盖掉');
+  assert(r2.carried && r2.carried.acc === 'a2', `认出对话后归到那个对话 ${JSON.stringify(r2.carried)}`);
+  assert.strictEqual(r2.carried.d.text, '旧的\nThanks!', '认出的对话原来有草稿：原来的在前，没认出时写的接在后面');
+  assert.strictEqual(r2.carriedBox.text, '旧的\nThanks!', '没认出对话时写的字不被旧草稿盖掉');
+
+  await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
+  await w.webContents.executeJavaScript(`(${helpers})()`);
+  w.focus();
+  const r3 = await w.webContents.executeJavaScript(`(${part3})()`);
+  assert.deepStrictEqual([r3.emptyBox.text, r3.emptyBox.out], ['', ''], `打开没有消息的新对话，回复框清空 ${JSON.stringify(r3.emptyBox)}`);
+  assert.strictEqual(r3.emptySent, 0, '空对话里写的不能存到上一个客户名下');
+  assert(r3.emptyCarried && r3.emptyCarried.d.text === '给新客户的', `认出对话后归到新客户 ${JSON.stringify(r3.emptyCarried)}`);
+  assert.strictEqual(r3.emptyCarriedBox.text, '给新客户的');
+  assert(r3.hasFocus, '窗口要有焦点才测得了“刚换对话就打字”');
+  assert.deepStrictEqual(r3.typingOld.map((x) => x.d && x.d.text), ['给新客户的'], `上一个对话留打字之前的那份 ${JSON.stringify(r3.typingOld)}`);
+  assert(r3.typingNew && r3.typingNew.d.text === '补一句', `刚换对话就打的字归到新对话 ${JSON.stringify(r3.typingNew)}`);
+  assert.strictEqual(r3.typingBox.text, '补一句');
+  assert.strictEqual(r3.used.d, null, `放进输入框后草稿删掉 ${JSON.stringify(r3.used)}`);
+  assert.strictEqual(r3.usedBox.text, '补一句', '这次框里还在');
+  assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句!', '放进去以后再改就又存');
+  assert(r3.langKept, '换目标语言不换回复框');
   assert.deepStrictEqual(errs, [], '页面没有报错');
-  console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删）');
+  console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留）');
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });

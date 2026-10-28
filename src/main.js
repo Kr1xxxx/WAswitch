@@ -2300,11 +2300,11 @@ async function removeAccount(id, { timeoutMs } = {}) {
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
   if (trIpc.floatCore) trIpc.floatCore.forget(id);
-  trIpc.forgetDrafts(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   const wasPrimary = acc.primary;
   accounts = accounts.filter((a) => a.id !== id);
+  trIpc.forgetDrafts(id); // 号已经不在了：之后晚到的草稿不再收
   // 删掉主号后，第一个网页版账号自动成为主号
   const newPrimary = wasPrimary ? accounts.find((a) => a.mode === 'web') : null;
   if (newPrimary) newPrimary.primary = true;

@@ -149,7 +149,7 @@ npm run check:lite
 - OpenRouter 默认要求只用不拿数据训练的上游服务商。
 - 译文里如果出现原文没有的链接、电话或邮箱，会有黄色提醒。
 
-数据只存在这台电脑的用户数据目录里，是明文 JSON（和 `accounts.json` 一样）：`quick-replies.json`、`customers.json`、`translate-modes.json`；服务商设置在 `translate.json`（密钥是加密的）；工作台回复框没发的草稿在 `reply-drafts.json`（每个对话一份，清空回复框或删号就删）。
+数据只存在这台电脑的用户数据目录里，是明文 JSON（和 `accounts.json` 一样）：`quick-replies.json`、`customers.json`、`translate-modes.json`；服务商设置在 `translate.json`（密钥是加密的）；工作台回复框没发的草稿在 `reply-drafts.json`（每个对话一份，放进输入框、清空回复框或删号就删）。
 
 - 不同步，也不上传。
 - 不会写进日志或自检结果。
