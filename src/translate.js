@@ -9,7 +9,28 @@ const { writeJsonAtomic } = require('./atomic');
 const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
-const RETRY_MS = 1500; // 服务商太忙时，等多久再试一次
+// 服务商太忙（429）：服务商给了 Retry-After 就按它等，没给就 1.5、3、6 秒（各自加减 15% 随机，
+// 几个号同时撞上限流时不会一起再撞一次）。最多重试 3 次，还忙就换备用；要等超过 20 秒的不等，直接换
+const RETRY_MS = 1500;
+const RETRY_MAX = 3;
+const RETRY_WAIT_MAX = 20000;
+const RETRY_JITTER = 0.15;
+// Retry-After：秒数或 HTTP 日期 -> 毫秒；没有或看不懂 -> null
+function retryAfterMs(v, now = Date.now()) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s) * 1000);
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? Math.max(0, t - now) : null;
+}
+// 第 n 次重试（从 0 起）前等多久。after = 服务商说的 Retry-After（毫秒）；rand() 在 [0, 1)
+// 有 Retry-After 只往后加随机（不早于服务商说的），没有就在指数退避上下浮动。
+// Retry-After 是 0 或已经过去的日期（两边时钟不准）当没给，免得几毫秒内连发 3 次
+function backoffMs(n, after, base = RETRY_MS, rand = Math.random) {
+  if (Number.isFinite(after) && after > 0) return Math.round(after * (1 + RETRY_JITTER * rand()));
+  return Math.round(base * 2 ** n * (1 + RETRY_JITTER * (2 * rand() - 1)));
+}
 const MAX_PROVIDERS = 10;
 const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成智谱，DeepL 当备用（只改还在用出厂设置的）
 const MAX_CHAT_LANGS = 1000;
@@ -769,7 +790,7 @@ class Translator {
     if (!res.ok) {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
-      if (res.status === 429) throw { kind: 'overload', text: tooFastText(provName(p)), status: 429 };
+      if (res.status === 429) throw { kind: 'overload', text: tooFastText(provName(p)), status: 429, retryAfter: res.retryAfter };
       if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
@@ -794,7 +815,9 @@ class Translator {
       if (signal.aborted) throw stopped();
       throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）', detail: String((e && e.message) || e || '').slice(0, 200) };
     }
-    try { return { ok: res.ok, status: res.status, text: await readCapped(res) }; } catch (e) {
+    let after = null;
+    try { after = retryAfterMs(res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null); } catch {}
+    try { return { ok: res.ok, status: res.status, text: await readCapped(res), retryAfter: after }; } catch (e) {
       if (e && e.kind === 'big') throw { kind: 'big', text: '服务商返回的内容太大，已丢弃' };
       if (signal.aborted) throw stopped();
       throw { kind: 'network', text: '连接中断' };
@@ -825,11 +848,11 @@ class Translator {
     if (!res.ok) {
       const err = statusError(res.status, provName(p));
       const detail = providerDetail(text, key);
-      // 429：限流（混元 hy-mt2-plus 常见）原地重试一次再换备用；说的是余额不足（智谱 1113）就不重试，直接换备用。
+      // 429：限流（混元 hy-mt2-plus、智谱并发上限常见）按 Retry-After 或退避原地重试，还忙再换备用；说的是余额不足（智谱 1113）就不重试，直接换备用。
       // 两种都只提示“请求太频繁，请重试”，不接服务商原话
       if (res.status === 429) {
         const broke = /余额|欠费|资源包|充值|insufficient|balance|arrear|billing|quota exceeded/i.test(detail) || /"code"\s*:\s*"?1113\b/.test(text);
-        throw { kind: broke ? 'quota' : 'overload', text: tooFastText(provName(p)), status: 429 };
+        throw { kind: broke ? 'quota' : 'overload', text: tooFastText(provName(p)), status: 429, retryAfter: res.retryAfter };
       }
       // 密钥错时带上服务商 id，界面给“去填密钥”按钮
       throw withDetail(err, res.status, detail, p);
@@ -846,7 +869,8 @@ class Translator {
   // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind }
   // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
   // providerId：指定用哪个服务商（翻译页上用户自己选的），只用它，不换备用
-  async translate({ text, mode, target, source, context, draft, fix, providerId } = {}) {
+  // onWait(ms)：太忙要等着重试时告诉界面还要等多久（按钮上倒计时），等完再调一次 onWait(0)
+  async translate({ text, mode, target, source, context, draft, fix, providerId, onWait } = {}) {
     const c = this.load();
     if (typeof text !== 'string' || !text.trim()) return { error: '先放一段要翻译的文字', kind: 'input' };
     if (text.length > MAX_INPUT) return { error: `一次最多 ${MAX_INPUT} 个字`, kind: 'input' };
@@ -869,28 +893,46 @@ class Translator {
     const fb = this.provider(c.fallbackId);
     // 备用没填密钥就不换过去，免得把默认服务商的错换成“备用还没填密钥”
     const chain = [primary, !pinned && fb && fb.id !== primary.id && !needsKey(fb) ? fb : null].filter(Boolean);
+    const stopped = (reason) => ({ kind: reason === 'timeout' ? 'timeout' : 'cancel', text: reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' });
+    // 一次请求：各自 30 秒（等着重试的时间不算），用户点取消立刻停
+    const callOnce = async (p) => {
+      const attempt = new AbortController();
+      const onCancel = () => attempt.abort('cancel');
+      controller.signal.addEventListener('abort', onCancel);
+      const timer = setTimeout(() => attempt.abort('timeout'), TIMEOUT_MS);
+      try { return await once(p, attempt.signal); } finally {
+        clearTimeout(timer);
+        controller.signal.removeEventListener('abort', onCancel);
+      }
+    };
+    const tell = (ms) => { if (typeof onWait === 'function') { try { onWait(ms); } catch {} } };
+    const sleep = (ms) => new Promise((ok) => {
+      if (controller.signal.aborted) return ok();
+      const t = setTimeout(ok, ms);
+      controller.signal.addEventListener('abort', () => { clearTimeout(t); ok(); }, { once: true });
+    });
+    const rand = this.deps.random || Math.random;
+    const base = this.deps.retryMs ?? RETRY_MS;
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
         const p = chain[i];
-        // 每个服务商各自 30 秒
-        const attempt = new AbortController();
-        const onCancel = () => attempt.abort('cancel');
-        controller.signal.addEventListener('abort', onCancel);
-        const timer = setTimeout(() => attempt.abort('timeout'), TIMEOUT_MS);
         try {
           let out;
-          try {
-            out = await once(p, attempt.signal);
-          } catch (e) {
-            // 服务商太忙：等一下再试一次，还忙就换备用
-            if (!(e && e.kind === 'overload') || attempt.signal.aborted) throw e;
-            await new Promise((ok) => {
-              const t = setTimeout(ok, this.deps.retryMs ?? RETRY_MS);
-              attempt.signal.addEventListener('abort', () => { clearTimeout(t); ok(); }, { once: true });
-            });
-            if (attempt.signal.aborted) throw { kind: attempt.signal.reason === 'timeout' ? 'timeout' : 'cancel', text: attempt.signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' };
-            out = await once(p, attempt.signal);
+          for (let n = 0; ; n += 1) {
+            try {
+              out = await callOnce(p);
+              break;
+            } catch (e) {
+              // 服务商太忙：按 Retry-After 或退避等一下再试，最多 3 次，还忙就换备用；要等太久的不等
+              if (!(e && e.kind === 'overload') || controller.signal.aborted || n >= RETRY_MAX) throw e;
+              const ms = backoffMs(n, e.retryAfter, base, rand);
+              if (ms > RETRY_WAIT_MAX) throw e;
+              tell(ms);
+              await sleep(ms);
+              tell(0);
+              if (controller.signal.aborted) throw stopped('cancel');
+            }
           }
           this.stats.ok += 1;
           return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
@@ -898,9 +940,6 @@ class Translator {
           const err = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
           // 备用自己配置不对（密钥、地址、模型、语言）：还是报默认服务商的错
           if (!(i > 0 && lastErr && ['auth', 'config', 'lang', 'model', 'bad'].includes(err.kind))) lastErr = err;
-        } finally {
-          clearTimeout(timer);
-          controller.signal.removeEventListener('abort', onCancel);
         }
         // 网络、超时、服务商太忙、余额用完和 5xx 换备用；密钥、模型名错了或用户取消不换
         if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload', 'quota'].includes(lastErr.kind)) break;
@@ -935,5 +974,5 @@ class Translator {
   }
 }
 
-module.exports = { WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { retryAfterMs, backoffMs, RETRY_MAX, RETRY_WAIT_MAX, WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 
