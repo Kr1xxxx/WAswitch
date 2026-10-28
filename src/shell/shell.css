@@ -69,7 +69,10 @@ body.collapsed .head { justify-content: center; padding: 0; }
 .row.on { background: rgba(255,255,255,.88); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 body.collapsed .row { justify-content: center; padding: 0; }
 .avatar { position: relative; width: 28px; height: 28px; flex: none; border-radius: 8px; color: #fff; font-size: var(--fs-s); font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.avatar.add { border: var(--hair) dashed rgba(0,0,0,.3); color: var(--soft); }
+/* 头像是打包的 emoji 图：不要底色，图本身就是识别 */
+.avatar.emoji { background: none; }
+.emo { display: block; flex: none; }
+.memname .emo, .tr-auto-name .emo, .tr-prow .emo { display: inline-block; vertical-align: -3px; margin-right: 8px; }
 .dot { position: absolute; top: -6px; right: -7px; min-width: 18px; height: 18px; padding: 0 3px; border-radius: 9px; border: 2px solid var(--tint); background: var(--text); color: #fff; font-size: var(--fs-s); font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .dot.bad { background: #d4323b; }
 .dot.quiet { background: #8a9099; }
@@ -85,6 +88,11 @@ body.collapsed .row { justify-content: center; padding: 0; }
 .pill { min-width: 20px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--text); color: #fff; font-size: var(--fs-s); font-weight: 600; display: flex; align-items: center; justify-content: center; }
 .pill.quiet { background: #8a9099; }
 .side-label { display: flex; align-items: center; justify-content: space-between; }
+.side-label .add-btn { width: 24px; height: 24px; margin: -4px -5px -4px 0; border-radius: 6px; color: var(--muted); }
+.side-label .add-btn:hover { color: var(--text); }
+.side-label .add-btn.on { background: rgba(255,255,255,.88); color: var(--text); }
+body.collapsed .side-label { justify-content: center; padding: 2px 0; }
+body.collapsed .side-label .add-btn { margin: 0; width: 28px; height: 28px; border-radius: 8px; }
 .link-btn { border: none; background: transparent; color: var(--muted); font-size: var(--fs-s); font-weight: 600; padding: 0 2px; cursor: pointer; }
 .link-btn:hover { color: var(--text); }
 .group-head { display: flex; align-items: center; gap: 4px; height: 24px; margin-top: 6px; padding: 0 6px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--fs-s); font-weight: 600; letter-spacing: .04em; text-align: left; width: 100%; }
@@ -179,8 +187,18 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 40px; }
 /* 名称 + 颜色：窗口窄时颜色整排换到名称下面，不被右边的说明卡片挡住 */
 .name-row { align-items: flex-end; gap: 14px; flex-wrap: wrap; }
-.name-row > .field:first-child { flex: 1 1 180px; }
+.name-row > .name-field { flex: 1 1 180px; }
+.name-input { gap: 8px; }
+.name-input input { flex: 1; width: 0; min-width: 0; }
 @media (max-width: 1060px) { .page:not(.narrow) { gap: 24px; padding: 32px 24px; } .side-panel { width: 210px; padding: 18px; } }
+/* 编辑页的图标：名称左边一个方块，点开下面一整套 emoji（Radix slate 3/5 做悬停和选中） */
+.emoji-btn { width: 40px; height: 40px; padding: 0; border: var(--hair) solid var(--field); border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; }
+.emoji-btn:hover, .emoji-btn.on { background: #F0F0F3; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 36px); gap: 4px; padding: 6px; width: max-content; max-width: 100%; border: var(--hair) solid var(--field); border-radius: 12px; background: #fff; }
+.emoji-grid[hidden] { display: none; }
+.emoji-cell { width: 36px; height: 36px; padding: 0; border: none; border-radius: 6px; background: transparent; display: flex; align-items: center; justify-content: center; }
+.emoji-cell:hover { background: #F0F0F3; }
+.emoji-cell.on { background: #E0E1E6; }
 .swatch { width: 26px; height: 26px; border-radius: 8px; border: none; padding: 0; }
 .swatch.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -656,11 +674,24 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
    不加阴影；动画只有按钮状态的淡入淡出，250ms ease-out */
 .tp {
   --s1: #fcfcfd; --s2: #f9f9fb; --s3: #f0f0f3; --s4: #e8e8ec; --s5: #e0e1e6; --s6: #d9d9e0; --s7: #cdced6; --s8: #b9bbc6;
-  --s11: #60646c; --s12: #1c2024; --b9: #0090ff; --g3: #e6f6eb; --g9: #30a46c; --g11: #218358; --r9: #e5484d; --r11: #ce2c31;
+  --s11: #60646c; --s12: #1c2024; --b9: #0090ff; --g3: #e6f6eb; --g9: #30a46c; --g11: #218358; --r9: #e5484d; --r11: #ce2c31; --a9: #ffc53d;
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: var(--fs-m); line-height: 1.5;
 }
 .tp-head { flex: none; height: 48px; display: flex; align-items: center; padding: 0 24px; border-bottom: var(--hair) solid var(--s5); }
 .tp-head h1 { font-size: var(--fs-m); font-weight: 600; letter-spacing: 0; }
+/* 右上角三个服务商：上面名字和是否启用，下面额度。按钮内边距 8，整组往右挪 8，字和下面内容的右边对齐 */
+.tp-provs { margin: 0 -8px 0 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.tp-prov { flex: none; min-width: 112px; height: 40px; display: flex; flex-direction: column; justify-content: center; gap: 0; padding: 0 8px; border: 0; border-radius: 8px;
+  background: transparent; font: inherit; font-size: var(--fs-s); line-height: 16px; text-align: left; color: var(--s11); }
+.tp-prov:hover { background: var(--s3); }
+.tp-prov-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tp-prov-name { font-weight: 500; color: var(--s12); }
+.tp-prov-on.on { color: var(--g11); }
+.tp-prov-quota { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tp-meter { flex: none; width: 40px; height: 4px; border-radius: 2px; background: var(--s4); overflow: hidden; }
+.tp-meter-fill { display: block; height: 100%; border-radius: 2px; background: var(--b9); }
+.tp-meter.near .tp-meter-fill { background: var(--a9); }
+.tp-meter.full .tp-meter-fill { background: var(--r9); }
 .tp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px 24px; }
 .tp-bar { flex: none; display: flex; align-items: center; gap: 4px; }
 .tp select.tp-lang { height: 32px; max-width: 220px; padding: 0 28px 0 12px; border: 0; border-radius: 8px; background-color: var(--s3); font-size: var(--fs-m); color: var(--s12); }

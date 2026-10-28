@@ -78,10 +78,39 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   calls=[]; q=await tr.translate({text:'你好',mode,providerId:'gone'});
   assert.equal(q.kind,'config'); assert.equal(calls.length,0);
   behave=[busy,busy,busy,busy]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert(!/busy|capacity/i.test(q.error) && /忙/.test(q.error), q.error);
-  // 429 但说的是余额不足：不重试
-  behave=[{status:429,body:'{"error":{"message":"余额不足"}}'}]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,1);
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.detail, JSON.stringify(q));
+  // 429 但说的是余额不足（智谱 1113）：不原地重试，直接换备用
+  const broke={status:429,body:'{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}'};
+  behave=[broke,null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
+  // 备用也没余额：只说一句，不接服务商原话
+  behave=[broke,broke]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,2);
+  assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!/余额|充值/.test(JSON.stringify(q)), JSON.stringify(q));
+  // 只有 code 1113、没有中文说明：也算没余额
+  behave=[{status:429,body:'{"error":{"code":"1113"}}'},null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===2, JSON.stringify(q));
+  // 402 没余额：也换备用
+  behave=[{status:402,body:'{}'},null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback, JSON.stringify(q));
+  // 没设备用：只说一句，不教人去设置
+  const fbKeep=tr.load().fallbackId; tr.setRoles({primaryId:pid,fallbackId:''});
+  behave=[busy,busy]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'OpenRouter 请求太频繁，请重试');
+  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
+  // 出厂配置：智谱默认、DeepL 备用但没填密钥。智谱没余额：不换到没密钥的备用，还是只说智谱那句
+  const dlNo=tr.saveProvider({preset:'deepl'}); assert(dlNo.ok, JSON.stringify(dlNo));
+  tr.setRoles({primaryId:fbKeep,fallbackId:dlNo.id});
+  behave=[broke]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,1);
+  behave=[busy,busy]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert.equal(q.kind,'overload');
+  // 备用有密钥但不对：报默认服务商的错，不报备用的
+  tr.setRoles({primaryId:fbKeep,fallbackId:pid});
+  behave=[broke,{status:401,body:'{}'}]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,2);
+  tr.deleteProvider(dlNo.id);
+  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
   // cancel
   behave=['hang']; calls=[];
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);
@@ -416,6 +445,44 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'你好'}]})}];
   q=await t9.test(dr.id); assert(q.ok); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'ZH-HANS');
   fs.rmSync(d9,{recursive:true,force:true});
+  // DeepL 每个密钥每月 10 万字符：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥重新算，换回来接着算
+  const d10=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  let now10=new Date(2026,9,28,12).getTime();
+  const t10=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
+  const zid10=t10.saveProvider({preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',key:'zk'}).id;
+  const did10=t10.saveProvider({preset:'deepl',key:'k1:fx'}).id;
+  t10.setRoles({primaryId:did10,fallbackId:zid10});
+  const use10=()=>t10.publicConfig().providers.find(p=>p.id===did10).usage;
+  assert.deepEqual(use10(),{used:0,cap:100000});
+  assert(!('usage' in t10.publicConfig().providers.find(p=>p.id===zid10)));
+  assert(!('usageKey' in t10.publicConfig().providers.find(p=>p.id===did10)),'hash 不给界面');
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
+  q=await t10.translate({text:'你好😀',mode:{prompt:'p'},target:'英语'}); assert.equal(q.text,'Hello');
+  assert.equal(use10().used,3,'按字符数（表情算 1 个）');
+  calls=[]; behave=[{status:500,body:'{}'},{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
+  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'}); assert.equal(use10().used,3,'失败不记数');
+  t10.load().deeplUsage[t10.provider(did10).usageKey].chars=99999;
+  calls=[]; behave=[{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
+  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'});
+  assert.equal(q.text,'Hi'); assert.equal(q.fallback,true); assert.equal(calls.length,1); assert(!calls[0].url.includes('deepl'),'超额不发给 DeepL');
+  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语',providerId:did10});
+  assert.equal(q.kind,'quota'); assert(q.error.includes('10 万'));
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
+  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi'); assert.equal(use10().used,100000,'正好用满还能翻');
+  now10=new Date(2026,10,1,0,5).getTime();
+  assert.equal(use10().used,0,'11 月 1 号清零');
+  t10.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
+  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
+  await t10.translate({text:'好好',mode:{prompt:'p'},target:'英语'}); assert.equal(use10().used,2);
+  t10.saveProvider({id:did10,preset:'deepl',key:'k1:fx'}); assert.equal(use10().used,0,'k1 这个月还没用');
+  const raw10=JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'));
+  assert.equal(Object.keys(raw10.deeplUsage).length,1,'上个月的记录删掉了');
+  assert(!JSON.stringify(raw10).includes('k1:fx')&&!JSON.stringify(raw10).includes('k2:fx'),'不存明文密钥');
+  // 重新读文件后用量还在
+  const t10b=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
+  t10b.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
+  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,2);
+  fs.rmSync(d10,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(d7,'translate.json'),JSON.stringify({accountAuto:{a:true},autoConsent:{a:true,b:true},consented:{x:true}}));

@@ -68,8 +68,17 @@
     if (c.acc && c.kind === 'msg') {
       const meta = h('div', 'meta');
       const chip = h('span', 'acc');
-      const dot = h('i');
-      dot.style.background = c.acc.color || '#888';
+      // 账号的 emoji 图标（主进程只发这一套里的名字）；没有时还是颜色小圆点
+      let dot;
+      if (/^[a-z]+$/.test(c.acc.emoji || '')) {
+        dot = document.createElement('img');
+        dot.className = 'emo';
+        dot.alt = '';
+        dot.src = `../emoji/svg/${c.acc.emoji}.svg`;
+      } else {
+        dot = h('i');
+        dot.style.background = c.acc.color || '#888';
+      }
       chip.append(dot, document.createTextNode(c.acc.name || ''));
       meta.append(chip);
       body.append(meta);
