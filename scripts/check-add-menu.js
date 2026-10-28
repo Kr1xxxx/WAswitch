@@ -1,7 +1,7 @@
 // 侧栏不再有「添加账号」行，改成「账号」旁的 + 号，点开选添加账号或添加分组（shen 2026-10-28）。
 // 真的 shell 页面 + 假的主进程。检查：1) 侧栏里没有「添加账号」行，展开和收起侧栏都有 + 号；
 // 2) 点 + 号把按钮下方的坐标交给主进程弹菜单，菜单是「添加账号」「添加分组」，选了分别打开编辑页、新建分组；
-// 3) 有分组时添加账号页有「分组」，默认是正在看的那个号所在的组，保存时带上。SHOT_DIR 设了就存截图（菜单用 import 截整屏）。
+// 3) 有分组时添加账号页有「分组」，默认是正在看的那个号所在的组，保存时带上；另外编辑页开多次，morphState 不留旧的测试按钮状态（正文第 6 步）。SHOT_DIR 设了就存截图（菜单用 import 截整屏）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
 const path = require('path');
 const fs = require('fs');
@@ -108,5 +108,15 @@ app.whenReady().then(async () => {
   await js((s) => window.__cbs.state({ ...s, groups: [], page: 'editor', editorId: null, editorNonce: 2 }), base);
   await wait(500);
   assert.strictEqual(await js(() => !!document.querySelector('#body select[aria-label="分组"]')), false, '没有分组时不显示');
+
+  // 6) 编辑页开很多次、每次点「测试」：morphState 里只留最后一次的测试按钮状态，不越攒越多
+  for (let n = 3; n <= 8; n += 1) {
+    await js((s, nonce) => window.__cbs.state({ ...s, groups: [], page: 'editor', editorId: null, editorNonce: nonce }), base, n);
+    await wait(200);
+    await js(() => [...document.querySelectorAll('#body button')].find((b) => b.textContent.includes('测试')).click());
+    await wait(100);
+  }
+  const keys = await js(() => Object.keys(morphState).filter((k) => k.startsWith('editorTest:')));
+  assert.deepStrictEqual(keys, ['editorTest:new:8'], `旧的编辑页测试状态没清掉：${keys}`);
   done(0, 'check-add-menu: ok');
 }).catch((e) => done(1, `check-add-menu FAILED: ${e.stack || e.message}`));

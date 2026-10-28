@@ -13,6 +13,7 @@ const { BrowserWindow, screen, powerMonitor } = require('electron');
 const path = require('path');
 const { PopupQueue } = require('./popup-queue');
 const EMOJI = require('./emoji/list');
+const RADIX = require('./colors/radix');
 
 const CARD_W = 344;
 const PAD = { top: 4, right: 8, bottom: 24, left: 24 }; // 卡片四周留给阴影的透明边
@@ -114,7 +115,7 @@ class PopupWindow {
     this.lastSig = '';
     this.win = new BrowserWindow({
       width: WIN_W, height: WIN_H, ...this.position(),
-      show: false, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+      show: false, frame: false, transparent: true, backgroundColor: RADIX.TRANSPARENT, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, closable: true,
       skipTaskbar: true, focusable: false, alwaysOnTop: true, title: 'WAswitch 通知',
       ...(mac ? { type: 'panel' } : {}),
@@ -336,7 +337,7 @@ function initials(name) {
   return (first + second).toUpperCase();
 }
 
-const AVATAR_COLORS = ['#8B6F5A', '#4F7A8C', '#6B7F4E', '#A0566B', '#5A5F8C', '#7A6A3A', '#3F7D74', '#8C5A86'];
+const AVATAR_COLORS = RADIX.AVATAR_COLORS;
 function colorFor(name) {
   let h = 0;
   for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) >>> 0;

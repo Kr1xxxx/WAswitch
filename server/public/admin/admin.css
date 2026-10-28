@@ -1,5 +1,6 @@
-:root { --bg: #f6f7f9; --card: #fff; --ink: #1d2127; --muted: #6b7380; --line: #e2e5ea; --accent: #128c7e; --warn: #c98a00; --bad: #c62828; --good: #2e7d32; }
-@media (prefers-color-scheme: dark) { :root { --bg: #15181c; --card: #1e2227; --ink: #e8eaed; --muted: #9aa1ab; --line: #2f343b; --accent: #25d3b6; --warn: #e0a800; --bad: #ef5350; --good: #66bb6a; } }
+/* 颜色用 Radix 变量（radix.css / radix-dark.css，由 scripts/make-colors.js 生成）；深色时色阶自动换，这里只改底色 */
+:root { --bg: var(--slate-2); --card: var(--white); --ink: var(--slate-12); --muted: var(--slate-11); --line: var(--slate-6); --accent: var(--green-9); --warn: var(--amber-11); --bad: var(--red-11); --good: var(--green-11); }
+@media (prefers-color-scheme: dark) { :root { --bg: var(--slate-1); --card: var(--slate-2); } }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
 header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; }
@@ -23,7 +24,7 @@ tr:last-child td { border-bottom: 0; }
 .bad { color: var(--bad); } .dot.bad { background: var(--bad); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
 button.btn { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; margin: 2px 4px 2px 0; }
-button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--white); }
 button.btn.danger { color: var(--bad); }
 input, select, textarea { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 form.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 16px; }

@@ -338,8 +338,8 @@ class Translator {
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
-      // 内置假发词汇：默认关；睫毛词汇：默认开
-      wigTerms: false, lashTerms: true,
+      // 内置假发词汇、睫毛词汇：都默认开
+      wigTerms: true, lashTerms: true,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
@@ -382,7 +382,7 @@ class Translator {
           base.seeded = raw.seeded === true;
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
-          base.wigTerms = raw.wigTerms === true;
+          base.wigTerms = raw.wigTerms !== false; // 没存过（老设置）= 默认开
           base.lashTerms = raw.lashTerms !== false; // 没存过（老设置）= 默认开
           base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
           const du = raw.deeplUsage;
@@ -524,7 +524,7 @@ class Translator {
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
       rolePrompt: c.rolePrompt,
-      wigTerms: c.wigTerms === true,
+      wigTerms: c.wigTerms !== false,
       deeplCap: c.deeplCap,
       wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
       lashTerms: c.lashTerms !== false,
@@ -637,7 +637,7 @@ class Translator {
   // 翻译和纠错实际用的角色设定（含打开的假发、睫毛词汇）；话术记录也拿它当键，开关一变老译文就不用
   roleText(target = '') {
     const c = this.load();
-    return roleWithTerms(c.rolePrompt, { wig: c.wigTerms === true, lash: c.lashTerms !== false }, target);
+    return roleWithTerms(c.rolePrompt, { wig: c.wigTerms !== false, lash: c.lashTerms !== false }, target);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -720,6 +720,15 @@ class Translator {
   cancel() {
     if (this.busy) { this.busy.controller.abort(); return true; }
     return false;
+  }
+
+  // 另开一条翻译通道：配置、密钥、DeepL 用量都和本体共用，只有“正在翻的那一条”分开。
+  // 翻译页用它，不和工作台的自动翻译、回复翻译互相排队，取消也只取消自己
+  lane() {
+    const l = Object.create(this);
+    l.busy = null;
+    l.load = () => this.load(); // 配置只放在本体上，两条通道看到的永远是同一份
+    return l;
   }
 
   // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }

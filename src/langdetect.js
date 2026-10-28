@@ -1,6 +1,8 @@
 // 认出客户消息是哪种语言（本机算，不联网、不用额度）。
 // 先看文字（阿拉伯字母、泰文、韩文、日文假名……），拉丁字母再按常用词猜。认不准返回 ''。
 // 返回的名字和 translate.js 的 LANGS 一致。
+// 主进程 require，软件界面（翻译页）用 <script> 加载成 window.LangDetect。
+(function (root) {
 const SCRIPTS = [
   [/[؀-ۿ]/g, '阿拉伯语'],
   [/[฀-๿]/g, '泰语'],
@@ -56,4 +58,7 @@ function detectLang(text) {
   return best;
 }
 
-module.exports = { detectLang };
+const api = { detectLang };
+if (typeof module !== 'undefined' && module.exports) module.exports = api;
+else root.LangDetect = api;
+})(typeof window !== 'undefined' ? window : globalThis);

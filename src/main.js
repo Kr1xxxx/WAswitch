@@ -104,9 +104,28 @@ const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
 const PANEL_W = 380; // 右侧工作台（客户资料 / 话术 / 翻译）的宽度
+// 窗口窄时给 WhatsApp 让地方：小于 1200 宽侧栏自动只显示图标，小于 1000 宽工作台默认收起（设计复查第 1 条）。
+// 窄窗口里用户自己点开的，这次保持打开，直到窗口再变宽
+const NARROW_SIDE = 1200;
+const NARROW_PANEL = 1000;
+const narrowOpen = { side: false, panel: false };
+let lastNarrow = { side: false, panel: false };
+function winWidth() { return win && !win.isDestroyed() ? win.getContentBounds().width : Infinity; }
+const narrowSide = () => winWidth() < NARROW_SIDE;
+const narrowPanel = () => winWidth() < NARROW_PANEL;
+// 窗口宽窄变了：变宽后忘掉窄窗口里手动点开的，下次变窄照样自动收起
+function syncNarrow() {
+  const now = { side: narrowSide(), panel: narrowPanel() };
+  for (const k of ['side', 'panel']) if (!now[k] && lastNarrow[k]) narrowOpen[k] = false;
+  const changed = now.side !== lastNarrow.side || now.panel !== lastNarrow.panel;
+  lastNarrow = now;
+  return changed;
+}
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
-const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+// 账号颜色（Radix 9 号实色，见 src/colors/radix.js）
+const RADIX = require('./colors/radix');
+const COLORS = RADIX.ACCOUNT_COLORS;
 // 账号头像的 emoji（打包在 src/emoji 里）
 const EMOJI = require('./emoji/list');
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
@@ -301,7 +320,7 @@ function loadAccounts() {
     // 手机号：登录后自动读到的，或用户在编辑里自己填的（phoneManual）。同样只在本机显示，不给 MCP
     acc.phone = cleanPhone(acc.phone);
     acc.phoneManual = acc.phoneManual === true && !!acc.phone;
-    acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
+    acc.color = RADIX.accountColor(acc.color) || COLORS[i % COLORS.length]; // 0.5.12 以前的旧颜色换成同位置的新颜色
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
@@ -541,7 +560,7 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | welcome
+let page = 'account'; // account | editor | settings | overview | translate | welcome
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
@@ -975,8 +994,20 @@ function proxyLabel(acc) {
   return `${acc.exitLabel || p.scheme} ${p.port}`;
 }
 
+// 侧栏是否只显示图标：设置里选了，或者窗口窄（窄窗口里用户点了展开就展开）
+function sideCollapsed() {
+  if (page === 'settings') return false;
+  return settings.sidebarCollapsed || (narrowSide() && !narrowOpen.side);
+}
 function sideWidth() {
-  return page !== 'settings' && settings.sidebarCollapsed ? SIDE_COLLAPSED : SIDE_EXPANDED;
+  return sideCollapsed() ? SIDE_COLLAPSED : SIDE_EXPANDED;
+}
+function toggleSide() {
+  if (!narrowSide()) { setSetting('sidebarCollapsed', !settings.sidebarCollapsed); return; }
+  const open = sideCollapsed();
+  narrowOpen.side = open;
+  if (open && settings.sidebarCollapsed) setSetting('sidebarCollapsed', false);
+  else refresh();
 }
 
 // ---------- 聊天锁 ----------
@@ -1030,9 +1061,12 @@ let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
 let translator = null;
-const panelShown = () => panelOpen && page === 'account' && !locked && visibleAccounts().length > 0;
-function togglePanel(on = !panelOpen) {
+// 窗口窄时工作台默认收起，用户点开才显示
+const panelWanted = () => panelOpen && (!narrowPanel() || narrowOpen.panel);
+const panelShown = () => panelWanted() && page === 'account' && !locked && visibleAccounts().length > 0;
+function togglePanel(on = !panelWanted()) {
   panelOpen = !!on;
+  if (narrowPanel()) narrowOpen.panel = panelOpen;
   refresh();
 }
 // 停着的号（团队收回等）名下的客户也不显示、不提醒，数据保留
@@ -1213,7 +1247,7 @@ function pushState() {
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
     mcp: mcpModule ? mcpModule.view() : null,
-    collapsed: settings.sidebarCollapsed,
+    collapsed: sideCollapsed(),
     team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
     locked,
     panelOpen: panelShown(),
@@ -1378,7 +1412,7 @@ async function unparkAccount(acc) {
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
   const acc = {
-    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: RADIX.accountColor(seat.color) || nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
@@ -2582,7 +2616,7 @@ app.whenReady().then(async () => {
   const winH = Math.max(600, Math.min(960, Math.round(wa.height * 0.92)));
   win = new BaseWindow({
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
-    title: 'WAswitch', backgroundColor: '#E6E9ED',
+    title: 'WAswitch', backgroundColor: RADIX.hex('slate', 3),
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
     ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
@@ -2622,7 +2656,9 @@ app.whenReady().then(async () => {
   lockLocalPage(shellView.webContents);
   shellView.webContents.loadFile(path.join(__dirname, 'shell', 'index.html'));
   shellView.webContents.on('did-finish-load', pushState);
-  win.on('resize', layout);
+  // 宽窄跨过 1200 / 1000 时侧栏和工作台要跟着收起展开，界面也要重画
+  win.on('resize', () => { if (syncNarrow()) refresh(); else layout(); });
+  syncNarrow(); // 记下打开时的宽窄
 
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
@@ -2783,14 +2819,13 @@ handleShell('netlog:clear', () => {
   return true;
 });
 // ---- 面板 ----
-onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
+onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelWanted()));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
 onShell('panel:tab', (tab) => {
   if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
   if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
-  panelOpen = true;
-  refresh();
+  togglePanel(true);
 });
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
@@ -2939,7 +2974,7 @@ const selTr = createSelTranslate({
 });
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);
-onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
+onShell('collapse', () => toggleSide());
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
 onShell('reload', (id) => {
@@ -3077,6 +3112,8 @@ onShell('context', (id, from) => {
         { label: '还原到默认 90%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || DEFAULT_ZOOM) !== DEFAULT_ZOOM, click: () => stepZoom(id, 0) },
       ],
     },
+    // 内存数字从顶栏挪到这里（设计复查第 2 条），只看不点；轻量号是平均到每个号的近似值
+    ...(memoryManager.usageMB.get(id) ? [{ label: `内存${isLite(acc) ? '约' : ''} ${memoryManager.usageMB.get(id)} MB`, enabled: false }] : []),
     { type: 'separator' },
     // 不用拖也能排：上移、下移、移到分组
     { label: '上移', click: () => stepAccount(id, -1) },

@@ -91,7 +91,8 @@ const SAMPLES_OK = {
 for (const [kind, list] of Object.entries(SAMPLES_BAD)) for (const t of list) if (!checkText(t, kind).length) bad.push(`脚本自检：没抓到违规写法 ${t}`);
 for (const [kind, list] of Object.entries(SAMPLES_OK)) for (const t of list) if (checkText(t, kind).length) bad.push(`脚本自检：误报了合规写法 ${t}`);
 
-for (const file of walk(SRC)) {
+// 扫软件界面（src）和安装器图片的 HTML（build/art，生成安装界面图片用，同样只能用这四种字号）
+for (const file of [...walk(SRC), ...walk(path.join(ROOT, 'build', 'art'))]) {
   if (file === FONTS) continue;
   const rel = path.relative(ROOT, file);
   const kind = /\.m?js$/.test(file) ? 'js' : 'css';

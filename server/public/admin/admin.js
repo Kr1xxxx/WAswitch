@@ -7,8 +7,10 @@ const STATE_TEXT = {
 };
 const EVENT_TEXT = { dropped: '掉线', recovered: '恢复', exit_changed: '出口 IP 变了', proxy_down: '代理断开', proxy_up: '代理恢复', banned: '可能被封' };
 const ROLE_TEXT = { owner: '老板', supervisor: '主管', agent: '坐席' };
-// 和 WAswitch 侧栏的颜色一致（src/main.js COLORS）
-const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+// 和 WAswitch 侧栏的颜色一致（radix.js 由 scripts/make-colors.js 从 src/colors/radix.js 复制过来）
+const COLORS = RADIX.ACCOUNT_COLORS;
+// 旧版存的颜色换成新的；没有颜色时用灰色
+const swatchColor = (c) => RADIX.accountColor(c) || 'var(--slate-9)';
 
 let me = null;
 let tab = 'overview';
@@ -109,7 +111,7 @@ async function overviewPage() {
     el('div', { class: 'wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, ['账号', '员工 / 电脑', '状态', '未读', '代理', '出口', '上报'].map((h) => el('th', {}, h)))),
       el('tbody', {}, assigned.map((a) => el('tr', {},
-        el('td', {}, el('span', { class: 'swatch', style: `background:${a.color || '#999'}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
+        el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
         el('td', {}, a.user_name || '', el('div', { class: 'muted' }, a.device_name || '')),
         el('td', {}, statusCell(a, now)),
         el('td', { class: a.unread ? 'warn' : 'muted' }, a.unread || 0),
@@ -135,7 +137,7 @@ async function accountsPage() {
       act(() => api('POST', `accounts/${a.id}/assign`, { device_id: pick.value }), '已分配');
     });
     return el('tr', {},
-      el('td', {}, el('span', { class: 'swatch', style: `background:${a.color || '#999'}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
+      el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
       el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : el('span', { class: 'muted' }, '未分组')),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
@@ -164,7 +166,7 @@ function editAccount(a) {
   const f = {
     label: el('input', { value: a.label, maxlength: 40 }),
     number_label: el('input', { value: a.number_label || '', maxlength: 40, placeholder: '号码备注（手填）' }),
-    color: el('select', {}, COLORS.map((c) => el('option', { value: c, selected: c === a.color }, c))),
+    color: el('select', {}, COLORS.map((c) => el('option', { value: c, selected: c === RADIX.accountColor(a.color) }, c))),
     expected_country: el('input', { value: a.expected_country || '', maxlength: 2, placeholder: '如 US', size: 4 }),
     note: el('input', { value: a.note || '', maxlength: 500, placeholder: '备注（会显示给员工）', size: 30 }),
   };

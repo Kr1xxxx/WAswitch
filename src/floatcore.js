@@ -10,6 +10,7 @@ const PER_MINUTE = 20;
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
+const KEEP_VIEW = 40; // 读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
@@ -144,7 +145,20 @@ class FloatCore {
     // 刚切到这个对话：已经在屏幕上的旧消息只补翻最后 5 条；之后新来的都算
     const candidates = newChat ? fresh.slice(-BACKFILL) : fresh;
     if (opts.auto) for (const item of candidates) this.queueAuto(accId, st, item, opts);
-    const view = msgs.filter((m) => !m.out && String(m.text || '').trim()).map((m) => hashOf(accId, m.id));
+    let view = msgs.filter((m) => !m.out && String(m.text || '').trim()).map((m) => hashOf(accId, m.id));
+    // 读页面只读最后 20 条（双方）：自己每发一条，最老的一条就被挤出去。还是同一个对话、和上次读到的接得上，
+    // 挤出去的客户消息照样留在翻译栏上面，不然每发一条，翻译栏就少一条、整列往上跳（shen 2026-10-28）
+    const prevAll = new Set(st.recent.map((m) => m.h));
+    if (!newChat && msgs.some((m) => prevAll.has(hashOf(accId, m.id)))) {
+      // 只留比这次读到的都早的那一段（中间不见了的是客户撤回的，不留）；这次认出是自己发的（上次当成了收到的）也不留
+      const inView = new Set(view);
+      const first = st.view.findIndex((h) => inView.has(h));
+      const own = new Set(msgs.filter((m) => m.out && m.id.startsWith('true_')).map((m) => hashOf(accId, 'false_' + m.id.slice(5))));
+      const kept = (first < 0 ? st.view : st.view.slice(0, first)).filter((h) => !own.has(h) && st.items.has(h));
+      // 只限制留下的旧消息，这次读到的一条不少；轻量号一次读到的多，按上次的条数留
+      const room = Math.max(0, Math.max(KEEP_VIEW, st.view.length) - view.length);
+      if (room && kept.length) view = [...kept.slice(-room), ...view];
+    }
     const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
