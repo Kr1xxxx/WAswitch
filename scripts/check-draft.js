@@ -152,7 +152,7 @@ async function partC(win) {
   await win.loadFile(path.join(__dirname, 'fixtures', 'lite-draft.html'));
   const page = (code) => wc.executeJavaScript(code);
   await page(`(() => {
-    const acc = { id: 'l1', proxyLabel: 'DE · 7891', direct: false };
+    const acc = { id: 'l1', proxyLabel: 'DE 7891', direct: false };
     const view = { rev: 1, jid: '4915123456789@s.whatsapp.net', title: 'Anna Müller', chats: [{ jid: '4915123456789@s.whatsapp.net', name: 'Anna Müller', ts: 0, unread: 1, preview: 'Hi' }], messages: [] };
     document.body.append(litePage(acc, { id: 'l1', status: 'open', openJid: view.jid, view }));
     return true;

@@ -141,6 +141,11 @@ function morphBtn(key, labels, run, attrs = {}) {
 }
 
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
+// 几段并排的短文字，用间距隔开，不用中点（shen 2026-10-28）。样式 .seg 在 shell.css
+function segs(...xs) {
+  return xs.filter((x) => x !== null && x !== undefined && x !== false && x !== '').map((x) => h('span', { class: 'seg' }, x));
+}
+
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -302,7 +307,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
-    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? segs('轻量', acc.proxyLabel) : acc.proxyLabel)),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
   draggable(row, acc.id);
@@ -331,13 +336,13 @@ function groupHead(g) {
   if (chev) { chev.classList.add('gchev'); fx(`grp:${g.id}`, !!g.collapsed, chev, g.collapsed ? 'fx-rot-close' : 'fx-rot-open', false); }
   const head = h('button', {
     class: `group-head${g && g.collapsed ? ' closed' : ''}`,
-    title: g ? `${name} · ${g.count} 个号${g.muted ? ' · 整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
+    title: g ? `${name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
     'aria-expanded': g ? String(!g.collapsed) : null,
     onclick: () => { if (g) window.wa.groupToggle(g.id); },
     oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
   },
   chev,
-  h('span', { class: 'gname' }, g && g.collapsed ? `${name} · ${g.count}` : name),
+  h('span', { class: 'gname' }, g && g.collapsed ? segs(name, h('span', { class: 'count' }, g.count)) : name),
   quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
   g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
   dropOn(head, gid, null);
@@ -388,7 +393,7 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, `账号 · ${s.accounts.length}`),
+    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))),
       s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
     h('div', { class: 'list' },
       accountList(),
@@ -404,10 +409,10 @@ function renderSide() {
       h('div', { class: 'bars' }, s.accounts.map((a) => h('span', { style: { width: `${((a.memMB || 0) / total) * 100}%`, background: a.color } })))));
   }
   const totalUnread = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
-  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
+  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? `\n共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
   if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => { settingsTab = 'quick'; window.wa.showPage('settings'); render(true); } }, icon('gear', 17),
+    h('button', { class: 'icon-btn', title: updateReady() ? `设置\n新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => { settingsTab = 'quick'; window.wa.showPage('settings'); render(true); } }, icon('gear', 17),
       updateReady() ? h('span', { class: 'dot new', 'aria-hidden': 'true' }) : null),
     s.settings?.showUpdateButton ? checkUpdateBtn() : null,
     bell));
@@ -420,13 +425,13 @@ function checkUpdateBtn() {
   const st = u ? u.status : 'dev';
   const busy = st === 'checking' || st === 'downloading';
   const title = {
-    dev: '检查更新 · 开发版不检查更新',
-    off: '检查更新 · 这种安装方式不能自动更新',
+    dev: '检查更新\n开发版不检查更新',
+    off: '检查更新\n这种安装方式不能自动更新',
     checking: '正在检查更新…',
     downloading: `正在下载 ${u && u.version}`,
     downloaded: `新版本 ${u && u.version} 已就绪`,
-    none: '检查更新 · 已是最新版本',
-    error: '检查更新 · 上次没检查成功',
+    none: '检查更新\n已是最新版本',
+    error: '检查更新\n上次没检查成功',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
     onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheckOnly(); } }, icon('sync', 16));
@@ -475,12 +480,14 @@ function exitTitle(acc) {
   if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
   const lat = acc.latency ? `\n最近一次检测用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
-  return `网络线路 · 出口 IP ${acc.exitIp}${at}${lat}`;
+  return `网络线路：出口 IP ${acc.exitIp}${at}${lat}`;
 }
 
 // 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
 function exitChip(acc) {
   if (acc.problem) return h('span', { class: 'chip exit bad', title: exitTitle(acc) }, icon('globe', 12), h('span', null, acc.problemShort));
+  // 换主号后后台比对发现这个轻量小号和主号出口相同：标黄，换个代理端口或节点后消失
+  if (acc.primaryClash) return h('span', { class: 'chip exit night', title: `和主号的出口 IP 相同：${acc.primaryClash}。请在编辑账号里换一个代理端口或节点。` }, icon('globe', 12), h('span', null, `和主号同一个 IP ${acc.primaryClash}`));
   const ch = acc.exitChange;
   if (ch) {
     const when = new Date(ch.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -489,9 +496,9 @@ function exitChip(acc) {
       class: 'chip exit night', type: 'button',
       title: `${when} 巡检发现出口 IP 变了：${ch.from} → ${ch.to}${moved ? `（${ch.fromLabel} → ${ch.toLabel}，国家也变了，时区可能对不上，建议跑一次隔离自检）` : ''}。机场节点常会自动换 IP，频繁变化容易被 WhatsApp 当成异常。点一下表示知道了。`,
       onclick: () => window.wa.exitAck(acc.id),
-    }, icon('globe', 12), h('span', null, `出口 IP 变了${moved ? `（${ch.toLabel}）` : ''} · ${ch.to}`));
+    }, icon('globe', 12), h('span', null, ...segs(`出口 IP 变了${moved ? `（${ch.toLabel}）` : ''}`, ch.to)));
   }
-  return h('span', { class: 'chip exit', title: exitTitle(acc) }, icon('globe', 12), h('span', null, acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel));
+  return h('span', { class: 'chip exit', title: exitTitle(acc) }, icon('globe', 12), h('span', null, ...(acc.exitIp && !acc.direct ? segs(acc.proxyLabel, acc.exitIp) : [acc.proxyLabel])));
 }
 
 // 当地时间：按账号的时区显示，22:00–8:00 变黄，提醒这时候发消息不像真人。5:00 前写“深夜”，5:00–8:00 写“清晨”
@@ -517,16 +524,16 @@ function clockChip(acc) {
     const z = peer && peer.accountId === acc.id ? peer.zone : null;
     if (z) {
       const c = clockParts(z.tz);
-      chip.lastChild.textContent = `客户 ${z.approx ? '约 ' : ''}${z.place} ${c.text}${c.night ? ` · ${c.when}` : ''}`;
+      chip.lastChild.replaceChildren(...segs(`客户 ${z.approx ? '约 ' : ''}${z.place} ${c.text}`, c.night ? c.when : null));
       chip.classList.toggle('night', c.night);
       chip.classList.add('peer');
       chip.title = `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`;
       return;
     }
     const zones = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
-    // 星期只在第一个写：“伦敦 周二 16:44 · 纽约 11:44 · 加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
+    // 星期只在第一个写：“伦敦 周二 16:44  纽约 11:44  加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
     const day = (x) => x.text.split(' ')[0];
-    chip.lastChild.textContent = zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`).join(' · ');
+    chip.lastChild.replaceChildren(...segs(...zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`)));
     const night = zones.every((x) => x.night); // 几个地方都是深夜 / 清晨才标黄
     chip.classList.toggle('night', night);
     chip.classList.remove('peer');
@@ -589,7 +596,7 @@ function renderTop() {
   if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
+    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
     h('span', { class: 'grow' }),
     exitChip(acc),
     !lite ? zoomChip(acc) : null,
@@ -656,46 +663,63 @@ function renderAi() {
     h('button', { class: 'btn primary', onclick: () => window.wa.aiAnswer(true) }, r.kind === 'add' ? '打开' : '切换'));
 }
 
-// 删除、清空前的确认框（软件里统一用这一个）。on: 'panel' 只盖住右侧面板（账号页时 WhatsApp 页面盖着中间，盖不住）；
-// 不传就盖住整个卡片内容区。默认焦点在“取消”，Esc 或点外面也是取消。返回 true 表示确认。
-function confirmDelete({ title, detail = '', ok = '删除', on } = {}) {
-  return new Promise((resolve) => {
-    const body = document.getElementById('body');
-    const panel = document.getElementById('panel');
-    const prevFocus = document.activeElement;
-    const cancelBtn = h('button', { class: 'btn', type: 'button' }, '取消');
-    const okBtn = h('button', { class: 'btn danger-fill', type: 'button' }, ok);
-    const box = h('div', { class: 'cfm-box', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': title },
-      h('div', { class: 'cfm-title' }, title),
-      detail ? h('div', { class: 'cfm-detail' }, detail) : null,
-      h('div', { class: 'cfm-btns' }, cancelBtn, okBtn));
-    const wrap = h('div', { class: 'cfm' }, box);
-    if (on === 'panel' && panel && !panel.hidden) {
-      const b = body.getBoundingClientRect(), r = panel.getBoundingClientRect();
-      Object.assign(wrap.style, { left: `${r.left - b.left}px`, width: `${r.width}px` });
-    }
-    const done = (v) => {
-      document.removeEventListener('keydown', onKey, true);
-      // 淡出后再拿掉；结果马上给，不等动画
-      wrap.classList.add('out');
-      setTimeout(() => wrap.remove(), fxReduced() ? 0 : 140);
-      try { prevFocus?.focus?.(); } catch {}
-      resolve(v);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
-      if (e.key === 'Tab') { e.preventDefault(); (document.activeElement === cancelBtn ? okBtn : cancelBtn).focus(); }
-    };
-    cancelBtn.onclick = () => done(false);
-    okBtn.onclick = () => done(true);
-    wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) done(false); });
-    document.addEventListener('keydown', onKey, true);
-    body.append(wrap);
-    cancelBtn.focus();
-  });
+// 删除、清空、解散分组不先问，直接做，然后在旁边给几秒“撤销”（主进程发来 undo:offer）。
+// 放在用户刚才操作的地方，而且不能被 WhatsApp 页面盖住：panel 右侧面板列表底部；
+// 账号页的其他操作（侧栏解散分组）放顶栏；其他页面（设置、未读总览）放内容区底部。再删别的，换成新的这一条
+const UNDO_SHOW_MS = 8000;
+const UNDO_MAX_MS = 14000; // 主进程 15 秒后就不认了：鼠标停在上面也最多留这么久
+let undoBox = null;
+let undoTimer = null;
+let undoCap = null;
+function hideUndo() {
+  clearTimeout(undoTimer);
+  clearTimeout(undoCap);
+  undoTimer = null;
+  undoCap = null;
+  if (undoBox) undoBox.remove();
+  undoBox = null;
 }
-// 名字太长时截一下，免得确认框被撑开
-const delName = (t, n = 30) => { t = String(t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n)}…` : t; };
+function undoRect(where) {
+  const visible = (el) => el && !el.hidden && el.getBoundingClientRect().width > 0;
+  const panel = document.getElementById('panel');
+  const list = panel && panel.querySelector('.pn-list');
+  if (where === 'panel' && visible(panel)) return { r: (visible(list) ? list : panel).getBoundingClientRect(), at: 'bottom' };
+  if (s.page === 'account' && visible($top)) return { r: $top.getBoundingClientRect(), at: 'middle' };
+  return { r: document.getElementById('body').getBoundingClientRect(), at: 'bottom' };
+}
+function placeUndo() {
+  if (!undoBox) return;
+  const { r, at } = undoRect(undoBox.dataset.where);
+  const w = Math.max(0, r.width - 16);
+  Object.assign(undoBox.style, { left: `${r.left + r.width / 2}px`, maxWidth: `${w}px` });
+  if (at === 'middle') Object.assign(undoBox.style, { top: `${r.top + r.height / 2}px`, bottom: '', transform: 'translate(-50%, -50%)' });
+  else Object.assign(undoBox.style, { top: '', bottom: `${window.innerHeight - r.bottom + 12}px`, transform: 'translateX(-50%)' });
+}
+async function runUndo(o) {
+  hideUndo();
+  let ok = false;
+  try { ok = await window.wa.undo(o.token); } catch {}
+  if (!ok) return;
+  if (o.kind === 'panel') { try { pn.data = await window.wa.panelData(); } catch {} renderPanel(true); }
+  else if (o.kind === 'tr') { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} render(true); }
+  else if (o.kind === 'notif') loadNotifLog();
+  else if (o.kind === 'netlog') loadNetLog();
+}
+window.wa.onUndoOffer((o) => {
+  if (!o || !Number.isInteger(o.token)) return;
+  hideUndo();
+  const btn = h('button', { class: 'undo-btn', type: 'button', onclick: () => runUndo(o) }, '撤销');
+  undoBox = h('div', { class: 'undo', role: 'status', 'data-where': o.where || 'body' }, h('span', { class: 'undo-text' }, String(o.text || '')), btn);
+  // 鼠标停在上面时不消失
+  const arm = () => { clearTimeout(undoTimer); undoTimer = setTimeout(hideUndo, UNDO_SHOW_MS); };
+  undoBox.addEventListener('mouseenter', () => clearTimeout(undoTimer));
+  undoBox.addEventListener('mouseleave', arm);
+  document.body.append(undoBox);
+  placeUndo();
+  arm();
+  undoCap = setTimeout(hideUndo, UNDO_MAX_MS);
+});
+window.addEventListener('resize', placeUndo);
 
 // ---------- 卡片里的页面 ----------
 
@@ -735,7 +759,7 @@ function problemDetails(acc) {
   const key = `${acc.id}|${acc.problemKind}`;
   const logs = h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLogs(); } }, '打开日志文件夹');
   return h('details', { class: 'pdetails', open: detailsOpenKey === key, ontoggle: (e) => { if (e.currentTarget.open) detailsOpenKey = key; else if (detailsOpenKey === key) detailsOpenKey = ''; } },
-    h('summary', null, `详细信息 ${acc.problemCode}`),
+    h('summary', null, ...segs('详细信息', acc.problemCode)),
     // 系统的原话（英文错误码），排查时看
     acc.problemDetail ? h('code', null, acc.problemDetail) : null,
     h('p', null, '日志里也记着这个代码。', ' ', logs));
@@ -766,12 +790,12 @@ function overviewPage() {
       h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。` : '所有号都没有未读对话。')),
     unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
       h('span', { class: 'sw', style: { background: a.color } }),
-      h('span', { class: 'ov-name' }, a.name, groupName(a) ? h('span', { class: 'hint', style: { marginLeft: '8px' } }, groupName(a)) : null),
+      h('span', { class: 'ov-name' }, ...segs(a.name, groupName(a) ? h('span', { class: 'hint' }, groupName(a)) : null)),
       a.muted || a.groupMuted ? h('span', { class: 'hint' }, '不弹通知') : null,
       h('span', { class: `pill${a.muted || a.groupMuted ? ' quiet' : ''}` }, a.unread)))) : null,
     h('div', { class: 'hstack', style: { justifyContent: 'space-between', marginTop: '8px' } },
       h('h2', { class: 'ov-h2' }, '通知记录'),
-      notifLogCache.length ? h('button', { class: 'btn', onclick: async () => { if (!await confirmDelete({ title: '清空通知记录？', detail: `会删掉这里的 ${notifLogCache.length} 条记录，不影响未读数和聊天。`, ok: '清空' })) return; await window.wa.notifClear(); loadNotifLog(); } }, '清空记录') : null),
+      notifLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.notifClear(); loadNotifLog(); } }, '清空记录') : null),
     notifLogCache.length
       ? h('div', { class: 'box ov-log' }, notifLogCache.map((e) => {
         const a = byId.get(e.id);
@@ -781,7 +805,7 @@ function overviewPage() {
           h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', today ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
           h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
           h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
-          h('span', { class: 'hint' }, `${e.count} 个未读${e.popped ? '' : '，没弹'}`));
+          h('span', { class: 'hint' }, ...segs(`${e.count} 个未读`, e.popped ? null : '没弹')));
       }))
       : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。'))));
   return page;
@@ -874,7 +898,7 @@ function replyItems() {
       h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
       h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(r.text); copyFlash(b); } }, '复制'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
-      h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除话术「${delName(r.title || r.text)}」？`, detail: '删除后不能恢复。' })) return; pn.data = await window.wa.replyDelete(r.id); panelSay('已删除'); } }, '删除'))));
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.replyDelete(r.id); pn.msg = ''; renderPanel(true); } }, '删除'))));
 }
 function customerItems() {
   const q = pn.q.toLowerCase();
@@ -894,7 +918,7 @@ function customerItems() {
     h('span', { class: 'acts' },
       c.phone ? h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(c.phone); copyFlash(b); } }, '复制电话') : null,
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
-      h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ on: 'panel', title: `删除客户「${delName(c.name || c.phone)}」？`, detail: '会删掉这个客户的资料、标签、备注和跟进时间，不能恢复。WhatsApp 里的聊天不受影响。' })) return; pn.data = await window.wa.custDelete(c.id); panelSay('已删除'); } }, '删除'))));
+      h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.custDelete(c.id); pn.msg = ''; renderPanel(true); } }, '删除'))));
 }
 // ---------- 翻译（面板里的第三个标签） ----------
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
@@ -1156,13 +1180,13 @@ function translatePage(page) {
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
         p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
-      h('span', { class: 'hint' }, `${p.preset === 'deepl' ? '机器翻译' : p.model}，${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
+      h('span', { class: 'hint' }, ...segs(p.preset === 'deepl' ? '机器翻译' : p.model, p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥')),
       h('span', { class: 'hint' }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         trTestBtn(p, { class: 'pn-btn' }),
         p.id !== c.primaryId ? h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认') : null,
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
-        h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除服务商「${delName(p.name)}」？`, detail: `保存的密钥也会一起删掉。${p.id === c.primaryId ? '它是现在的默认服务商，删了以后要重新选一个。' : ''}` })) return; apply(await window.wa.trProviderDelete(p.id)); } }, '删除'))))
+        h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trProviderDelete(p.id)) }, '删除'))))
       : h('span', { class: 'hint' }, '还没有。')),
     trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'zhipu' }; trSay = ''; render(true); } }, '+ 添加服务商')),
     c.providers.length > 1 ? setRow('备用服务商', '', fb) : null,
@@ -1193,7 +1217,7 @@ function translatePage(page) {
       h('span', { class: 'hint', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.prompt),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         h('button', { class: 'pn-btn', onclick: () => { trModeEdit = { ...m }; render(true); } }, '修改'),
-        h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除翻译模式「${delName(m.name)}」？`, detail: '删除后不能恢复。' })) return; apply(await window.wa.tmodeDelete(m.id)); } }, '删除'))))),
+        h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.tmodeDelete(m.id)) }, '删除'))))),
     h('div', { class: 'hstack' },
       h('button', { class: 'btn', onclick: () => { trModeEdit = { direction: 'out', temperature: 0.3 }; trSay = ''; render(true); } }, '+ 新建模式'),
       h('button', { class: 'btn', onclick: async () => { const r = await window.wa.panelImport('tmodes'); if (!r) return; if (r.error) trSay = `导入失败：${r.error}`; else { trSay = importSay(r, '个'); tr.modes = r.modes; } render(true); } }, '导入'),
@@ -1395,7 +1419,7 @@ function editorPage(id) {
       tags.replaceChildren(
         h('span', { class: 'tag' }, auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
-        h('span', { class: 'tag' }, 'Chrome 跟随本机系统'),
+        h('span', { class: 'tag' }, '浏览器：Chrome，操作系统跟随本机'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
     };
     // 选直连时提醒一句，不拦。网页号直连跟随系统代理，轻量号直连用这台电脑的真实 IP，
@@ -1463,10 +1487,11 @@ function editorPage(id) {
       if (localProxyPort(proxyInput.value)) probePorts();
       if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return { ok: false }; }
       tested = res;
-      const place = [res.country, res.city].filter(Boolean).join(' ');
-      let text = `连接成功，出口 IP ${res.ip}，${place}，${res.ms} ms。`;
-      if (res.direct === 'system') text = `直连，跟随系统代理，出口 IP ${res.ip}，${place}，${res.ms} ms。`;
-      if (res.direct === 'real') text = `直连，这台电脑的真实 IP ${res.ip}，${place}，${res.ms} ms。`;
+      const where = [res.country, res.city].filter(Boolean).join(' ');
+      const tail = `${where ? `，${where}` : ''}，用时 ${res.ms} ms。`;
+      let text = `连接成功。出口 IP ${res.ip}${tail}`;
+      if (res.direct === 'system') text = `直连，跟随系统代理。出口 IP ${res.ip}${tail}`;
+      if (res.direct === 'real') text = `直连，用这台电脑的真实 IP ${res.ip}${tail}`;
       // 轻量号没有时区设置，不提时区
       if (mode !== 'lite' && res.region) { addTzOption(res.region, res.regionLabel); region.value = res.region; text += ' 已按出口所在地选好时区。'; } else if (mode !== 'lite') text += ' 出口时区无法识别，请手动选最接近的。';
       if (res.sameAs) {
@@ -1585,7 +1610,7 @@ function netPage(page) {
         h('span', { class: 'hint' }, a.problem ? a.problemShort : '正常'));
     })),
     h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, filterSel,
-      netLogCache.length ? h('button', { class: 'btn', onclick: async () => { if (!await confirmDelete({ title: '清空连接记录？', detail: `会删掉全部 ${netLogCache.length} 条掉线和重连记录，“24 小时掉线次数”也会从 0 开始算。`, ok: '清空' })) return; await window.wa.netLogClear(); loadNetLog(); } }, '清空记录') : null),
+      netLogCache.length ? h('button', { class: 'btn', onclick: async () => { await window.wa.netLogClear(); loadNetLog(); } }, '清空记录') : null),
     rows.length
       ? h('div', { class: 'box ov-log' }, rows.map((e) => {
         const a = byId.get(e.id);
@@ -1830,16 +1855,9 @@ function settingsPage() {
 
 // ---------- 设置 › AI 接口（MCP） ----------
 // MCP 不在安装包里：先下载（校验 sha512），下载后开关默认关，要自己打开。
-let mcpUninstallAsk = 0; // 点了一次“卸载”的时间，4 秒内再点才真卸载
 function mcpUninstallRow() {
-  const asking = Date.now() - mcpUninstallAsk < 4000;
   return setRow('卸载 MCP', '断开所有 AI 客户端，删掉下载的文件，设置会留着。',
-    h('button', { class: 'btn', onclick: () => {
-      if (Date.now() - mcpUninstallAsk < 4000) { mcpUninstallAsk = 0; window.wa.mcpUninstall(); return; }
-      mcpUninstallAsk = Date.now();
-      render(true);
-      setTimeout(() => render(true), 4100);
-    } }, asking ? '再点一次确认卸载' : '卸载'));
+    h('button', { class: 'btn', onclick: () => window.wa.mcpUninstall() }, '卸载'));
 }
 function mcpPage(page, m) {
   page.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, 'AI 接口（MCP）'),
@@ -2087,6 +2105,7 @@ function render(forceContent = false) {
   renderTop();
   renderLock();
   renderPanel();
+  placeUndo(); // 换页、开关面板以后“撤销”跟着挪
   // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
   const onTr = s.page === 'settings' && (settingsTab === 'translate' || settingsTab === 'quick');
   if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();

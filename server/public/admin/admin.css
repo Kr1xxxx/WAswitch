@@ -15,6 +15,8 @@ th { font-weight: 600; color: var(--muted); font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
 .wrap { overflow-x: auto; }
 .muted { color: var(--muted); }
+/* 几段并排的短文字用间距隔开，不用中点 */
+.seg { margin-left: 8px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
 .good { color: var(--good); } .good .dot, .dot.good { background: var(--good); }
 .warn { color: var(--warn); } .dot.warn { background: var(--warn); }

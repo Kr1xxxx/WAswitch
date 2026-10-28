@@ -130,7 +130,7 @@ function makeLitePage(id) {
       status.replaceChildren(h('div', { class: 'panel' },
         h('div', { class: 'spinner', 'aria-hidden': 'true' }),
         h('h2', null, reconnecting ? '连接断开，正在重新连接…' : '正在连接…'),
-        h('p', null, `轻量模式，${acc.direct ? '直连' : `通过 ${acc.proxyLabel}`}`)));
+        h('p', null, ...segs('轻量模式', acc.direct ? '直连' : `通过 ${acc.proxyLabel}`))));
     }
   }
 

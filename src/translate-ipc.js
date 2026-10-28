@@ -11,6 +11,7 @@ const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = 
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
+const { shortName } = require('./undo');
 
 function setupTranslateIpc(ctx) {
   const {
@@ -47,7 +48,16 @@ function setupTranslateIpc(ctx) {
     pushFloat();
     return { ...r, ...trState() };
   });
-  handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') ctx.translator.deleteProvider(id); pushFloat(); return trState(); });
+  handleShell('tr:provider:delete', (id) => {
+    const snap = typeof id === 'string' ? ctx.translator.deleteProvider(id) : null;
+    if (snap) {
+      ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(snap.provider.name)}」` }, () => {
+        if (ctx.translator.restoreProvider(snap)) { retryKeyErrors(snap.provider.id); pushFloat(); }
+      });
+    }
+    pushFloat();
+    return trState();
+  });
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
   handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
@@ -135,7 +145,13 @@ function setupTranslateIpc(ctx) {
     const rec = ctx.modeStore.upsert({ id: data.id, name: data.name, direction: data.direction, prompt: data.prompt, temperature: data.temperature });
     return rec ? { ok: true, id: rec.id, ...trState() } : { error: ctx.modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
   });
-  handleShell('tmode:delete', (id) => { if (typeof id === 'string') ctx.modeStore.remove(id); return trState(); });
+  handleShell('tmode:delete', (id) => {
+    const old = typeof id === 'string' ? ctx.modeStore.remove(id) : false;
+    if (old) {
+      ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(old.name)}」` }, () => { ctx.modeStore.restore(old); pushFloat(); });
+    }
+    return trState();
+  });
 
   // ---- 悬浮翻译窗（shen 2026-10-24 选的方案 B） ----
   // 只读当前打开的对话（隔离环境，见 wa-page.js 的 readOpenChat），不改页面、不碰输入框。
