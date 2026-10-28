@@ -27,7 +27,7 @@ jobs:
         run: npm run check:agents
       - name: 回车处理先判断输入法选字
         run: npm run check:ime-enter
-      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
       - name: MCP 自检
         run: npm run check:mcp
       - name: MCP 起草回复自检（真粘贴，确认不发送）

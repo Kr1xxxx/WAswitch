@@ -5,6 +5,12 @@ const fs = require('fs');
 const { app, BrowserWindow } = require('electron');
 
 const DSF = Number(process.env.VISUAL_DSF || 1);
+// 字体配置必须是绝对路径：相对路径 fontconfig 找不到，会悄悄用回系统字体，出的图和 CI 不一样
+if (!process.env.FONTCONFIG_FILE || !path.isAbsolute(process.env.FONTCONFIG_FILE)) {
+  process.stderr.write('FONTCONFIG_FILE 要设成 scripts/visual/fonts.conf 的绝对路径（用 npm run check:visual 启动）\nVISUAL FAIL\n');
+  process.exit(1);
+}
+// 升级 Electron（Chromium、Skia 跟着变）以后，字形和抗锯齿可能整体变一点：全部重出基准图（--update）再提交
 const UPDATE = process.env.VISUAL_UPDATE === '1';
 const OUT = process.env.VISUAL_OUT || '';
 const BASE = path.join(__dirname, 'baseline');
@@ -12,7 +18,7 @@ const BASE = path.join(__dirname, 'baseline');
 const TOL = 3;
 const MAX_PX = 0;
 
-// 缩放系数写死；颜色按 sRGB；软件渲染（xvfb 下没有 GPU，capturePage 也要求关掉硬件加速）
+// 缩放系数写死；颜色按 sRGB；软件渲染（xvfb 下没有 GPU）
 app.commandLine.appendSwitch('force-device-scale-factor', String(DSF));
 app.commandLine.appendSwitch('force-color-profile', 'srgb');
 app.commandLine.appendSwitch('disable-lcd-text');
@@ -87,10 +93,11 @@ app.whenReady().then(async () => {
     if (!shots.length) throw new Error('组件总览页里没有 section[data-shot]');
     for (const name of shots) {
       // 滚到这一块，等两帧再截，保证画完
-      const r = await js(`(() => { const s = document.querySelector('section[data-shot="${name}"]'); s.scrollIntoView({ block: 'start' }); const b = s.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height), vh: innerHeight }; })()`);
+      const r = await js(`(() => { const s = document.querySelector('section[data-shot="${name}"]'); s.scrollIntoView({ block: 'start' }); const b = s.getBoundingClientRect(); return { px: Math.round(b.left + scrollX), py: Math.round(b.top + scrollY), width: Math.round(b.width), height: Math.round(b.height), vh: innerHeight }; })()`);
       if (r.height > r.vh) throw new Error(`「${name}」这块高 ${r.height}px，超过窗口 ${r.vh}px，拆成两块`);
-      await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
-      const img = await w.webContents.capturePage({ x: r.x, y: r.y, width: r.width, height: r.height });
+      // 用 CDP 截图（按页面坐标）：它会等这一帧真的画完。capturePage 冷启动时偶尔拿到上一帧（还没滚动、悬停没画上）
+      const shot = await dbg.sendCommand('Page.captureScreenshot', { format: 'png', clip: { x: r.px, y: r.py, width: r.width, height: r.height, scale: 1 } });
+      const img = nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64'));
       const file = path.join(BASE, `${name}-${DSF}x.png`);
       if (UPDATE) {
         fs.writeFileSync(file, img.toPNG());
@@ -98,7 +105,7 @@ app.whenReady().then(async () => {
         continue;
       }
       if (!fs.existsSync(file)) { bad++; fail(`✗ ${name}-${DSF}x：没有基准图。跑 npm run check:visual -- --update 生成`); continue; }
-      const res = compare(img, nativeImage.createFromPath(file));
+      const res = compare(img, nativeImage.createFromBuffer(fs.readFileSync(file)));
       const save = () => {
         if (!OUT) return;
         fs.mkdirSync(OUT, { recursive: true });

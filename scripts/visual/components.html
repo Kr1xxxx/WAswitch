@@ -162,5 +162,45 @@
       </div>
     </div>
   </section>
+  <section data-shot="workbench">
+    <h2>工作台</h2>
+    <div class="wb-tabs" role="tablist">
+      <button class="tb-tab on" role="tab">客户资料</button>
+      <button class="tb-tab" role="tab" data-force="hover">话术</button>
+      <button class="tb-tab" role="tab">翻译<span class="tb-badge">3</span></button>
+    </div>
+    <div class="pn-tabs"><button class="pn-tab on">全部</button><button class="pn-tab">常用</button><button class="pn-tab">报价</button></div>
+    <div class="dk-card"><div class="dk-field"><textarea class="dk-in" rows="3" aria-label="要回的话" placeholder="要回的话"></textarea><div class="dk-tools"><button class="dk-tool" aria-label="复制"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button><span class="dk-keyhint">回车翻译</span></div></div></div>
+    <div class="dk-card"><div class="dk-field"><textarea class="dk-out" rows="3" aria-label="译文">Hi Emma, the 13x4 lace front in natural black is back in stock. Shall I send you the price list?</textarea><div class="dk-tools"><button class="dk-tool" aria-label="复制"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div></div>
+    <div class="line"><textarea class="dk-in" rows="2" aria-label="改译文">Thanks Lukas, I will check with our warehouse today.</textarea></div>
+    <div class="lite-msgs">
+      <div class="lite-msg"><span class="from">Emma Schneider</span><span class="text">Do you have the 24 inch body wave in stock?</span><span class="time">09:12</span></div>
+      <div class="lite-msg me"><span class="text">Yes, we ship from our EU warehouse.</span><span class="time">09:14</span></div>
+    </div>
+  </section>
+
+  <section data-shot="settings">
+    <h2>设置</h2>
+    <div class="qk-tiles">
+      <div class="qk-tile"><span class="qk-k">内存</span><b class="qk-v">1.2 GB</b><span class="qk-s">5 个账号</span></div>
+      <div class="qk-tile"><span class="qk-k">翻译</span><b class="qk-v ok">智谱</b><span class="qk-s">glm-4-flash</span></div>
+      <div class="qk-tile"><span class="qk-k">自检</span><b class="qk-v warn">1 个提醒</b><span class="qk-s">Marco 出口 IP 变了</span></div>
+      <div class="qk-tile"><span class="qk-k">版本</span><b class="qk-v bad">更新失败</b><button class="link-btn qk-act">重试</button></div>
+    </div>
+    <div>
+      <div class="setrow"><div class="meta"><span class="title">自动翻译收到的消息</span><span class="desc">只翻客户发来的</span></div><button class="switch" role="switch" aria-checked="true" aria-label="开"></button></div>
+      <div class="setrow solo"><div class="meta"><span class="title">界面语言</span></div><select><option>中文</option></select></div>
+    </div>
+    <div class="line">
+      <span class="tag">网页版</span>
+      <span class="tag">时区：伦敦</span>
+      <span class="sub"><span class="seg">Lukas</span><span class="seg">+49 151 2345 6789</span></span>
+    </div>
+    <div class="line progress-line">
+      <div class="progress"><span style="width: 40%"></span></div>
+      <div class="progress thin"><span style="width: 75%"></span></div>
+      <span class="spinner" aria-label="加载中"></span>
+    </div>
+  </section>
 </body>
 </html>

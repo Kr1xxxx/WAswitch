@@ -13,8 +13,8 @@ if (process.platform !== 'linux') {
   process.exit(0);
 }
 // 兜底字体（见 scripts/visual/fonts.conf）
-if (!fs.existsSync('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')) {
-  console.error('缺 DejaVu 字体：sudo apt-get install -y fonts-dejavu-core');
+if (!['DejaVuSans.ttf', 'DejaVuSansMono.ttf'].every((f) => fs.existsSync(`/usr/share/fonts/truetype/dejavu/${f}`))) {
+  console.error('缺 DejaVu 字体：sudo apt-get install -y fonts-dejavu-core fonts-dejavu-mono');
   process.exit(1);
 }
 
@@ -37,8 +37,13 @@ for (const dsf of [1, 2]) {
     timeout: 120000,
   });
   process.stdout.write(r.stdout || '');
-  const err = (r.stderr || '').split('\n').filter((l) => /^(✗|VISUAL|\s+at |Error)/.test(l)).join('\n');
+  const lines = (r.stderr || '').split('\n');
+  const err = lines.filter((l) => /^(✗|VISUAL|\s+at |Error)/.test(l)).join('\n');
   if (err) process.stderr.write(`${err}\n`);
+  // Electron 没走到最后（崩溃、超时）就没有 VISUAL 那行：把最后几行原样打出来，不然只看到「失败」不知道为什么
+  if (!/VISUAL (PASS|FAIL)/.test(r.stderr || '')) {
+    process.stderr.write(`✗ ${dsf} 倍：Electron 没跑完（退出码 ${r.status}${r.signal ? `，信号 ${r.signal}` : ''}${r.error ? `，${r.error.message}` : ''}）\n${lines.filter(Boolean).slice(-15).join('\n')}\n`);
+  }
   if (r.status !== 0 || !/VISUAL PASS/.test(r.stderr || '')) failed++;
 }
 if (failed) {
