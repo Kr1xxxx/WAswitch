@@ -25,7 +25,7 @@
     "check:ports": "node scripts/check-ports.js && node scripts/check-proxy-pass.js",
     "check:atomic": "node scripts/check-atomic.js && node scripts/check-account-id.js",
     "check:editor": "node scripts/check-editor-save.js",
-    "check:records": "node scripts/check-records.js",
+    "check:records": "node scripts/check-records.js && node scripts/check-undo.js",
     "check:import": "node scripts/check-import.js",
     "check:downloads": "node scripts/check-downloads.js",
     "check:translate": "node scripts/check-translate.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
