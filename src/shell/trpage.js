@@ -126,12 +126,12 @@ function tpOutPane(which) {
   o.fix = morphBtn(`tp-fix${which}`, { idle: '纠错', busy: '纠错中', ok: '已纠错', err: '重试' }, () => tpFix(which), { class: 'tp-btn tp-fix primary' });
   // 纠错中再点一下 = 取消（和「翻译中」一样）
   o.fix.addEventListener('click', () => { if (o.fix.dataset.st === 'busy' && tp.busy) window.wa.trPageCancel(); }, true);
-  foot.append(o.fix);
+  foot.append(o.fix, copy);
+  // 收起箭头放在最右边，贴着栏的右边缘（复制按钮没字时也不浮在中间）
   if (which === 2) {
     o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: (e) => tpSetOpen2(false, e) }, icon('up', 14));
     foot.append(o.fold);
   }
-  foot.append(copy);
   return o;
 }
 

@@ -122,6 +122,9 @@ body.collapsed .meta, body.collapsed .pill, body.collapsed .mute, body.collapsed
 .membox { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-l); background: var(--white-a6); font-size: var(--fs-s); color: var(--soft); }
 .membox .top { display: flex; justify-content: space-between; }
 .membox b { color: var(--text); }
+.membox.warn { background: var(--amber-3); color: var(--amber-11); }
+.membox.bad { background: var(--red-3); color: var(--red-11); }
+.membox.warn b, .membox.bad b { color: inherit; }
 .bars { height: 4px; border-radius: var(--r-full); background: var(--slate-a4); display: flex; overflow: hidden; }
 body.collapsed .membox { display: none; }
 .foot { display: flex; align-items: center; justify-content: space-between; }
@@ -157,7 +160,7 @@ body.collapsed .foot .upd-check { display: none; }
 .chip.bad { background: var(--red-3); color: var(--danger); }
 .chip.night { background: var(--amber-3); color: var(--amber-11); }
 button.chip { border: 0; font: inherit; font-size: var(--fs-s); cursor: pointer; }
-#content { flex: 1; min-height: 0; overflow-y: auto; user-select: text; }
+#content { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; user-select: text; }
 #content[hidden], #lock[hidden] { display: none; }
 #lock { flex: 1; min-height: 0; }
 
@@ -328,7 +331,7 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 
 /* 关于页：软件更新 */
 /* 关于页：软件更新卡片 */
-.update-box { --upd: var(--slate-11); --upd-bg: var(--slate-3); display: flex; flex-direction: column; gap: 12px; max-width: 600px; padding: 16px 18px; border: var(--hair) solid var(--line); border-radius: var(--r-l); background: var(--white); }
+.update-box { --upd: var(--slate-11); --upd-bg: var(--slate-3); display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border: var(--hair) solid var(--line); border-radius: var(--r-l); background: var(--white); }
 .update-box.ok { --upd: var(--green-11); --upd-bg: var(--green-3); }
 .update-box.busy { --upd: var(--green-11); --upd-bg: var(--green-3); }
 .update-box.new { --upd: var(--white); --upd-bg: var(--green-9); border-color: var(--green-6); background: linear-gradient(180deg, var(--green-2), var(--white) 70%); }
@@ -368,7 +371,7 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .icon-btn { position: relative; }
 .dot.new { top: 3px; right: 3px; min-width: 0; width: 10px; height: 10px; padding: 0; border-color: var(--slate-6); background: var(--green-9); }
 #side .tab { display: flex; align-items: center; justify-content: space-between; }
-#side .tab-group { margin-top: 8px; padding: 10px 10px 4px; border-top: var(--hair) solid var(--slate-a5); font-size: var(--fs-s); font-weight: 600; color: var(--muted); letter-spacing: .06em; }
+#side .tab-group { margin-top: 8px; padding: 10px 10px 4px; font-size: var(--fs-s); font-weight: 600; color: var(--muted); letter-spacing: .06em; }
 .tab-dot { width: 8px; height: 8px; border-radius: var(--r-full); background: var(--green-9); }
 
 /* 编辑页：标题旁的帮助链接、底部固定的按钮栏（窗口不高时也看得到“保存”） */
@@ -408,6 +411,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .pn-tab { border: none; background: transparent; padding: 5px 10px; border-radius: var(--r-s); font: inherit; font-weight: 600; color: var(--muted); }
 .pn-tab.on { background: var(--slate-3); color: var(--text); }
 .pn-tools { display: flex; gap: 6px; padding: 8px 10px; align-items: center; }
+.pn-tools .pn-btn { height: 30px; }
 .pn-tools input[type=search] { flex: 1; min-width: 0; height: 30px; border: var(--hair) solid var(--line); border-radius: var(--r-m); padding: 0 8px; font: inherit; background: var(--white); }
 .pn-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .pn-item { background: var(--white); border: var(--hair) solid var(--line); border-radius: var(--r-m); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
@@ -669,8 +673,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
   --s11: var(--slate-11); --s12: var(--slate-12); --b9: var(--blue-9); --g3: var(--green-3); --g9: var(--green-9); --g11: var(--green-11); --r9: var(--red-9); --r11: var(--red-11); --a9: var(--amber-9);
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: var(--fs-m); line-height: 1.5;
 }
-.tp-head { flex: none; height: 48px; display: flex; align-items: center; padding: 0 24px; border-bottom: var(--hair) solid var(--s5); }
-.tp-head h1 { font-size: var(--fs-m); font-weight: 600; letter-spacing: 0; }
+.tp-head { flex: none; height: 64px; display: flex; align-items: center; padding: 16px 24px 0; }
 /* 右上角三个服务商：上面名字和是否启用，下面额度。按钮内边距 8，整组往右挪 8，字和下面内容的右边对齐 */
 .tp-provs { margin: 0 -8px 0 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .tp-prov { flex: none; min-width: 112px; height: 40px; display: flex; flex-direction: column; justify-content: center; gap: 0; padding: 0 8px; border: 0; border-radius: var(--r-m);
@@ -695,8 +698,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 /* 翻译是这页的主要内容：两栏占满剩下的高度，最近记录最多 4 行 */
 .tp-grid { flex: 1 1 auto; min-height: 240px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .tp-pane { position: relative; min-height: 0; display: flex; flex-direction: column; border: var(--hair) solid var(--s6); border-radius: var(--r-l); background: var(--s2); }
-.tp-in { border-color: var(--s7); background: var(--s1); }
-.tp-in:focus-within { border-color: var(--s8); }
+.tp-in { border-color: var(--s6); background: var(--s1); }
+.tp-in:focus-within { border-color: var(--s7); }
 .tp-outs { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
 .tp-outs .tp-out { flex: 1; }
 .tp-text { flex: 1; min-height: 0; width: 100%; padding: 14px 16px 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; font-size: var(--fs-l); line-height: 1.6; color: var(--s12); user-select: text; }

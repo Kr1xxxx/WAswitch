@@ -218,7 +218,7 @@ function dockItemEdit(it) {
 }
 function dockSuggestBox(text, take, drop) {
   return h('div', { class: 'dk-suggest' },
-    h('span', { class: 'dk-label' }, '纠错建议（你改过这条，没有直接替换）'),
+    h('span', { class: 'dk-label' }, '纠错建议'),
     h('span', { class: 'dk-tr' }, text),
     h('span', { class: 'dk-row' }, h('button', { class: 'pn-btn primary', onclick: take }, '采用'), h('button', { class: 'pn-btn', onclick: drop }, '不用')));
 }
@@ -406,7 +406,7 @@ function dockCompose() {
     if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点“重新翻译”', true);
     dockTranslate(false);
   });
-  const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）', placeholder: '译文会显示在这里，可以直接改' }, dk.out);
+  const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
   out.addEventListener('input', () => {
     dk.out = out.value;
     if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
@@ -429,7 +429,7 @@ function dockCompose() {
           h('button', { class: 'dk-btn', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
     dockField(out, () => out.value, status),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
-    dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
+    dk.warn.length ? h('div', { class: 'tr-warn' }, `原文没有：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },
       h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey }, '放进输入框')));
 }
@@ -452,6 +452,9 @@ function dockRender(force = false) {
   if (!dk.st || dk.st.accountId !== s.activeId) { if (!dk.fetching) { dk.fetching = true; dockFetch().finally(() => { dk.fetching = false; }); } if (!dk.st) { host.replaceChildren(h('div', { class: 'hint dk-hint' }, '加载中…')); return; } }
   const st = dk.st;
   if (!st.accountId) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '先添加一个 WhatsApp 账号。')); return; }
+  // 账号出了问题（代理不通、退出登录等）：读不到对话，工作台只留一句，不显示「正在读当前对话…」和回复框
+  const acc = s.accounts.find((a) => a.id === s.activeId);
+  if (acc && acc.problem) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '账号连上后可用。')); return; }
   if (!st.hasProvider) {
     host.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
       h('span', { class: 'hint' }, '还没设置翻译服务。'),
