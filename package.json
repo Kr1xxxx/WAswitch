@@ -83,7 +83,8 @@
       "src/mcp/settings.js",
       "src/mcp/preload.js",
       "assets/**/*",
-      "!**/node_modules/**/*.{map,md,markdown,d.ts,d.mts,d.cts}"
+      "!**/node_modules/**/*.{map,md,markdown,d.ts,d.mts,d.cts}",
+      "**/node_modules/**/{LICENSE,LICENCE,license,licence}.{md,markdown}"
     ],
     "icon": "assets/icon.png",
     "win": {
