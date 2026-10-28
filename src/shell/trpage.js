@@ -537,9 +537,12 @@ async function tpFix(which) {
 }
 
 // ⇄：原文语言和目标语言对调；有译文就把译文换到左边当原文
+// 还没翻过时没有 detected，先在本机认一下原文语言，不然德语会被当成认不出、对调成 中文 → 英语
 function tpSwap() {
   const ui = tp.ui;
-  const next = ReplyLang.swap({ text: ui.input.value, src: tp.src || tp.detected, manual: tp.tgt, autoTarget: '英语' });
+  const text = ui.input.value;
+  const src = tp.src || tp.detected || (ReplyLang.isChinese(text) ? '' : tpDetect(text));
+  const next = ReplyLang.swap({ text, src, manual: tp.tgt, autoTarget: '英语' });
   tp.src = next.src;
   tp.tgt = next.manual;
   if (ui.o1.box.value.trim()) {
@@ -553,6 +556,12 @@ function tpSwap() {
   tpUpdate();
   tpFx(ui.swap.firstChild, 'tp-fx-turn');
   tpFx(ui.input);
+}
+
+// 认出的语言不在下拉里（服务商不支持）就当认不出
+function tpDetect(text) {
+  const l = typeof LangDetect !== 'undefined' ? LangDetect.detectLang(text) : '';
+  return tpLangs().includes(l) ? l : '';
 }
 
 async function tpLoadCfg() {
