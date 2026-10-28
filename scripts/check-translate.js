@@ -366,9 +366,22 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   const dW=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',lashTerms:true}));
   let tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
   assert.equal(tW.publicConfig().wigTerms,true); assert(tW.roleText().includes('发帘 = Bundle') && tW.roleText().startsWith('睫毛、假发行业'));
-  fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:false}));
+  // 0.5.12/0.5.13 的设置：wigTerms:false 是默认关时顺手存进去的（睫毛可能也关着）→ 升级时打开一次并存盘
+  fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:false,lashTerms:false,seeded:true,seedVer:3,autoDefaultOn:true,chatLang:{}}));
   tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
-  assert.equal(tW.publicConfig().wigTerms,false); assert(!tW.roleText().includes('发帘'));
+  assert.equal(tW.publicConfig().wigTerms,true); assert.equal(tW.publicConfig().lashTerms,true); assert(tW.roleText().startsWith('睫毛、假发行业'));
+  let sW=JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')); assert.equal(sW.termsDefaultOn,true); assert.equal(sW.wigTerms,true); assert.equal(sW.lashTerms,true);
+  // 迁移之后用户自己关掉：重开不会再打开
+  assert(tW.setWigTerms(false).ok); assert(tW.setLashTerms(false).ok);
+  tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tW.publicConfig().wigTerms,false); assert.equal(tW.publicConfig().lashTerms,false); assert(!tW.roleText().includes('发帘'));
+  // 新装（没有设置文件）：默认开，标记一起存上，之后关掉也不会被打开
+  const dN=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  let tN=new T.Translator({seed:false,dir:dN,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tN.publicConfig().wigTerms,true); assert(tN.setWigTerms(false).ok);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dN,'translate.json'),'utf8')).termsDefaultOn,true);
+  tN=new T.Translator({seed:false,dir:dN,safeStorage:ss,sessionFor:()=>fake}); assert.equal(tN.publicConfig().wigTerms,false); assert.equal(tN.publicConfig().lashTerms,true);
+  fs.rmSync(dN,{recursive:true,force:true});
   assert(tW.setWigTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')).wigTerms,true);
   fs.rmSync(dW,{recursive:true,force:true});
   assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));

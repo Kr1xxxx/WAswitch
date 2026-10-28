@@ -340,6 +340,8 @@ class Translator {
       rolePrompt: '',
       // 内置假发词汇、睫毛词汇：都默认开
       wigTerms: true, lashTerms: true,
+      // 0.5.13 及更早的设置存过 wigTerms:false（那时默认关，存别的设置时一起写进去了），升级时两个词表都打开一次
+      termsDefaultOn: false,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
@@ -382,8 +384,10 @@ class Translator {
           base.seeded = raw.seeded === true;
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
-          base.wigTerms = raw.wigTerms !== false; // 没存过（老设置）= 默认开
-          base.lashTerms = raw.lashTerms !== false; // 没存过（老设置）= 默认开
+          base.termsDefaultOn = raw.termsDefaultOn === true;
+          // 迁移过之后存的 false 才是用户自己关的；没存过 = 默认开
+          base.wigTerms = !base.termsDefaultOn || raw.wigTerms !== false;
+          base.lashTerms = !base.termsDefaultOn || raw.lashTerms !== false;
           base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
           const du = raw.deeplUsage;
           if (du && typeof du === 'object') {
@@ -421,6 +425,7 @@ class Translator {
       }
     }
     if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
+    if (!base.termsDefaultOn) { base.termsDefaultOn = true; migrated = true; }
     if (migrated) { try { this.save(); } catch {} }
     return base;
   }
