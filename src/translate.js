@@ -15,6 +15,11 @@ const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成�
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
+// DeepL 每个密钥（每个 DeepL 账号）每月最多翻 10 万字符（shen 2026-10-28），本机记数，每月 1 号清零
+const DEEPL_MONTH_CAP = 100000;
+const monthKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const usageKeyOf = (key) => crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+const deeplChars = (text) => [...text].length;
 const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
 
 // 深度思考：'' 默认（不传参数）| disabled | enabled。新服务商默认关（翻译用不上，关掉更快）；自定义和混元默认不传
@@ -306,7 +311,9 @@ class Translator {
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
-      autoDefaultOn: false };
+      autoDefaultOn: false,
+      // DeepL 每个密钥这个月用了多少字符：{ 密钥的 hash 前 16 位: { month: 'YYYY-MM', chars } }
+      deeplUsage: {} };
     let migrated = false;
     try {
       if (fs.existsSync(this.file)) {
@@ -315,6 +322,7 @@ class Translator {
           base.providers = Array.isArray(raw.providers) ? raw.providers.filter((p) => p && typeof p.id === 'string').slice(0, MAX_PROVIDERS).map((p) => ({
             id: p.id, preset: PRESETS[p.preset] ? p.preset : 'custom', name: line(p.name, 40), baseUrl: line(p.baseUrl, 300), model: line(p.model, 120),
             keyEnc: typeof p.keyEnc === 'string' ? p.keyEnc : '', keyTail: line(p.keyTail, 4), updatedAt: Number(p.updatedAt) || 0,
+            ...(typeof p.usageKey === 'string' && /^[0-9a-f]{16}$/.test(p.usageKey) ? { usageKey: p.usageKey } : {}),
             thinking: THINKING.includes(p.thinking) ? p.thinking : defaultThinking(p.preset),
           })) : [];
           // 混元、智谱只能用固定的几个模型：别的模型名改成默认的；混元旧地址换成 TokenHub（换地址时密钥清掉，要重新填 TokenHub 的密钥）
@@ -344,6 +352,11 @@ class Translator {
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
           base.wigTerms = raw.wigTerms === true;
+          if (raw.deeplUsage && typeof raw.deeplUsage === 'object') {
+            for (const [k, v] of Object.entries(raw.deeplUsage)) {
+              if (/^[0-9a-f]{16}$/.test(k) && v && /^\d{4}-\d{2}$/.test(v.month)) base.deeplUsage[k] = { month: v.month, chars: clampNum(v.chars, 0, 1e9, 0) };
+            }
+          }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
@@ -434,11 +447,27 @@ class Translator {
 
   provider(id) { return this.load().providers.find((p) => p.id === id) || null; }
 
+  now() { return this.deps.now ? this.deps.now() : Date.now(); }
+  // DeepL 这个密钥本月已用字符数（换月了就是 0）
+  deeplUsed(usageKey) {
+    const u = usageKey && this.load().deeplUsage[usageKey];
+    return u && u.month === monthKey(this.now()) ? u.chars : 0;
+  }
+  addDeeplUsage(usageKey, n) {
+    const c = this.load();
+    const month = monthKey(this.now());
+    // 别的月份的记录没用了，顺手删掉
+    for (const [k, v] of Object.entries(c.deeplUsage)) if (v.month !== month) delete c.deeplUsage[k];
+    c.deeplUsage[usageKey] = { month, chars: this.deeplUsed(usageKey) + n };
+    this.save();
+  }
+
   // 给界面看的配置：没有密钥，只有尾号
   publicConfig() {
     const c = this.load();
     return {
-      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc })),
+      providers: c.providers.map(({ keyEnc, usageKey, ...p }) => ({ ...p, hasKey: !!keyEnc,
+        ...(p.preset === 'deepl' ? { usage: { used: keyEnc ? this.deeplUsed(usageKey) : 0, cap: DEEPL_MONTH_CAP } } : {}) })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
       fixId: c.fixId,
@@ -484,6 +513,7 @@ class Translator {
     if (newKey) {
       p.keyEnc = this.deps.safeStorage.encryptString(newKey).toString('base64');
       p.keyTail = newKey.slice(-4);
+      p.usageKey = usageKeyOf(newKey);
     }
     if (!c.primaryId || !this.provider(c.primaryId)) c.primaryId = p.id;
     this.save();
@@ -639,6 +669,10 @@ class Translator {
     if (!key) throw noKey(p);
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
+    // 老设置里存的密钥没有 hash：第一次用时补上
+    if (!p.usageKey) p.usageKey = usageKeyOf(key);
+    const n = deeplChars(text);
+    if (this.deeplUsed(p.usageKey) + n > DEEPL_MONTH_CAP) throw { kind: 'quota', cap: true, text: 'DeepL 本月 10 万字符已用完，下月 1 号恢复' };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
     if (DEEPL_LANGS[source]) body.source_lang = DEEPL_LANGS[source][0];
     const ctx = deeplContext(context);
@@ -658,6 +692,7 @@ class Translator {
       out = j && Array.isArray(j.translations) && j.translations[0] && j.translations[0].text;
     } catch { out = ''; }
     if (typeof out !== 'string' || !out.trim()) throw { kind: 'empty', text: '服务商没有返回译文' };
+    this.addDeeplUsage(p.usageKey, n);
     return out.trim();
   }
 
@@ -776,7 +811,8 @@ class Translator {
           controller.signal.removeEventListener('abort', onCancel);
         }
         // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
-        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
+        // DeepL 本月 10 万字符用完了（软件自己的限额）也换备用
+        if (controller.signal.aborted || !(['network', 'timeout', 'server', 'overload'].includes(lastErr.kind) || lastErr.cap)) break;
       }
       if (lastErr.kind === 'overload' && chain.length < 2 && !pinned) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
