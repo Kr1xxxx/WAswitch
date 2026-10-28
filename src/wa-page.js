@@ -540,5 +540,54 @@ async function composeState(wc, probe = '') {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, parseWid, READ_CHAT_CODE, READ_PEER_CODE, parsePre };
+// 选中文字一键翻译：读当前选中的文字和它在页面上的位置。只读 getSelection()，不改选区、不改页面、不留监听。
+// 只认右侧聊天区（#main）里消息上的选区，输入框和左边对话列表里的不算。
+// 文字只取消息正文（selectable-text）里被选中的部分：拖选整条消息时不带上时间、已读勾这些；认不出正文就用整个选区的文字。
+// 返回 { text, x, y, w, h, top, vw, vh }（位置是页面 CSS 像素：最后一行的矩形 + 第一行的顶边）| null
+const SELECTION_CODE = `(() => {
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: 'span.selectable-text, [data-testid*="selectable-text"]' })};
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const main = document.querySelector(S.main);
+  const r = sel.getRangeAt(0);
+  const inMain = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !!el && !!main && main.contains(el) && !el.closest('footer') && !el.isContentEditable; };
+  if (!inMain(r.startContainer) || !inMain(r.endContainer)) return null;
+  let rootNode = r.commonAncestorContainer;
+  if (rootNode.nodeType !== 1) rootNode = rootNode.parentElement;
+  const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+  const parts = [];
+  let lastBody = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!r.intersectsNode(n)) continue;
+    const body = n.parentElement && n.parentElement.closest(S.body);
+    if (!body) continue;
+    let t = n.data;
+    const from = n === r.startContainer ? r.startOffset : 0;
+    const to = n === r.endContainer ? r.endOffset : t.length;
+    t = t.slice(from, to);
+    if (lastBody && body !== lastBody) parts.push('\\n');
+    parts.push(t);
+    lastBody = body;
+  }
+  const text = (parts.join('').trim() || String(sel.toString() || '').trim());
+  if (!text) return null;
+  const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+  if (!rects.length) return null;
+  const last = rects[rects.length - 1];
+  return { text: text.slice(0, 4000), x: last.left, y: last.top, w: last.width, h: last.height, top: rects[0].top, vw: innerWidth, vh: innerHeight };
+})()`;
+
+async function readSelection(wc) {
+  if (wc.isDestroyed() || wc.isLoading()) return null;
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: SELECTION_CODE }]);
+    if (!r || typeof r !== 'object' || typeof r.text !== 'string' || !r.text.trim()) return null;
+    const n = (v) => (Number.isFinite(v) ? v : 0);
+    return { text: r.text.slice(0, 4000), x: n(r.x), y: n(r.y), w: n(r.w), h: n(r.h), top: n(r.top), vw: n(r.vw), vh: n(r.vh) };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

@@ -104,6 +104,9 @@ function makeLitePage(id) {
   });
   input.addEventListener('input', () => { input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
+  // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
+  msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
+  msgs.addEventListener('scroll', liteSelHide, { passive: true });
 
   // 没连上时盖在聊天页上面的提示（连接中、扫码、二维码过期）
   function drawStatus(acc, lite) {
@@ -171,6 +174,90 @@ function makeLitePage(id) {
 
   return { el, update, fill };
 }
+
+// ---- 选中文字后的「翻译」小按钮和悬浮译文窗（轻量号的聊天页是软件自己的界面，直接画在这里；样子和网页号的一样，共用 seltr/card.js） ----
+// 放在选区最后一行下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐
+let liteSelBox = null; // { wrap, card }
+let liteSel = null; // { id, text, mode, first, last, area }
+function liteSelHide() {
+  liteSel = null;
+  if (liteSelBox) liteSelBox.wrap.hidden = true;
+}
+function liteSelPlace() {
+  if (!liteSel || !liteSelBox) return;
+  const { wrap } = liteSelBox;
+  const { area, first, last } = liteSel;
+  const bw = wrap.offsetWidth;
+  const bh = wrap.offsetHeight;
+  let top = last.bottom + 4;
+  if (top + bh > area.bottom) top = first.top - 4 - bh;
+  top = Math.max(area.top, Math.min(area.bottom - bh, top));
+  const left = Math.max(area.left, Math.min(area.right - bw, liteSel.mode === 'card' ? last.left : last.right - bw));
+  Object.assign(wrap.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+async function liteSelGo() {
+  const cur = liteSel;
+  if (!cur || !liteSelBox) return;
+  cur.mode = 'card';
+  liteSelBox.card.set({ mode: 'card', busy: true });
+  liteSelPlace();
+  let r;
+  try { r = await window.wa.selTranslate(cur.id, cur.text); } catch { r = { error: '翻译失败' }; }
+  if (liteSel !== cur) return; // 期间收起了或换了别的选区
+  liteSelBox.card.set(r && typeof r.text === 'string' && r.text.trim() ? { mode: 'card', text: r.text } : { mode: 'card', error: (r && r.error) || '翻译失败' });
+  liteSelPlace();
+}
+// 只取消息正文（.text）里被选中的部分：拖选整条消息时不带上发送人和时间
+function liteSelText(r) {
+  const parts = [];
+  let last = null;
+  for (const t of document.querySelectorAll('.lite-msgs .lite-msg .text')) {
+    if (!r.intersectsNode(t)) continue;
+    const part = document.createRange();
+    part.selectNodeContents(t);
+    if (r.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(r.startContainer, r.startOffset);
+    if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
+    if (last) parts.push('\n');
+    parts.push(part.toString());
+    last = t;
+  }
+  return parts.join('').trim();
+}
+function liteSelCheck(id, box) {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return liteSelHide();
+  const r = sel.getRangeAt(0);
+  const inside = (n) => !!n && box.contains(n.nodeType === 1 ? n : n.parentElement);
+  if (!inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
+  const text = liteSelText(r) || String(sel.toString() || '').trim();
+  if (!text) return liteSelHide();
+  const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+  if (!rects.length) return liteSelHide();
+  if (!liteSelBox) {
+    const card = window.SelCard({ go: liteSelGo, retry: liteSelGo, copy: (t) => window.wa.panelCopy(t) });
+    const wrap = h('div', { class: 'sel-pop', hidden: true }, card.root);
+    document.body.append(wrap);
+    liteSelBox = { wrap, card };
+  }
+  liteSel = { id, text: text.slice(0, 4000), mode: 'button', first: rects[0], last: rects[rects.length - 1], area: box.getBoundingClientRect() };
+  liteSelBox.card.set({ mode: 'button' });
+  liteSelBox.wrap.hidden = false;
+  liteSelPlace();
+}
+// 点到按钮和译文窗外面、按键（Ctrl/Cmd 组合键除外，好让 Ctrl+C 复制）、选区没了（按钮状态时）、
+// 改窗口大小、换号、锁定、离开账号页就收起
+document.addEventListener('mousedown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('keydown', (e) => {
+  if (!liteSel || liteSelBox.wrap.contains(e.target) || e.ctrlKey || e.metaKey || ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+  liteSelHide();
+}, true);
+window.addEventListener('resize', () => { if (liteSel) liteSelHide(); });
+if (window.wa.onState) window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
+document.addEventListener('selectionchange', () => {
+  if (!liteSel || liteSel.mode !== 'button') return;
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) liteSelHide();
+});
 
 // shell.js 调用：返回这个账号的聊天页（同一个元素），并更新内容
 function litePage(acc, lite) {

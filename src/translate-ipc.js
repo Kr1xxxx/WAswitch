@@ -12,6 +12,7 @@ const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
 const { shortName } = require('./undo');
+const ReplyLang = require('./shell/reply-lang');
 
 function setupTranslateIpc(ctx) {
   const {
@@ -142,6 +143,18 @@ function setupTranslateIpc(ctx) {
       : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: pid });
     return { ...r, detected };
   });
+  // 聊天里选中文字后的悬浮译文窗（sel-translate.js、轻量号聊天页）：外文翻成中文，中文翻成客户的语言（和工作台“自动”一样）。
+  // 忠实翻译、不带上下文；同一句翻过的直接用记下的译文
+  async function selTranslate(text) {
+    if (typeof text !== 'string' || !text.trim()) return { error: '没有选中文字', kind: 'input' };
+    const t = text.trim().slice(0, 4000);
+    const zh = ReplyLang.isChinese(t);
+    const st = floatState();
+    const target = zh ? (st.autoTarget && st.autoTarget !== '中文' ? st.autoTarget : '英语') : '中文';
+    const r = await outTranslate({ text: t, mode: PAGE_MODE, target, source: zh ? '中文' : '' });
+    return { ...r, target };
+  }
+  handleShell('seltr:translate', ({ accountId, text } = {}) => (accountId === ctx.activeId ? selTranslate(text) : { error: '当前账号变了，请重新选', kind: 'input' }));
   // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
   const chatCustomer = (accId, title) => matchChatCustomer(ctx.customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
   handleShell('tr:chatlang', async (accountId) => {
@@ -524,6 +537,7 @@ function setupTranslateIpc(ctx) {
     setupFloatCore,
     pushFloat,
     layoutFloat,
+    selTranslate,
     // MCP translate_text 用：和用户点的翻译同一条队列
     userTranslate,
     // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒

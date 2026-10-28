@@ -310,6 +310,9 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .lite-msg .text { white-space: pre-wrap; word-break: break-word; }
 .lite-msg .from { font-size: var(--fs-s); font-weight: 600; color: #1d4ed8; }
 .lite-msg .time { align-self: flex-end; font-size: var(--fs-s); color: var(--muted); }
+/* 轻量号聊天页里选中文字后的「翻译」按钮和译文窗（样式在 ../seltr/card.css，和网页号上的一样） */
+.sel-pop { position: fixed; z-index: 55; -webkit-app-region: no-drag; }
+.sel-pop[hidden] { display: none; }
 .lite-err { min-height: 0; padding: 0 16px; font-size: var(--fs-s); color: var(--danger); }
 .lite-err:not(:empty) { padding: 6px 16px 0; }
 .lite-compose { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: var(--hair) solid var(--line); }

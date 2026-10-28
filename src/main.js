@@ -48,6 +48,7 @@ const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
+const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
@@ -1116,6 +1117,7 @@ function layout() {
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
   trIpc.layoutFloat(bounds);
+  selTr.sync();
   syncLiteWatch();
 }
 
@@ -1711,8 +1713,8 @@ function setSpellcheck(id, on) {
   applySpellcheck(acc);
   pushState();
 }
-// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴。不提供“检查元素”
-function setupPageMenu(wc, ses) {
+// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴，选中聊天文字时还有「翻译」。不提供“检查元素”
+function setupPageMenu(wc, ses, id) {
   wc.on('context-menu', (_e, p) => {
     const items = [];
     if (p.misspelledWord) {
@@ -1730,6 +1732,8 @@ function setupPageMenu(wc, ses) {
       );
     } else if (p.selectionText) {
       items.push({ label: '复制', role: 'copy' });
+      // 和选中后出现的小按钮同一条路：在选区旁边弹出悬浮译文窗
+      if (p.selectionText.trim()) items.push({ label: '翻译', click: () => selTr.fromMenu(id, wc, p.selectionText, { x: p.x, y: p.y }) });
     }
     if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
   });
@@ -1764,7 +1768,8 @@ async function createView(acc, loadDelay = 0) {
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy(webrtcPolicy(acc));
   setupNavigationGuards(wc);
-  setupPageMenu(wc, ses);
+  setupPageMenu(wc, ses, acc.id);
+  selTr.watch(acc.id, wc);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
 
@@ -2918,6 +2923,20 @@ const ctx = {
 
 // ---- 翻译和悬浮翻译窗（在 translate-ipc.js） ----
 const trIpc = setupTranslateIpc(ctx);
+// ---- 聊天里选中文字后的「翻译」小按钮和悬浮译文窗（在 sel-translate.js） ----
+const selTr = createSelTranslate({
+  win: () => win,
+  lockLocalPage,
+  canShow: (id) => {
+    const acc = findAcc(id);
+    return !!acc && !isLite(acc) && id === activeId && page === 'account' && !locked && !problems.has(id) && !!win && win.isVisible() && !win.isMinimized();
+  },
+  viewOf: (id) => views.get(id) || null,
+  readSelection: (wc) => waPage.readSelection(wc),
+  translate: (text) => trIpc.selTranslate(text),
+  copy: (text) => clipboard.writeText(text),
+  focus: () => focusActive(),
+});
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);
 onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
@@ -3176,6 +3195,7 @@ onShell('update:install', () => { if (!updater) return; if (updater.state.manual
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  selTr.shutdown(); // 选中文字的按钮/译文窗先拆掉，退出时不再处理账号页面的鼠标事件
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
   if (trIpc.trStore) trIpc.trStore.flush(); // 还没写盘的译文

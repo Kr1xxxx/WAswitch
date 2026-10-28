@@ -1,0 +1,5 @@
+/* 盖在账号页面上的小视图：只放 card.css 里的按钮或译文窗，四周 6px 透明边留给阴影 */
+:root { --hair: 1px; }
+@media (min-resolution: 2dppx) { :root { --hair: .5px; } }
+html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+body { padding: 6px; }
