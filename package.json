@@ -33,6 +33,7 @@
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:font-sizes": "node scripts/check-font-sizes.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
+    "check:add-menu": "electron scripts/check-add-menu.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"
   },
