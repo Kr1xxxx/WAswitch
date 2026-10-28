@@ -29,6 +29,10 @@ const dk = {
   seenTitle: null,
   unread: 0,
   acc: null,
+  draftKey: '', // 回复框现在是哪个对话的草稿：`${号}|${chatKey}`，'' = 还没认出对话
+  draftSent: '', // 上次存的草稿（JSON），没变就不再发
+  draftTimer: null,
+  redraw: false, // 换了对话：下次重画连回复框一起换
 };
 
 const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !s.locked && s.page === 'account');
@@ -46,6 +50,48 @@ function dockCountUnread() {
   dk.unread = st.items.filter((it) => !dk.seen.has(it.h)).length;
 }
 
+// ---- 草稿 ----
+// 回复框写的话和译文按对话存在本机（主进程 drafts.js）：切到别的对话再切回来、重启软件都还在，清空回复框就删掉。
+// 认对话用主进程给的 chatKey（对话的 hash）；还没认出对话（刚打开号）时先不存，认出来以后归到那个对话
+const dockDraftOf = () => ({ text: dk.text, out: dk.out, src: dk.src, edited: dk.edited, fixed: dk.fixed, warn: dk.warn });
+function dockDraftFlush() {
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = null;
+  if (!dk.draftKey || !window.wa.dockDraft) return;
+  const d = dockDraftOf();
+  const json = JSON.stringify(d);
+  if (json === dk.draftSent) return;
+  dk.draftSent = json;
+  const [acc, chat] = dk.draftKey.split('|');
+  window.wa.dockDraft(acc, chat, d);
+}
+// 打字时等停手 300ms 再存；重画时（翻译、纠错、对调这类一下子改完的）已经在等就不再往后推
+function dockDraftQueue(restart = true) {
+  if (!dk.draftKey || (!restart && dk.draftTimer)) return;
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = setTimeout(dockDraftFlush, 300);
+}
+// 主进程推来新状态：换了对话（或换了号）就先把上一个对话的草稿写下来，再换成这个对话的
+function dockAdopt(st) {
+  const key = st.accountId && st.chatKey ? `${st.accountId}|${st.chatKey}` : '';
+  const accChanged = dk.acc !== st.accountId;
+  if (accChanged || key !== dk.draftKey) dockDraftFlush();
+  if (accChanged) { dockReset(); dk.acc = st.accountId; dk.draftKey = ''; }
+  dk.st = st;
+  if (key === dk.draftKey || !key) return;
+  const carry = !dk.draftKey && (dk.text.trim() || dk.out.trim()); // 对话还没认出来时写的：归到认出来的这个对话
+  dk.draftKey = key;
+  if (carry) { dk.draftSent = ''; dockDraftQueue(); return; }
+  const d = st.draft || {};
+  Object.assign(dk, {
+    text: d.text || '', out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
+    suggest: '', forTitle: d.out ? st.title : null, msg: '', bad: false, msgPid: '',
+  });
+  dk.draftSent = JSON.stringify(dockDraftOf());
+  dk.redraw = true; // 回复框要换成这个对话的内容（正在打字也换）
+}
+window.addEventListener('beforeunload', dockDraftFlush);
+
 function dockReset() {
   Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null });
   dk.seen.clear();
@@ -54,15 +100,14 @@ function dockReset() {
 function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
 
 window.wa.onDock((st) => {
-  if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
-  dk.st = st;
+  dockAdopt(st);
   const before = dk.unread;
   dockCountUnread();
   if (dockVisible()) dockRender(false);
   if (before !== dk.unread && s) refreshPanelHead();
 });
 async function dockFetch() {
-  try { const st = await window.wa.dockGet(); if (st) { if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; } dk.st = st; dockCountUnread(); } } catch {}
+  try { const st = await window.wa.dockGet(); if (st) { dockAdopt(st); dockCountUnread(); } } catch {}
   dockRender(true);
 }
 
@@ -105,11 +150,12 @@ async function dockTranslate(insert = false, fresh = false) {
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
+  p.key = dk.draftKey;
   dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
-  if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
+  if (!dk.st || p.acc !== dk.st.accountId || p.key !== dk.draftKey) return dockRender(true); // 换号、换对话了：作废（再翻一次直接用记下的译文）
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
@@ -400,7 +446,7 @@ function dockCompose() {
   // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
   const keyHint = h('span', { class: 'dk-keyhint' }, ...segs('回车翻译', 'Shift + 回车换行'));
   const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', 'aria-label': '要回的话（中文翻成客户的语言，英文翻成中文）', 'aria-description': '回车翻译，Shift + 回车换行' }, dk.text);
-  input.addEventListener('input', () => { dk.text = input.value; });
+  input.addEventListener('input', () => { dk.text = input.value; dockDraftQueue(); });
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
     if (e.shiftKey) return; // 换行
@@ -411,6 +457,7 @@ function dockCompose() {
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
   out.addEventListener('input', () => {
     dk.out = out.value;
+    dockDraftQueue();
     if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
   });
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
@@ -468,7 +515,10 @@ function dockRender(force = false) {
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   const mark = dockScrollMark();
-  if (root && !force && typing) {
+  dockDraftQueue(false); // 翻译、纠错、对调这些改了草稿的，重画时一起存（没变就不发）
+  const redraw = dk.redraw;
+  dk.redraw = false;
+  if (root && !force && !redraw && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
