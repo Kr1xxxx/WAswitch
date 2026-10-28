@@ -181,7 +181,7 @@ function rawDetail(text) {
 
 // ---------- 过渡动画 ----------
 // 界面每次状态变化都整块重画，CSS transition 接不上。这里按“槽位”记住上次的值，值真的变了才给新元素放一次动画。
-// 动画只用 opacity/transform，时长在 shell.css 的 --fx-* 里统一改；系统开了“减少动态效果”就不动
+// 动画只用 opacity/transform，时长在 src/tokens.css 的 --fx 里统一改；系统开了“减少动态效果”就不动
 const fxLast = new Map();
 function fxChanged(slot, key, first = true) {
   const had = fxLast.has(slot);
@@ -321,7 +321,7 @@ function accountRow(acc) {
   // 名字下面一行：有问题时写问题，平时写这个号登录的手机号（连接方式在悬停提示里）。锁着时不露手机号
   const sub = acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : s.locked ? '' : acc.phone;
   const row = h('button', {
-    class: `row${on ? ' on' : ''}${on && sideFx ? ' fx-on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
+    class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
     oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
   },
@@ -352,9 +352,9 @@ function groupHead(g) {
     return h('div', { class: 'group-head editing' }, icon('down', 12), input);
   }
   const quiet = g && g.muted;
-  // 箭头一直是朝下的那个，折起来转 -90°；刚点过就放一次转动
+  // 箭头一直是朝下的那个，折起来转 -90°（不放动画）
   const chev = g ? icon('down', 12) : null;
-  if (chev) { chev.classList.add('gchev'); fx(`grp:${g.id}`, !!g.collapsed, chev, g.collapsed ? 'fx-rot-close' : 'fx-rot-open', false); }
+  if (chev) chev.classList.add('gchev');
   const head = h('button', {
     class: `group-head${g && g.collapsed ? ' closed' : ''}`,
     title: g ? `${name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
@@ -388,23 +388,17 @@ function accountList() {
     out.push(groupHead(g));
     // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
     const rows = s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow);
-    // 刚展开的组：里面的号淡入
-    if (fxChanged(`grprows:${g.id}`, !!g.collapsed, false) && !g.collapsed) rows.forEach((r) => fxPlay(r));
     out.push(...rows);
   }
   return out;
 }
 
-let sideFx = false;
 function renderSide() {
   if (dragId) { sideStale = true; return; }
   // 正在给分组改名：不重画，免得输入框被换掉
   const editing = document.activeElement && document.activeElement.classList.contains('group-name');
   if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
-  // 侧栏高亮换了（切账号、切设置页）：新高亮那一行淡入
-  sideFx = fxChanged('side-on', s.page === 'account' ? `a:${s.activeId}` : s.page === 'editor' ? `e:${s.editorId || ''}` : s.page, false);
-  const setFx = s.page === 'settings' && fxChanged('set-tab', settingsTab, false);
   $side.replaceChildren();
   $side.append(h('div', { class: 'win-drag' }));
   if (s.page === 'settings') {
@@ -414,7 +408,7 @@ function renderSide() {
       h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
         i ? h('div', { class: 'tab-group' }, title) : null,
         ...tabs.map(([id, label]) =>
-          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
+          h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
             id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
@@ -426,7 +420,7 @@ function renderSide() {
     h('div', { class: 'label side-label' }, s.collapsed ? null : h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))), addBtn()),
     h('div', { class: 'list' }, accountList()),
     s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
-    h('button', { class: `row tool-row${s.page === 'translate' ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
+    h('button', { class: `row tool-row${s.page === 'translate' ? ' on' : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
       h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
     h('div', { class: 'grow' })));
   const upd = updateCard();
@@ -641,11 +635,10 @@ function renderTop() {
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；
 // 没有收起按钮了（shen 2026-10-27），收起用顶栏的“工作台”按钮或 Ctrl/Cmd + Shift + K
 function panelHead() {
-  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'translate', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
-    return h('button', { class: `tb-tab${on ? ` on${tabFx ? ' fx-on' : ''}` : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
+    return h('button', { class: `tb-tab${on ? ' on' : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
   };
   return h('div', { class: 'wb-tabs', role: 'tablist', 'aria-label': '工作台' },
     tab('customers', '客户资料'), tab('replies', '话术'), tab('translate', '翻译', 'translate'),
@@ -661,7 +654,6 @@ function refreshPanelHead() {
 function renderAi() {
   const r = s.aiRequest;
   $ai.hidden = !r;
-  if (fxChanged('ai', !!r, false) && r) fxPlay($ai, 'fx-down');
   if (!r) return;
   if (r.kind === 'draft') {
     // AI 起草了一条回复：给用户看开头，点“放进输入框”才放，发送永远自己按
@@ -1292,7 +1284,6 @@ function translatePage(page) {
 function renderPanel(force = false) {
   const show = !!s.panelOpen && !s.locked && s.page === 'account';
   $panel.hidden = !show;
-  if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
   const tab = s.panelTab || 'translate';

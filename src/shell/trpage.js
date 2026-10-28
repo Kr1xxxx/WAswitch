@@ -252,7 +252,7 @@ function tpSetOpen2(on, e) {
   if (on) tpFillCompare();
 }
 
-// ---------- 动效：只用 250ms ease-out（--fx-state），系统开了「减少动态效果」就不播 ----------
+// ---------- 动效：只用 250ms ease-out（src/tokens.css 的 --fx），系统开了「减少动态效果」就不播 ----------
 const tpCalm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 // 重新播一次某个 CSS 动画（class 在 shell.css 的 .tp-fx*）
 function tpFx(el, cls = 'tp-fx') {
@@ -272,7 +272,7 @@ function tpFoldFx(on) {
   if (tpCalm() || !from || pane.hidden === bar.hidden) return;
   const el = on ? pane : bar;
   const to = el.offsetHeight;
-  const duration = parseFloat(getComputedStyle(el).getPropertyValue('--fx-state')) || 250;
+  const duration = parseFloat(getComputedStyle(el).getPropertyValue('--fx')) || 250;
   if (on) {
     // 展开：从对照条的高度长到整栏，里面的字等长开再淡入
     pane.animate([{ flex: 'none', height: `${from}px`, overflow: 'hidden' }, { flex: 'none', height: `${to}px`, overflow: 'hidden' }], { duration, easing: 'ease-out' });

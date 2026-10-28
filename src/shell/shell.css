@@ -772,7 +772,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-pop-yes { width: 64px; background: var(--s12); color: #fff; }
 /* 矮窗口（笔记本小屏）：记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
 @media (max-height: 760px) { .tp-hist-list { height: 120px; } }
-/* 翻译页动效：译文 / 报错 / 新记录淡入，⇄ 转半圈（250ms ease-out，减少动态效果时 --fx-state 为 0） */
+/* 翻译页动效：译文 / 报错 / 新记录淡入，⇄ 转半圈（--fx 250ms ease-out，减少动态效果时为 0） */
 @keyframes tp-fade { from { opacity: 0; } }
 @keyframes tp-turn { from { transform: rotate(-180deg); } }
 .tp-fx { animation: tp-fade var(--fx) var(--fx-ease); }
