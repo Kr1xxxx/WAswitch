@@ -57,7 +57,7 @@ async function runCompose(req, insert = false) {
   if (req.accountId !== s.accountId) return render(true);
   if (r.error) return say(r.error, true);
   ui.out = r.text; ui.warn = r.warn || [];
-  if (!insert) return say(`${r.provider} · ${(r.ms / 1000).toFixed(1)} 秒`);
+  if (!insert) return say(r.cached ? '这句以前翻过，用了记下的译文' : `${r.provider} · ${(r.ms / 1000).toFixed(1)} 秒`);
   if (ui.warn.length) return say('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   if (s.title !== title) return say('翻译时对话换了，没有贴。看一下再点“放进输入框”', true);
   return insertOut();
