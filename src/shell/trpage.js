@@ -148,7 +148,7 @@ function tpBuild() {
     histList);
   const undo = h('div', { class: 'tp-undo', role: 'status', hidden: true }, h('span', null, '已清空最近记录'),
     h('button', { class: 'tp-undo-btn', type: 'button', onclick: () => tpUndoHist() }, '撤销'));
-  const ui = { input, go, src, tgt, swap, o1, o2, open2, hist, histList, undo };
+  const ui = { input, clear, go, src, tgt, swap, o1, o2, open2, hist, histList, undo };
   tp.ui = ui;
   tp.el = h('div', { class: 'tp' },
     h('div', { class: 'tp-head' }, h('h1', null, '翻译')),
@@ -259,12 +259,13 @@ function tpUpdate() {
   const p2 = provs.find((p) => p.id === tp.p2);
   ui.open2.querySelector('.tp-open2-model').textContent = p2 ? tpProvName(p2) : '';
   tpOff(ui.go, !tp.busy && !ui.input.value.trim());
+  ui.clear.style.visibility = ui.input.value ? '' : 'hidden';
   ui.swap.disabled = tp.busy;
   const toForeign = tpPick(ui.input.value).target !== '中文';
   ui.o1.fix.hidden = !toForeign || !ui.o1.box.value.trim() || !ui.input.value.trim();
   tpOff(ui.o1.fix, tp.busy && ui.o1.fix.dataset.st !== 'busy');
   // 没译文时「复制」先藏起来（位置留着，有了译文不跳）
-  for (const o of [ui.o1, ui.o2]) o.copy.style.visibility = o.box.value.trim() ? '' : 'hidden';
+  for (const o of [ui.o1, ui.o2]) o.copy.classList.toggle('tp-empty', !o.box.value.trim());
   tpFitSelect(ui.o1.model); tpFitSelect(ui.o2.model);
 }
 

@@ -660,7 +660,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
    不加阴影；动画只有按钮状态的淡入淡出，250ms ease-out */
 .tp {
   --s1: #fcfcfd; --s2: #f9f9fb; --s3: #f0f0f3; --s4: #e8e8ec; --s5: #e0e1e6; --s6: #d9d9e0; --s7: #cdced6; --s8: #b9bbc6;
-  --s11: #60646c; --s12: #1c2024; --g3: #e6f6eb; --g9: #30a46c; --g11: #218358; --r9: #e5484d; --r11: #ce2c31;
+  --s11: #60646c; --s12: #1c2024; --b9: #0090ff; --g3: #e6f6eb; --g9: #30a46c; --g11: #218358; --r9: #e5484d; --r11: #ce2c31;
   /* 字号只用三种：和 #204 的 fonts.css 字号变量同名同值（那边合并后这里可以删） */
   --fs-s: 12px; --fs-m: 14px; --fs-l: 16px;
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: var(--fs-m); line-height: 1.5;
@@ -709,6 +709,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-copy[data-st="idle"]:hover { background: var(--s4); }
 .tp-copy[data-st="idle"]:active { background: var(--s5); }
 .tp-copy[data-st="ok"] { background: var(--g3); color: var(--g11); }
+.tp :focus-visible { outline: 2px solid var(--b9); outline-offset: 2px; }
+.tp .tp-text:focus-visible { outline: 0; }
+/* 按钮里的文字层自己设了 visible，所以要连子元素一起藏 */
+.tp-copy.tp-empty, .tp-pane .tp-copy.tp-empty[data-st] > span { visibility: hidden; }
 .tp-fix { width: 80px; background: transparent; color: var(--s12); font-weight: 400; }
 .tp-fix:hover:not(:disabled) { background: var(--s3); }
 .tp-fix[data-st="ok"] { color: var(--g11); }
