@@ -29,7 +29,7 @@ let calls=[];
 let behave=[];
 const fake={fetch:async(url,opt)=>{calls.push({url,opt});const b=behave.shift();if(b==='net')throw new Error('x');if(b==='hang')return new Promise((res,rej)=>opt.signal.addEventListener('abort',()=>rej(new Error('ab'))));const st=b&&b.status||200;const body=b&&b.body||JSON.stringify({choices:[{message:{content:'Hola'}}]});return {ok:st<300,status:st,body:null,text:async()=>body};}};
 const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
-tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模式提示词，先关掉（睫毛词汇单独在后面查）
+tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认开；下面这些检查只看模式提示词，先关掉（词汇单独在后面查）
 (async()=>{
   let r=tr.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y',key:'sk-secret1234'});
   assert(r.ok,JSON.stringify(r));
@@ -201,7 +201,7 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
     {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
     {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1'}));
   const th=new T.Translator({seed:false,dir:d2,safeStorage:ss,sessionFor:()=>fake});
-  th.setLashTerms(false);
+  th.setLashTerms(false); th.setWigTerms(false);
   const [h1,h2]=th.load().providers;
   assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
   assert.equal(h1.keyEnc,''); // 换地址：密钥清掉
@@ -287,8 +287,11 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
-  // 假发词汇：默认关；打开后跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
+  // 假发词汇：默认开（和睫毛一样）；跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
   let rt;
+  assert.equal(t4.publicConfig().wigTerms,true); assert.equal(t4.load().wigTerms,true);
+  rt=t4.roleText(); assert(rt.startsWith('贴牌 = private label\n\n睫毛、假发行业固定译法') && rt.includes('发帘 = Bundle') && rt.includes('密排 = Lash trays'),rt);
+  assert(t4.setWigTerms(false).ok); // 下面先单看睫毛词汇
   // 睫毛词汇：默认开（老设置没存过也算开），单独开关、单独存盘；密排排在睫毛前面
   assert.equal(t4.publicConfig().lashTerms,true); assert.deepEqual(t4.publicConfig().lashList,[{zh:'密排',en:'Lash trays'},{zh:'假睫毛',en:'Lash trays'},{zh:'睫毛',en:'Lash'}]);
   rt=t4.roleText();
@@ -359,6 +362,15 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   assert.equal(tL.publicConfig().lashTerms,true); assert(tL.roleText().startsWith('睫毛、假发行业'));
   assert(tL.setLashTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dL,'translate.json'),'utf8')).lashTerms,true);
   fs.rmSync(dL,{recursive:true,force:true});
+  // 老设置没有 wigTerms：默认开（发帘不再被睫毛词表带成 Lash trays）；存过 false 的仍关
+  const dW=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',lashTerms:true}));
+  let tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tW.publicConfig().wigTerms,true); assert(tW.roleText().includes('发帘 = Bundle') && tW.roleText().startsWith('睫毛、假发行业'));
+  fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:false}));
+  tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tW.publicConfig().wigTerms,false); assert(!tW.roleText().includes('发帘'));
+  assert(tW.setWigTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')).wigTerms,true);
+  fs.rmSync(dW,{recursive:true,force:true});
   assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));
   fs.rmSync(d4,{recursive:true,force:true});
   // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
@@ -522,6 +534,35 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
   t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
   fs.rmSync(d7,{recursive:true,force:true});
+  // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置和 DeepL 用量共用一份
+  const dLn=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const hangs=[];
+  const fakeLn={fetch:async(url,opt)=>{const body=JSON.parse(opt.body);const t=body.text?body.text[0]:body.messages[body.messages.length-1].content;
+    if(/慢/.test(t))return new Promise((res,rej)=>{hangs.push(()=>res({ok:true,status:200,body:null,text:async()=>JSON.stringify({choices:[{message:{content:'slow done'}}]})}));opt.signal.addEventListener('abort',()=>rej(new Error('ab')));});
+    return {ok:true,status:200,body:null,text:async()=>body.text?JSON.stringify({translations:[{text:'Hallo'}]}):JSON.stringify({choices:[{message:{content:'fast'}}]})};}};
+  const tLn=new T.Translator({seed:false,dir:dLn,safeStorage:ss,sessionFor:()=>fakeLn});
+  const zLn=tLn.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k1'}).id;
+  tLn.setRoles({primaryId:zLn});
+  const page=tLn.lane();
+  const work=tLn.translate({text:'慢一点',mode:{prompt:'p'},target:'英语'});
+  assert(tLn.busy,'工作台在翻');
+  q=await page.translate({text:'快',mode:{prompt:'p'},target:'英语',providerId:zLn});
+  assert.equal(q.text,'fast','工作台在翻时翻译页不用排队'); assert(tLn.busy && !page.busy);
+  const pageSlow=page.translate({text:'慢慢',mode:{prompt:'p'},target:'英语',providerId:zLn});
+  assert(page.busy && tLn.busy);
+  assert.equal(page.cancel(),true);
+  q=await pageSlow; assert.equal(q.kind,'cancel','翻译页取消只取消自己');
+  assert(tLn.busy,'工作台那条还在翻');
+  hangs[0](); q=await work; assert.equal(q.text,'slow done');
+  assert.equal(page.cancel(),false,'没在翻时取消什么也不做');
+  // 配置是同一份：本体加的服务商、通道里记的 DeepL 用量，两边都看得到，也写进同一个文件
+  const dlLn=tLn.saveProvider({preset:'deepl',baseUrl:'https://api-free.deepl.com',model:'',key:'k:fx'}).id;
+  assert(page.provider(dlLn),'通道看得到本体新加的服务商');
+  q=await page.translate({text:'你好',mode:{prompt:'p'},target:'德语',providerId:dlLn}); assert.equal(q.text,'Hallo',JSON.stringify(q));
+  assert.equal(tLn.deeplUsed(),2,'通道记的用量本体也看得到');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dLn,'translate.json'),'utf8')).deeplUsage.chars,2);
+  assert(!Object.prototype.hasOwnProperty.call(page,'cfg'),'通道不自己存配置');
+  fs.rmSync(dLn,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
