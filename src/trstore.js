@@ -1,6 +1,7 @@
 // 收到的消息的译文永久存在本机磁盘上（shen 2026-10-26：切回对话、重启软件都直接显示，不再调模型、不耗额度）。
 // 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, edited, fixed, at } }。
 // 不存原文和号码，只存原文的 hash 和译文。按原文认（同一对话里同样的话只翻一次），消息编号变了也认得出。
+// 另外记着翻译栏显示过哪些消息（_view，只有 hash 和时间），重新打开对话时更早的译文也补回来。
 // 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时不删（shen 2026-10-26）。
 const fs = require('fs');
 const path = require('path');
@@ -9,6 +10,9 @@ const { writeJsonAtomic } = require('./atomic');
 
 const KEEP_IN_MEMORY = 20; // 内存里最多留 20 个对话的译文
 const TR_MAX = 4000; // 一条译文最多存多少字（再长截断）
+const VIEW_KEY = '_view'; // 译文文件里放“翻译栏显示过哪些消息”的那一项（别的键都是原文 hash）
+const VIEW_MAX = 40; // 和 floatcore.js 的 KEEP_VIEW 一样：翻译栏最多 40 条
+const HEX_KEY = /^[0-9a-f]{24}$/;
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
 
@@ -46,16 +50,46 @@ class TrStore {
     }
   }
 
-  get(acc, chat, text) {
+  get(acc, chat, text) { return this.getKey(acc, chat, textKey(text)); }
+
+  // 按原文的 hash 取（翻译栏补回来的旧消息手里只有 hash，没有原文）
+  getKey(acc, chat, key) {
     const e = this.load(acc, chat);
-    const r = e && e.data[textKey(text)];
+    const r = e && HEX_KEY.test(String(key)) && Object.hasOwn(e.data, key) ? e.data[key] : null;
     return r && typeof r.tr === 'string' && r.tr ? r : null;
   }
 
-  put(acc, chat, text, rec) {
+  put(acc, chat, text, rec) { this.putKey(acc, chat, textKey(text), rec); }
+
+  putKey(acc, chat, key, rec) {
     const e = this.load(acc, chat);
-    if (!e || !rec || typeof rec.tr !== 'string' || !rec.tr.trim()) return;
-    e.data[textKey(text)] = { tr: rec.tr.slice(0, TR_MAX), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
+    if (!e || !HEX_KEY.test(String(key)) || !rec || typeof rec.tr !== 'string' || !rec.tr.trim()) return;
+    e.data[key] = { tr: rec.tr.slice(0, TR_MAX), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
+    this.touch(e);
+  }
+
+  // 翻译栏上这个对话显示过哪些消息（按顺序，最多 VIEW_MAX 条）：重新打开对话、重启软件时，
+  // 读页面只读得到最后 20 条，更早的译文按这张单子补回来（shen 2026-10-28：「后续打开页面，翻译的文本都一直在这」）。
+  // 每条只有 { h: 消息编号的 hash, k: 原文的 hash, t: 几点几分 }，不存原文和号码
+  getView(acc, chat) {
+    const e = this.load(acc, chat);
+    const v = e && e.data[VIEW_KEY];
+    if (!v || !Array.isArray(v.list)) return [];
+    return v.list.filter((x) => x && typeof x.h === 'string' && HEX_KEY.test(String(x.k)))
+      .map((x) => ({ h: x.h.slice(0, 64), k: x.k, t: typeof x.t === 'string' ? x.t.slice(0, 5) : '' }));
+  }
+
+  putView(acc, chat, list) {
+    const e = this.load(acc, chat);
+    if (!e || !Array.isArray(list)) return;
+    const next = list.slice(-VIEW_MAX).map(({ h, k, t }) => ({ h, k, t: t || '' }));
+    const prev = e.data[VIEW_KEY];
+    if (prev && JSON.stringify(prev.list) === JSON.stringify(next)) return;
+    e.data[VIEW_KEY] = { at: Date.now(), list: next };
+    this.touch(e);
+  }
+
+  touch(e) {
     e.dirty = true;
     if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, 1000);
   }
@@ -199,4 +233,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, TR_MAX, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
+module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
