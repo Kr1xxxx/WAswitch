@@ -292,6 +292,16 @@ async function noWordsGist() {
   // 不翻的：点不了翻译、改不了
   assert(!fc.manual('G', items[2].h));
   assert(!fc.edit('G', items[2].h, 'x'));
+  // 用户自己的「收到」模式要要点：存着的要点不删；客户原文里本来就有【要点】也不删
+  let keep = true;
+  const fc2 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  store.put('G', ck, '客户写的【要点】', { tr: '客户\n【要点】原文就有' });
+  fc2.ingest('G', { title: 'g', msgs: [msg(1, false, chat, 'Thanks, please send the invoice')] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc2.viewOf('G').items[0].tr, '谢谢，请发送发票\n\n【要点】客户要求发送发票');
+  keep = false;
+  const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc3.viewOf('G').items[0].tr, '客户\n【要点】原文就有');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

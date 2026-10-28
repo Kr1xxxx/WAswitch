@@ -137,6 +137,11 @@ class FloatCore {
     st.items.delete(h);
   }
 
+  // 存着的译文里的【要点】留着不删：用户现在用的「收到」模式自己要要点（deps.keepGist），或者客户原文里本来就有【要点】
+  keepGist(text) {
+    return String(text).includes('【要点】') || !!(this.deps.keepGist && this.deps.keepGist());
+  }
+
   // 读到一次当前对话。read: { title, msgs: [{ id, out, text }] }。opts: { auto, dailyCap }
   // 返回 true 表示悬浮窗要刷新
   ingest(accId, read, opts) {
@@ -161,7 +166,7 @@ class FloatCore {
       const skip = noWords(item.text);
       const saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
       if (skip) item.state = 'skip';
-      else if (saved) { item.state = 'done'; item.tr = saved.edited ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
+      else if (saved) { item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
       st.items.set(h, item);
       fresh.push(item);
     }
