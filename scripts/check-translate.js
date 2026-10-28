@@ -77,10 +77,26 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   calls=[]; q=await tr.translate({text:'你好',mode,providerId:'gone'});
   assert.equal(q.kind,'config'); assert.equal(calls.length,0);
   behave=[busy,busy,busy,busy]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert(!/busy|capacity/i.test(q.error) && /忙/.test(q.error), q.error);
-  // 429 但说的是余额不足：不重试
-  behave=[{status:429,body:'{"error":{"message":"余额不足"}}'}]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,1);
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.detail, JSON.stringify(q));
+  // 429 但说的是余额不足（智谱 1113）：不原地重试，直接换备用
+  const broke={status:429,body:'{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}'};
+  behave=[broke,null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
+  // 备用也没余额：只说一句，不接服务商原话
+  behave=[broke,broke]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,2);
+  assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!/余额|充值/.test(JSON.stringify(q)), JSON.stringify(q));
+  // 只有 code 1113、没有中文说明：也算没余额
+  behave=[{status:429,body:'{"error":{"code":"1113"}}'},null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===2, JSON.stringify(q));
+  // 402 没余额：也换备用
+  behave=[{status:402,body:'{}'},null]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert(q.fallback, JSON.stringify(q));
+  // 没设备用：只说一句，不教人去设置
+  const fbKeep=tr.load().fallbackId; tr.setRoles({primaryId:pid,fallbackId:''});
+  behave=[busy,busy]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'OpenRouter 请求太频繁，请重试');
+  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
   // cancel
   behave=['hang']; calls=[];
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);

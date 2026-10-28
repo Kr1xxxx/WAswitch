@@ -230,13 +230,16 @@ function needsKey(p) {
 // 报错里点名是哪个服务商（“去填密钥”按钮靠 pid 打开它的表单）
 const provName = (p) => (p && p.name) || '翻译服务';
 const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}还没填密钥`, pid: p.id });
+// 429（太忙或额度用完）只说这一句，不接服务商原话（shen 2026-10-28）
+const nameGap = (name) => (/[A-Za-z0-9)]$/.test(name) ? ' ' : '');
+const tooFastText = (name) => `${name}${nameGap(name)}请求太频繁，请重试`;
 
 // name：服务商名字（例如“智谱”“OpenRouter”），报错里写明是谁出的问题
 function statusError(status, name = '') {
-  const who = name ? `${name}${/[A-Za-z0-9)]$/.test(name) ? ' ' : ''}` : '服务商';
+  const who = name ? `${name}${nameGap(name)}` : '服务商';
   if (status === 401 || status === 403) return { kind: 'auth', text: `${who}的密钥不对或没有权限` };
   if (status === 402) return { kind: 'quota', text: `${who}账户没余额了` };
-  if (status === 429) return { kind: 'quota', text: `${who}请求太频繁或超出额度，稍后再试` };
+  if (status === 429) return { kind: 'quota', text: tooFastText(name || '服务商') };
   if (status === 404) return { kind: 'model', text: `${who}的地址或模型名不对` };
   if (status === 400 || status === 422) return { kind: 'bad', text: `${who}拒绝了这次请求（可能是模型名不对或文字太长）` };
   if (status >= 500) return { kind: 'server', text: `${who}那边出错了，稍后再试` };
@@ -648,7 +651,7 @@ class Translator {
     if (!res.ok) {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
-      if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
+      if (res.status === 429) throw { kind: 'overload', text: tooFastText(provName(p)), status: 429 };
       if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
@@ -703,9 +706,11 @@ class Translator {
     if (!res.ok) {
       const err = statusError(res.status, provName(p));
       const detail = providerDetail(text, key);
-      // 429 多半是“服务繁忙/限流”（混元 hy-mt2-plus 常见），不是没钱：不带英文原话，交给上层重试和换备用
-      if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
-        throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
+      // 429：限流（混元 hy-mt2-plus 常见）原地重试一次再换备用；说的是余额不足（智谱 1113）就不重试，直接换备用。
+      // 两种都只提示“请求太频繁，请重试”，不接服务商原话
+      if (res.status === 429) {
+        const broke = /余额|欠费|资源包|充值|insufficient|balance|arrear|billing|quota exceeded/i.test(detail) || /"code"\s*:\s*"?1113\b/.test(text);
+        throw { kind: broke ? 'quota' : 'overload', text: tooFastText(provName(p)), status: 429 };
       }
       // 密钥错时带上服务商 id，界面给“去填密钥”按钮
       throw withDetail(err, res.status, detail, p);
@@ -775,10 +780,9 @@ class Translator {
           clearTimeout(timer);
           controller.signal.removeEventListener('abort', onCancel);
         }
-        // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
-        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
+        // 网络、超时、服务商太忙、余额用完和 5xx 换备用；密钥、模型名错了或用户取消不换
+        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload', 'quota'].includes(lastErr.kind)) break;
       }
-      if (lastErr.kind === 'overload' && chain.length < 2 && !pinned) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
       // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单；英文原话放 detail
