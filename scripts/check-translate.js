@@ -248,13 +248,23 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   let rt=t4.roleText();
   assert(rt.startsWith('贴牌 = private label\n\n'));
   for (const l of ['配件 = Closure','前头 = Frontal','发帘 = Bundle','头套 = Wig','全蕾丝头套 = Full lace wig','胶片发 = Tape hair','辫发 = Raw hair','处女发 = Virgin hair']) assert(rt.split('\n').includes(l),l);
+  // 头套排第一行（glm-4-flash 实测排在全蕾丝头套后面会翻错），wig 不译假发点名说了
+  assert(rt.indexOf('头套 = Wig')<rt.indexOf('全蕾丝头套 = Full lace wig') && rt.indexOf('全蕾丝头套 = Full lace wig')<rt.indexOf('配件 = Closure'),rt);
+  assert(rt.includes('wig 一律译成头套，不译成假发'));
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('处女发 = Virgin hair'));
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().wigTerms,true);
   rt=T.roleWithWig('配件 = Accessory\n假发 = wig',true);
-  assert(!rt.includes('配件 = Closure') && !rt.includes('头套 = Wig') && rt.includes('前头 = Frontal'),rt);
+  assert(!rt.includes('配件 = Closure') && !rt.includes('头套 = Wig') && !rt.includes('Wig → 头套') && rt.includes('前头 = Frontal'),rt);
+  assert(!rt.includes('不译成假发'),rt); // 用户自己定了 wig 的译法，就不再说 wig 要译成头套
+  // 用户把英文写在左边、或中文写在右边，也算定过这个词
+  rt=T.roleWithWig('Closure = 封口\nhair bundle = 发帘',true);
+  assert(!rt.includes('配件 = Closure') && !rt.includes('发帘 = Bundle') && rt.includes('头套 = Wig'),rt);
   assert(T.roleWithWig('',true).startsWith('假发行业固定译法'));
   assert.equal(T.roleWithWig('x',false),'x');
+  // 用户把 8 个词全定了：词表一行不加，角色设定原样
+  const all8='头套 = a\n全蕾丝头套 = b\n配件 = c\n前头 = d\n发帘 = e\n胶片发 = f\n辫发 = g\n处女发 = h';
+  assert.equal(T.roleWithWig(all8,true),all8);
   const wm=T.buildMessages({prompt:'p'},'I want a closure',{target:'中文'},undefined,'','hy-mt2-plus',T.roleWithWig('',true));
   assert(wm[0].content.includes('Closure 翻译成 配件') && wm[0].content.includes('Virgin hair 翻译成 处女发') && !wm[0].content.includes('假发行业'),wm[0].content);
   assert.equal(T.glossaryPairs(T.roleWithWig('',true),false).length,8); // 反方向的箭头行混元不当词条
