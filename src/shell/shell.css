@@ -317,7 +317,7 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .lite-empty { display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--muted); font-size: var(--fs-m); text-align: center; }
 .lite-head { flex: none; height: 46px; display: flex; align-items: center; padding: 0 16px; border-bottom: var(--hair) solid var(--line); font-size: var(--fs-m); }
 .lite-msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; background: var(--slate-2); }
-.lite-msg { align-self: flex-start; max-width: max(72%, min(100%, 260px)); display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: var(--r-m); background: var(--white); border: var(--hair) solid var(--slate-5); font-size: var(--fs-m); }
+.lite-msg { align-self: flex-start; max-width: max(72%, min(100%, 260px)); display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: var(--r-m); background: var(--white); border: var(--hair) solid var(--slate-6); font-size: var(--fs-m); }
 .lite-msg.me { align-self: flex-end; background: var(--green-4); }
 .lite-msg .text { white-space: pre-wrap; word-break: break-word; }
 .lite-msg .from { font-size: var(--fs-s); font-weight: 600; color: var(--blue-11); }
@@ -497,7 +497,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-model { max-width: 150px; }
 /* 收到的消息：照 WhatsApp 收到的气泡。紧凑，时间小号灰字在右下角，纠错/编辑悬停才显示 */
 .dk-list { position: relative; flex: 1; min-height: 80px; overflow-y: auto; overflow-anchor: none; padding: 8px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
-.dk-item { position: relative; align-self: flex-start; max-width: 92%; min-width: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px 6px 9px; border-radius: var(--r-m); background: var(--slate-3); border: var(--hair) solid var(--slate-5); }
+.dk-item { position: relative; align-self: flex-start; max-width: 92%; min-width: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px 6px 9px; border-radius: var(--r-m); background: var(--slate-3); border: var(--hair) solid var(--slate-6); }
 .dk-item.wide { align-self: stretch; max-width: none; }
 .dk-item.foot { padding-bottom: 20px; }
 .dk-meta { position: absolute; right: 8px; bottom: 4px; display: flex; align-items: center; gap: 5px; line-height: 15px; pointer-events: none; }
