@@ -19,6 +19,7 @@ const dk = {
   forTitle: null, // 译文是给哪个对话翻的
   warn: [],
   busy: false,
+  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（按钮上倒计时）
   msg: '',
   bad: false,
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
@@ -52,6 +53,25 @@ function dockReset() {
 }
 
 function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
+
+// 服务商太忙、等着重试：转圈的按钮显示还要等几秒，等完回到「翻译中」
+let dkWaitTimer = 0;
+function dockBusyText() {
+  const left = dk.waitUntil ? Math.ceil((dk.waitUntil - Date.now()) / 1000) : 0;
+  return left > 0 ? `${left} 秒后重试… 取消` : '翻译中… 取消';
+}
+function dockWait(ms) {
+  dk.waitUntil = ms > 0 && dk.busy ? Date.now() + ms : 0;
+  clearInterval(dkWaitTimer);
+  const paint = () => {
+    const b = document.querySelector('.dk-cancel');
+    if (b) b.textContent = dockBusyText();
+    if (!dk.waitUntil || Date.now() >= dk.waitUntil) clearInterval(dkWaitTimer);
+  };
+  if (dk.waitUntil) dkWaitTimer = setInterval(paint, 250);
+  paint();
+}
+if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'dock') dockWait(Number(w.ms) || 0); });
 
 window.wa.onDock((st) => {
   if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
@@ -109,6 +129,7 @@ async function dockRun(p) {
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
+  dockWait(0);
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
@@ -425,7 +446,7 @@ function dockCompose() {
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       dockLangBar(),
-      dk.busy ? h('button', { class: 'dk-btn', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
+      dk.busy ? h('button', { class: 'dk-btn dk-cancel', onclick: () => window.wa.trCancel() }, dockBusyText())
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-btn', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
           h('button', { class: 'dk-btn', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
