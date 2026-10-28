@@ -705,6 +705,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-copy[data-st="ok"] { background: var(--g3); color: var(--g11); }
 .tp :focus-visible { outline: 2px solid var(--b9); outline-offset: 2px; }
 .tp .tp-text:focus-visible { outline: 0; }
+.tp-text::-webkit-scrollbar { width: 8px; }
+.tp-text::-webkit-scrollbar-button { display: none; }
+.tp-text::-webkit-scrollbar-track { background: transparent; }
+.tp-text::-webkit-scrollbar-thumb { background: var(--s7); border-radius: 4px; }
 /* 按钮里的文字层自己设了 visible，所以要连子元素一起藏 */
 .tp-copy.tp-empty, .tp-pane .tp-copy.tp-empty[data-st] > span { visibility: hidden; }
 .tp-fix { width: 80px; background: transparent; color: var(--s12); font-weight: 400; }
@@ -725,7 +729,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-hout { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; }
 .tp-hout-text { flex: 1; color: var(--s11); }
 .tp-htime { flex: none; font-size: var(--fs-s); color: var(--s11); }
-/* 清空记录后的撤销条（样式同 #207 的撤销提示） */
 /* ---------- 状态按钮（shell.js 的 morphBtn）：转圈 → ✓ / ✗，几种文字叠在同一格，宽度不跳 ---------- */
 .morph { display: inline-grid; place-items: center; }
 .morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; }

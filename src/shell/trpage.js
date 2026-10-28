@@ -16,6 +16,7 @@ const tp = {
   autoFold: false, // 原文太长（超出输入框）：这一次自动收起对照栏，只翻一栏（不改记下的展开/收起）
   hist: [],
   busy: false,
+  cancelled: false, // 这次翻译被取消了：第二栏不再翻
   ui: null,
 };
 
@@ -106,7 +107,7 @@ function tpOutPane(which) {
     o.fix = morphBtn('tp-fix', { idle: '纠错', busy: '纠错中', ok: '已纠错', err: '重试' }, () => tpFix(), { class: 'tp-btn tp-fix primary' });
     foot.append(o.fix);
   } else {
-    o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: () => tpSetOpen2(false) }, icon('up', 14));
+    o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: (e) => tpSetOpen2(false, e) }, icon('up', 14));
     foot.append(o.fold);
   }
   foot.append(copy);
@@ -139,7 +140,7 @@ function tpBuild() {
   const swap = h('button', { class: 'tp-icon tp-swap', type: 'button', 'aria-label': '对调语言', onclick: () => tpSwap() }, icon('swap', 16));
   const o1 = tpOutPane(1);
   const o2 = tpOutPane(2);
-  const open2 = h('button', { class: 'tp-open2', type: 'button', 'aria-expanded': 'false', onclick: () => tpSetOpen2(true) },
+  const open2 = h('button', { class: 'tp-open2', type: 'button', 'aria-expanded': 'false', onclick: (e) => tpSetOpen2(true, e) },
     h('span', null, '对照'), h('span', { class: 'tp-open2-model' }), h('span', { class: 'grow' }), icon('down', 14));
   const histList = h('div', { class: 'tp-hist-list' });
   const hist = h('div', { class: 'tp-hist' },
@@ -218,12 +219,13 @@ function tpLabels() {
 }
 
 function tpOpen2() { return tp.open2 && !tp.autoFold; }
-function tpSetOpen2(on) {
+function tpSetOpen2(on, e) {
   tp.open2 = on;
   tp.autoFold = false;
   tpSavePrefs();
   tpUpdate();
-  (on ? tp.ui.o2.fold : tp.ui.open2).focus();
+  // 点的按钮藏起来了，焦点挪到换出来的那个按钮上；只在键盘按的时候挪（detail 为 0），鼠标点不出焦点框
+  if (!e || e.detail === 0) (on ? tp.ui.o2.fold : tp.ui.open2).focus();
   if (on) tpFillCompare();
 }
 
