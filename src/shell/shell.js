@@ -322,7 +322,7 @@ function renderSide() {
       h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
         i ? h('div', { class: 'tab-group' }, title) : null,
         ...tabs.map(([id, label]) =>
-          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
             id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
@@ -1540,10 +1540,10 @@ function netPage(page) {
 
 // ---------- 设置 › 快捷设置 ----------
 // 设置的第一页：把常用的开关从各分页挑出来。每个开关用的都是原分页那一个（同一个设置、同一个接口），两边一起变。
-const goTab = (id) => { settingsTab = id; render(true); };
+const goTab = (id) => { settingsTab = id; trSay = ''; render(true); };
 function qkHead(title, tab) {
   return h('div', { class: 'qk-head' }, h('h2', { class: 'ov-h2' }, title),
-    h('button', { class: 'link-btn qk-more', onclick: () => goTab(tab) }, '更多 ›'));
+    h('button', { class: 'link-btn qk-more', 'aria-label': `${title}的更多设置`, onclick: () => goTab(tab) }, '更多 ›'));
 }
 function qkTile(k, v, tone, sub, action) {
   return h('div', { class: 'qk-tile' },
@@ -1584,7 +1584,7 @@ function quickTiles() {
   const ust = u ? u.status : 'dev';
   const usub = {
     dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
-    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每 6 小时自动检查',
   }[ust] || '';
   const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
     ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
