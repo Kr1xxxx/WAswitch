@@ -6,10 +6,11 @@ const fs = require('fs');
 const proxy = require('./proxy');
 const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
-const { needsKey } = require('./translate');
+const { needsKey, extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = require('./trstore');
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
+const { makeOutTranslate } = require('./outcache');
 
 function setupTranslateIpc(ctx) {
   const {
@@ -100,7 +101,9 @@ function setupTranslateIpc(ctx) {
     userTr.gen += 1;
     return true;
   }
-  handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft } = {}) => {
+  // 发出的翻译：同一句中文、同一种语言、同一个模式翻过就直接用记下的译文（见 outcache.js）；fresh = 用户点了“重新翻译”
+  const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts });
+  handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft, fresh } = {}) => {
     // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;
     // __back：回译成中文核对，用固定的忠实翻译提示词
@@ -108,7 +111,8 @@ function setupTranslateIpc(ctx) {
     if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft, fix: true });
     let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
       : typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
-    return userTranslate({ text, mode, target, source, context: modeId === '__back' ? undefined : context });
+    if (modeId === '__back') return userTranslate({ text, mode, target, source });
+    return outTranslate({ text, mode, target, source, context }, fresh === true);
   });
   handleShell('tr:cancel', () => userCancel());
   // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
@@ -452,7 +456,7 @@ function setupTranslateIpc(ctx) {
   handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
     if (accountId !== ctx.activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
     const mode = typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
-    return userTranslate({ text, mode, target, context: floatCore.contextOf(ctx.activeId) }); // 带上当前对话最近几条当上下文
+    return outTranslate({ text, mode, target, context: floatCore.contextOf(ctx.activeId) }); // 带上当前对话最近几条当上下文；翻过的直接用记下的
   });
   handleFloat('float:cancel', () => userCancel());
   handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
