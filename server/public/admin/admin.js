@@ -139,7 +139,7 @@ async function accountsPage() {
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
       el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
-      el('td', {}, a.group_id ? groups.get(a.group_id) || '' : el('span', { class: 'muted' }, '未分组')),
+      el('td', {}, a.group_id ? groups.get(a.group_id) || '' : ''),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
       el('td', {}, pick,

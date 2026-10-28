@@ -338,10 +338,9 @@ function accountRow(acc) {
 }
 
 // 分组的组头：点一下折叠/展开，右键改名、整组静音、解散；把号拖到组头上就放进这个组的最后
+// 没放进分组的号排在最前面，不加组头
 function groupHead(g) {
-  const name = g ? g.name : '未分组';
-  const gid = g ? g.id : '';
-  if (g && s.editGroupId === g.id && !s.collapsed) {
+  if (s.editGroupId === g.id && !s.collapsed) {
     let done = false;
     const commit = (name) => { if (done) return; done = true; window.wa.groupRename(g.id, name); };
     const input = h('input', {
@@ -352,22 +351,21 @@ function groupHead(g) {
     requestAnimationFrame(() => { input.focus(); input.select(); });
     return h('div', { class: 'group-head editing' }, icon('down', 12), input);
   }
-  const quiet = g && g.muted;
   // 箭头一直是朝下的那个，折起来转 -90°（不放动画）
-  const chev = g ? icon('down', 12) : null;
-  if (chev) chev.classList.add('gchev');
+  const chev = icon('down', 12);
+  chev.classList.add('gchev');
   const head = h('button', {
-    class: `group-head${g && g.collapsed ? ' closed' : ''}`,
-    title: g ? `${name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
-    'aria-expanded': g ? String(!g.collapsed) : null,
-    onclick: () => { if (g) window.wa.groupToggle(g.id); },
-    oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
+    class: `group-head${g.collapsed ? ' closed' : ''}`,
+    title: `${g.name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散`,
+    'aria-expanded': String(!g.collapsed),
+    onclick: () => window.wa.groupToggle(g.id),
+    oncontextmenu: (e) => { e.preventDefault(); window.wa.groupContext(g.id); },
   },
   chev,
-  h('span', { class: 'gname' }, g && g.collapsed ? segs(name, h('span', { class: 'count' }, g.count)) : name),
-  quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
-  g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
-  dropOn(head, gid, null);
+  h('span', { class: 'gname' }, g.collapsed ? segs(g.name, h('span', { class: 'count' }, g.count)) : g.name),
+  g.muted ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
+  g.collapsed && g.unread ? h('span', { class: `pill${g.muted ? ' quiet' : ''}` }, g.unread) : null);
+  dropOn(head, g.id, null);
   return head;
 }
 
@@ -380,11 +378,18 @@ function addBtn() {
   }, icon('plus', 14));
 }
 
-// 账号列表：没有分组时和以前一样；有分组时先是“未分组”，再按组排
+// 「账号」那一行：把号拖到这里就移出分组，放到最前面那段的最后（没放进分组的号一个都不剩时也能拖回来）
+function sideLabel() {
+  const el = h('div', { class: 'label side-label' }, s.collapsed ? null : h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))), addBtn());
+  if ((s.groups || []).length) dropOn(el, '', null);
+  return el;
+}
+
+// 账号列表：没放进分组的号排在最前面（不加组头），再按组排
 function accountList() {
   const groups = s.groups || [];
   if (!groups.length) return s.accounts.map(accountRow);
-  const out = [groupHead(null), ...s.accounts.filter((a) => !a.groupId).map(accountRow)];
+  const out = s.accounts.filter((a) => !a.groupId).map(accountRow);
   for (const g of groups) {
     out.push(groupHead(g));
     // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
@@ -417,7 +422,7 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    h('div', { class: 'label side-label' }, s.collapsed ? null : h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))), addBtn()),
+    sideLabel(),
     h('div', { class: 'list' }, accountList()),
     s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
     h('button', { class: `row tool-row${s.page === 'translate' ? ' on' : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },

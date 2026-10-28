@@ -1,6 +1,7 @@
 // 侧栏不再有「添加账号」行，改成「账号」旁的 + 号，点开选添加账号或添加分组（shen 2026-10-28）。
 // 真的 shell 页面 + 假的主进程。检查：1) 侧栏里没有「添加账号」行，展开和收起侧栏都有 + 号；
 // 2) 点 + 号把按钮下方的坐标交给主进程弹菜单，菜单是「添加账号」「添加分组」，选了分别打开编辑页、新建分组；
+// 另外：没放进分组的号上面没有「未分组」组头，拖到「账号」那一行就移出分组（shen 2026-10-28）。
 // 3) 有分组时添加账号页有「分组」，默认是正在看的那个号所在的组，保存时带上；另外编辑页开多次，morphState 不留旧的测试按钮状态（正文第 6 步）。SHOT_DIR 设了就存截图（菜单用 import 截整屏）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
 const path = require('path');
@@ -56,7 +57,23 @@ app.whenReady().then(async () => {
   assert(!/\+ 分组/.test(r.text), '旧的「+ 分组」不该再有');
   assert(r.btn, '「账号」旁要有 + 号');
   assert.strictEqual(r.label, '添加');
+  assert(!/未分组/.test(r.text), `侧栏不该写「未分组」：${r.text}`);
+  const heads = await js(() => [...document.querySelectorAll('#side .group-head')].map((e) => e.innerText.trim()));
+  assert.deepStrictEqual(heads, ['分组 1'], '只有真分组才有组头');
+  const order = await js(() => [...document.querySelectorAll('#side .list .row .name-text')].map((e) => e.textContent));
+  assert.deepStrictEqual(order, ['Lukas', 'Emma'], '没放进分组的号排在最前面');
   await shot('side');
+  // 把组里的号拖到「账号」那一行：移出分组，放到最前面那段的最后
+  await js(() => {
+    dragId = 'a2';
+    const el = document.querySelector('#side .side-label');
+    const dt = new DataTransfer();
+    el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  const moved = (await js(() => window.__calls)).find((c) => c[0] === 'moveAccount');
+  assert.deepStrictEqual(moved, ['moveAccount', 'a2', '', ''], '拖到「账号」行要移出分组');
+  await js(() => { window.__calls = []; });
 
   // 2) 点 + 号：坐标是按钮左下方，菜单是添加账号、添加分组
   await js(() => document.querySelector('#side .add-btn').click());
