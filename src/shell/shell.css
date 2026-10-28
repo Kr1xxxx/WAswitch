@@ -17,9 +17,10 @@
   --fx: 160ms;
   --fx-slow: 200ms;
   --fx-ease: cubic-bezier(.2, .8, .2, 1);
+  --fx-state: 250ms; /* 状态按钮换状态 */
 }
 @media (prefers-reduced-motion: reduce) {
-  :root { --fx-fast: 0ms; --fx: 0ms; --fx-slow: 0ms; }
+  :root { --fx-fast: 0ms; --fx: 0ms; --fx-slow: 0ms; --fx-state: 0ms; }
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -649,3 +650,15 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .qk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: var(--hair) solid var(--line); }
 .qk-head .ov-h2 { margin: 0; padding-bottom: 8px; }
 .link-btn.qk-more { font-size: 12px; }
+
+/* ---------- 状态按钮（shell.js 的 morphBtn）：转圈 → ✓ / ✗，几种文字叠在同一格，宽度不跳 ---------- */
+.morph { display: inline-grid; place-items: center; }
+.morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; }
+.morph svg { width: 1em; height: 1em; }
+.morph[data-st="idle"] > .mb-idle, .morph[data-st="busy"] > .mb-busy, .morph[data-st="ok"] > .mb-ok, .morph[data-st="err"] > .mb-err { visibility: visible; }
+.morph.mb-anim[data-st] > span { animation: mb-in var(--fx-state) ease-out; }
+.morph[data-st="busy"] { cursor: progress; }
+.morph[data-st="ok"]:not(.primary) { color: var(--ok); }
+.morph[data-st="err"]:not(.primary) { color: var(--danger); }
+.mb-spin { width: .9em; height: .9em; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; opacity: .7; animation: spin .9s linear infinite; }
+@keyframes mb-in { from { opacity: 0; transform: scale(.9); } }
