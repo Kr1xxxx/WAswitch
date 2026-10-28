@@ -95,6 +95,9 @@ app.whenReady().then(async () => {
   assert(bot.end.gap <= 1, `新消息来了应该跟到底，还差 ${bot.end.gap}px`);
   assert.strictEqual(bot.end.first === 'h0', false, '没有被打回顶部');
   assert(bot.frames.every((f) => f.top > 0), '翻译过程中不能被打回顶部');
-  console.log(`翻译页滚动自检通过（中间：${mid.frames.length} 帧位置不变；底部：跟到最新）`);
+  // 回复框不放「用中文写要回的话」这类灰字提示（shen 2026-10-28）
+  const ph = await w.webContents.executeJavaScript("(() => { const el = document.querySelector('.dk-in'); return el ? el.placeholder : null; })()");
+  assert.strictEqual(ph, '', `回复框不该有灰字提示：${ph}`);
+  console.log(`翻译页滚动自检通过（中间：${mid.frames.length} 帧位置不变；底部：跟到最新；回复框无灰字提示）`);
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });
