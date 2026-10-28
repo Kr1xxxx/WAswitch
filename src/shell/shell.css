@@ -753,9 +753,15 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-fix[data-st="err"] { color: var(--r11); }
 
 .tp-hist { flex: none; display: flex; flex-direction: column; }
+/* 记录区固定五行高（最多存十条），页面不跟着变；多出来的只在这块里面滚 */
 .tp-hist-head { flex: none; height: 32px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px; font-size: var(--fs-s); font-weight: 500; color: var(--s11); }
 .tp-hist-head .tp-link { text-decoration: none; }
-.tp-hist-list { max-height: 160px; overflow-y: auto; }
+/* 滚动条放在右边留白里（往外伸 12，滚动条 8 + 4），行的两列还和上面两栏对齐，出不出滚动条都不挪 */
+.tp-hist-list { height: 200px; margin-right: -12px; padding-right: 4px; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.tp-hist-list::-webkit-scrollbar { width: 8px; }
+.tp-hist-list::-webkit-scrollbar-button { display: none; }
+.tp-hist-list::-webkit-scrollbar-track { background: transparent; }
+.tp-hist-list::-webkit-scrollbar-thumb { background: var(--s7); border-radius: 4px; }
 /* 两列和上面两栏对齐：列间距 12，每列左边距 16（和栏里正文一样） */
 .tp-hrow { width: 100%; height: 40px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: center; padding: 0;
   border: 0; border-top: var(--hair) solid var(--s5); border-radius: 0; background: transparent; font: inherit; color: var(--s12); text-align: left; }
@@ -765,6 +771,29 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-hout { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; }
 .tp-hout-text { flex: 1; color: var(--s11); }
 .tp-htime { flex: none; font-size: var(--fs-s); color: var(--s11); }
+/* 底栏的字符数：不显眼的灰色小字，和后面的按钮隔开一点 */
+.tp-count { flex: none; padding: 0 8px; font-size: var(--fs-s); color: var(--s11); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tp-count:empty { display: none; }
+/* 栏太窄（小窗口）时字符数让位给按钮，不把底栏挤出框 */
+.tp-pane { container-type: inline-size; }
+@container (max-width: 400px) {
+  .tp-count { display: none; }
+  /* 再窄（最小窗口 + 纠错）：模型名先让，超出的用省略号，按钮不出框 */
+  .tp select.tp-model { flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
+}
+/* 原文框有字时点记录：贴在那一行上方的小提示。外圆角 14 − 内边距 8 = 按钮 6 */
+.tp-pop { position: fixed; z-index: 30; display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 16px; border: var(--hair) solid var(--s6); border-radius: 14px; background: var(--s1); box-shadow: 0 4px 16px rgba(28, 32, 36, .08); }
+.tp-pop-text { margin-right: 12px; color: var(--s12); white-space: nowrap; }
+.tp-pop-no { width: 64px; background: transparent; color: var(--s12); font-weight: 400; }
+.tp-pop-no:hover { background: var(--s3); }
+.tp-pop-yes { width: 64px; background: var(--s12); color: #fff; }
+/* 矮窗口（笔记本小屏）：记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
+@media (max-height: 760px) { .tp-hist-list { height: 120px; } }
+/* 翻译页动效：译文 / 报错 / 新记录淡入，⇄ 转半圈（250ms ease-out，减少动态效果时 --fx-state 为 0） */
+@keyframes tp-fade { from { opacity: 0; } }
+@keyframes tp-turn { from { transform: rotate(-180deg); } }
+.tp-fx { animation: tp-fade var(--fx-state) ease-out; }
+.tp-fx-turn { animation: tp-turn var(--fx-state) ease-out; }
 /* ---------- 状态按钮（shell.js 的 morphBtn）：转圈 → ✓ / ✗，几种文字叠在同一格，宽度不跳 ---------- */
 .morph { display: inline-grid; place-items: center; }
 .morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; }
