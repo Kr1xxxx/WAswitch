@@ -37,6 +37,7 @@
     "check:colors": "node scripts/check-colors.js",
     "make:colors": "node scripts/make-colors.js",
     "check:radius-motion": "node scripts/check-radius-motion.js",
+    "check:visual": "node scripts/check-visual.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
     "check:add-menu": "electron scripts/check-add-menu.js",
     "check:topbar": "electron scripts/check-topbar-fit.js",
