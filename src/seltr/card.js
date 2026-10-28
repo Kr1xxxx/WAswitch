@@ -37,7 +37,6 @@
       if (box.dataset.mode === 'button') {
         const b = el('button', 'sc-go');
         b.type = 'button';
-        b.title = '翻译选中的文字';
         b.append(trIcon(), el('span', '', '翻译'));
         b.addEventListener('mousedown', (e) => e.preventDefault()); // 不把选区点没
         b.addEventListener('click', () => handlers.go());

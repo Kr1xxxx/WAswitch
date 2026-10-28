@@ -5,7 +5,8 @@
 //   - 什么时候去看：主进程的 input-event（鼠标左键松开）。页面里不挂监听
 //   - 选了什么、在哪：隔离环境里只读 getSelection()（wa-page.js 的 readSelection）
 //   - 按钮和译文窗：单独一个很小的视图，盖在账号页面上面，不在页面里（src/seltr/）
-// 在账号页面上按鼠标、滚轮、按键，换号、锁定、改窗口大小都会收起。视图第一次用时才建，闲 3 分钟就关掉省内存。
+// 在账号页面上按鼠标、滚轮、按键（Ctrl/Cmd 组合键除外，好让 Ctrl+C 复制），换号、锁定、改窗口大小都会收起。
+// 视图第一次用时才建，收起后 30 秒没再用就关掉省内存（按钮和译文窗是同一个视图）。
 // 轻量号的聊天页本来就是软件自己的界面，按钮和译文窗直接画在 shell 里（lite.js，共用 seltr/card.js）。
 const path = require('path');
 const { WebContentsView, ipcMain } = require('electron');
@@ -16,7 +17,7 @@ const CARD_W = 320 + PAD * 2;
 const CARD_MIN_H = 44 + PAD * 2;
 const CARD_MAX_H = 260 + PAD * 2;
 const GAP = 4; // 和选区之间
-const IDLE_CLOSE_MS = 3 * 60 * 1000;
+const IDLE_CLOSE_MS = 30 * 1000; // 视图是一个单独的渲染进程（约 100 MB）：收起 30 秒没再用就关掉
 const CHECK_DELAY_MS = 40; // 松开鼠标后等页面把选区定下来（双击选词）
 
 // 放哪：选区最后一行的下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐。都在账号页面范围内
@@ -32,6 +33,13 @@ function placeBox(sel, view, zoom = 1, size = BTN, align = 'right') {
 }
 const placeButton = (sel, view, zoom) => placeBox(sel, view, zoom, BTN);
 
+// 不收起的按键：单按 Ctrl/Shift/Alt/Cmd，和 Ctrl/Cmd 组合键（Ctrl+C 复制选中的字）
+function quietKey(ev) {
+  const mods = Array.isArray(ev.modifiers) ? ev.modifiers : [];
+  if (mods.some((m) => ['control', 'ctrl', 'meta', 'cmd', 'command'].includes(m))) return true;
+  return ['Control', 'Shift', 'Alt', 'Meta', 'Ctrl', 'Command'].includes(ev.keyCode);
+}
+
 // deps：
 //   win() -> 主窗口；lockLocalPage(wc)
 //   canShow(id) -> 这个号现在是不是正显示着（当前号、账号页、没锁、没出问题）
@@ -39,6 +47,7 @@ const placeButton = (sel, view, zoom) => placeBox(sel, view, zoom, BTN);
 //   readSelection(wc) -> wa-page.js 的 readSelection
 //   translate(text) -> Promise<{ text } | { error }>
 //   copy(text)
+//   focus() -> 键盘焦点还给当前账号页面
 function createSelTranslate(deps) {
   let view = null;
   let ready = false;
@@ -75,7 +84,15 @@ function createSelTranslate(deps) {
     seq += 1;
     if (!shown) return;
     shown = null;
-    if (view && !view.webContents.isDestroyed()) view.setVisible(false);
+    if (view && !view.webContents.isDestroyed()) {
+      // 焦点在按钮/译文窗上（点过它）：还给聊天页，不然收起后打字没反应
+      const hadFocus = view.webContents.isFocused();
+      view.setVisible(false);
+      if (hadFocus) deps.focus();
+    }
+    armIdle();
+  }
+  function armIdle() {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(closeView, IDLE_CLOSE_MS);
   }
@@ -90,17 +107,20 @@ function createSelTranslate(deps) {
     const size = card ? { width: CARD_W, height: Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, shown.h || CARD_MIN_H)) } : BTN;
     view.setBounds(placeBox(shown.sel, JSON.parse(shown.at), shown.zoom, size, card ? 'left' : 'right'));
   }
-  // 新建的视图等页面画好再显示，不闪一块空白
+  // 新建的视图页面画好（seltr:ready）才显示，不闪一块空白；3 秒还没好（或期间又动了鼠标键盘）就这次不显示
   async function waitReady(v) {
-    for (let i = 0; i < 40 && !ready && v === view && !v.webContents.isDestroyed(); i += 1) await new Promise((r) => setTimeout(r, 25));
-    return v === view && !v.webContents.isDestroyed();
+    for (let i = 0; i < 120 && !ready && v === view && !v.webContents.isDestroyed(); i += 1) await new Promise((r) => setTimeout(r, 25));
+    return ready && v === view && !v.webContents.isDestroyed();
   }
   async function show(next) {
     const run = seq;
     const v = ensureView();
     clearTimeout(idleTimer);
     idleTimer = null;
-    if (!(await waitReady(v)) || run !== seq || !deps.canShow(next.id)) return false;
+    if (!(await waitReady(v)) || run !== seq || !deps.canShow(next.id)) {
+      if (!shown) armIdle();
+      return false;
+    }
     shown = next;
     push();
     place();
@@ -152,7 +172,9 @@ function createSelTranslate(deps) {
       if (t === 'mouseUp') {
         if (ev.button && ev.button !== 'left') return;
         check(id, wc);
-      } else if (t === 'mouseDown' || t === 'mouseWheel' || t === 'rawKeyDown' || t === 'keyDown' || t === 'contextMenu' || t === 'gestureScrollBegin') {
+      } else if (t === 'rawKeyDown' || t === 'keyDown') {
+        if (!quietKey(ev)) hide();
+      } else if (t === 'mouseDown' || t === 'mouseWheel' || t === 'contextMenu' || t === 'gestureScrollBegin') {
         hide();
       }
     });
@@ -179,7 +201,8 @@ function createSelTranslate(deps) {
       const p = point && Number.isFinite(point.x) ? point : { x: 0, y: 0 };
       found = { id, text: '', at: JSON.stringify(pageView.getBounds()), sel: { x: p.x, y: p.y, w: 0, h: 0, top: p.y }, zoom: wc.getZoomFactor() };
     }
-    found.text = text.trim().slice(0, 4000);
+    // 读到了选区就用读到的（只有消息正文，不带时间）；读不到用右键菜单给的文字
+    if (!found.text) found.text = text.trim().slice(0, 4000);
     if (await show({ ...found, mode: 'card', st: { busy: true }, h: 0 })) translate();
   }
 
@@ -202,4 +225,4 @@ function createSelTranslate(deps) {
   return { watch, hide, sync, fromMenu, close: closeView, get shown() { return shown ? { id: shown.id, text: shown.text, mode: shown.mode } : null; } };
 }
 
-module.exports = { createSelTranslate, placeBox, placeButton, BTN, CARD_W, PAD };
+module.exports = { createSelTranslate, placeBox, placeButton, quietKey, BTN, CARD_W, PAD };

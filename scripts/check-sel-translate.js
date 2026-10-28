@@ -6,7 +6,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const waPage = require('../src/wa-page');
-const { placeButton, placeBox, BTN, CARD_W, PAD } = require('../src/sel-translate');
+const { placeButton, placeBox, quietKey, BTN, CARD_W, PAD } = require('../src/sel-translate');
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -25,6 +25,8 @@ const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}
   check(low.y + low.height - 6 === 60 + 560 - 4, `选区在最下面：按钮放到选区上面（${low.y}）`);
   const left = placeButton({ x: 0, y: 200, w: 10, h: 20, top: 200 }, view, 1);
   check(left.x >= view.x, '选区在最左边：按钮不出账号页面');
+  check(quietKey({ modifiers: ['control'], keyCode: 'C' }) && quietKey({ modifiers: ['meta'], keyCode: 'C' }) && quietKey({ keyCode: 'Shift' }), 'Ctrl/Cmd 组合键和单按修饰键不收起按钮（能 Ctrl+C）');
+  check(!quietKey({ modifiers: [], keyCode: 'A' }) && !quietKey({ keyCode: 'Escape' }), '其它按键收起按钮');
   const right = placeButton({ x: 790, y: 200, w: 200, h: 20, top: 200 }, view, 1);
   check(right.x + right.width <= view.x + view.width, '选区超出右边：按钮不出账号页面');
   const card = placeBox(sel, view, 1, { width: CARD_W, height: 100 }, 'left');
@@ -60,6 +62,12 @@ app.whenReady().then(async () => {
 
   await select(win, 'm1', 8, 21);
   check((await waPage.readSelection(wc))?.text === 'send tracking', '选中一条消息里的几个词');
+  // 拖选整条消息（一直拖到时间）：只要正文，不带时间
+  await pageEval("(() => { const s = getSelection(); const r = document.createRange(); r.setStart(document.getElementById('m2').firstChild, 4); r.setEnd(document.getElementById('t2').firstChild, 5); s.removeAllRanges(); s.addRange(r); return s.toString(); })()");
+  check((await waPage.readSelection(wc))?.text === 'the 1st package', '选到时间也只取消息正文，不带「04:28」');
+  // 跨两条消息：中间换行
+  await pageEval("(() => { const s = getSelection(); const r = document.createRange(); r.setStart(document.getElementById('m1').firstChild, 22); r.setEnd(document.getElementById('m2').firstChild, 7); s.removeAllRanges(); s.addRange(r); return 1; })()");
+  check((await waPage.readSelection(wc))?.text === 'number please\nFor the', '跨两条消息：两段之间换行');
   await select(win, 'compose');
   check(await waPage.readSelection(wc) === null, '选的是输入框里的字：不出按钮');
   await select(win, 'name');

@@ -2935,6 +2935,7 @@ const selTr = createSelTranslate({
   readSelection: (wc) => waPage.readSelection(wc),
   translate: (text) => trIpc.selTranslate(text),
   copy: (text) => clipboard.writeText(text),
+  focus: () => focusActive(),
 });
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);

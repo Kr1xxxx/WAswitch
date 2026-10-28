@@ -207,13 +207,30 @@ async function liteSelGo() {
   liteSelBox.card.set(r && typeof r.text === 'string' && r.text.trim() ? { mode: 'card', text: r.text } : { mode: 'card', error: (r && r.error) || '翻译失败' });
   liteSelPlace();
 }
+// 只取消息正文（.text）里被选中的部分：拖选整条消息时不带上发送人和时间
+function liteSelText(r) {
+  const parts = [];
+  let last = null;
+  for (const t of document.querySelectorAll('.lite-msgs .lite-msg .text')) {
+    if (!r.intersectsNode(t)) continue;
+    const part = document.createRange();
+    part.selectNodeContents(t);
+    if (r.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(r.startContainer, r.startOffset);
+    if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
+    if (last) parts.push('\n');
+    parts.push(part.toString());
+    last = t;
+  }
+  return parts.join('').trim();
+}
 function liteSelCheck(id, box) {
   const sel = document.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return liteSelHide();
-  const text = String(sel.toString() || '').trim();
   const r = sel.getRangeAt(0);
   const inside = (n) => !!n && box.contains(n.nodeType === 1 ? n : n.parentElement);
-  if (!text || !inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
+  if (!inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
+  const text = liteSelText(r) || String(sel.toString() || '').trim();
+  if (!text) return liteSelHide();
   const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
   if (!rects.length) return liteSelHide();
   if (!liteSelBox) {
@@ -227,9 +244,15 @@ function liteSelCheck(id, box) {
   liteSelBox.wrap.hidden = false;
   liteSelPlace();
 }
-// 点到按钮和译文窗外面、按键、选区没了（按钮状态时）就收起
+// 点到按钮和译文窗外面、按键（Ctrl/Cmd 组合键除外，好让 Ctrl+C 复制）、选区没了（按钮状态时）、
+// 改窗口大小、换号、锁定、离开账号页就收起
 document.addEventListener('mousedown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
-document.addEventListener('keydown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('keydown', (e) => {
+  if (!liteSel || liteSelBox.wrap.contains(e.target) || e.ctrlKey || e.metaKey || ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+  liteSelHide();
+}, true);
+window.addEventListener('resize', () => { if (liteSel) liteSelHide(); });
+window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
 document.addEventListener('selectionchange', () => {
   if (!liteSel || liteSel.mode !== 'button') return;
   const sel = document.getSelection();
