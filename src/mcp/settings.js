@@ -119,7 +119,14 @@ function renderAiLog(list) {
     what.appendChild(body);
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${when(e.at)} · ${e.client}${e.undone && e.undoNote !== '已撤销' ? ` · ${e.undoNote}` : ''}`;
+    // 几段用间距隔开，不用中点
+    for (const t of [when(e.at), e.client, e.undone && e.undoNote !== '已撤销' ? e.undoNote : '']) {
+      if (!t) continue;
+      const seg = document.createElement('span');
+      seg.className = 'seg';
+      seg.textContent = t;
+      meta.appendChild(seg);
+    }
     what.appendChild(meta);
     li.appendChild(what);
     if (e.undone) {

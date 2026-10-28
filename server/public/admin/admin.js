@@ -88,7 +88,7 @@ function exitCell(a) {
 }
 
 function proxyCell(a) {
-  if (a.proxy_ok === 1) return el('span', { class: 'good' }, `通${a.proxy_ms ? ` · ${a.proxy_ms} ms` : ''}`);
+  if (a.proxy_ok === 1) return el('span', { class: 'good' }, `通${a.proxy_ms ? `，用时 ${a.proxy_ms} ms` : ''}`);
   if (a.proxy_ok === 0) return el('span', { class: 'bad' }, '不通');
   return el('span', { class: 'muted' }, '直连或未测');
 }
@@ -127,7 +127,7 @@ async function accountsPage() {
   const groups = new Map(me.groups.map((g) => [g.id, g.name]));
   const rows = data.accounts.map((a) => {
     const pick = el('select', {}, el('option', { value: '' }, '分配给…'),
-      devices.map((d) => el('option', { value: d.id, selected: d.id === a.device_id }, `${users.get(d.user_id).name} · ${d.name}`)));
+      devices.map((d) => el('option', { value: d.id, selected: d.id === a.device_id }, `${users.get(d.user_id).name}（${d.name}）`)));
     pick.addEventListener('change', () => {
       if (!pick.value || pick.value === a.device_id) return;
       const tip = a.device_id ? '原来那台电脑会停止并隐藏这个号（数据保留）。新电脑要填好代理、用手机重新扫码。确定吗？' : '新电脑要填好代理、用手机扫码。确定吗？';
@@ -138,7 +138,7 @@ async function accountsPage() {
       el('td', {}, el('span', { class: 'swatch', style: `background:${a.color || '#999'}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
       el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : el('span', { class: 'muted' }, '未分组')),
-      el('td', {}, a.user_name ? `${a.user_name} · ${a.device_name}` : el('span', { class: 'muted' }, '未分配')),
+      el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
       el('td', {}, pick,
         btn('编辑', () => editAccount(a)),
@@ -213,7 +213,7 @@ async function peoplePage() {
       el('td', {}, ROLE_TEXT[u.role], u.group_id ? el('div', { class: 'muted' }, groups.get(u.group_id) || '') : null),
       el('td', {}, devs.length ? devs.map((d) => el('div', {},
         el('span', { class: `dot ${d.revoked_at ? 'bad' : now - d.last_seen_at < 6 * 60 * 1000 ? 'good' : ''}` }),
-        d.name, el('span', { class: 'muted' }, ` · ${d.revoked_at ? '已停用' : ago(d.last_seen_at, now)} · v${d.app_version || '?'} ${d.platform}`),
+        d.name, el('span', { class: 'muted seg' }, d.revoked_at ? '已停用' : ago(d.last_seen_at, now)), el('span', { class: 'muted seg' }, `v${d.app_version || '?'} ${d.platform}`),
         d.revoked_at ? btn('恢复', () => act(() => api('POST', `devices/${d.id}/restore`), '已恢复'))
           : btn('停用', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
         btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); }),
