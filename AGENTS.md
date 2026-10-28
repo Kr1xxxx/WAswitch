@@ -102,6 +102,9 @@ npm run check:ime-enter     # 回车处理带输入法守卫
 npm run check:font-sizes    # 只有四种字号
 npm run check:radius-motion # 圆角四档、动效 250ms ease-out
 npm run check:colors        # 只用 Radix 颜色
+xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual   # 组件总览页和基准图逐像素一致
 ```
+
+`check:visual` 把组件总览页（`scripts/visual/components.html`）按 1 倍、2 倍缩放截图，和 `scripts/visual/baseline` 里的图比，差一个像素也会红。有意改了控件的样子：在 Linux 上加 `-- --update` 重新生成，看一眼新图没问题，和改动放在同一个 PR 里提交。新加的控件或状态，放进总览页里最合适的那一块再更新基准图。Mac、Windows 上这个检查会直接跳过。
 
 改了哪个界面，就把对应的 Electron 自检也跑一遍（`xvfb-run -a npx electron --no-sandbox scripts/check-*.js`）。窗口最小 900×600，右侧工作台 380px 宽，在这两个尺寸下文字不能被裁掉或换行变形。

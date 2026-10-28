@@ -6,3 +6,6 @@ dist/
 /*.png
 dist-mcp/
 /src/mcp-module.json
+
+# 组件总览页像素比对不一样时的差异图（npm run check:visual）
+/visual-diff/
