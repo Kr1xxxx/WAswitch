@@ -317,7 +317,20 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     msgs.push({ id, out, text, t: r.t });
   }
   msgs.reverse();
-  return { ok: true, title, chat, msgs };
+  // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
+  // 找最后一条消息外面能滚动的那层，离底部还远就是 false；找不到（没排版、页面改版）是 null。只读位置，不滚动
+  let bottom = null;
+  const last = top[top.length - 1].n;
+  for (let sc = last.parentElement; sc && sc !== main; sc = sc.parentElement) {
+    if (sc.scrollHeight <= sc.clientHeight + 4) continue;
+    const cs = getComputedStyle(sc);
+    if (cs.overflowY !== 'auto' && cs.overflowY !== 'scroll') continue;
+    const dist = cs.flexDirection === 'column-reverse' ? Math.abs(sc.scrollTop) : sc.scrollHeight - sc.clientHeight - sc.scrollTop;
+    const gap = last.getBoundingClientRect().bottom - sc.getBoundingClientRect().bottom;
+    bottom = dist <= 120 && gap <= 120;
+    break;
+  }
+  return { ok: true, title, chat, msgs, bottom };
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
 
@@ -342,7 +355,7 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
       .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs };
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
   } catch {
     return { ok: false, why: 'error' };
   }
