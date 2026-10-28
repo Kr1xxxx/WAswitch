@@ -48,5 +48,7 @@ const T = require('../src/translate');
 assert.equal(T.statusError(401, 'OpenRouter').text, 'OpenRouter 的密钥不对或没有权限');
 assert.equal(T.statusError(401, '智谱').text, '智谱的密钥不对或没有权限');
 assert.equal(T.statusError(401).text, '服务商的密钥不对或没有权限');
+assert.equal(T.statusError(429, '智谱').text, '智谱请求太频繁，请重试');
+assert.equal(T.statusError(429, 'DeepL').text, 'DeepL 请求太频繁，请重试');
 
 console.log('check-errtext: ok');

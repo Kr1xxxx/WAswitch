@@ -17,6 +17,7 @@ const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
+const { addMenuTemplate } = require('./add-menu');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
@@ -2873,6 +2874,8 @@ handleShell('panel:import', async ({ kind } = {}) => {
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
 const ctx = {
   get accounts() { return accounts; },
+  get groups() { return groups; },
+  moveAccount,
   get activeId() { return activeId; },
   set activeId(v) { activeId = v; },
   get page() { return page; },
@@ -3101,7 +3104,15 @@ onShell('acc:move', ({ id, groupId, beforeId } = {}) => {
   if (typeof id !== 'string' || typeof (groupId ?? '') !== 'string') return;
   moveAccount(id, groupId || '', typeof beforeId === 'string' ? beforeId : null);
 });
-onShell('group:create', () => createGroup(null));
+// 侧栏 + 号：添加账号或分组。菜单在按钮下方弹出
+onShell('add:menu', ({ x, y } = {}) => {
+  const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) } : {};
+  Menu.buildFromTemplate(addMenuTemplate({
+    canGroup: groups.length < GROUP_MAX,
+    addAccount: async () => { if (await confirmLeaveEditor()) openEditor(null); },
+    addGroup: () => createGroup(null),
+  })).popup({ window: win, ...at });
+});
 onShell('group:rename', ({ id, name } = {}) => {
   if (editGroupId === id) editGroupId = '';
   const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 20);
