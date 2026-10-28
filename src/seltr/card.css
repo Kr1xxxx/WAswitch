@@ -4,7 +4,7 @@
 .sc[data-mode="button"] { display: inline-flex; }
 .sc-go {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  width: 64px; height: 28px; padding: 0; border: var(--hair) solid #cdced6; border-radius: 8px;
+  width: 64px; height: 28px; padding: 0; border: var(--hair) solid #cdced6; border-radius: var(--r-s);
   background: #fcfcfd; color: #1c2024; font: 500 var(--fs-m)/1 var(--font-ui); cursor: pointer;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
 }
@@ -13,7 +13,7 @@
 .sc-go svg { flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .sc[data-mode="card"] {
   display: flex; flex-direction: column; gap: 8px; width: 320px; max-height: 260px; padding: 10px 12px;
-  border: var(--hair) solid #cdced6; border-radius: 10px; background: #fcfcfd;
+  border: var(--hair) solid #cdced6; border-radius: var(--r-m); background: #fcfcfd;
   box-shadow: 0 2px 6px rgba(0, 0, 0, .08); font-size: var(--fs-m); line-height: 1.5;
 }
 .sc-text { margin: 0; min-height: 0; overflow-y: auto; white-space: pre-wrap; word-break: break-word; user-select: text; }
@@ -21,6 +21,6 @@
 .sc-err { margin: 0; color: #ce2c31; }
 .sc-foot { display: flex; justify-content: flex-end; flex: none; }
 /* 卡片圆角 10、内边距 10 → 里面的按钮圆角 6，和外框同心 */
-.sc-btn { height: 28px; min-width: 56px; padding: 0 10px; margin: 0 -6px -4px 0; border: 0; border-radius: 6px; background: transparent; color: #1c2024; font: 500 var(--fs-m)/1 var(--font-ui); cursor: pointer; }
+.sc-btn { height: 28px; min-width: 56px; padding: 0 10px; margin: 0 -6px -4px 0; border: 0; border-radius: var(--r-s); background: transparent; color: #1c2024; font: 500 var(--fs-m)/1 var(--font-ui); cursor: pointer; }
 .sc-btn:hover { background: #f0f0f3; }
 .sc-go:focus-visible, .sc-btn:focus-visible { outline: 2px solid #0090ff; outline-offset: 1px; }
