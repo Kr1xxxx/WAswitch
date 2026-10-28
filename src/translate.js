@@ -20,6 +20,7 @@ const DAILY_CAPS = [100, 200, 500, 1000, 2000];
 const DEEPL_MONTH_CAP = 100000;
 const DEEPL_CAP_MIN = 1000;
 const DEEPL_CAP_MAX = 1e9;
+const CAP_ERR = `每月上限填 ${DEEPL_CAP_MIN} 到 ${DEEPL_CAP_MAX} 之间的数`;
 const monthKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const deeplChars = (text) => [...text].length;
 // 100000 -> 「10 万」，12345 -> 「12345 」
@@ -467,10 +468,13 @@ class Translator {
     const u = this.load().deeplUsage;
     return u.month === monthKey(this.now()) ? u.chars : 0;
   }
-  setDeeplCap(n) {
+  validCap(n) {
     const v = Number(n);
-    if (!Number.isFinite(v) || v < DEEPL_CAP_MIN || v > DEEPL_CAP_MAX) return { error: `每月上限填 ${DEEPL_CAP_MIN} 到 ${DEEPL_CAP_MAX} 之间的数` };
-    this.load().deeplCap = Math.round(v);
+    return Number.isFinite(v) && v >= DEEPL_CAP_MIN && v <= DEEPL_CAP_MAX;
+  }
+  setDeeplCap(n) {
+    if (!this.validCap(n)) return { error: CAP_ERR };
+    this.load().deeplCap = Math.round(Number(n));
     this.save();
     return { ok: true };
   }
@@ -516,6 +520,8 @@ class Translator {
     if (!model && !deepl) return { error: '请填模型名' };
     if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join('、')}` };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
+    const hasCap = deepl && data.monthCap !== undefined && data.monthCap !== '';
+    if (hasCap && !this.validCap(data.monthCap)) return { error: CAP_ERR };
     if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
     let p = typeof data.id === 'string' ? c.providers.find((x) => x.id === data.id) : null;
     if (!p) {
@@ -533,8 +539,8 @@ class Translator {
       p.keyTail = newKey.slice(-4);
     }
     if (!c.primaryId || !this.provider(c.primaryId)) c.primaryId = p.id;
-    // DeepL 表单里的「每月上限」（整个软件一个上限，不分密钥）；填错了不改，其他照样保存
-    if (deepl && data.monthCap !== undefined && data.monthCap !== '') this.setDeeplCap(data.monthCap);
+    // DeepL 表单里的「每月上限」（整个软件一个上限，不分密钥）
+    if (hasCap) this.setDeeplCap(data.monthCap);
     this.save();
     return { ok: true, id: p.id };
   }

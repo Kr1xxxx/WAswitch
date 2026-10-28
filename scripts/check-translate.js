@@ -451,6 +451,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   assert(t10.setDeeplCap(500).error); assert(t10.setDeeplCap('x').error); assert.equal(t10.publicConfig().deeplCap,100000);
   assert(t10.setDeeplCap(200000).ok); assert.equal(use10().cap,200000);
   t10.saveProvider({id:did10,preset:'deepl',monthCap:150000}); assert.equal(use10().cap,150000);
+  assert(t10.saveProvider({id:did10,preset:'deepl',name:'改名',monthCap:500}).error,'上限填错整个不存'); assert.equal(t10.provider(did10).name,'DeepL'); assert.equal(use10().cap,150000);
   t10.saveProvider({id:zid10,preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',monthCap:5000}); assert.equal(use10().cap,150000,'别的服务商不改上限');
   t10.setDeeplCap(100000);
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];

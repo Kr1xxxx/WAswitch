@@ -1135,7 +1135,7 @@ function trKeysBox(c, apply) {
 }
 // DeepL 每月字符上限（整个软件一个，默认 10 万）：改完离开输入框或按回车就保存
 function trCapInput(c) {
-  return h('input', { type: 'number', class: 'tr-cap-in', min: '1000', step: '10000', value: String(c.deeplCap || 100000), 'aria-label': 'DeepL 每月字符上限' });
+  return h('input', { type: 'number', class: 'tr-cap-in', min: '1000', step: '1000', value: String(c.deeplCap || 100000), 'aria-label': 'DeepL 每月字符上限' });
 }
 function trCapBox(c, apply) {
   const box = trCapInput(c);
