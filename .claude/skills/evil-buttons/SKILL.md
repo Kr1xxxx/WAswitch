@@ -12,7 +12,7 @@ This folder holds an unchanged copy of every component (`components/*.tsx`) and 
 
 1. Pick the closest component from the list below.
 2. Read its `docs/<slug>.mdx` for props, variants and usage, then its `components/<file>.tsx` for the exact timing, easing, colors and DOM structure.
-3. Build it in the target stack. In a shadcn/React project install it directly with `npx shadcn@latest add @evilbuttons/<name>`. In WAswitch (Electron, plain HTML/CSS/JS in `src/shell`, `src/float`, `src/popup`, no React or Tailwind) rebuild the idea in vanilla JS and CSS, do not add React, Tailwind or motion as dependencies.
+3. Build it in the target stack. In a shadcn/React project install it from the shadcn registry `@evilbuttons/<name>` (see the Install section on evilbuttons.com). In WAswitch (Electron, plain HTML/CSS/JS in `src/shell`, `src/float`, `src/popup`, no React or Tailwind) rebuild the idea in vanilla JS and CSS, do not add React, Tailwind or motion as dependencies.
 4. In WAswitch the project UI design rules win over the upstream look (memory `waswitch-ui-design-rules`): Radix UI Colors only, 0.5px borders, minimal motion (ease-out 250ms), no flashy effects, min 12px text. Take the interaction pattern and state handling, drop glow, shaders, confetti and physics.
 
 If the copy here looks stale, check upstream for new components: `git clone --depth 1 https://github.com/radiumcoders/evil-buttons` and read `registry.components.json`.
