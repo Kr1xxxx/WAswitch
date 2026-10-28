@@ -121,11 +121,14 @@ app.whenReady().then(async () => {
     await js(() => [...document.querySelectorAll('.tr-prow')].find((r) => r.querySelector('b').textContent === '智谱').querySelectorAll('button')[2].click());
     await until(() => window.__calls.some((c) => c[0] === 'roles'));
     calls = await js(() => window.__calls.slice());
-    assert.deepStrictEqual(calls.find((c) => c[0] === 'roles'), ['roles', 'd', '', 'z'], `设为纠错应只改纠错 ${JSON.stringify(calls)}`);
+    assert.deepStrictEqual(calls.find((c) => c[0] === 'roles'), ['roles', undefined, undefined, 'z'], `设为纠错应只改纠错 ${JSON.stringify(calls)}`);
     await until(() => [...document.querySelectorAll('.tr-prow')].find((r) => r.querySelector('b').textContent === '智谱').querySelectorAll('button')[2].disabled);
     pr = await prow();
     assert(btn('智谱', '设为纠错').dis, '设好之后智谱的「设为纠错」应点不了');
     assert(pr.find((r) => r.name === '智谱').btns.length === 5);
+    // 纠错下拉和按钮一致：不会纠错的（DeepL、hy-mt）不在下拉里
+    const fixOpts = await js(() => [...document.querySelector('select[aria-label="纠错服务商"]').options].map((o) => o.value));
+    assert.deepStrictEqual(fixOpts, ['', 'z'], `纠错下拉只该有「用默认的」和智谱 ${JSON.stringify(fixOpts)}`);
     await shot('providers');
 
     assert.deepStrictEqual(errs, [], `页面报错：${errs.join('\n')}`);

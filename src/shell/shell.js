@@ -1199,7 +1199,7 @@ function translatePage(page) {
     if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
     apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
   } },
-    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => p.preset !== 'deepl' || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
+    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => !trNoFix(p) || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
@@ -1271,7 +1271,7 @@ function translatePage(page) {
         trTestBtn(p, { class: 'pn-btn' }),
         // 每行按钮一样多，上下对齐：已经是默认 / 纠错的，或不会纠错的（DeepL、混元翻译模型），按钮还在，只是点不了
         h('button', { class: 'pn-btn', disabled: p.id === c.primaryId, onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认'),
-        h('button', { class: 'pn-btn', disabled: p.id === c.fixId || trNoFix(p), title: trNoFix(p) ? '不会纠错' : null, onclick: async () => apply(await window.wa.trRoles(c.primaryId, c.fallbackId, p.id)) }, '设为纠错'),
+        h('button', { class: 'pn-btn', disabled: p.id === c.fixId || trNoFix(p), title: trNoFix(p) ? '不会纠错' : null, onclick: async () => apply(await window.wa.trRoles(undefined, undefined, p.id)) }, '设为纠错'),
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
         h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trProviderDelete(p.id)) }, '删除'))))
       : h('span', { class: 'hint' }, '还没有。')),

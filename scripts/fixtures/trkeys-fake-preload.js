@@ -24,7 +24,8 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   };
   if (k === 'trRoles') return async (primaryId, fallbackId, fixId) => {
     window.__calls.push(['roles', primaryId, fallbackId, fixId]);
-    Object.assign(window.__cfg, { primaryId, fallbackId }, typeof fixId === 'string' ? { fixId } : {});
+    // 和 setRoles 一样：不是字符串的就不动
+    for (const [k, v] of Object.entries({ primaryId, fallbackId, fixId })) if (typeof v === 'string') window.__cfg[k] = v;
     return state();
   };
   if (k === 'trTest') return async (id) => { window.__calls.push(['test', id]); return { ok: true }; };
