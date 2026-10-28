@@ -248,6 +248,18 @@ function refreshCacheSize() {
 const active = () => (s.accounts || []).find((a) => a.id === s.activeId);
 const mb = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${n} MB`);
 
+// 账号头像：打包的 emoji 图（src/emoji），Mac 和 Windows 显示一样。没有 emoji 的（不该出现）退回名字第一个字
+function emojiImg(a, size) {
+  const e = a && window.EMOJI ? window.EMOJI.get(a.emoji) : null;
+  return e ? h('img', { class: 'emo', src: `../emoji/svg/${e.id}.svg`, alt: '', width: size, height: size, draggable: 'false' }) : null;
+}
+function avatarOf(a, extra = '') {
+  const img = emojiImg(a, 24);
+  return h('span', { class: `avatar${img ? ' emoji' : ''}${extra}`, style: img ? null : { background: a.color } }, img || a.name.trim().charAt(0) || '?');
+}
+// 列表里名字前面的小图标（以前是颜色小方块）
+const mini = (a) => emojiImg(a, 16) || h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } });
+
 function tint(color) {
   // 背景 = 账号颜色 22% + 浅灰
   return color ? `color-mix(in srgb, ${color} 22%, #EEF0F3)` : '#E6E9ED';
@@ -294,13 +306,16 @@ function accountRow(acc) {
   // 自己关了通知，或者所在分组整组关了，都显示成灰色
   const quiet = acc.muted || acc.groupMuted;
   // 开了“同步到 CRM”的号：头像外圈蓝色、名字旁边 CRM 标记，侧栏收起时也看得到
-  const avatar = h('span', { class: `avatar${acc.crm ? ' crm' : ''}`, style: { background: acc.color } }, acc.name.trim().charAt(0) || '?');
+  const avatar = avatarOf(acc, acc.crm ? ' crm' : '');
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
-  const tip = [acc.name, acc.phone, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const via = acc.mode === 'lite' ? `轻量模式，${acc.proxyLabel}` : acc.proxyLabel;
+  const tip = [acc.name, s.locked ? '' : acc.phone, via, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  // 名字下面一行：有问题时写问题，平时写这个号登录的手机号（连接方式在悬停提示里）。锁着时不露手机号
+  const sub = acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : s.locked ? '' : acc.phone;
   const row = h('button', {
     class: `row${on ? ' on' : ''}${on && sideFx ? ' fx-on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
@@ -309,7 +324,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
-    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? segs('轻量', acc.proxyLabel) : acc.proxyLabel)),
+    sub ? h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, sub) : null),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
   draggable(row, acc.id);
@@ -606,7 +621,7 @@ function renderTop() {
   if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
+    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), emojiImg(acc, 16), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
     h('span', { class: 'grow' }),
     exitChip(acc),
     !lite ? zoomChip(acc) : null,
@@ -810,7 +825,7 @@ function overviewPage() {
     h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '未读总览'),
       h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。` : '所有号都没有未读对话。')),
     unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
-      h('span', { class: 'sw', style: { background: a.color } }),
+      mini(a),
       h('span', { class: 'ov-name' }, ...segs(a.name, groupName(a) ? h('span', { class: 'hint' }, groupName(a)) : null)),
       a.muted || a.groupMuted ? h('span', { class: 'hint' }, '不弹通知') : null,
       h('span', { class: `pill${a.muted || a.groupMuted ? ' quiet' : ''}` }, a.unread)))) : null,
@@ -824,7 +839,7 @@ function overviewPage() {
         const today = t.toDateString() === new Date().toDateString();
         return h(a ? 'button' : 'div', { class: 'ov-logrow', onclick: a ? () => window.wa.switchTo(a.id) : null },
           h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', today ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
-          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          mini(a),
           h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
           h('span', { class: 'hint' }, ...segs(`${e.count} 个未读`, e.popped ? null : '没弹')));
       }))
@@ -1221,7 +1236,7 @@ function translatePage(page) {
         trNetErr ? netSay : null)),
     s.accounts.length ? setRow('自动翻译收到的消息', '',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
-        h('span', { class: 'tr-auto-name' }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        h('span', { class: 'tr-auto-name' }, mini(a), a.name),
         sw(c.accountAuto[a.id] !== false, `${a.name} 自动翻译`, async (v) => apply(await window.wa.trAuto(a.id, v))))))) : null,
     setRow('每个号每天最多自动翻译', '',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
@@ -1322,6 +1337,7 @@ function editorPage(id) {
   const root = h('div', { class: 'page' }, h('div', { class: 'col' }, h('p', { class: 'lead' }, '正在加载…')));
   window.wa.editorLoad(id).then((d) => {
     let color = d.color;
+    let emoji = d.emoji;
     let tested = null;
     let mode = d.mode;
     // 主号：只能用网页版。已经是主号的不能在这里取消，要在别的号里勾选来更换
@@ -1377,6 +1393,24 @@ function editorPage(id) {
     const testBtn = morphBtn(`editorTest:${d.id || 'new'}:${s.editorNonce}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
     const saveBtn = h('button', { class: 'btn primary', type: 'button' }, d.isNew ? '保存并扫码登录' : '保存');
 
+    // 图标：名称输入框左边的方块，点开下面展开一整套 emoji，点一个就换上并收起
+    let emojiOpen = false;
+    const emojiBtn = h('button', { class: 'emoji-btn', type: 'button', onclick: () => { emojiOpen = !emojiOpen; drawEmoji(); } });
+    const emojiGrid = h('div', { class: 'emoji-grid', role: 'group', 'aria-label': '选一个图标' });
+    emojiGrid.addEventListener('keydown', (e) => { if (e.key === 'Escape') { emojiOpen = false; drawEmoji(); emojiBtn.focus(); } });
+    const drawEmoji = () => {
+      const cur = window.EMOJI.get(emoji);
+      emojiBtn.replaceChildren(emojiImg({ emoji }, 24) || '?');
+      emojiBtn.setAttribute('aria-label', `图标：${cur ? cur.name : '未选'}`);
+      emojiBtn.setAttribute('aria-expanded', String(emojiOpen));
+      emojiBtn.classList.toggle('on', emojiOpen);
+      emojiGrid.hidden = !emojiOpen;
+      emojiGrid.replaceChildren(...(emojiOpen ? window.EMOJI.LIST.map((x) => h('button', {
+        class: `emoji-cell${x.id === emoji ? ' on' : ''}`, type: 'button', title: x.name,
+        'aria-label': x.name, 'aria-pressed': String(x.id === emoji),
+        onclick: () => { emoji = x.id; emojiOpen = false; drawEmoji(); emojiBtn.focus(); },
+      }, emojiImg({ emoji: x.id }, 24))) : []));
+    };
     const drawSwatches = () => swatches.replaceChildren(...COLORS.map((c, i) => h('button', {
       class: `swatch${c === color ? ' on' : ''}`, type: 'button', style: { background: c, '--c': c },
       'aria-label': COLOR_NAMES[i] + (c === color ? '，已选' : ''),
@@ -1537,12 +1571,13 @@ function editorPage(id) {
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       // 直连不用测试；填了代理的轻量号仍要先测试通过
       if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
-      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked, groupId: groupRow ? groupSel.value : undefined });
+      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, emoji, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked, groupId: groupRow ? groupSel.value : undefined });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
     };
 
     drawSwatches();
+    drawEmoji();
     onProxyChange();
     probePorts();
     // 去 Clash 里改完配置再切回来：自动重新检测一次（离开编辑页后自己移除）
@@ -1553,13 +1588,14 @@ function editorPage(id) {
     const markDirty = () => { if (!dirty) { dirty = true; window.wa.editorDirty(true); } };
     root.addEventListener('input', markDirty);
     root.addEventListener('change', markDirty);
-    root.addEventListener('click', (e) => { if (e.target.closest('.swatch, .mode, .preset')) markDirty(); });
+    root.addEventListener('click', (e) => { if (e.target.closest('.swatch, .emoji-cell, .mode, .preset')) markDirty(); });
     root.replaceChildren(
       h('div', { class: 'col' },
         h('h1', null, d.isNew ? '添加账号' : '编辑账号'),
         h('div', { class: 'hstack name-row' },
-          h('label', { class: 'field' }, '名称', name),
+          h('div', { class: 'field name-field' }, '名称', h('div', { class: 'hstack name-input' }, emojiBtn, name)),
           h('div', { class: 'field' }, '颜色', swatches)),
+        emojiGrid,
         h('label', { class: 'field' }, '手机号', phone),
         h('label', { class: 'field' }, '备注', note),
         groupRow,
@@ -1630,7 +1666,7 @@ function netPage(page) {
     h('div', { class: 'box' }, s.accounts.map((a) => {
       const drops = netLogCache.filter((e) => e.id === a.id && e.at >= dayAgo && (e.kind === 'down' || e.kind === 'qr')).length;
       return h('div', { class: 'tr-prow' },
-        h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+        h('span', null, mini(a), a.name),
         h('span', { class: 'hint' }, a.direct ? '直连' : a.latency ? `最近用时 ${a.latency.ms} ms` : '还没测过'),
         h('b', { style: { textAlign: 'right', color: drops ? 'var(--danger)' : null } }, `24 小时掉线 ${drops} 次`),
         h('span', { class: 'hint' }, a.problem ? a.problemShort : '正常'));
@@ -1643,7 +1679,7 @@ function netPage(page) {
         const t = new Date(e.at);
         return h('div', { class: 'ov-logrow' },
           h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
-          h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
+          mini(a),
           h('span', { class: 'ov-name', style: { flex: 'none', width: '110px' } }, a ? a.name : '已删除的号'),
           h('span', { class: `ov-name${['down', 'qr', 'crash', 'exit_fail'].includes(e.kind) ? ' bad-text' : ''}` }, (NET_TEXT[e.kind] || (() => e.kind))(e)));
       }))
@@ -1760,7 +1796,7 @@ function settingsPage() {
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
           h('b', { style: { fontSize: 'var(--fs-xl)' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: 'var(--fs-s)', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
-          h('span', { class: 'memname', title: a.name }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
+          h('span', { class: 'memname', title: a.name }, mini(a), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
           h('b', { style: { textAlign: 'right' } }, `${a.memMB || 0} MB`),
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台')))),
@@ -1811,7 +1847,7 @@ function settingsPage() {
           h('button', { class: 'btn', disabled: !!st.popupDnd, title: st.popupDnd ? '勿扰开着，先关掉勿扰' : '', onclick: () => window.wa.popupTest() }, '弹一张'))),
       h('h2', { class: 'ov-h2' }, '哪些号弹'),
       h('div', null, s.accounts.length ? s.accounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center' } },
-        h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+        avatarOf(a),
         h('span', { class: 'meta' }, a.name),
         sw(!a.muted, `${a.name}的通知`, (v) => window.wa.setMuted(a.id, !v)))) : h('p', { class: 'lead' }, '还没有账号。')));
   } else if (settingsTab === 'general') {
@@ -1949,7 +1985,7 @@ function crmBox(accounts, upload) {
     h('p', { class: 'hint', style: { margin: '0' } }, '这些号的单聊文字消息每 10 分钟同步到公司 CRM。群聊不同步；网页版的号只同步你打开过的对话。'),
     h('p', { class: 'hint', style: { margin: '0', fontSize: 'var(--fs-s)' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
-      h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+      avatarOf(a, a.crm ? ' crm' : ''),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
       h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
         ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
@@ -1989,7 +2025,7 @@ function teamPage(t, accounts = []) {
     if (t.privateAccounts.length && t.allowPrivate) {
       wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
         t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
-          h('span', { class: 'avatar', style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
+          avatarOf(a),
           h('span', { class: 'meta' }, a.name),
           h('button', { class: 'btn', onclick: async () => {
             const r = await window.wa.teamJoin([a.id]);
@@ -2147,7 +2183,7 @@ function render(forceContent = false) {
     if (forceContent || key !== shown || !$content.contains(document.activeElement) || !['SELECT', 'INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) $content.replaceChildren(settingsPage());
   } else if (s.page === 'overview') {
     // 只有内容变了才重画，免得滚动位置被打回顶部
-    const sig = JSON.stringify([s.accounts.map((a) => [a.id, a.name, a.color, a.unread, a.muted, a.groupMuted, a.groupId]), s.groups, notifLogCache.length, notifLogCache[0]?.at]);
+    const sig = JSON.stringify([s.accounts.map((a) => [a.id, a.name, a.color, a.emoji, a.unread, a.muted, a.groupMuted, a.groupId]), s.groups, notifLogCache.length, notifLogCache[0]?.at]);
     if (key !== shown) loadNotifLog();
     if (forceContent || key !== shown || sig !== overviewSig) { overviewSig = sig; $content.replaceChildren(overviewPage()); }
     // 有新的未读时顺便刷新记录

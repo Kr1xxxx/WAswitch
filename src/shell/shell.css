@@ -69,6 +69,10 @@ body.collapsed .head { justify-content: center; padding: 0; }
 .row.on { background: rgba(255,255,255,.88); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 body.collapsed .row { justify-content: center; padding: 0; }
 .avatar { position: relative; width: 28px; height: 28px; flex: none; border-radius: 8px; color: #fff; font-size: var(--fs-s); font-weight: 700; display: flex; align-items: center; justify-content: center; }
+/* 头像是打包的 emoji 图：不要底色，图本身就是识别 */
+.avatar.emoji { background: none; }
+.emo { display: block; flex: none; }
+.memname .emo, .tr-auto-name .emo, .tr-prow .emo { display: inline-block; vertical-align: -3px; margin-right: 8px; }
 .dot { position: absolute; top: -6px; right: -7px; min-width: 18px; height: 18px; padding: 0 3px; border-radius: 9px; border: 2px solid var(--tint); background: var(--text); color: #fff; font-size: var(--fs-s); font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .dot.bad { background: #d4323b; }
 .dot.quiet { background: #8a9099; }
@@ -183,8 +187,18 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 40px; }
 /* 名称 + 颜色：窗口窄时颜色整排换到名称下面，不被右边的说明卡片挡住 */
 .name-row { align-items: flex-end; gap: 14px; flex-wrap: wrap; }
-.name-row > .field:first-child { flex: 1 1 180px; }
+.name-row > .name-field { flex: 1 1 180px; }
+.name-input { gap: 8px; }
+.name-input input { flex: 1; width: 0; min-width: 0; }
 @media (max-width: 1060px) { .page:not(.narrow) { gap: 24px; padding: 32px 24px; } .side-panel { width: 210px; padding: 18px; } }
+/* 编辑页的图标：名称左边一个方块，点开下面一整套 emoji（Radix slate 3/5 做悬停和选中） */
+.emoji-btn { width: 40px; height: 40px; padding: 0; border: var(--hair) solid var(--field); border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; }
+.emoji-btn:hover, .emoji-btn.on { background: #F0F0F3; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 36px); gap: 4px; padding: 6px; width: max-content; max-width: 100%; border: var(--hair) solid var(--field); border-radius: 12px; background: #fff; }
+.emoji-grid[hidden] { display: none; }
+.emoji-cell { width: 36px; height: 36px; padding: 0; border: none; border-radius: 6px; background: transparent; display: flex; align-items: center; justify-content: center; }
+.emoji-cell:hover { background: #F0F0F3; }
+.emoji-cell.on { background: #E0E1E6; }
 .swatch { width: 26px; height: 26px; border-radius: 8px; border: none; padding: 0; }
 .swatch.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
