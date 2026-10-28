@@ -351,6 +351,15 @@ function groupHead(g) {
   return head;
 }
 
+// 侧栏「账号」旁的 + 号：弹出菜单选添加账号还是添加分组（菜单在主进程里弹，和右键菜单一样）
+function addBtn() {
+  const on = s.page === 'editor' && !s.editorId;
+  return h('button', {
+    class: `icon-btn add-btn${on ? ' on' : ''}`, title: '添加', 'aria-label': '添加', 'aria-haspopup': 'menu',
+    onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); window.wa.addMenu(Math.round(r.left), Math.round(r.bottom + 4)); },
+  }, icon('plus', 14));
+}
+
 // 账号列表：没有分组时和以前一样；有分组时先是“未分组”，再按组排
 function accountList() {
   const groups = s.groups || [];
@@ -395,12 +404,8 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))),
-      s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
-    h('div', { class: 'list' },
-      accountList(),
-      h('button', { class: `row${s.page === 'editor' && !s.editorId ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '添加账号', onclick: () => window.wa.add() },
-        h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: 'var(--fs-m)' } }, '添加账号'))),
+    h('div', { class: 'label side-label' }, s.collapsed ? null : h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))), addBtn()),
+    h('div', { class: 'list' }, accountList()),
     s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
     h('button', { class: `row tool-row${s.page === 'translate' ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
       h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
@@ -1465,6 +1470,10 @@ function editorPage(id) {
       drawTags();
     };
     const regionRow = h('label', { class: 'field' }, '时区', region, tags);
+    // 有分组才出现：新号默认放进正在看的那个号所在的组
+    const groupSel = h('select', { 'aria-label': '分组' }, h('option', { value: '' }, '未分组'), (d.groups || []).map((g) => h('option', { value: g.id }, g.name)));
+    groupSel.value = d.groupId || '';
+    const groupRow = d.groups && d.groups.length ? h('label', { class: 'field' }, '分组', groupSel) : null;
     const proxyHint = h('span', { class: 'hint' });
     const onModeChange = () => {
       const lite = mode === 'lite';
@@ -1528,7 +1537,7 @@ function editorPage(id) {
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       // 直连不用测试；填了代理的轻量号仍要先测试通过
       if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
-      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked });
+      const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked, groupId: groupRow ? groupSel.value : undefined });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
     };
@@ -1553,6 +1562,7 @@ function editorPage(id) {
           h('div', { class: 'field' }, '颜色', swatches)),
         h('label', { class: 'field' }, '手机号', phone),
         h('label', { class: 'field' }, '备注', note),
+        groupRow,
         modeRow,
         primaryRow,
         h('div', { class: 'field' },
