@@ -56,6 +56,9 @@ function dockReset() {
 // 翻译中 → 译文、补回旧译文、上面的消息被挤掉，最后一条都不变；撤回最新一条，最后一条变成以前就有的，都不算
 function dockHasNew(prev, st) {
   if (dk.stick || !prev || !st || !dockVisible()) return false;
+  // dk.stick 可能过期（窗口拉高后不用滚了、滚回底的那一下被当成程序滚的）：再看一眼列表现在是不是在底下
+  const l = $panel.querySelector('.dk-host .dk-list');
+  if (!l || l.scrollHeight - l.scrollTop - l.clientHeight <= 24) { dk.stick = true; return false; }
   if (prev.accountId !== st.accountId || prev.title !== st.title || !prev.items.length || !st.items.length) return false;
   const last = st.items[st.items.length - 1].h;
   return !prev.items.some((it) => it.h === last);
@@ -331,7 +334,8 @@ function dockIncoming() {
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
   // 程序自己设的滚动（恢复位置）也会触发 scroll：滚动距离没变就不算用户滚的
   list.addEventListener('scroll', () => {
-    if (!list.isConnected || list.scrollTop === list._setTop) return;
+    if (!list.isConnected) return;
+    if (list.scrollTop === list._setTop) { list._setTop = null; return; } // 程序设一次只发一次 scroll，只吞这一次
     dk.stick = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
     if (dk.stick && dk.pill) { dk.pill = false; dockPillSync(box); }
   }, { passive: true });

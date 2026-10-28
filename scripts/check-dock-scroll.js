@@ -103,6 +103,14 @@ const scenario = async (mode) => {
   d.title = 'Emma Schmidt'; push();
   await frame(); await wait(100);
   out.switchChat = { had, after: pill() };
+  // 列表不够长、不用滚：就算之前记着“不在底下”，来了新消息也不出
+  await up(30);
+  d.items = items.slice(-2); push();
+  await frame(); await wait(100);
+  dk.stick = false; // 模拟“不在底下”的记录过期（比如窗口拉高后列表不用滚了）
+  d.items.push({ h: 'new5', text: '#S Ok', t: '11:04', state: 'done', tr: '好' }); push();
+  await frame(); await wait(100);
+  out.short = { scrolls: list().scrollHeight > list().clientHeight, pill: pill() };
   return out;
 };
 
@@ -140,6 +148,7 @@ app.whenReady().then(async () => {
   assert.strictEqual(mid.again, true, '再往上翻时来了新消息，应该出「新消息」');
   assert.strictEqual(mid.manual, false, '自己滚到最底下，「新消息」应该收起');
   assert(mid.switchChat.had && !mid.switchChat.after, `换对话不带「新消息」过去 ${JSON.stringify(mid.switchChat)}`);
+  assert(!mid.short.scrolls && !mid.short.pill, `列表不用滚时来新消息不该出「新消息」 ${JSON.stringify(mid.short)}`);
   // 2) 停在最底下：翻译过程中和新消息来了以后都在最底下
   const bot = await run('bottom');
   assert(bot.end.gap <= 1, `新消息来了应该跟到底，还差 ${bot.end.gap}px`);
