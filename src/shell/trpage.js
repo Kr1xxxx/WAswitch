@@ -167,10 +167,11 @@ function tpBuild() {
     h('div', { class: 'tp-hist-head' }, h('span', null, '最近记录'),
       h('button', { class: 'tp-link', type: 'button', onclick: () => tpClearHist() }, '清空')),
     histList);
-  const ui = { input, inCount, clear, go, src, tgt, swap, o1, o2, open2, hist, histList };
+  const provs = h('div', { class: 'tp-provs' });
+  const ui = { input, inCount, clear, go, src, tgt, swap, o1, o2, open2, hist, histList, provs };
   tp.ui = ui;
   tp.el = h('div', { class: 'tp' },
-    h('div', { class: 'tp-head' }, h('h1', null, '翻译')),
+    h('div', { class: 'tp-head' }, h('h1', null, '翻译'), ui.provs),
     h('div', { class: 'tp-body' },
       h('div', { class: 'tp-bar' }, src, swap, tgt),
       h('div', { class: 'tp-grid' },
@@ -325,6 +326,43 @@ function tpUpdate() {
   // 没译文时「复制」先藏起来（位置留着，有了译文不跳）
   for (const o of [ui.o1, ui.o2]) o.copy.classList.toggle('tp-empty', !o.box.value.trim());
   tpFitSelect(ui.o1.model); tpFitSelect(ui.o2.model);
+  tpQuota();
+}
+
+// 右上角：三个翻译服务商，填了密钥才算已启用。智谱、混元免费不限量；DeepL 每个密钥每月 10 万字符（本机记数，每月 1 号清零）
+const TP_PROVS = [['zhipu', '智谱'], ['hunyuan', '腾讯混元'], ['deepl', 'DeepL']];
+function tpWan(n) {
+  if (n < 1000) return String(n);
+  return `${(Math.floor(n / 1000) / 10).toString()}万`;
+}
+function tpQuota() {
+  const ui = tp.ui;
+  const provs = tpProviders();
+  const rows = TP_PROVS.map(([preset, name]) => {
+    const list = provs.filter((p) => p.preset === preset);
+    const p = list.find((x) => x.hasKey) || list[0];
+    return { preset, name, id: p ? p.id : '', on: !!(p && p.hasKey), used: (p && p.usage && p.usage.used) || 0, cap: (p && p.usage && p.usage.cap) || 100000 };
+  });
+  const want = JSON.stringify(rows);
+  if (ui.provs.dataset.v === want) return;
+  ui.provs.dataset.v = want;
+  ui.provs.replaceChildren(...rows.map(({ preset, name, id, on, used, cap }) => {
+    let quota;
+    if (preset === 'deepl') {
+      const pct = Math.min(100, (used / cap) * 100);
+      quota = h('span', { class: 'tp-prov-quota' },
+        h('span', { class: `tp-meter${pct >= 100 ? ' full' : pct >= 90 ? ' near' : ''}`, role: 'progressbar', 'aria-label': 'DeepL 本月已用字符', 'aria-valuemin': '0', 'aria-valuemax': String(cap), 'aria-valuenow': String(used) },
+          h('span', { class: 'tp-meter-fill', style: { width: `${pct}%` } })),
+        h('span', null, `${tpWan(used)} / ${tpWan(cap)}`));
+    } else quota = h('span', { class: 'tp-prov-quota' }, '无限免费');
+    // 点一下去填（或改）这个服务商的密钥；列表里没有这个服务商就打开翻译设置
+    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => {
+      if (id) trOpenKey(id);
+      else { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); }
+    } },
+    h('span', { class: 'tp-prov-top' }, h('span', { class: 'tp-prov-name' }, name), h('span', { class: `tp-prov-on${on ? ' on' : ''}` }, on ? '已启用' : '未启用')),
+    quota);
+  }));
 }
 
 // fresh：刚加了一条，新的那行淡入，列表回到最上面
@@ -431,6 +469,7 @@ async function tpRun() {
   }
   tpLabels();
   tpUpdate();
+  tpLoadCfg(); // DeepL 用量变了
   return res;
 }
 
@@ -458,6 +497,7 @@ async function tpRerun(which) {
   await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
   tp.busy = false;
   tpUpdate();
+  tpLoadCfg();
 }
 
 // 展开对照栏时：上面已经有译文、对照栏还空着，就只补翻对照这一栏
@@ -471,6 +511,7 @@ async function tpFillCompare() {
   await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
   tp.busy = false;
   tpUpdate();
+  tpLoadCfg();
 }
 
 async function tpFix(which) {
