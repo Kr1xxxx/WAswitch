@@ -48,6 +48,7 @@ const ICONS = {
   sync: '<path d="M20 11a8 8 0 0 0-14.9-3.9L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.9L21 15"/><path d="M21 20v-5h-5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   copy: '<rect x="4" y="8" width="12" height="12" rx="2.5"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
+  swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
 };
 
@@ -844,7 +845,7 @@ function customerItems() {
 // ---------- 翻译（面板里的第三个标签） ----------
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
 // 翻译设置的缓存（设置 › 翻译、客户表单的语言选项用）；面板“翻译”页在 dock.js
-const tr = { cfg: null, modes: [], outMode: LS('tr.outMode') || '' };
+const tr = { cfg: null, modes: [] };
 async function trLoad() {
   if (tr.loading) return;
   tr.loading = true;
@@ -1124,7 +1125,7 @@ function translatePage(page) {
         + '混元翻译模型只认固定译法，其他文字不起作用。')),
     trWigBox(c, apply),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
-    h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用来翻客户发来的消息。'),
+    h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式：工作台的回复用排第一个的那个，悬浮窗里可以选；“收到”的用来翻客户发来的消息。'),
     trModeEdit ? trModeForm() : null,
     h('div', { class: 'box' }, tr.modes.map((m) => h('div', { class: 'tr-prow' },
       h('b', { title: m.name }, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
