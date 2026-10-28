@@ -1,0 +1,70 @@
+---
+title: RevealButton
+description: A button that reveals a hidden secret value on hold or toggle, with a blur-in animation and an eye icon indicator.
+category: Interactive
+---
+
+## Preview
+
+<PreviewCard live title="RevealButton" note="Hold to reveal">
+  <RevealButton secret="sk_live_abc123_xQ4z9" maskedValue="sk_live_•••••••" />
+</PreviewCard>
+
+## Variants
+
+### Toggle mode
+
+Click once to reveal, click again to hide.
+
+<PreviewCard title="Toggle" note="Click to toggle">
+  <RevealButton revealMode="toggle" secret="sk_live_abc123_xQ4z9" maskedValue="sk_live_•••••••" label="API Key" hiddenLabel="API Key" />
+</PreviewCard>
+
+### Light
+
+`variant="light"` swaps the dark face for a white one with a soft gray rim.
+
+<PreviewCard title="Light" note="Hold to reveal">
+  <RevealButton variant="light" secret="sk_live_abc123_xQ4z9" maskedValue="sk_live_•••••••" />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/reveal-button</Cmd>
+
+## Usage
+
+```tsx
+import { RevealButton } from "@/components/evil-buttons/reveal-button";
+
+export function ButtonDemo() {
+  return (
+    <RevealButton
+      secret="sk_live_abc123_xQ4z9"
+      maskedValue="sk_live_•••••••"
+      revealMode="hold"
+      onRevealChange={(revealed) => console.log(revealed)}
+    />
+  );
+}
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes except `children`.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `secret` | `React.ReactNode` | `"sk_live_••••_9xQ4"` | The real value shown when revealed. |
+| `maskedValue` | `string` | `"•••• •••• ••••"` | The placeholder string shown when hidden. |
+| `label` | `React.ReactNode` | `"Reveal"` | Small label shown above the value when revealed. |
+| `hiddenLabel` | `React.ReactNode` | `"Hidden"` | Small label shown above the value when hidden. |
+| `revealMode` | `"hold" \| "toggle"` | `"hold"` | How the button reveals the secret. `"hold"` requires sustained press; `"toggle"` switches on each click. |
+| `variant` | `"dark" \| "light"` | `"dark"` | Graded surface style. |
+| `onRevealChange` | `(revealed: boolean) => void` | - | Callback fired whenever the revealed state changes. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- In hold mode, letting go or blurring hides it again.
+- `aria-pressed` reflects whether it's revealed.

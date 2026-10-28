@@ -1,0 +1,61 @@
+---
+title: StickyButton
+description: A magnetic button whose body and label are pulled toward the cursor from a wide field, with parallax depth and tilt.
+category: Mischief
+---
+
+## Preview
+
+<PreviewCard live>
+  <StickyButton>Deploy Doom</StickyButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/sticky</Cmd>
+
+## Usage
+
+```tsx
+import StickyButton from "@/components/evil-buttons/sticky";
+
+export function ButtonDemo() {
+  return <StickyButton>Launch</StickyButton>;
+}
+```
+
+## Variants
+
+### Clingy
+
+A wider field and a stronger pull make the button chase the cursor from far away.
+
+<PreviewCard>
+  <StickyButton radius={220} strength={0.7} parallax={0.6}>Can't Escape</StickyButton>
+</PreviewCard>
+
+### Subtle
+
+A tight field with no tilt, for a gentle magnetic nudge.
+
+<PreviewCard>
+  <StickyButton radius={60} strength={0.25} parallax={0.2} tilt={0}>Barely Sticky</StickyButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | The button label or content. |
+| `radius` | `number` | `120` | Distance in px beyond the button's edge where the pull starts. |
+| `strength` | `number` | `0.45` | How far the body follows the cursor, as a fraction of the cursor offset. |
+| `parallax` | `number` | `0.35` | How far the label drifts inside the body, from `0` (fixed to the body) to `1` (the edge of its padding). |
+| `tilt` | `number` | `8` | Maximum tilt in degrees while the body is pulled. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- The pull fades smoothly to zero at the field's edge.
+- Runs on motion values, with no re-renders on pointer move.

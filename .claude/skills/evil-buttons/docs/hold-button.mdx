@@ -1,0 +1,71 @@
+---
+title: HoldButton
+description: A hold-to-confirm button whose inner fill grows from 0 to 100%; release early to shake and abort, hold to the end to fire the action.
+category: Interactive
+---
+
+## Preview
+
+<PreviewCard live title="HoldButton" note="Press and hold to delete">
+  <HoldButton />
+</PreviewCard>
+
+## Variants
+
+### Fast hold
+
+A snappier 800ms hold for low-stakes confirmations.
+
+<PreviewCard title="Fast hold" note="Hold for 800ms">
+  <HoldButton duration={800} label="Hold to dismiss" successLabel="Dismissed" />
+</PreviewCard>
+
+### Slow hold
+
+A longer 2.5s hold for high-stakes, irreversible actions.
+
+<PreviewCard title="Slow hold" note="Hold for 2.5s">
+  <HoldButton duration={2500} label="Hold to wipe account" successLabel="Wiped" />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/hold-button</Cmd>
+
+## Usage
+
+```tsx
+import { HoldButton } from "@/components/evil-buttons/hold-button";
+
+export function ButtonDemo() {
+  return (
+    <HoldButton
+      duration={1500}
+      label="Hold to delete"
+      successLabel="Deleted"
+      onConfirm={() => deleteAccount()}
+      onAbort={(progress) => console.log("aborted at", progress)}
+    />
+  );
+}
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes except `onClick` and `onAbort`.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `duration` | `number` | `1500` | Milliseconds the user must hold before `onConfirm` fires. |
+| `label` | `React.ReactNode` | `"Hold to delete"` | Label shown in the idle state. |
+| `holdingLabel` | `React.ReactNode` | `"Keep holding…"` | Label shown while the button is being held. |
+| `successLabel` | `React.ReactNode` | `"Deleted"` | Label shown after the hold completes. |
+| `onConfirm` | `() => void` | - | Fired once the fill reaches 100%. |
+| `onAbort` | `(progress: number) => void` | - | Fired when released early, with the progress (0-1) reached. |
+| `resetAfter` | `number` | `1400` | Milliseconds to stay in the success state before resetting to idle. Set to `0` to stay. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Release outside the button and it still aborts.
+- Hold <kbd>Space</kbd> or <kbd>Enter</kbd> to confirm from the keyboard.

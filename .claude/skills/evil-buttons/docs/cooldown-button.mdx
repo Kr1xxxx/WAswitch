@@ -1,0 +1,62 @@
+---
+title: CooldownButton
+description: A button that locks itself behind a draining radial timer after each click to stop spam and double-submits, taunting you while you wait.
+category: Interactive
+---
+
+## Preview
+
+<PreviewCard live title="CooldownButton" note="Click, then try to click again">
+  <CooldownButton>Send it</CooldownButton>
+</PreviewCard>
+
+## Variants
+
+### Longer leash
+
+Tune `cooldown` and supply your own taunts.
+
+<PreviewCard title="Five second penalty" note="No spamming the API">
+  <CooldownButton
+    cooldown={5000}
+    taunts={["Nope.", "Still waiting.", "Touch grass."]}
+  >
+    {"Refresh"}
+  </CooldownButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/cooldown-button</Cmd>
+
+## Usage
+
+```tsx
+import { CooldownButton } from "@/components/evil-buttons/cooldown-button";
+
+export function ButtonDemo() {
+  return (
+    <CooldownButton cooldown={3000} onClick={() => sendRequest()}>
+      Send it
+    </CooldownButton>
+  );
+}
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Idle label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Send it"` | Idle label used when no children are provided. |
+| `cooldown` | `number` | `3000` | Lockout duration in milliseconds after each click. Set to `0` to disable the cooldown. |
+| `taunts` | `string[]` | _5 defaults_ | Pool of messages; one is picked at random per cooldown. |
+| `showCountdown` | `boolean` | `true` | Append the remaining whole seconds to the taunt while locked. |
+| `onClick` | `(e) => void` | - | Fires immediately on a valid click, before the cooldown begins. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Disabled for the whole cooldown, so no double submits.

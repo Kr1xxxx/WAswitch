@@ -1,0 +1,44 @@
+---
+title: ChromeButton
+description: A metallic pill whose border is a ring of flowing liquid chrome around a solid face that follows the light or dark theme, with pill, compact, and icon sizes.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="ChromeButton" note="Hover and press">
+  <ChromeButton>Continue</ChromeButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/chrome-button</Cmd>
+
+## Usage
+
+```tsx
+import { ChromeButton } from "@/components/evil-buttons/chrome-button";
+
+export function ButtonDemo() {
+  return <ChromeButton onClick={() => console.log("Continue")}>Continue</ChromeButton>;
+}
+```
+
+## Props
+
+The component spreads native `button` props and forwards its ref.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Face content: label and icons. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Continue"` | Label used when no children are provided. |
+| `tone` | `"auto" \| "dark" \| "light"` | `"auto"` | `auto` follows the theme: white face normally, dark face inside a `.dark` ancestor (shadcn's convention). `dark` and `light` force one. |
+| `size` | `"default" \| "sm" \| "icon"` | `"default"` | Pill, compact pill, or a round icon-only button. Give icon buttons an `aria-label`. |
+| `speed` | `number` | `1` | Speed multiplier for the metal flowing around the ring. |
+| `interactive` | `boolean` | `true` | Swirl the metal around the pointer and speed it up on hover, and send a shock front through it on press. |
+| `className` | `string` | - | Extra classes merged onto the outer ring. |
+
+## Good to know
+
+- Self-contained WebGL, no extra dependencies.
+- Only animates while on screen and the tab is visible.

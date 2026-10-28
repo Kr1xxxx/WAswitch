@@ -1,0 +1,81 @@
+---
+title: AquaButton
+description: A glossy pill button inspired by Apple's Aqua interface, with layered highlights and a soft inner glow.
+category: Styles
+---
+
+## Preview
+
+<PreviewCard live title="AquaButton" note="Interactive">
+  <div className="flex gap-4">
+    <AquaButton variant="secondary">Cancel</AquaButton>
+    <AquaButton>Save</AquaButton>
+  </div>
+</PreviewCard>
+
+### Secondary
+
+<PreviewCard title="Secondary" note="Interactive">
+  <AquaButton variant="secondary">Cancel</AquaButton>
+</PreviewCard>
+
+### Icon Button
+
+Override the pill shape, padding, and min-width via `className` for a compact square icon button.
+
+<PreviewCard title="Icon Button" note="Interactive">
+  <AquaButton
+    aria-label="Show menu"
+    className="h-9 w-9 min-w-0 rounded-md px-0"
+  >
+    <svg width="11" height="11" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M1 3 L9 3 L5 8 Z" fill="currentColor" />
+    </svg>
+  </AquaButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/aqua-button</Cmd>
+
+## Usage
+
+```tsx
+import { AquaButton } from "@/components/evil-buttons/aqua-button";
+
+export function ButtonDemo() {
+  return (
+    <div className="flex gap-4">
+      <AquaButton variant="secondary">Cancel</AquaButton>
+      <AquaButton>Save</AquaButton>
+    </div>
+  );
+}
+
+export function IconButtonDemo() {
+  return (
+    <AquaButton
+      aria-label="Show menu"
+      className="h-9 w-9 min-w-0 rounded-md px-0"
+    >
+      <svg width="11" height="11" viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M1 3 L9 3 L5 8 Z" fill="currentColor" />
+      </svg>
+    </AquaButton>
+  );
+}
+```
+
+## Props
+
+| Prop        | Type                         | Default     | Description                                       |
+| ----------- | ---------------------------- | ----------- | ------------------------------------------------- |
+| `variant`   | `"primary" \| "secondary"`   | `"primary"` | Blue Aqua gel or adaptive silver/dark glass.      |
+| `className` | `string`                     | -           | Extra classes passed to the wrapper.              |
+| `children`  | `React.ReactNode`            | -           | The visible button label or content.              |
+
+All other `<button>` attributes (`onClick`, `disabled`, `type`, etc.) are forwarded.
+
+## Good to know
+
+- Scales with `font-size`: everything is in `em`.

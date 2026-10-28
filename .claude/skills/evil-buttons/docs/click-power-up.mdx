@@ -1,0 +1,56 @@
+---
+title: ClickPowerUp
+description: A bracketed button that arms on hover and powers up with an accent flash and bracket burst on every click.
+category: Utility
+---
+
+## Preview
+
+<PreviewCard live>
+  <ClickPowerUp>Deploy Doom</ClickPowerUp>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/click-powerup</Cmd>
+
+## Usage
+
+```tsx
+import { ClickPowerUp } from "@/components/evil-buttons/click-powerup";
+
+export function ButtonDemo() {
+  return (
+    <ClickPowerUp onClick={() => console.log("Powered up")}>
+      Launch
+    </ClickPowerUp>
+  );
+}
+```
+
+## Variants
+
+### Custom accent
+
+Swap the flash color and hold it a little longer.
+
+<PreviewCard>
+  <ClickPowerUp accentColor="#f59e0b" tapDuration={900}>Overdrive</ClickPowerUp>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | The button label or content. |
+| `tapDuration` | `number` | `500` | Milliseconds the powered-up flash lasts after a click. |
+| `accentColor` | `string` | `"#2CD4BD"` | Color of the powered-up flash. |
+| `onClick` | `(event) => void` | - | Fired on every click. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Works in light and dark themes out of the box.
+- Touch skips hover and goes straight to the press.
