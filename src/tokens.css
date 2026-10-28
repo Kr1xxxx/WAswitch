@@ -1,0 +1,7 @@
+/* 圆角和动效，全软件共用。每个页面都在 fonts.css 后面加载这个文件；CI 的 check:radius-motion 会检查。
+   圆角只有四档：6 标签和小控件；10 输入框、按钮、列表行；14 卡片和面板；圆形给角标、开关、进度条、转圈。
+   套在里面、贴着角的圆角要同心：内圆角 = 外圆角 − 内边距（14 − 8 = 6，10 − 4 = 6）。 */
+:root { --r-s: 6px; --r-m: 10px; --r-l: 14px; --r-full: 999px; }
+/* 动效只有一种：250ms ease-out，只动 opacity 和 transform。系统开了「减少动态效果」就不动 */
+:root { --fx: 250ms; --fx-ease: ease-out; }
+@media (prefers-reduced-motion: reduce) { :root { --fx: 0ms; } }
