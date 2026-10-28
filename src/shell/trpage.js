@@ -138,7 +138,8 @@ function tpOutPane(which) {
 function tpBuild() {
   tpLoadPrefs();
   const input = h('textarea', { class: 'tp-text', placeholder: '输入或粘贴文字', 'aria-label': '原文', spellcheck: 'false' });
-  input.addEventListener('input', () => { tpIdle(); tpLabels(); tpUpdate(); });
+  // 原文改了，上次翻译认出的语言就不算数了（Fable 审计 #224）
+  input.addEventListener('input', () => { tp.detected = ''; tpIdle(); tpLabels(); tpUpdate(); });
   input.addEventListener('keydown', (e) => {
     // 输入法还在选字（Windows 上是 keyCode 229）时回车不算
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -223,7 +224,7 @@ function tpLabels() {
   const ui = tp.ui;
   const text = ui.input.value;
   // “自动”那一项显示的是选自动时会得到什么，不受另一边手动选的影响
-  const srcAuto = text.trim() ? (ReplyLang.isChinese(text) ? '中文' : tp.detected) : '';
+  const srcAuto = text.trim() ? (ReplyLang.isChinese(text) ? '中文' : tp.detected || tpDetect(text)) : '';
   const r = ReplyLang.pick({ text, src: tp.src, manual: '', autoTarget: '英语' });
   const fill = (sel, autoLabel, list, cur) => {
     const want = ['__auto', ...list].join('|');
@@ -564,9 +565,12 @@ async function tpFix(which) {
 }
 
 // ⇄：原文语言和目标语言对调；有译文就把译文换到左边当原文
+// 还没翻过时没有 detected，先在本机认一下原文语言，不然德语会被当成认不出、对调成 中文 → 英语
 function tpSwap() {
   const ui = tp.ui;
-  const next = ReplyLang.swap({ text: ui.input.value, src: tp.src || tp.detected, manual: tp.tgt, autoTarget: '英语' });
+  const text = ui.input.value;
+  const src = tp.src || tp.detected || (ReplyLang.isChinese(text) ? '' : tpDetect(text));
+  const next = ReplyLang.swap({ text, src, manual: tp.tgt, autoTarget: '英语' });
   tp.src = next.src;
   tp.tgt = next.manual;
   if (ui.o1.box.value.trim()) {
@@ -580,6 +584,12 @@ function tpSwap() {
   tpUpdate();
   tpFx(ui.swap.firstChild, 'tp-fx-turn');
   tpFx(ui.input);
+}
+
+// 认出的语言不在下拉里（服务商不支持）就当认不出
+function tpDetect(text) {
+  const l = typeof LangDetect !== 'undefined' ? LangDetect.detectLang(text) : '';
+  return tpLangs().includes(l) ? l : '';
 }
 
 async function tpLoadCfg() {
