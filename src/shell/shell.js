@@ -345,7 +345,11 @@ function groupHead(g) {
     const commit = (name) => { if (done) return; done = true; window.wa.groupRename(g.id, name); };
     const input = h('input', {
       class: 'group-name', value: g.name, maxlength: '20', 'aria-label': '分组名称',
-      onkeydown: (e) => { if (e.key === 'Enter') commit(input.value); if (e.key === 'Escape') commit(g.name); },
+      onkeydown: (e) => {
+        if (e.isComposing || e.keyCode === 229) return; // 输入法还在选字，这个回车是上屏，不算改完
+        if (e.key === 'Enter') commit(input.value);
+        if (e.key === 'Escape') commit(g.name);
+      },
       onblur: () => commit(input.value),
     });
     requestAnimationFrame(() => { input.focus(); input.select(); });
@@ -1146,7 +1150,7 @@ function trKeysBox(c, apply) {
       return { ok: !!t.ok };
     };
     const saveBtn = morphBtn(`trKeySave:${trKeyMorph[p.id] || p.rowId}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
-    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') saveBtn.click(); });
+    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.isComposing && ev.keyCode !== 229) saveBtn.click(); });
     if (trKeyFocus === p.rowId) requestAnimationFrame(() => { if (trKeyFocus !== p.rowId || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
     const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
     const roles = p.id ? [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null] : [];
@@ -1167,7 +1171,7 @@ function trCapInput(c) {
 }
 function trCapBox(c, apply) {
   const box = trCapInput(c);
-  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') box.blur(); });
+  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.isComposing && ev.keyCode !== 229) box.blur(); });
   box.addEventListener('change', async () => {
     const r = await window.wa.trDeeplCap(Number(box.value));
     trSay = r.error || 'DeepL 每月上限已保存';
@@ -1233,7 +1237,7 @@ function translatePage(page) {
   netSel.value = netMode;
   const proxyIn = h('input', { id: 'tr-net-url', 'aria-label': '翻译代理地址', value: netUrl, placeholder: 'http://127.0.0.1:7890', style: { width: '200px', flex: 'none' },
     oninput: (e) => { if (trNetDraft) trNetDraft.url = e.target.value; },
-    onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+    onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) e.target.blur(); },
     onblur: (e) => {
       if (trNetBusy || !e.target.isConnected) return;
       const url = e.target.value;
@@ -2172,7 +2176,10 @@ function lockPage() {
   };
   thumb.addEventListener('pointerup', end);
   thumb.addEventListener('pointercancel', end);
-  thumb.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); unlock(); } });
+  thumb.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); unlock(); }
+  });
   lockEl = h('div', { class: 'lockpage' },
     h('div', { class: 'lock-card' },
       h('span', { class: 'lock-icon' }, icon('lock', 22)),
