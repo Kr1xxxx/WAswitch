@@ -25,9 +25,10 @@ function retryAfterMs(v, now = Date.now()) {
   return Number.isFinite(t) ? Math.max(0, t - now) : null;
 }
 // 第 n 次重试（从 0 起）前等多久。after = 服务商说的 Retry-After（毫秒）；rand() 在 [0, 1)
-// 有 Retry-After 只往后加随机（不早于服务商说的），没有就在指数退避上下浮动
+// 有 Retry-After 只往后加随机（不早于服务商说的），没有就在指数退避上下浮动。
+// Retry-After 是 0 或已经过去的日期（两边时钟不准）当没给，免得几毫秒内连发 3 次
 function backoffMs(n, after, base = RETRY_MS, rand = Math.random) {
-  if (Number.isFinite(after) && after >= 0) return Math.round(after * (1 + RETRY_JITTER * rand()));
+  if (Number.isFinite(after) && after > 0) return Math.round(after * (1 + RETRY_JITTER * rand()));
   return Math.round(base * 2 ** n * (1 + RETRY_JITTER * (2 * rand() - 1)));
 }
 const MAX_PROVIDERS = 10;

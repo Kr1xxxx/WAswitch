@@ -36,7 +36,7 @@ app.whenReady().then(async () => {
   await js(() => window.__wait({ lane: 'dock', ms: 3000 }));
   await wait(50);
   assert.strictEqual((await goText()).text, '翻译中', '工作台的倒计时不该出现在翻译页');
-  await js(() => window.__wait({ lane: 'page', ms: 2600 }));
+  await js(() => window.__wait({ lane: 'page', ms: 2900 }));
   await wait(50);
   g = await goText();
   assert.deepStrictEqual(g, { st: 'busy', text: '3 秒后重试' }, JSON.stringify(g));
@@ -62,6 +62,24 @@ app.whenReady().then(async () => {
   g = await goText();
   assert(g.st !== 'busy' && !/秒/.test(g.text), JSON.stringify(g));
   await wait(2000); // 等「已翻译」回到「翻译」
+  // 纠错按钮倒计时不折行（Fable 审计 #246 必修）：中文翻成英语才有纠错
+  await js(() => { const t = document.querySelector('.tp-in .tp-text'); t.value = '这顶假发周五前能到柏林吗？'; t.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.tp-go').click(); });
+  await wait(100);
+  assert(await js(() => window.__release('Can this wig reach Berlin by Friday?')));
+  await wait(50);
+  assert(await js(() => window.__release('Will this wig arrive in Berlin before Friday?')));
+  await wait(2200);
+  await js(() => document.querySelector('.tp-fix').click());
+  await wait(100);
+  await js(() => window.__wait({ lane: 'page', ms: 2900 }));
+  await wait(50);
+  const fx = await js(() => { const b = document.querySelector('.tp-fix'); const sp = b.querySelector('.mb-busy'); return { st: b.dataset.st, text: sp.textContent, h: sp.getBoundingClientRect().height, bh: b.clientHeight, sw: b.scrollWidth, cw: b.clientWidth }; });
+  assert.strictEqual(fx.st, 'busy', JSON.stringify(fx));
+  assert.strictEqual(fx.text, '3 秒后重试', JSON.stringify(fx));
+  assert(fx.cw > 0 && fx.h > 0 && fx.h < 24 && fx.sw <= fx.cw, `纠错按钮倒计时折行或溢出 ${JSON.stringify(fx)}`);
+  await shot('fix-wait');
+  await js(() => document.querySelector('.tp-fix').click()); // 取消
+  await wait(150);
   // 下一次转圈还是「翻译中」
   await js(() => document.querySelector('.tp-go').click());
   await wait(100);
@@ -91,7 +109,7 @@ app.whenReady().then(async () => {
   await js(() => window.__wait({ lane: 'page', ms: 3000 }));
   await wait(50);
   assert.strictEqual(await dockBtn(), '翻译中… 取消', '翻译页的倒计时不该出现在工作台');
-  await js(() => window.__wait({ lane: 'dock', ms: 2600 }));
+  await js(() => window.__wait({ lane: 'dock', ms: 2900 }));
   await wait(50);
   assert.strictEqual(await dockBtn(), '3 秒后重试… 取消');
   await shot('dock-wait');

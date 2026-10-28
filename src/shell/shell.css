@@ -738,7 +738,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-text::-webkit-scrollbar-thumb { background: var(--s7); border-radius: var(--r-full); }
 /* 按钮里的文字层自己设了 visible，所以要连子元素一起藏 */
 .tp-copy.tp-empty, .tp-pane .tp-copy.tp-empty[data-st] > span { visibility: hidden; }
-.tp-fix { width: 80px; background: transparent; color: var(--s12); font-weight: 400; }
+.tp-fix { min-width: 80px; padding: 0 10px; background: transparent; color: var(--s12); font-weight: 400; }
 .tp-fix:hover:not(:disabled) { background: var(--s3); }
 .tp-fix[data-st="ok"] { color: var(--g11); }
 .tp-fix[data-st="err"] { color: var(--r11); }
@@ -786,7 +786,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-fx-turn { animation: tp-turn var(--fx) var(--fx-ease); }
 /* ---------- 状态按钮（shell.js 的 morphBtn）：转圈 → ✓ / ✗，几种文字叠在同一格，宽度不跳 ---------- */
 .morph { display: inline-grid; place-items: center; }
-.morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; }
+.morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; white-space: nowrap; }
 .morph svg { width: 1em; height: 1em; }
 .morph[data-st="idle"] > .mb-idle, .morph[data-st="busy"] > .mb-busy, .morph[data-st="ok"] > .mb-ok, .morph[data-st="err"] > .mb-err { visibility: visible; }
 .morph.mb-anim[data-st] > span { animation: mb-in var(--fx) var(--fx-ease); }

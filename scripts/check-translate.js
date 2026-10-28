@@ -88,6 +88,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   // HTTP 日期格式的 Retry-After 也认
   assert(Math.abs(T.retryAfterMs(new Date(Date.now()+5000).toUTCString())-5000)<=1500); assert.equal(T.retryAfterMs('3'),3000); assert.equal(T.retryAfterMs('soon'),null); assert.equal(T.retryAfterMs(''),null);
   assert.equal(T.backoffMs(2,null,1500,()=>0.5),6000); assert.equal(T.backoffMs(0,null,1500,()=>0),1275); assert.equal(T.backoffMs(0,4000,1500,()=>0),4000);
+  assert.equal(T.backoffMs(1,0,1500,()=>0.5),3000); // Retry-After 0 或过去的日期：当没给
   // 要等超过 20 秒的不等，直接换备用
   waits=[]; behave=[{...busy,headers:{'retry-after':'60'}},null]; calls=[];
   t0=Date.now();
