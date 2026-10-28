@@ -123,7 +123,9 @@ function syncNarrow() {
 }
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
-const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+// 账号颜色（Radix 9 号实色，见 src/colors/radix.js）
+const RADIX = require('./colors/radix');
+const COLORS = RADIX.ACCOUNT_COLORS;
 // 账号头像的 emoji（打包在 src/emoji 里）
 const EMOJI = require('./emoji/list');
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
@@ -318,7 +320,7 @@ function loadAccounts() {
     // 手机号：登录后自动读到的，或用户在编辑里自己填的（phoneManual）。同样只在本机显示，不给 MCP
     acc.phone = cleanPhone(acc.phone);
     acc.phoneManual = acc.phoneManual === true && !!acc.phone;
-    acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
+    acc.color = RADIX.accountColor(acc.color) || COLORS[i % COLORS.length]; // 0.5.12 以前的旧颜色换成同位置的新颜色
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
@@ -1409,7 +1411,7 @@ async function unparkAccount(acc) {
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
   const acc = {
-    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: RADIX.accountColor(seat.color) || nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
@@ -2613,7 +2615,7 @@ app.whenReady().then(async () => {
   const winH = Math.max(600, Math.min(960, Math.round(wa.height * 0.92)));
   win = new BaseWindow({
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
-    title: 'WAswitch', backgroundColor: '#E6E9ED',
+    title: 'WAswitch', backgroundColor: RADIX.hex('slate', 3),
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
     ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),

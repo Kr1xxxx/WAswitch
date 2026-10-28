@@ -4,30 +4,25 @@
 /* 细线：边框、分割线、描边统一用 --hair。高分屏 0.5px；普通屏（如 Windows 100% 缩放）用 1px，避免线变淡或消失 */
 :root { --hair: 1px; }
 @media (min-resolution: 2dppx) { :root { --hair: .5px; } }
+/* 颜色用 Radix 变量（src/colors/radix.css）；深色时 radix-dark.css 换成 Radix 深色色阶，这里只改底色和阴影 */
 :root {
-  --nt-bg: rgba(248, 248, 250, .97);
-  --nt-solid: #F6F6F8;
-  --nt-ink: #121316;
-  --nt-sub: #5B606A;
-  --nt-line: rgba(0, 0, 0, .1);
-  --nt-btn: rgba(0, 0, 0, .06);
-  --nt-btn-h: rgba(0, 0, 0, .11);
-  --nt-shadow: 0 10px 28px rgba(20, 24, 32, .2), 0 1px 3px rgba(20, 24, 32, .14);
-  --wa: #128C7E;
-  --wa-ink: #fff;
+  --nt-bg: var(--slate-2);
+  --nt-solid: var(--slate-2);
+  --nt-ink: var(--slate-12);
+  --nt-sub: var(--slate-11);
+  --nt-line: var(--slate-a6);
+  --nt-btn: var(--slate-a3);
+  --nt-btn-h: var(--slate-a4);
+  --nt-shadow: 0 10px 28px var(--black-a3), 0 1px 3px var(--black-a2);
+  --wa: var(--green-9);
+  --wa-ink: var(--white);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --nt-bg: rgba(44, 45, 50, .97);
-    --nt-solid: #2C2D32;
-    --nt-ink: #F2F3F5;
-    --nt-sub: #A9AEB6;
-    --nt-line: rgba(255, 255, 255, .1);
-    --nt-btn: rgba(255, 255, 255, .09);
-    --nt-btn-h: rgba(255, 255, 255, .15);
-    --nt-shadow: 0 10px 28px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .45);
-    --wa: #1FAF5A;
+    --nt-bg: var(--slate-4);
+    --nt-solid: var(--slate-4);
+    --nt-shadow: 0 10px 28px var(--black-a7), 0 1px 3px var(--black-a6);
     color-scheme: dark;
   }
 }
@@ -50,11 +45,11 @@ body { font: var(--fs-m)/1.4 var(--font-ui); color: var(--nt-ink); user-select: 
 .top { display: flex; gap: 11px; min-width: 0; }
 .av {
   width: 42px; height: 42px; border-radius: var(--r-full); flex: none; position: relative;
-  display: grid; place-items: center; color: #fff; font-weight: 600; font-size: var(--fs-l); letter-spacing: .02em;
+  display: grid; place-items: center; color: var(--white); font-weight: 600; font-size: var(--fs-l); letter-spacing: .02em;
 }
 .av.lock { background: var(--nt-btn-h); color: var(--nt-sub); }
 .av.logo { background: transparent; }
-.av.logo svg.big { width: 42px; height: 42px; border-radius: var(--r-m); }
+.av.logo img.big { width: 42px; height: 42px; border-radius: var(--r-m); }
 .av .badge { position: absolute; right: -3px; bottom: -3px; width: 18px; height: 18px; border-radius: var(--r-s); border: 1.5px solid var(--nt-solid); box-sizing: content-box; }
 .body { display: grid; gap: 2px; min-width: 0; flex: 1; }
 .line1 { display: flex; gap: 6px; align-items: center; min-width: 0; }
@@ -81,7 +76,7 @@ time { margin-left: auto; color: var(--nt-sub); font-size: var(--fs-s); white-sp
   position: absolute; top: -7px; left: -7px; width: 20px; height: 20px; border-radius: var(--r-full);
   border: var(--hair) solid var(--nt-line); background: var(--nt-solid); color: var(--nt-sub);
   font-size: var(--fs-s); line-height: 18px; text-align: center; padding: 0; opacity: 0; transition: opacity var(--fx) var(--fx-ease);
-  cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+  cursor: pointer; box-shadow: 0 1px 3px var(--black-a3);
 }
 .nt:hover .x { opacity: 1; }
 .win .x { left: auto; right: 6px; top: 6px; background: transparent; border: 0; box-shadow: none; }
@@ -89,6 +84,6 @@ time { margin-left: auto; color: var(--nt-sub); font-size: var(--fs-s); white-sp
 
 .more {
   font-size: var(--fs-s); color: var(--nt-ink); background: var(--nt-bg); border: var(--hair) solid var(--nt-line);
-  border-radius: var(--r-full); padding: 4px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, .14);
+  border-radius: var(--r-full); padding: 4px 10px; box-shadow: 0 2px 8px var(--black-a3);
   display: flex; gap: 8px; align-items: center;
 }

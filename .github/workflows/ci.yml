@@ -38,6 +38,8 @@ jobs:
         run: npm run check:font-sizes
       - name: 圆角和动效检查（6 / 10 / 14 / 圆形，250ms ease-out）
         run: npm run check:radius-motion
+      - name: 颜色检查（只用 Radix UI Colors）
+        run: npm run check:colors
       - name: 账号图标 emoji 自检
         run: npm run check:emoji
       - name: 悬浮翻译自检

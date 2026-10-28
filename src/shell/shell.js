@@ -2,7 +2,7 @@
 // WhatsApp 页面本身是主进程叠在卡片上面的独立视图，这里不碰它。
 // 所有来自用户或账号的数据一律用 textContent 显示，不拼 HTML。
 
-const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+const COLORS = RADIX.ACCOUNT_COLORS; // src/colors/radix.js
 const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
 // 代理预设：直连 + Clash 本机端口（7891–7893 一直显示，7890–7899 里别的端口开着或被别的号用着才显示）+ 带密码模板
 const PORT_DEFAULT = [7891, 7892, 7893];
@@ -263,11 +263,11 @@ function avatarOf(a, extra = '') {
   return h('span', { class: `avatar${img ? ' emoji' : ''}${extra}`, style: img ? null : { background: a.color } }, img || a.name.trim().charAt(0) || '?');
 }
 // 列表里名字前面的小图标（以前是颜色小方块）
-const mini = (a) => emojiImg(a, 16) || h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } });
+const mini = (a) => emojiImg(a, 16) || h('span', { class: 'sw', style: { background: a ? a.color : 'var(--slate-7)' } });
 
 function tint(color) {
-  // 背景 = 账号颜色 22% + 浅灰
-  return color ? `color-mix(in srgb, ${color} 22%, #EEF0F3)` : '#E6E9ED';
+  // 窗口底色 = 账号同色系的 3 号（Radix 的浅底色），没有账号时用 slate 3
+  return `var(--${RADIX.accountFamily(color)}-3)`;
 }
 
 // ---------- 侧栏 ----------
@@ -330,7 +330,7 @@ function accountRow(acc) {
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
     sub ? h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, sub) : null),
-  quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
+  quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: 'var(--slate-11)' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
   draggable(row, acc.id);
   dropOn(row, acc.groupId || '', acc.id);
@@ -1341,7 +1341,7 @@ function renderPanel(force = false) {
 
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), text ? h('small', null, text) : null));
-  return h('div', { class: 'center', style: { background: '#fff' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
+  return h('div', { class: 'center', style: { background: 'var(--white)' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
     h('h1', null, '一个窗口，同时登录多个 WhatsApp'),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色'),
@@ -1406,7 +1406,7 @@ function editorPage(id) {
     addTzOption(d.region, d.regionLabel);
     region.value = d.region;
     const tags = h('div', { class: 'tags' });
-    const error = h('div', { class: 'hint', role: 'alert', style: { color: '#B42318', minHeight: '18px' } });
+    const error = h('div', { class: 'hint', role: 'alert', style: { color: 'var(--red-11)', minHeight: '18px' } });
     const swatches = h('div', { class: 'swatches' });
     const presets = h('div', { class: 'presets' });
     const testKey = `editorTest:${d.id || 'new'}:${s.editorNonce}`;
@@ -1503,7 +1503,7 @@ function editorPage(id) {
     const names = (list) => (list || []).map((n) => `「${n}」`).join('、');
     const webOthers = names(d.otherDirect);
     const liteOthers = names(d.otherLiteDirect);
-    const liteDirectHint = h('span', { class: 'hint', style: { color: '#B54708' } });
+    const liteDirectHint = h('span', { class: 'hint', style: { color: 'var(--amber-11)' } });
     const drawLiteDirect = () => {
       const direct = !proxyInput.value.trim();
       const lite = mode === 'lite';
@@ -1921,7 +1921,7 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
-        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
+        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => { settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹'),
@@ -2163,7 +2163,7 @@ function render(forceContent = false) {
   document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
   const acc = active();
   if (s.page !== 'editor') liveColor = null;
-  document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(liveColor || s.editorColor) : '#E6E9ED';
+  document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(liveColor || s.editorColor) : 'var(--slate-3)';
   renderSide();
   renderAi();
   renderTop();
