@@ -330,7 +330,7 @@ function tpUpdate() {
   tpQuota();
 }
 
-// 右上角：三个翻译服务商，填了密钥才算已启用。智谱、混元免费不限量；DeepL 每个密钥每月 10 万字符（本机记数，每月 1 号清零）
+// 右上角：三个翻译服务商，填了密钥才算已启用。智谱、混元免费不限量；DeepL 每个使用者每月 10 万字符（换密钥也接着算，每月 1 号清零）
 const TP_PROVS = [['zhipu', '智谱'], ['hunyuan', '腾讯混元'], ['deepl', 'DeepL']];
 function tpWan(n) {
   if (n < 1000) return String(n);

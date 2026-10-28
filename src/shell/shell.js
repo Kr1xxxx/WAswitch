@@ -1038,6 +1038,7 @@ function trProviderForm() {
   // DeepL 是机器翻译：没有地址、模型、深度思考可选；各类型的说明也不一样，换类型时重画表单
   const deepl = preset.value === 'deepl';
   preset.addEventListener('change', () => render(true));
+  const capIn = deepl ? trCapInput(tr.cfg) : null;
   return h('div', { class: 'box tr-form' },
     h('b', null, e.id ? '修改服务商' : '添加服务商'),
     setRow('类型', deepl ? 'DeepL 不按模式改语气，也不会纠错。' : '', preset),
@@ -1047,9 +1048,10 @@ function trProviderForm() {
     setRow('API 密钥', preset.value === 'hunyuan' ? '填腾讯云 TokenHub 的密钥。' : '', key,
       preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '', think),
+    deepl ? setRow('每月上限', '', h('label', { class: 'tr-cap' }, capIn, '字符')) : null,
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
       h('button', { class: 'btn primary', onclick: async () => {
-        const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value });
+        const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value, ...(capIn ? { monthCap: Number(capIn.value) } : {}) });
         tr.cfg = r.config; tr.modes = r.modes;
         if (r.error) { trSay = r.error; } else { trSay = '已保存'; trEdit = null; }
         render(true);
@@ -1118,6 +1120,7 @@ function trKeysBox(c, apply) {
     if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
     const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
     const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
+    const cap = p.preset === 'deepl' ? trCapBox(c, apply) : null;
     return h('div', { class: 'tr-krow' },
       h('div', { class: 'meta' },
         h('span', { class: 'title' }, h('b', null, p.name), ...roles),
@@ -1126,8 +1129,23 @@ function trKeysBox(c, apply) {
         link),
       h('span', { class: 'hstack', style: { gap: '6px' } }, key,
         saveBtn,
-        trTestBtn(p, { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥' })));
+        trTestBtn(p, { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥' })),
+      cap);
   }));
+}
+// DeepL 每月字符上限（整个软件一个，默认 10 万）：改完离开输入框或按回车就保存
+function trCapInput(c) {
+  return h('input', { type: 'number', class: 'tr-cap-in', min: '1000', step: '1000', value: String(c.deeplCap || 100000), 'aria-label': 'DeepL 每月字符上限' });
+}
+function trCapBox(c, apply) {
+  const box = trCapInput(c);
+  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') box.blur(); });
+  box.addEventListener('change', async () => {
+    const r = await window.wa.trDeeplCap(Number(box.value));
+    trSay = r.error || 'DeepL 每月上限已保存';
+    apply(r);
+  });
+  return h('label', { class: 'tr-cap' }, '每月上限', box, '字符');
 }
 // 服务商「测试」：结果在按钮上显示，没通过的原因写在服务商下面
 function trTestBtn(p, attrs) {
