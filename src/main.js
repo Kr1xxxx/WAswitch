@@ -3195,6 +3195,7 @@ onShell('update:install', () => { if (!updater) return; if (updater.state.manual
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  selTr.shutdown(); // 选中文字的按钮/译文窗先拆掉，退出时不再处理账号页面的鼠标事件
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
   if (trIpc.trStore) trIpc.trStore.flush(); // 还没写盘的译文

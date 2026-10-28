@@ -48,6 +48,9 @@ function quietKey(ev) {
 //   translate(text) -> Promise<{ text } | { error }>
 //   copy(text)
 //   focus() -> 键盘焦点还给当前账号页面
+// 退出软件拆视图时 view.webContents 可能已经是 undefined：一律先看它还在不在
+const wcOk = (v) => !!v && !!v.webContents && !v.webContents.isDestroyed();
+
 function createSelTranslate(deps) {
   let view = null;
   let ready = false;
@@ -55,9 +58,10 @@ function createSelTranslate(deps) {
   let shown = null;
   let seq = 0; // 每次按下/滚动/新的松开 +1：读选区、翻译期间又动了就作废
   let idleTimer = null;
+  let stopped = false; // 软件在退出：不再建视图
 
   function ensureView() {
-    if (view && !view.webContents.isDestroyed()) return view;
+    if (wcOk(view)) return view;
     ready = false;
     view = new WebContentsView({
       webPreferences: { preload: path.join(__dirname, 'seltr', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
@@ -78,13 +82,13 @@ function createSelTranslate(deps) {
     ready = false;
     shown = null;
     try { deps.win().contentView.removeChildView(v); } catch {}
-    if (!v.webContents.isDestroyed()) v.webContents.close();
+    if (wcOk(v)) v.webContents.close();
   }
   function hide() {
     seq += 1;
     if (!shown) return;
     shown = null;
-    if (view && !view.webContents.isDestroyed()) {
+    if (wcOk(view)) {
       // 焦点在按钮/译文窗上（点过它）：还给聊天页，不然收起后打字没反应
       const hadFocus = view.webContents.isFocused();
       view.setVisible(false);
@@ -96,7 +100,7 @@ function createSelTranslate(deps) {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(closeView, IDLE_CLOSE_MS);
   }
-  const alive = () => !!view && !view.webContents.isDestroyed();
+  const alive = () => wcOk(view);
   function push() {
     if (!alive() || !ready || !shown) return;
     view.webContents.send('seltr:state', shown.mode === 'card' ? { mode: 'card', ...shown.st } : { mode: 'button' });
@@ -109,10 +113,11 @@ function createSelTranslate(deps) {
   }
   // 新建的视图页面画好（seltr:ready）才显示，不闪一块空白；3 秒还没好（或期间又动了鼠标键盘）就这次不显示
   async function waitReady(v) {
-    for (let i = 0; i < 120 && !ready && v === view && !v.webContents.isDestroyed(); i += 1) await new Promise((r) => setTimeout(r, 25));
-    return ready && v === view && !v.webContents.isDestroyed();
+    for (let i = 0; i < 120 && !ready && v === view && wcOk(v); i += 1) await new Promise((r) => setTimeout(r, 25));
+    return ready && v === view && wcOk(v);
   }
   async function show(next) {
+    if (stopped) return false;
     const run = seq;
     const v = ensureView();
     clearTimeout(idleTimer);
@@ -134,7 +139,7 @@ function createSelTranslate(deps) {
   async function locate(id, wc) {
     const sel = await deps.readSelection(wc);
     const pageView = deps.viewOf(id);
-    if (!sel || !pageView || pageView.webContents !== wc) return null;
+    if (!sel || stopped || wc.isDestroyed() || !pageView || pageView.webContents !== wc) return null;
     return { id, text: sel.text, at: JSON.stringify(pageView.getBounds()), sel, zoom: wc.getZoomFactor() };
   }
 
@@ -168,6 +173,7 @@ function createSelTranslate(deps) {
   // 账号页面上的鼠标和键盘（主进程看得到，页面里不挂监听）
   function watch(id, wc) {
     wc.on('input-event', (_e, ev) => {
+      if (stopped || wc.isDestroyed()) return;
       const t = ev && ev.type;
       if (t === 'mouseUp') {
         if (ev.button && ev.button !== 'left') return;
@@ -222,7 +228,14 @@ function createSelTranslate(deps) {
   });
   ipcMain.on('seltr:hide', (e) => { if (fromView(e)) hide(); });
 
-  return { watch, hide, sync, fromMenu, close: closeView, get shown() { return shown ? { id: shown.id, text: shown.text, mode: shown.mode } : null; } };
+  // 退出软件时调（main.js 的 before-quit）：拆掉视图，之后不再响应
+  function shutdown() {
+    stopped = true;
+    seq += 1;
+    closeView();
+  }
+
+  return { watch, hide, sync, fromMenu, close: closeView, shutdown, get shown() { return shown ? { id: shown.id, text: shown.text, mode: shown.mode } : null; } };
 }
 
 module.exports = { createSelTranslate, placeBox, placeButton, quietKey, BTN, CARD_W, PAD };
