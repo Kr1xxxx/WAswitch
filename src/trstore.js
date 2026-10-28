@@ -84,6 +84,7 @@ class TrStore {
     if (!e || !Array.isArray(list)) return;
     const next = list.slice(-VIEW_MAX).map(({ h, k, t }) => ({ h, k, t: t || '' }));
     const prev = e.data[VIEW_KEY];
+    if (!prev && !next.length) return; // 打开过、没有收到消息的对话：不为它建文件
     if (prev && JSON.stringify(prev.list) === JSON.stringify(next)) return;
     e.data[VIEW_KEY] = { at: Date.now(), list: next };
     this.touch(e);

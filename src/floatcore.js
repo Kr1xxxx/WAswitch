@@ -4,7 +4,7 @@
 // 译文另外永久存到磁盘（deps.store，见 trstore.js）：切回对话、重启都直接显示，不再调模型。
 // 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（只有译文，没有原文）。
 const crypto = require('crypto');
-const { textKey } = require('./trstore');
+const { textKey, VIEW_MAX } = require('./trstore');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，只补翻最近 5 条
@@ -12,7 +12,7 @@ const PER_MINUTE = 20;
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
-const KEEP_VIEW = 40; // 读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
+const KEEP_VIEW = VIEW_MAX; // 40（和 trstore.js 存的条数一样）。读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
 // 从最近消息里截上下文：这条消息之前的几条；这条不在里面就不给（别的对话的内容不能串进来）
 function contextFrom(list, h) {
