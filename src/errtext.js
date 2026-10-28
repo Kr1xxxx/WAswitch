@@ -14,7 +14,7 @@ function rawOf(e) {
   if (c && typeof c === 'object') parts.push(c.code || '', c.message || '');
   else if (c) parts.push(String(c));
   if (e.code && !parts.join(' ').includes(e.code)) parts.push(e.code);
-  return parts.filter(Boolean).join(' · ').split('\n')[0].slice(0, 300);
+  return parts.filter(Boolean).join('; ').split('\n')[0].slice(0, 300);
 }
 
 // Chromium 的 ERR_XXX 和 Node 的 EXXX 归成几类

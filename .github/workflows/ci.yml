@@ -21,6 +21,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: 界面文字不用中点「·」分隔
+        run: npm run check:middot
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: MCP 自检
         run: npm run check:mcp
@@ -32,10 +34,14 @@ jobs:
         run: npm run check:translate
       - name: 客户当地时间自检
         run: npm run check:customer-time
+      - name: 字号自检（最多四种，最小 12px）
+        run: npm run check:font-sizes
       - name: 悬浮翻译自检
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
+      - name: 删除不弹确认、撤销提示自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归

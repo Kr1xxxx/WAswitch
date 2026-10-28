@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
+    "check:middot": "node scripts/check-no-middot.js",
     "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-search.js && node scripts/check-mcp-customer-search.js && node scripts/check-mcp-helpers.js && node scripts/check-mcp-customers.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
     "check:lite": "node scripts/run-check-lite.js",
@@ -24,12 +25,13 @@
     "check:ports": "node scripts/check-ports.js && node scripts/check-proxy-pass.js",
     "check:atomic": "node scripts/check-atomic.js && node scripts/check-account-id.js",
     "check:editor": "node scripts/check-editor-save.js",
-    "check:records": "node scripts/check-records.js",
+    "check:records": "node scripts/check-records.js && node scripts/check-undo.js",
     "check:import": "node scripts/check-import.js",
     "check:downloads": "node scripts/check-downloads.js",
-    "check:translate": "node scripts/check-translate.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
+    "check:translate": "node scripts/check-translate.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
     "check:customer-time": "node scripts/check-customer-time.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
+    "check:font-sizes": "node scripts/check-font-sizes.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"

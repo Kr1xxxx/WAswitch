@@ -66,6 +66,16 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   behave=[busy,busy,null]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===3, JSON.stringify(q));
   // 全都忙：中文提示，不带英文原话
+  // 翻译页指定服务商：只用它，失败也不换备用；找不到就报错，不偷偷用默认的
+  const pinId=tr.load().fallbackId;
+  behave=[null]; calls=[];
+  q=await tr.translate({text:'你好',mode,providerId:pinId});
+  assert(q.text==='Hola' && !q.fallback && calls[0].url.startsWith('https://open.bigmodel.cn'), JSON.stringify(q));
+  behave=['net',null]; calls=[];
+  q=await tr.translate({text:'你好',mode,providerId:pinId});
+  assert.equal(q.kind,'network'); assert.equal(calls.length,1);
+  calls=[]; q=await tr.translate({text:'你好',mode,providerId:'gone'});
+  assert.equal(q.kind,'config'); assert.equal(calls.length,0);
   behave=[busy,busy,busy,busy]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert(!/busy|capacity/i.test(q.error) && /忙/.test(q.error), q.error);
   // 429 但说的是余额不足：不重试
@@ -241,6 +251,48 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
+  // 假发词汇：默认关；打开后跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
+  assert.equal(t4.publicConfig().wigTerms,false); assert.equal(t4.roleText(),'贴牌 = private label');
+  assert.equal(t4.publicConfig().wigList.length,8);
+  assert(t4.setWigTerms(true).ok);
+  let rt=t4.roleText();
+  assert(rt.startsWith('贴牌 = private label\n\n'));
+  for (const l of ['配件 = Closure','前头 = Frontal','发帘 = Bundle','头套 = Wig','全蕾丝头套 = Full lace wig','胶片发 = Tape hair','辫发 = Raw hair','处女发 = Virgin hair']) assert(rt.split('\n').includes(l),l);
+  // 头套排第一行（glm-4-flash 实测排在全蕾丝头套后面会翻错），wig 不译假发点名说了
+  assert(rt.indexOf('头套 = Wig')<rt.indexOf('全蕾丝头套 = Full lace wig') && rt.indexOf('全蕾丝头套 = Full lace wig')<rt.indexOf('配件 = Closure'),rt);
+  assert(rt.includes('wig 一律译成头套，不译成假发'));
+  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('处女发 = Virgin hair'));
+  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().wigTerms,true);
+  rt=T.roleWithWig('配件 = Accessory\n假发 = wig',true);
+  assert(!rt.includes('配件 = Closure') && !rt.includes('头套 = Wig') && !rt.includes('Wig → 头套') && rt.includes('前头 = Frontal'),rt);
+  assert(!rt.includes('不译成假发'),rt); // 用户自己定了 wig 的译法，就不再说 wig 要译成头套
+  // 用户把英文写在左边、或中文写在右边，也算定过这个词
+  rt=T.roleWithWig('Closure = 封口\nhair bundle = 发帘',true);
+  assert(!rt.includes('配件 = Closure') && !rt.includes('发帘 = Bundle') && rt.includes('头套 = Wig'),rt);
+  assert(T.roleWithWig('',true).startsWith('假发行业固定译法'));
+  assert.equal(T.roleWithWig('x',false),'x');
+  // 用户把 8 个词全定了：词表一行不加，角色设定原样
+  const all8='头套 = a\n全蕾丝头套 = b\n配件 = c\n前头 = d\n发帘 = e\n胶片发 = f\n辫发 = g\n处女发 = h';
+  assert.equal(T.roleWithWig(all8,true),all8);
+  const wm=T.buildMessages({prompt:'p'},'I want a closure',{target:'中文'},undefined,'','hy-mt2-plus',T.roleWithWig('',true));
+  assert(wm[0].content.includes('Closure 翻译成 配件') && wm[0].content.includes('Virgin hair 翻译成 处女发') && !wm[0].content.includes('假发行业'),wm[0].content);
+  assert.equal(T.glossaryPairs(T.roleWithWig('',true),false).length,8); // 反方向的箭头行混元不当词条
+  assert(T.roleWithWig('',true).includes('Closure → 配件') && !rt.includes('Closure → 配件'));
+  // 翻成法语等英语以外的外语：多一句“整句用那种语言、英文词原样保留”；翻成中文、英语或不传：原来的写法
+  const fr=T.roleWithWig('',true,'法语');
+  assert(fr.includes('头套 = Wig') && fr.includes('Wig → 头套') && fr.includes('整句必须用法语写') && fr.includes('“头套”写成 Wig') && fr.endsWith('翻成法语。'),fr);
+  assert.equal(T.roleWithWig('',true,'英语'),T.roleWithWig('',true));
+  assert.equal(T.roleWithWig('',true,'中文'),T.roleWithWig('',true));
+  assert.equal(T.roleWithWig('',true,'火星语'),T.roleWithWig('',true));
+  assert(!T.roleWithWig('',true).includes('整句'));
+  assert(!T.roleWithWig('头套 = a\n全蕾丝头套 = b',true,'法语').includes('“头套”')); // 例子只用还在词表里的词
+  calls=[]; await t4.translate({text:'头套',mode:{prompt:'p'},target:'法语'});
+  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('整句必须用法语写'));
+  calls=[]; await t4.translate({text:'wig',mode:{prompt:'p'},target:'中文'});
+  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('Wig → 头套'));
+  assert.equal(T.glossaryPairs(fr,false).length,8);
+  assert(t4.setWigTerms(false).ok); assert.equal(t4.roleText(),'贴牌 = private label');
   fs.rmSync(d4,{recursive:true,force:true});
   // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
   const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));

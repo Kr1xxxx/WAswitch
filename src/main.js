@@ -23,6 +23,7 @@ const { Notifier } = require('./notify');
 const { PopupWindow } = require('./popup');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
+const { UndoSlot, shortName } = require('./undo');
 const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
 const memory = require('./memory');
@@ -488,6 +489,39 @@ async function watchExits() {
     exitWatchRunning = false;
   }
 }
+// 轻量小号的出口不能和主号相同。保存小号时比过；换了主号、主号改了代理以后在后台再比一次（不弹窗），
+// 撞了就在侧栏和顶栏标黄，直到这个小号换了代理、或下次比对不再相同
+const primaryClash = new Map(); // 轻量号 id -> 主号出口 IP
+let clashRunning = false;
+let clashAgain = false;
+async function comparePrimary() {
+  if (clashRunning) { clashAgain = true; return; }
+  clashRunning = true;
+  try {
+    do {
+      clashAgain = false;
+      const primary = accounts.find((a) => a.primary);
+      const lites = visibleAccounts().filter(isLite);
+      if (!primary || !lites.length) { primaryClash.clear(); continue; }
+      const pres = primary.proxy ? await proxy.test(primary.proxy, proxy.decryptPassword(primary.proxyPassword)) : await proxy.testSystem();
+      if (!pres.ok || quitting) continue; // 查不到主号出口：保持原来的标记
+      if (primary.proxy && findAcc(primary.id)) recordExit(primary, pres.ip);
+      const clash = new Map();
+      for (const acc of lites) {
+        const res = acc.proxy ? await proxy.test(acc.proxy, proxy.decryptPassword(acc.proxyPassword)) : await proxy.testDirect();
+        if (!findAcc(acc.id)) continue;
+        if (res.ok && acc.proxy) recordExit(acc, res.ip);
+        if (res.ok ? res.ip === pres.ip : primaryClash.has(acc.id)) clash.set(acc.id, pres.ip);
+      }
+      primaryClash.clear();
+      for (const [id, ip] of clash) primaryClash.set(id, ip);
+    } while (clashAgain && !quitting);
+  } finally {
+    clashRunning = false;
+  }
+  refresh();
+}
+
 // id -> 'logged_in' | 'needs_qr'。以后 MCP 的账号状态也从这里读
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
@@ -922,7 +956,7 @@ function proxyLabel(acc) {
   const p = proxy.parse(acc.proxy);
   if (!p) return '直连';
   if (p.error) return '代理设置有误';
-  return acc.exitLabel ? `${acc.exitLabel} · ${p.port}` : `${p.scheme} · ${p.port}`;
+  return `${acc.exitLabel || p.scheme} ${p.port}`;
 }
 
 function sideWidth() {
@@ -973,7 +1007,8 @@ function checkIdleLock() {
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
-let panelOpen = false;
+// 一打开软件就展开（shen 2026-10-28：右侧翻译栏每个客户都默认打开）；用户点顶栏按钮或 Ctrl/Cmd+Shift+K 收起后，这次运行内保持收起
+let panelOpen = true;
 let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
 let replyStore = null;
 let customerStore = null;
@@ -1201,6 +1236,7 @@ function pushState() {
         exitIp: exitIps.get(acc.id) || (acc.lastExit ? acc.lastExit.ip : ''),
         exitAt: acc.lastExit ? acc.lastExit.at : 0,
         exitChange: exitChanges.get(acc.id) || null,
+        primaryClash: primaryClash.get(acc.id) || '',
         latency: lastLatency.get(acc.id) || null,
         problem: problem ? problem.text : '',
         problemTitle: problem ? problem.title : '',
@@ -1523,7 +1559,7 @@ const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 // 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
 // port：出错后探一下本机端口的结果 { open, socks }（见 portProbeFor）。端口通着还连不上，就是 Clash 当前节点挂了
 function loadProblem(acc, code, desc, port) {
-  const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? ` · ${acc.proxy}` : ''}`;
+  const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? `; ${acc.proxy}` : ''}`;
   const kind = errtext.netKind(desc);
   const p = acc.proxy ? proxy.parse(acc.proxy) : null;
   if (PROXY_ERRORS.has(code) || (p && !p.error && ['proxyDown', 'proxyNode', 'proxyAuth', 'refused'].includes(kind))) {
@@ -1909,7 +1945,7 @@ const LITE_PROBLEMS = {
   }),
   // 代理端口通，但 30 秒还没连上 WhatsApp（或连续失败 3 次）：多半是 Clash 当前节点挂了
   unreachable: (acc, { detail } = {}) => {
-    const raw = detail ? `${detail}${acc.proxy ? ` · ${acc.proxy}` : ''}` : '';
+    const raw = detail ? `${detail}${acc.proxy ? `; ${acc.proxy}` : ''}` : '';
     if (!acc.proxy) {
       return {
         kind: 'network', // 直连号没有代理可改，用“连不上”的代码 N1
@@ -2217,15 +2253,9 @@ async function removeAccount(id, { timeoutMs } = {}) {
   const newPrimary = wasPrimary ? accounts.find((a) => a.mode === 'web') : null;
   if (newPrimary) newPrimary.primary = true;
   saveAccounts();
-  // 主号换了：轻量小号只在保存时和主号比过出口，提醒跑一次隔离自检（和在编辑里换主号一样）
-  if (newPrimary && accounts.some(isLite)) {
-    dialog.showMessageBox(win, {
-      type: 'info',
-      title: '请跑一次隔离自检',
-      message: `主号已改为「${newPrimary.name}」`,
-      detail: '轻量小号只在保存时和主号比较过出口 IP。请到 设置 › 隔离自检 跑一次，确认小号和新主号不在同一个 IP。',
-    }).catch(() => {});
-  }
+  primaryClash.delete(id);
+  // 主号换了：轻量小号只在保存时和主号比过出口，在后台和新主号再比一次（和在编辑里换主号一样）
+  if (newPrimary && accounts.some(isLite)) comparePrimary();
   // 删掉磁盘上的数据文件夹；文件还被占用时删不掉，下次启动会再清理
   const dir = lite ? liteDir(id) : partitionDir(id);
   if (dir) fs.rm(dir, { recursive: true, force: true }, (e) => { if (e) console.warn(`暂时删不掉账号 ${id} 的数据，下次启动再清理`); });
@@ -2688,7 +2718,7 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings', 'overview'].includes(p)) return;
+  if (!['account', 'settings', 'overview', 'translate'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
@@ -2699,14 +2729,37 @@ handleShell('notif:log', () => {
   return notifLog.filter((e) => !isParkedId(e.id)).reverse();
 });
 handleShell('notif:clear', () => {
+  const old = notifLog || loadNotifLog();
   notifLog = [];
   clearTimeout(notifLogTimer);
   try { fs.rmSync(notifLogFile(), { force: true }); } catch {}
+  if (old.length) {
+    offerUndo({ kind: 'notif', where: 'body', text: '已清空通知记录' }, () => {
+      notifLog = [...old, ...(notifLog || [])].slice(-NOTIF_LOG_MAX);
+      saveNotifLogSoon();
+    });
+  }
   return true;
+});
+// ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----
+// kind：撤销后界面要刷新哪一块；where：在哪里操作的（panel 右侧面板、side 侧栏、body 内容区），界面按它摆提示
+const undoSlot = new UndoSlot();
+function offerUndo({ kind, where, text }, restore) {
+  const token = undoSlot.put(restore);
+  if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('undo:offer', { token, kind, where, text });
+}
+handleShell('undo:run', (token) => {
+  if (!Number.isInteger(token)) return false;
+  try { return undoSlot.run(token); } catch (e) { console.warn('撤销失败', e.message); return false; }
 });
 // 连接记录：最新的在前；清空只清记录
 handleShell('netlog:get', () => (netLog ? netLog.load().filter((e) => !isParkedId(e.id)).reverse() : []));
-handleShell('netlog:clear', () => { if (netLog) netLog.clear(); return true; });
+handleShell('netlog:clear', () => {
+  if (!netLog) return true;
+  const old = netLog.clear();
+  if (old.length) offerUndo({ kind: 'netlog', where: 'body', text: '已清空连接记录' }, () => { netLog.restore(old); pushState(); });
+  return true;
+});
 // ---- 面板 ----
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
@@ -2719,7 +2772,13 @@ onShell('panel:tab', (tab) => {
 });
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
-handleShell('reply:delete', (id) => { if (typeof id === 'string') replyStore.remove(id); return panelData(); });
+handleShell('reply:delete', (id) => {
+  const old = typeof id === 'string' ? replyStore.remove(id) : false;
+  if (old) {
+    offerUndo({ kind: 'panel', where: 'panel', text: `已删除「${shortName(old.title || old.text)}」` }, () => replyStore.restore(old));
+  }
+  return panelData();
+});
 handleShell('cust:save', (data) => {
   if (!data || typeof data !== 'object') return null;
   const existing = typeof data.id === 'string' ? customerStore.get(data.id) : null;
@@ -2730,7 +2789,11 @@ handleShell('cust:save', (data) => {
   return ok ? panelData() : null;
 });
 handleShell('cust:delete', (id) => {
-  if (typeof id === 'string' && customerStore.get(id) && !parkedCustomer(customerStore.get(id))) customerStore.remove(id);
+  const snap = typeof id === 'string' ? customerStore.get(id) : null;
+  const old = snap && !parkedCustomer(snap) ? customerStore.remove(id) : false;
+  if (old) {
+    offerUndo({ kind: 'panel', where: 'panel', text: `已删除「${shortName(old.name || old.phone)}」` }, () => { customerStore.restore(old); trIpc.pushFloat(); });
+  }
   return panelData();
 });
 handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
@@ -2824,11 +2887,12 @@ const ctx = {
   get editorColor() { return editorColor; },
   get liteGuardHits() { return liteGuardHits; },
   get liteHost() { return liteHost; },
+  offerUndo,
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
   // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
   liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),
   nextName, nextColor, cleanNote, cleanPhone, applyPhone, COLORS, LITE_SCHEMES, newLiteKey, WA_URL, webrtcPolicy,
-  regionName, exitIps, exitChanges, recordExit, views, problems, notifier,
+  regionName, exitIps, exitChanges, recordExit, views, problems, notifier, primaryClash, comparePrimary,
   saveAccounts, startAccount, startLite, createView, destroyView, refresh, pushState, layout, focusActive, lockLocalPage, insertText,
 };
 
@@ -3003,29 +3067,31 @@ function setGroup(gid, patch) {
   notifier.refresh();
   refresh();
 }
-// 解散分组前先问一下（和删除账号一样用系统确认框，默认是“取消”）
-async function confirmDeleteGroup(gid) {
+function deleteGroup(gid) {
   const g = findGroup(gid);
   if (!g) return;
-  const n = accounts.filter((a) => a.groupId === gid).length;
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'warning',
-    buttons: ['取消', '解散'],
-    defaultId: 0,
-    cancelId: 0,
-    title: '解散分组',
-    message: `解散「${g.name}」？`,
-    detail: n ? `组里的 ${n} 个号会移到“未分组”，号本身和登录状态都不受影响。` : '这个分组是空的。',
-  });
-  if (response === 1) deleteGroup(gid);
-}
-function deleteGroup(gid) {
-  if (!findGroup(gid)) return;
+  // 撤销用：分组本身、它在分组里的位置、解散前账号的顺序、组里有哪些号
+  const old = { group: { ...g }, index: groups.indexOf(g), order: accounts.map((a) => a.id), members: accounts.filter((a) => a.groupId === gid).map((a) => a.id) };
   // 组里的号挪到“未分组”最后，保持原来的先后
   const members = accounts.filter((a) => a.groupId === gid);
   accounts = [...accounts.filter((a) => a.groupId !== gid), ...members.map((a) => Object.assign(a, { groupId: '' }))];
   groups = groups.filter((g) => g.id !== gid);
   if (editGroupId === gid) editGroupId = '';
+  saveAccounts();
+  saveGroups();
+  notifier.refresh();
+  refresh();
+  // 解散不再先问：直接解散，界面给几秒撤销
+  offerUndo({ kind: 'state', where: 'side', text: `已解散「${shortName(old.group.name)}」` }, () => restoreGroup(old));
+}
+// 撤销解散：分组放回原位，还在“未分组”里的号回到组里，账号恢复解散前的先后
+function restoreGroup(old) {
+  if (findGroup(old.group.id)) return;
+  groups.splice(Math.min(Math.max(0, old.index), groups.length), 0, { ...old.group });
+  const members = new Set(old.members);
+  for (const a of accounts) if (members.has(a.id) && !a.groupId) a.groupId = old.group.id;
+  const pos = new Map(old.order.map((id, i) => [id, i]));
+  accounts = accounts.map((a, i) => ({ a, i })).sort((x, y) => (pos.get(x.a.id) ?? old.order.length + x.i) - (pos.get(y.a.id) ?? old.order.length + y.i)).map((x) => x.a);
   saveAccounts();
   saveGroups();
   notifier.refresh();
@@ -3055,7 +3121,7 @@ onShell('group:context', (id) => {
       click: () => setGroup(id, { muted: !g.muted }),
     },
     { type: 'separator' },
-    { label: `解散「${g.name}」…（号不会删）`, click: () => confirmDeleteGroup(id) },
+    { label: `解散「${g.name}」（号不会删）`, click: () => deleteGroup(id) },
   ]).popup({ window: win });
 });
 

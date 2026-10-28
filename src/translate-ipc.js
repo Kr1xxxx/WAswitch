@@ -11,6 +11,7 @@ const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = 
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
+const { shortName } = require('./undo');
 
 function setupTranslateIpc(ctx) {
   const {
@@ -47,10 +48,20 @@ function setupTranslateIpc(ctx) {
     pushFloat();
     return { ...r, ...trState() };
   });
-  handleShell('tr:provider:delete', (id) => { if (typeof id === 'string') ctx.translator.deleteProvider(id); pushFloat(); return trState(); });
+  handleShell('tr:provider:delete', (id) => {
+    const snap = typeof id === 'string' ? ctx.translator.deleteProvider(id) : null;
+    if (snap) {
+      ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(snap.provider.name)}」` }, () => {
+        if (ctx.translator.restoreProvider(snap)) { retryKeyErrors(snap.provider.id); pushFloat(); }
+      });
+    }
+    pushFloat();
+    return trState();
+  });
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
   handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
+  handleShell('tr:wig', (on) => ({ ...ctx.translator.setWigTerms(on === true), ...trState() }));
   handleShell('tr:network', async (net) => {
     // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
     if (net && net.mode === 'proxy') {
@@ -102,20 +113,33 @@ function setupTranslateIpc(ctx) {
     return true;
   }
   // 发出的翻译：同一句中文、同一种语言、同一个模式翻过就直接用记下的译文（见 outcache.js）；fresh = 用户点了“重新翻译”
-  // 角色设定（固定译法）也算进记录的键：改了固定译法，老译文不再用
-  const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.load().rolePrompt });
+  // 角色设定（固定译法，含打开的假发词汇）也算进记录的键：改了固定译法或开关假发词汇，老译文不再用
+  const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.roleText() });
   handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft, fresh } = {}) => {
     // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;
     // __back：回译成中文核对，用固定的忠实翻译提示词
     // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
-    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft, fix: true });
+    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, source, context, draft, fix: true });
     let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
       : typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
     if (modeId === '__back') return userTranslate({ text, mode, target, source });
     return outTranslate({ text, mode, target, source, context }, fresh === true);
   });
   handleShell('tr:cancel', () => userCancel());
+  // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
+  // providerId = 这一栏选的模型（只用它，不换备用，纠错也用它）。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
+  const PAGE_MODE = { prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。', temperature: 0.2 };
+  handleShell('tr:page', async ({ text, source, target, providerId, fix, draft } = {}) => {
+    if (typeof text !== 'string') return { error: '先放一段要翻译的文字', kind: 'input' };
+    const detected = source ? '' : detectLang(text.slice(0, 2000));
+    const pid = typeof providerId === 'string' ? providerId : '';
+    // 纠错也用这一栏选的模型（按钮就在模型旁边）
+    const r = fix === true && typeof draft === 'string' && draft.trim()
+      ? await userTranslate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
+      : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: pid });
+    return { ...r, detected };
+  });
   // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
   const chatCustomer = (accId, title) => matchChatCustomer(ctx.customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
   handleShell('tr:chatlang', async (accountId) => {
@@ -134,7 +158,13 @@ function setupTranslateIpc(ctx) {
     const rec = ctx.modeStore.upsert({ id: data.id, name: data.name, direction: data.direction, prompt: data.prompt, temperature: data.temperature });
     return rec ? { ok: true, id: rec.id, ...trState() } : { error: ctx.modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
   });
-  handleShell('tmode:delete', (id) => { if (typeof id === 'string') ctx.modeStore.remove(id); return trState(); });
+  handleShell('tmode:delete', (id) => {
+    const old = typeof id === 'string' ? ctx.modeStore.remove(id) : false;
+    if (old) {
+      ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(old.name)}」` }, () => { ctx.modeStore.restore(old); pushFloat(); });
+    }
+    return trState();
+  });
 
   // ---- 悬浮翻译窗（shen 2026-10-24 选的方案 B） ----
   // 只读当前打开的对话（隔离环境，见 wa-page.js 的 readOpenChat），不改页面、不碰输入框。
@@ -170,7 +200,7 @@ function setupTranslateIpc(ctx) {
     temperature: 0.2,
   };
   const FIX_OUT = {
-    prompt: '你是{目标语言}母语的校对员。<text> 里是中文原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
+    prompt: '你是{目标语言}母语的校对员。<text> 里是原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
       + '检查译文是否准确表达原文、有没有漏译多译，修正语法和拼写，让说法自然、符合当地人聊天习惯，保持原来的语气。'
       + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
     temperature: 0.2,
@@ -313,7 +343,7 @@ function setupTranslateIpc(ctx) {
       langs: ctx.translator.publicConfig().langs,
       target: out.lang,
       targetSrc: out.from, // manual | customer | detected | default
-      autoTarget: (out.auto || out).lang, // 下拉里“自动（…）”显示的语言
+      autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
       accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
       canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
       // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话

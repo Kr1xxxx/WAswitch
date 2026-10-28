@@ -19,6 +19,8 @@ const { unreadBody, unreadNames, grownChats, chatKey, cleanPreview, popSig, cloc
 
 const READ_TIMEOUT_MS = 2000; // 读对话列表最多等这么久，超时就用“有 N 个未读对话”
 const LATER_MS = 10 * 60 * 1000; // 点“稍后”：10 分钟后还没读再弹一次
+// 托盘菜单是系统原生菜单，不能用样式：几段之间用一个全角宽的空格隔开，不用中点
+const GAP = '\u2003';
 const RECENT_POP_MS = 15 * 1000; // 这么久之内这个号刚弹过卡片，读不出新客户时就不再补一张号的卡
 const MAX_POPPED = 200; // 每个号最多记多少个客户“弹过哪一条”
 const HOLD_MS = 3 * 60 * 1000; // 重连（切网、页面重新加载）最后一次动静之后这么久内，未读数回到原来的数不算新消息
@@ -392,16 +394,16 @@ class Notifier {
       this.tray.setTitle(title, { fontType: 'monospacedDigit' });
     }
     const mem = this.hooks.totalMemory ? this.hooks.totalMemory() : 0;
-    const memText = mem ? ` · 共占用 ${mem} MB` : '';
+    const memText = mem ? `\n共占用 ${mem} MB` : '';
     const upd = this.hooks.trayText ? this.hooks.trayText() : '';
     const downText = down ? `\n${down} 个号断线，客户消息收不到` : '';
     const dndText = this.dnd ? '\n勿扰中，新消息不弹窗' : '';
-    this.tray.setToolTip(`${total ? `WAswitch · ${total} 个未读对话` : 'WAswitch'}${memText}${downText}${dndText}${upd ? `\n${upd}` : ''}`);
+    this.tray.setToolTip(`${total ? `WAswitch\n${total} 个未读对话` : 'WAswitch'}${memText}${downText}${dndText}${upd ? `\n${upd}` : ''}`);
     const items = accounts.map((acc) => {
       const n = this.unread.get(acc.id) || 0;
       const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
-        label: `${isOffline(acc.id) ? '⚠ ' : ''}${acc.name}${n ? `（${n}）` : ''}${isOffline(acc.id) ? ' · 断线' : ''}${this.muted(acc) ? ' · 不弹通知' : ''}${mb ? ` · ${mb} MB` : ''}`,
+        label: `${isOffline(acc.id) ? '⚠ ' : ''}${acc.name}${n ? `（${n}）` : ''}${[isOffline(acc.id) ? '断线' : '', this.muted(acc) ? '不弹通知' : '', mb ? `${mb} MB` : ''].filter(Boolean).map((t) => `${GAP}${t}`).join('')}`,
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });

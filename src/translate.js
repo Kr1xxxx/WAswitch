@@ -137,6 +137,41 @@ function glossaryPairs(role, toChinese) {
   return out;
 }
 const MAX_ROLE = 4000;
+// 内置“假发词汇”（shen 2026-10-28）：设置 › 翻译 里打开才用，默认关。左边中文，右边英文，两个方向都照这个翻。
+// 顺序：头套放第一行、全蕾丝头套紧跟其后（2026-10-28 Fable 用 glm-4-flash 实测：头套排在全蕾丝头套后面时，
+// “普通头套”会被翻成 frontal、wig 会被翻成假发；头套放最前面两处都对了。混元 hy-mt2-plus 两种顺序都全对）。
+const WIG_TERMS = [
+  ['头套', 'Wig'], ['全蕾丝头套', 'Full lace wig'], ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'],
+  ['胶片发', 'Tape hair'], ['辫发', 'Raw hair'], ['处女发', 'Virgin hair'],
+];
+// 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
+// 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
+// target：这次翻成什么语言。翻成法语、德语等英语以外的外语时多说一句：整句用那种语言、只有这些英文词原样保留
+// （shen 2026-10-28：非英语也用英文行业词；glm-4-flash 不说这句会把 Virgin hair 翻成 Cheveux vierges）。不传 target 或翻成中文、英语 = 原来的写法。
+function roleWithWig(role, wig, target = '') {
+  const own = String(role || '');
+  if (!wig) return own;
+  const taken = new Set();
+  for (const raw of own.split(/\r?\n/)) {
+    const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
+    if (m) { taken.add(m[1].toLowerCase()); taken.add(m[2].toLowerCase()); }
+  }
+  const keep = WIG_TERMS.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
+  if (!keep.length) return own;
+  const lines = keep.map(([a, b]) => `${a} = ${b}`);
+  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
+  const lang = LANGS.includes(target) ? target : '中文';
+  // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
+  const back = keep.map(([a, b]) => `${b} → ${a}`);
+  // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
+  const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
+  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：\n${back.join('\n')}`;
+  if (lang !== '中文' && lang !== '英语') {
+    const ex = keep.slice(0, 2).map(([a, b]) => `“${a}”写成 ${b}`).join('、');
+    tail += `\n译文整句必须用${lang}写，只有上面右边这几个英文词原样嵌在${lang}句子里（行业通用叫法），例如${ex}，不用${lang}自己的词，其他内容照常翻成${lang}。`;
+  }
+  return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}`;
+}
 function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
   const terms = glossaryPairs(role, target === '中文');
@@ -211,7 +246,7 @@ function statusError(status, name = '') {
 function withDetail(err, status, detail, p) {
   const pid = err.kind === 'auth' && p ? { pid: p.id } : {};
   if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status, ...pid };
-  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status} · ${detail}` : `HTTP ${status}` };
+  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}` };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
 function providerDetail(body, key = '') {
@@ -266,6 +301,8 @@ class Translator {
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
+      // 内置假发词汇：默认关
+      wigTerms: false,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
@@ -306,6 +343,7 @@ class Translator {
           base.seeded = raw.seeded === true;
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
+          base.wigTerms = raw.wigTerms === true;
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
@@ -411,6 +449,8 @@ class Translator {
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
       rolePrompt: c.rolePrompt,
+      wigTerms: c.wigTerms === true,
+      wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
       canEncrypt: canEncrypt(this.deps.safeStorage),
@@ -450,13 +490,35 @@ class Translator {
     return { ok: true, id: p.id };
   }
 
+  // 返回删掉的服务商和它原来的位置、用途（撤销时传给 restoreProvider），没有这个服务商返回 null
   deleteProvider(id) {
     const c = this.load();
+    const index = c.providers.findIndex((p) => p.id === id);
+    const snap = index >= 0 ? { provider: { ...c.providers[index] }, index, primaryId: c.primaryId, fallbackId: c.fallbackId, fixId: c.fixId } : null;
     c.providers = c.providers.filter((p) => p.id !== id);
     if (c.primaryId === id) c.primaryId = c.providers[0] ? c.providers[0].id : '';
     if (c.fallbackId === id || c.fallbackId === c.primaryId) c.fallbackId = '';
     if (c.fixId === id) c.fixId = '';
     this.save();
+    return snap;
+  }
+
+  // 撤销删除：放回原来的位置（连同密钥），原来是默认、备用、纠错用的就改回去
+  restoreProvider(snap) {
+    if (!snap || !snap.provider || typeof snap.provider.id !== 'string') return false;
+    const c = this.load();
+    const p = snap.provider;
+    if (c.providers.some((x) => x.id === p.id)) return false;
+    c.providers.splice(Math.min(Math.max(0, snap.index | 0), c.providers.length), 0, { ...p });
+    // 用途改回删除前的样子（删除时被挪走、清掉的默认、备用、纠错）
+    const has = (pid) => !!pid && !!this.provider(pid);
+    if (has(snap.primaryId)) c.primaryId = snap.primaryId;
+    else if (!has(c.primaryId)) c.primaryId = p.id;
+    if (has(snap.fallbackId)) c.fallbackId = snap.fallbackId;
+    if (c.fallbackId === c.primaryId || !has(c.fallbackId)) c.fallbackId = '';
+    if (has(snap.fixId)) c.fixId = snap.fixId;
+    this.save();
+    return true;
   }
 
   setRoles({ primaryId, fallbackId, fixId } = {}) {
@@ -474,6 +536,19 @@ class Translator {
     this.load().rolePrompt = text;
     this.save();
     return { ok: true };
+  }
+
+  // 假发词汇开关
+  setWigTerms(on) {
+    this.load().wigTerms = on === true;
+    this.save();
+    return { ok: true };
+  }
+
+  // 翻译和纠错实际用的角色设定（含打开的假发词汇）；话术记录也拿它当键，开关一变老译文就不用
+  roleText(target = '') {
+    const c = this.load();
+    return roleWithWig(c.rolePrompt, c.wigTerms === true, target);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -574,7 +649,7 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403 · ${detail}` } : {}) };
+      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
     let out = '';
@@ -646,16 +721,19 @@ class Translator {
 
   // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind }
   // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
-  async translate({ text, mode, target, source, context, draft, fix } = {}) {
+  // providerId：指定用哪个服务商（翻译页上用户自己选的），只用它，不换备用
+  async translate({ text, mode, target, source, context, draft, fix, providerId } = {}) {
     const c = this.load();
     if (typeof text !== 'string' || !text.trim()) return { error: '先放一段要翻译的文字', kind: 'input' };
     if (text.length > MAX_INPUT) return { error: `一次最多 ${MAX_INPUT} 个字`, kind: 'input' };
     if (!mode || typeof mode.prompt !== 'string') return { error: '先选一个翻译模式', kind: 'input' };
-    const primary = this.firstFor(fix === true);
+    const pinned = typeof providerId === 'string' && providerId ? this.provider(providerId) : null;
+    if (providerId && !pinned) return { error: '找不到这个服务商，请重新选一个', kind: 'config' };
+    const primary = pinned || this.firstFor(fix === true);
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
-    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, c.rolePrompt);
+    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, this.roleText(langs.target));
     // DeepL 只管翻译：没设目标语言时，“收到”的模式翻成中文，其他翻成英语
     const deeplReq = { text, target: langs.target || (mode.direction === 'in' ? '中文' : '英语'), source: langs.source, context };
     const once = (p, signal) => (p.preset === 'deepl' ? this.callDeepl(p, deeplReq, signal) : this.call(p, messagesFor(p), { temperature, maxTokens, signal }));
@@ -665,7 +743,7 @@ class Translator {
     this.busy = { controller };
     const started = Date.now();
     const fb = this.provider(c.fallbackId);
-    const chain = [primary, fb && fb.id !== primary.id ? fb : null].filter(Boolean);
+    const chain = [primary, !pinned && fb && fb.id !== primary.id ? fb : null].filter(Boolean);
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
@@ -700,7 +778,7 @@ class Translator {
         // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
         if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
       }
-      if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
+      if (lastErr.kind === 'overload' && chain.length < 2 && !pinned) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
       // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单；英文原话放 detail
@@ -731,5 +809,5 @@ class Translator {
   }
 }
 
-module.exports = { needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { WIG_TERMS, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

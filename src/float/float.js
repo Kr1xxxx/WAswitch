@@ -57,7 +57,7 @@ async function runCompose(req, insert = false) {
   if (req.accountId !== s.accountId) return render(true);
   if (r.error) return say(r.error, true);
   ui.out = r.text; ui.warn = r.warn || [];
-  if (!insert) return say(r.cached ? '这句以前翻过，用了记下的译文' : `${r.provider} · ${(r.ms / 1000).toFixed(1)} 秒`);
+  if (!insert) return say(r.cached ? '这句以前翻过，用了记下的译文' : `${r.provider}，用时 ${(r.ms / 1000).toFixed(1)} 秒`);
   if (ui.warn.length) return say('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   if (s.title !== title) return say('翻译时对话换了，没有贴。看一下再点“放进输入框”', true);
   return insertOut();
@@ -77,8 +77,8 @@ function body() {
   if (!s.accountId) return [h('p', { class: 'hint pad' }, '先添加一个 WhatsApp 账号。')];
   if (!s.hasProvider) return [h('p', { class: 'hint pad' }, '还没设置翻译服务：去 设置 › 翻译 添加。')];
   const parts = [];
-  if (s.readable === 'qr') parts.push(h('p', { class: 'hint pad' }, '扫码登录后可用。登录后点开一个聊天，这里就会显示客户的消息。'));
-  else if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '先在左边点开一个聊天，这里就会显示客户的消息。'));
+  if (s.readable === 'qr') parts.push(h('p', { class: 'hint pad' }, '扫码登录后可用。'));
+  else if (s.readable === 'nochat') parts.push(h('p', { class: 'hint pad' }, '先在左边点开一个聊天。'));
   else if (s.readable === 'unreadable') parts.push(h('p', { class: 'hint pad bad' }, '打开的聊天里认不出消息（可能是 WhatsApp 改版了）。'));
   else if (!s.items.length) parts.push(h('p', { class: 'hint pad' }, '这个对话最近没有收到文字消息。'));
   else {
@@ -153,7 +153,7 @@ function render(force = false) {
       await window.fl.setAuto(e.target.checked);
     } }), '自动');
   const head = h('div', { class: 'head' },
-    h('span', { class: 'title' }, `🌐 ${s.accountName || '翻译'}${s.title ? ` · ${s.title}` : ''}`),
+    h('span', { class: 'title' }, `🌐 ${s.accountName || '翻译'}`, s.title ? h('span', { class: 'chat' }, s.title) : null),
     h('button', { class: 'icon', title: '缩小', onclick: () => window.fl.collapse(true) }, '—'),
     h('button', { class: 'icon', title: '关闭', onclick: () => window.fl.close() }, '✕'));
   dragHandle(head);
