@@ -15,11 +15,15 @@ const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成�
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
-// DeepL 每个密钥（每个 DeepL 账号）每月最多翻 10 万字符（shen 2026-10-28），本机记数，每月 1 号清零
+// DeepL 每个使用者（这台电脑上的这个软件）每月最多翻多少字符：默认 10 万，可以在 DeepL 的设置里改（shen 2026-10-28）。
+// 换密钥也接着算，每月 1 号清零
 const DEEPL_MONTH_CAP = 100000;
+const DEEPL_CAP_MIN = 1000;
+const DEEPL_CAP_MAX = 1e9;
 const monthKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
-const usageKeyOf = (key) => crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
 const deeplChars = (text) => [...text].length;
+// 100000 -> 「10 万」，12345 -> 「12345 」
+const capText = (n) => (n % 10000 === 0 ? `${n / 10000} 万` : `${n} `);
 const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
 
 // 深度思考：'' 默认（不传参数）| disabled | enabled。新服务商默认关（翻译用不上，关掉更快）；自定义和混元默认不传
@@ -315,8 +319,8 @@ class Translator {
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
       autoDefaultOn: false,
-      // DeepL 每个密钥这个月用了多少字符：{ 密钥的 hash 前 16 位: { month: 'YYYY-MM', chars } }
-      deeplUsage: {} };
+      // DeepL 这个月用了多少字符（所有 DeepL 密钥合起来算）
+      deeplUsage: { month: '', chars: 0 }, deeplCap: DEEPL_MONTH_CAP };
     let migrated = false;
     try {
       if (fs.existsSync(this.file)) {
@@ -325,7 +329,6 @@ class Translator {
           base.providers = Array.isArray(raw.providers) ? raw.providers.filter((p) => p && typeof p.id === 'string').slice(0, MAX_PROVIDERS).map((p) => ({
             id: p.id, preset: PRESETS[p.preset] ? p.preset : 'custom', name: line(p.name, 40), baseUrl: line(p.baseUrl, 300), model: line(p.model, 120),
             keyEnc: typeof p.keyEnc === 'string' ? p.keyEnc : '', keyTail: line(p.keyTail, 4), updatedAt: Number(p.updatedAt) || 0,
-            ...(typeof p.usageKey === 'string' && /^[0-9a-f]{16}$/.test(p.usageKey) ? { usageKey: p.usageKey } : {}),
             thinking: THINKING.includes(p.thinking) ? p.thinking : defaultThinking(p.preset),
           })) : [];
           // 混元、智谱只能用固定的几个模型：别的模型名改成默认的；混元旧地址换成 TokenHub（换地址时密钥清掉，要重新填 TokenHub 的密钥）
@@ -355,9 +358,17 @@ class Translator {
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
           base.wigTerms = raw.wigTerms === true;
-          if (raw.deeplUsage && typeof raw.deeplUsage === 'object') {
-            for (const [k, v] of Object.entries(raw.deeplUsage)) {
-              if (/^[0-9a-f]{16}$/.test(k) && v && /^\d{4}-\d{2}$/.test(v.month)) base.deeplUsage[k] = { month: v.month, chars: clampNum(v.chars, 0, 1e9, 0) };
+          base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
+          const du = raw.deeplUsage;
+          if (du && typeof du === 'object') {
+            if (/^\d{4}-\d{2}$/.test(du.month)) base.deeplUsage = { month: du.month, chars: clampNum(du.chars, 0, 1e9, 0) };
+            else {
+              // #216 那版按密钥分开记：同一个月的合起来
+              for (const v of Object.values(du)) {
+                if (!v || !/^\d{4}-\d{2}$/.test(v.month)) continue;
+                if (v.month > base.deeplUsage.month) base.deeplUsage = { month: v.month, chars: 0 };
+                if (v.month === base.deeplUsage.month) base.deeplUsage.chars += clampNum(v.chars, 0, 1e9, 0);
+              }
             }
           }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
@@ -451,17 +462,20 @@ class Translator {
   provider(id) { return this.load().providers.find((p) => p.id === id) || null; }
 
   now() { return this.deps.now ? this.deps.now() : Date.now(); }
-  // DeepL 这个密钥本月已用字符数（换月了就是 0）
-  deeplUsed(usageKey) {
-    const u = usageKey && this.load().deeplUsage[usageKey];
-    return u && u.month === monthKey(this.now()) ? u.chars : 0;
+  // DeepL 本月已用字符数（换月了就是 0）
+  deeplUsed() {
+    const u = this.load().deeplUsage;
+    return u.month === monthKey(this.now()) ? u.chars : 0;
   }
-  addDeeplUsage(usageKey, n) {
-    const c = this.load();
-    const month = monthKey(this.now());
-    // 别的月份的记录没用了，顺手删掉
-    for (const [k, v] of Object.entries(c.deeplUsage)) if (v.month !== month) delete c.deeplUsage[k];
-    c.deeplUsage[usageKey] = { month, chars: this.deeplUsed(usageKey) + n };
+  setDeeplCap(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v < DEEPL_CAP_MIN || v > DEEPL_CAP_MAX) return { error: `每月上限填 ${DEEPL_CAP_MIN} 到 ${DEEPL_CAP_MAX} 之间的数` };
+    this.load().deeplCap = Math.round(v);
+    this.save();
+    return { ok: true };
+  }
+  addDeeplUsage(n) {
+    this.load().deeplUsage = { month: monthKey(this.now()), chars: this.deeplUsed() + n };
     this.save();
   }
 
@@ -469,8 +483,8 @@ class Translator {
   publicConfig() {
     const c = this.load();
     return {
-      providers: c.providers.map(({ keyEnc, usageKey, ...p }) => ({ ...p, hasKey: !!keyEnc,
-        ...(p.preset === 'deepl' ? { usage: { used: keyEnc ? this.deeplUsed(usageKey) : 0, cap: DEEPL_MONTH_CAP } } : {}) })),
+      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc,
+        ...(p.preset === 'deepl' ? { usage: { used: this.deeplUsed(), cap: c.deeplCap } } : {}) })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
       fixId: c.fixId,
@@ -482,6 +496,7 @@ class Translator {
       floatInMode: c.floatInMode,
       rolePrompt: c.rolePrompt,
       wigTerms: c.wigTerms === true,
+      deeplCap: c.deeplCap,
       wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
@@ -516,9 +531,10 @@ class Translator {
     if (newKey) {
       p.keyEnc = this.deps.safeStorage.encryptString(newKey).toString('base64');
       p.keyTail = newKey.slice(-4);
-      p.usageKey = usageKeyOf(newKey);
     }
     if (!c.primaryId || !this.provider(c.primaryId)) c.primaryId = p.id;
+    // DeepL 表单里的「每月上限」（整个软件一个上限，不分密钥）；填错了不改，其他照样保存
+    if (deepl && data.monthCap !== undefined && data.monthCap !== '') this.setDeeplCap(data.monthCap);
     this.save();
     return { ok: true, id: p.id };
   }
@@ -672,10 +688,9 @@ class Translator {
     if (!key) throw noKey(p);
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
-    // 老设置里存的密钥没有 hash：第一次用时补上
-    if (!p.usageKey) p.usageKey = usageKeyOf(key);
     const n = deeplChars(text);
-    if (this.deeplUsed(p.usageKey) + n > DEEPL_MONTH_CAP) throw { kind: 'quota', text: 'DeepL 本月 10 万字符已用完，下月 1 号恢复' };
+    const cap = this.load().deeplCap;
+    if (this.deeplUsed() + n > cap) throw { kind: 'quota', text: `DeepL 本月 ${capText(cap)}字符已用完，下月 1 号恢复` };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
     if (DEEPL_LANGS[source]) body.source_lang = DEEPL_LANGS[source][0];
     const ctx = deeplContext(context);
@@ -695,7 +710,7 @@ class Translator {
       out = j && Array.isArray(j.translations) && j.translations[0] && j.translations[0].text;
     } catch { out = ''; }
     if (typeof out !== 'string' || !out.trim()) throw { kind: 'empty', text: '服务商没有返回译文' };
-    this.addDeeplUsage(p.usageKey, n);
+    this.addDeeplUsage(n);
     return out.trim();
   }
 
