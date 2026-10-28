@@ -36,7 +36,7 @@ function makeLitePage(id) {
   const list = h('div', { class: 'lite-list', role: 'list' });
   const title = h('div', { class: 'lite-head' });
   const msgs = h('div', { class: 'lite-msgs', role: 'log' });
-  const input = h('textarea', { rows: '1', maxlength: '4000', placeholder: '输入消息，Enter 发送，Shift + Enter 换行', 'aria-label': '输入消息' });
+  const input = h('textarea', { rows: '1', maxlength: '4000', placeholder: '输入消息', 'aria-label': '输入消息', 'aria-description': 'Enter 发送，Shift + Enter 换行' });
   const sendBtn = h('button', { class: 'btn primary', type: 'button' }, '发送');
   const err = h('div', { class: 'lite-err', role: 'alert' });
   const conv = h('div', { class: 'lite-conv' }, title, msgs, err, h('div', { class: 'lite-compose' }, input, sendBtn));

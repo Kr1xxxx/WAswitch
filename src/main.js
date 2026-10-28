@@ -1116,7 +1116,7 @@ function layout() {
     }
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
-  trIpc.layoutFloat(bounds);
+  trIpc.layoutFloat();
   selTr.sync();
   syncLiteWatch();
 }
@@ -1218,7 +1218,6 @@ function pushState() {
     locked,
     panelOpen: panelShown(),
     panelTab,
-    floatOpen: trIpc.floatOpen,
     lockChoices: memory.LOCK_CHOICES,
     popupChoices: memory.POPUP_SECONDS,
     // 分组：每组带上未读总数，折叠后组头上也能看到
@@ -1592,7 +1591,7 @@ function loadProblem(acc, code, desc, port) {
       : nodeDead ? `Clash 开着，${p.port} 端口也通，但这个端口对应的节点连不出去。去 Clash 给这个端口换个节点。`
       : node ? (local ? 'Clash 开着，但当前节点打不开 WhatsApp，在 Clash 里换个节点试试。' : '代理连上了，但通过它打不开 WhatsApp，代理那边的网络可能有问题。')
         : local ? '通常是 Clash 没开，或者 Clash 里没开这个端口。' : '代理可能停了，或者地址、端口不对。';
-    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
+    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: why, detail: raw, retrying: !auth };
   }
   if (acc.proxy && (kind === 'dns' || kind === 'timeout' || kind === 'reset')) {
     return { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `${errtext.netReason(desc, { proxy: p && !p.error ? p : null })}。`, detail: raw, retrying: true };
@@ -1984,8 +1983,8 @@ const LITE_PROBLEMS = {
       title: local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理连不上 WhatsApp`,
       short: '节点不通',
       text: local
-        ? `这个号先暂停联网，不会改用直连，手机上的消息不会丢。Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
-        : `这个号先暂停联网，不会改用直连，手机上的消息不会丢。代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
+        ? `Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
+        : `代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
       detail: raw,
       retrying: true,
     };
@@ -2859,14 +2858,17 @@ handleShell('panel:export', async ({ kind, format } = {}) => {
     parked = rows.filter(parkedCustomer).length;
     rows = rows.map((c) => ({ ...c, accountName: names.get(c.accountId) || '' }));
   }
-  const json = format === 'json';
+  // 只有一个「导出」按钮：格式在保存对话框里选（默认 CSV），按保存的扩展名决定写哪种
   const stamp = new Date().toISOString().slice(0, 10);
+  const csvFilter = { name: 'CSV（Excel 可以打开）', extensions: ['csv'] };
+  const jsonFilter = { name: 'JSON', extensions: ['json'] };
   const r = await dialog.showSaveDialog(win, {
     title: STORE_LABEL[kind][1],
-    defaultPath: path.join(app.getPath('documents'), `${STORE_LABEL[kind][0]}-${stamp}.${json ? 'json' : 'csv'}`),
-    filters: [json ? { name: 'JSON', extensions: ['json'] } : { name: 'CSV（Excel 可以打开）', extensions: ['csv'] }],
+    defaultPath: path.join(app.getPath('documents'), `${STORE_LABEL[kind][0]}-${stamp}.${format === 'json' ? 'json' : 'csv'}`),
+    filters: format === 'json' ? [jsonFilter, csvFilter] : [csvFilter, jsonFilter],
   });
   if (r.canceled || !r.filePath) return null;
+  const json = path.extname(r.filePath).toLowerCase() === '.json';
   const out = json
     ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
     : records.toCsv(kind, rows);
