@@ -146,7 +146,9 @@ const WIG_TERMS = [
 ];
 // 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
 // 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
-function roleWithWig(role, wig) {
+// target：这次翻成什么语言。翻成法语、德语等英语以外的外语时多说一句：整句用那种语言、只有这些英文词原样保留
+// （shen 2026-10-28：非英语也用英文行业词；glm-4-flash 不说这句会把 Virgin hair 翻成 Cheveux vierges）。不传 target 或翻成中文、英语 = 原来的写法。
+function roleWithWig(role, wig, target = '') {
   const own = String(role || '');
   if (!wig) return own;
   const taken = new Set();
@@ -157,13 +159,18 @@ function roleWithWig(role, wig) {
   const keep = WIG_TERMS.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
   if (!keep.length) return own;
   const lines = keep.map(([a, b]) => `${a} = ${b}`);
+  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
+  const lang = LANGS.includes(target) ? target : '中文';
   // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
   const back = keep.map(([a, b]) => `${b} → ${a}`);
-  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
   // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
   const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
-  const tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：`;
-  return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}\n${back.join('\n')}`;
+  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：\n${back.join('\n')}`;
+  if (lang !== '中文' && lang !== '英语') {
+    const ex = keep.slice(0, 2).map(([a, b]) => `“${a}”写成 ${b}`).join('、');
+    tail += `\n译文整句必须用${lang}写，只有上面右边这几个英文词原样嵌在${lang}句子里（行业通用叫法），例如${ex}，不用${lang}自己的词，其他内容照常翻成${lang}。`;
+  }
+  return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}`;
 }
 function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
@@ -517,9 +524,9 @@ class Translator {
   }
 
   // 翻译和纠错实际用的角色设定（含打开的假发词汇）；话术记录也拿它当键，开关一变老译文就不用
-  roleText() {
+  roleText(target = '') {
     const c = this.load();
-    return roleWithWig(c.rolePrompt, c.wigTerms === true);
+    return roleWithWig(c.rolePrompt, c.wigTerms === true, target);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -701,7 +708,7 @@ class Translator {
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
-    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, this.roleText());
+    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, this.roleText(langs.target));
     // DeepL 只管翻译：没设目标语言时，“收到”的模式翻成中文，其他翻成英语
     const deeplReq = { text, target: langs.target || (mode.direction === 'in' ? '中文' : '英语'), source: langs.source, context };
     const once = (p, signal) => (p.preset === 'deepl' ? this.callDeepl(p, deeplReq, signal) : this.call(p, messagesFor(p), { temperature, maxTokens, signal }));
