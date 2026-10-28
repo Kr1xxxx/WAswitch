@@ -91,6 +91,43 @@ app.whenReady().then(async () => {
     assert.deepStrictEqual(r.map((x) => x.name), ['智谱', '腾讯混元', 'DeepL'], `删光后应有三个空密钥框 ${JSON.stringify(r)}`);
     assert(r.every((x) => !x.tags.length), `空行不带标签 ${JSON.stringify(r)}`);
 
+    // 5) 详细设置 › 服务商：每行都有「设为默认」「设为纠错」，上下对齐（shen 2026-10-28「设为默认，按钮不要消失」「再加一个纠错专用按钮」）
+    await js(() => {
+      const c = window.__cfg;
+      c.providers = [
+        { id: 'h', preset: 'hunyuan', name: '腾讯混元', baseUrl: '', model: 'hy-mt2-plus', hasKey: true, keyTail: 'f3k9' },
+        { id: 'z', preset: 'zhipu', name: '智谱', baseUrl: '', model: 'glm-4-flash', hasKey: true, keyTail: 'ab12' },
+        { id: 'd', preset: 'deepl', name: 'DeepL', baseUrl: '', model: '', hasKey: true, keyTail: '9:fx' }];
+      c.primaryId = 'd'; c.fallbackId = ''; c.fixId = '';
+      trAdvanced = true; settingsTab = 'translate'; tr.cfg = null; window.__calls.splice(0);
+    });
+    await go('settings');
+    await js(() => trLoad());
+    const prow = () => js(() => [...document.querySelectorAll('.tr-prow')].filter((r) => r.querySelector('.pn-btn')).slice(0, 3).map((r) => ({
+      name: r.querySelector('b').textContent,
+      btns: [...r.querySelectorAll('button')].map((b) => ({ t: b.textContent, x: Math.round(b.getBoundingClientRect().x), dis: b.disabled })),
+    })));
+    await until(() => document.querySelectorAll('.tr-prow b').length >= 3 && [...document.querySelectorAll('.tr-prow button')].some((b) => b.textContent === '设为纠错'));
+    let pr = await prow();
+    for (const row of pr) {
+      assert.deepStrictEqual(row.btns.slice(1).map((b) => b.t), ['设为默认', '设为纠错', '修改', '删除'], `${row.name} 这行按钮不对 ${JSON.stringify(row)}`);
+      assert.deepStrictEqual(row.btns.map((b) => b.x), pr[0].btns.map((b) => b.x), `按钮没有上下对齐 ${JSON.stringify(pr)}`);
+    }
+    const btn = (name, t) => pr.find((r) => r.name === name).btns.find((b) => b.t === t);
+    assert(btn('DeepL', '设为默认').dis, '默认的那行「设为默认」应点不了');
+    assert(!btn('智谱', '设为默认').dis && !btn('腾讯混元', '设为默认').dis);
+    assert(btn('DeepL', '设为纠错').dis && btn('腾讯混元', '设为纠错').dis, 'DeepL 和混元翻译模型不会纠错，「设为纠错」应点不了');
+    assert(!btn('智谱', '设为纠错').dis, '智谱应能设为纠错');
+    await js(() => [...document.querySelectorAll('.tr-prow')].find((r) => r.querySelector('b').textContent === '智谱').querySelectorAll('button')[2].click());
+    await until(() => window.__calls.some((c) => c[0] === 'roles'));
+    calls = await js(() => window.__calls.slice());
+    assert.deepStrictEqual(calls.find((c) => c[0] === 'roles'), ['roles', 'd', '', 'z'], `设为纠错应只改纠错 ${JSON.stringify(calls)}`);
+    await until(() => [...document.querySelectorAll('.tr-prow')].find((r) => r.querySelector('b').textContent === '智谱').querySelectorAll('button')[2].disabled);
+    pr = await prow();
+    assert(btn('智谱', '设为纠错').dis, '设好之后智谱的「设为纠错」应点不了');
+    assert(pr.find((r) => r.name === '智谱').btns.length === 5);
+    await shot('providers');
+
     assert.deepStrictEqual(errs, [], `页面报错：${errs.join('\n')}`);
     console.log('check-tr-keys: OK');
     app.exit(0);

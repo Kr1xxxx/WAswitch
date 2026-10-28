@@ -22,6 +22,11 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     Object.assign(p, { preset: data.preset, name: data.name, baseUrl: data.baseUrl, model: data.model, hasKey: true, keyTail: data.key.slice(-4) });
     return { ok: true, id: p.id, ...state() };
   };
+  if (k === 'trRoles') return async (primaryId, fallbackId, fixId) => {
+    window.__calls.push(['roles', primaryId, fallbackId, fixId]);
+    Object.assign(window.__cfg, { primaryId, fallbackId }, typeof fixId === 'string' ? { fixId } : {});
+    return state();
+  };
   if (k === 'trTest') return async (id) => { window.__calls.push(['test', id]); return { ok: true }; };
   if (k === 'showPage') return async (page) => { window.__calls.push(['page', page]); };
   return async () => null;
