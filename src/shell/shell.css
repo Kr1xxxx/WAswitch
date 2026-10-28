@@ -540,14 +540,13 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-edit { display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 2px; }
 .dk-suggest { display: flex; flex-direction: column; gap: 4px; width: 100%; margin-top: 4px; padding: 6px 8px; border-radius: 8px; background: #fff8e6; border: var(--hair) solid #f0d58a; }
 
-/* ---------- 删除确认框 ---------- */
-.cfm { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(22,24,29,.28); user-select: none; }
-.cfm-box { width: 100%; max-width: 360px; background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.18); display: flex; flex-direction: column; gap: 8px; }
-.cfm-title { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
-.cfm-detail { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-.cfm-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
-.cfm-btns .btn { height: 36px; padding: 0 16px; }
-.btn.danger-fill { border: none; background: var(--danger); color: #fff; font-weight: 600; }
+/* ---------- 撤销提示：删除、清空、解散分组以后出现几秒 ---------- */
+/* 颜色用 Radix slate：底 1、边 7、字 12；细线用 --hair；按钮圆角和外框同心（10 - 4 = 6） */
+.undo { position: fixed; z-index: 60; display: flex; align-items: center; gap: 12px; height: 36px; padding: 4px 4px 4px 14px; border-radius: 10px; border: var(--hair) solid #cdced6; background: #fcfcfd; color: #1c2024; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.06); white-space: nowrap; -webkit-app-region: no-drag; animation: fx-fade 250ms ease-out backwards; }
+.undo-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.undo-btn { flex: none; height: 28px; padding: 0 10px; border: none; border-radius: 6px; background: transparent; color: #1c2024; font-size: 13px; font-weight: 600; cursor: pointer; }
+.undo-btn:hover { background: #f0f0f3; }
+@media (prefers-reduced-motion: reduce) { .undo { animation: none; } }
 
 /* 复制成功的小对勾：原位置弹出并描出对勾，1.5 秒后图标淡回 */
 .copy-ok, .copy-ok:hover { color: #15803D; opacity: 1; }
@@ -567,9 +566,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 @keyframes fx-rise { from { opacity: 0; transform: translateY(4px); } }
 @keyframes fx-fade { from { opacity: 0; } }
 @keyframes fx-down { from { opacity: 0; transform: translateY(-6px); } }
-@keyframes fx-pop { from { opacity: 0; transform: scale(.96); } }
-@keyframes fx-out { to { opacity: 0; } }
-@keyframes fx-pop-out { to { opacity: 0; transform: scale(.97); } }
 @keyframes fx-slide-l { from { opacity: 0; transform: translateX(10px); } }
 @keyframes fx-bar { from { opacity: 0; transform: scaleX(.4); } }
 @keyframes fx-hl { from { opacity: .4; transform: scale(.98); } }
@@ -595,11 +591,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 @keyframes fx-knob-off { from { transform: translateX(18px); } }
 .switch.fx-sw-on::after { animation: fx-knob-on var(--fx) var(--fx-ease) backwards; }
 .switch.fx-sw-off::after { animation: fx-knob-off var(--fx) var(--fx-ease) backwards; }
-/* 确认框：背景淡入、框从 96% 放大；关掉时淡出 */
-.cfm { animation: fx-fade var(--fx-fast) ease-out backwards; }
-.cfm-box { animation: fx-pop var(--fx) var(--fx-ease) backwards; }
-.cfm.out { pointer-events: none; animation: fx-out var(--fx-fast) ease-in forwards; }
-.cfm.out .cfm-box { animation: fx-pop-out var(--fx-fast) ease-in forwards; }
 /* 翻译页顶上的“还没填密钥”黄条，和表单里的申请密钥链接 */
 .dk-keybar { margin: 10px 12px 0; display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 1.5; }
 .dk-keybar > span { flex: 1; }

@@ -5,7 +5,8 @@ const assert = require('assert');
 const Module = require('module');
 
 const fakeElectron = {
-  dialog: { showMessageBox: async () => ({}) },
+  // 编辑页保存不再弹任何对话框：一调用就算失败
+  dialog: { showMessageBox: async () => { throw new Error('editor:save 不该弹对话框'); } },
   safeStorage: {
     isEncryptionAvailable: () => true,
     encryptString: (s) => Buffer.from(`enc:${s}`),
@@ -55,7 +56,10 @@ const ctx = {
   destroyView: () => {},
   refresh: () => {},
   notifier: { refresh: () => {} },
+  primaryClash: new Map(),
+  comparePrimary: () => { compared++; },
 };
+let compared = 0;
 setupEditorIpc(ctx);
 const save = handlers['editor:save'];
 
@@ -113,6 +117,18 @@ const form = (extra) => ({ id: 'a1', name: '新名字', color: COLORS[0], proxy:
   tests = 0;
   await save({ name: '新号', color: COLORS[0], proxy: 'socks5://127.0.0.1:7893', region: 'auto', mode: 'web' });
   assert.strictEqual(tests, 1, '新建账号要测');
+
+  // 8. 有轻量小号时改了主号的代理：不弹窗，后台和主号比一次出口
+  ctx.accounts = [webAcc(), { id: 'l1', name: '小号', mode: 'lite', proxy: 'socks5://127.0.0.1:7895', proxyPassword: '', fingerprint: { region: 'auto' } }];
+  compared = 0;
+  assert.deepStrictEqual(await save(form({ proxy: 'socks5://127.0.0.1:7899' })), { ok: true });
+  assert.strictEqual(compared, 1, '主号改了代理要在后台比一次');
+
+  // 9. 只改主号名字：不比
+  ctx.accounts = [webAcc(), { id: 'l1', name: '小号', mode: 'lite', proxy: 'socks5://127.0.0.1:7895', proxyPassword: '', fingerprint: { region: 'auto' } }];
+  compared = 0;
+  await save(form());
+  assert.strictEqual(compared, 0, '只改名字不该比');
 
   console.log('check-editor-save: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
