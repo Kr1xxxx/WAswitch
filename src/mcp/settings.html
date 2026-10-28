@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>MCP 接口设置</title>
   <link rel="stylesheet" href="../fonts/fonts.css">
+  <link rel="stylesheet" href="../tokens.css">
   <style>
     /* 和主界面同一套样式（字体、开关、圆角按钮） */
     :root { --text: #16181d; --muted: #4a505a; --line: #eceef1; --ok: #05603a; --danger: #b42318; }
@@ -12,8 +13,6 @@
     :root { --hair: 1px; }
     @media (min-resolution: 2dppx) { :root { --hair: .5px; } }
     /* 动画时长：和 shell.css 的 --fx-slow / --fx-state 同值，减少动态效果时为 0 */
-    :root { --fx-slow: 200ms; --fx-state: 250ms; }
-    @media (prefers-reduced-motion: reduce) { :root { --fx-slow: 0ms; --fx-state: 0ms; } }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 28px 32px; font: var(--fs-m)/1.5 var(--font-ui); color: var(--text); background: #fff; }
     h1 { margin: 0 0 6px; font-size: var(--fs-xl); letter-spacing: -.01em; }
@@ -22,8 +21,8 @@
     .hint { color: var(--muted); font-size: var(--fs-s); }
     .switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: var(--hair) solid var(--line); font-weight: 600; cursor: pointer; }
     .switch.sub { font-weight: 400; }
-    .switch input { appearance: none; -webkit-appearance: none; flex: none; order: 2; width: 42px; height: 24px; margin: 0; border-radius: 12px; background: #c9ced6; position: relative; cursor: pointer; transition: background .15s; }
-    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left .15s; }
+    .switch input { appearance: none; -webkit-appearance: none; flex: none; order: 2; width: 42px; height: 24px; margin: 0; border-radius: var(--r-full); background: #c9ced6; position: relative; cursor: pointer; transition: background-color var(--fx) var(--fx-ease); }
+    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: var(--r-full); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left var(--fx) var(--fx-ease); }
     .switch input:checked { background: #16a34a; }
     .switch input:checked::after { left: 20px; }
     .switch input:disabled { opacity: .5; cursor: default; }
@@ -33,10 +32,10 @@
     #state { font-size: var(--fs-m); min-height: 20px; margin-top: 6px; }
     #state.ok { color: var(--ok); }
     #state.bad { color: var(--danger); }
-    pre { margin: 0; padding: 12px 14px; background: #f7f8fa; border: var(--hair) solid #e3e6ea; border-radius: 10px; font: var(--fs-s)/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
+    pre { margin: 0; padding: 12px 14px; background: #f7f8fa; border: var(--hair) solid #e3e6ea; border-radius: var(--r-m); font: var(--fs-s)/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
     .block { display: flex; flex-direction: column; gap: 8px; }
     .actions { display: flex; gap: 10px; }
-    button { height: 36px; padding: 0 16px; border-radius: 18px; border: var(--hair) solid #e3e6ea; background: #fff; color: inherit; font: inherit; font-size: var(--fs-m); cursor: pointer; }
+    button { height: 36px; padding: 0 16px; border-radius: var(--r-m); border: var(--hair) solid #e3e6ea; background: #fff; color: inherit; font: inherit; font-size: var(--fs-m); cursor: pointer; }
     button:hover { background: #f7f8fa; }
     table { width: 100%; border-collapse: collapse; font-size: var(--fs-m); }
     th, td { text-align: left; padding: 8px 4px; border-bottom: var(--hair) solid var(--line); }
@@ -52,8 +51,8 @@
     #undoMsg.ok { color: var(--ok); }
     #undoMsg.bad { color: var(--danger); }
     button.copy-ok, button.copy-ok:hover { color: #15803D; border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
-    .copy-ok svg { animation: copy-pop var(--fx-state) cubic-bezier(.2, .9, .3, 1.35); }
-    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw var(--fx-slow) calc(var(--fx-state) - var(--fx-slow)) ease-out forwards; }
+    .copy-ok svg { animation: copy-pop var(--fx) var(--fx-ease); }
+    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw var(--fx) var(--fx-ease) forwards; }
     @keyframes copy-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     @keyframes copy-draw { to { stroke-dashoffset: 0; } }
     @media (prefers-reduced-motion: reduce) { .copy-ok svg, .copy-ok svg path { animation: none; stroke-dashoffset: 0; } }
