@@ -506,6 +506,17 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-tool:hover { color: #000; opacity: .65; }
 .dk-tool:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; border-radius: 4px; }
 .dk-outhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 4px; }
+/* 语言条（shen 2026-10-28 参考图）：浅灰圆角条，左原文语言、中间 ⇄、右目标语言，下拉框无边框居中 */
+.dk-bar { flex: 1 1 200px; min-width: 0; display: flex; align-items: center; height: 32px; padding: 0 4px; border-radius: 9px; background: #ebebeb; box-shadow: 0 0 6px rgba(0,0,0,.12); }
+.dk-outhead .dk-bar-sel { flex: 1 1 0; min-width: 0; height: 28px; border: 0; background-color: transparent; box-shadow: none; font-size: 13px; color: #111; text-align: center; text-align-last: center; padding: 0 20px 0 8px; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 3h7L5 7.5z' fill='%23111'/%3E%3C/svg%3E"); background-position: right 8px center; background-size: 10px 10px; }
+.dk-bar-sel:hover { background-color: rgba(0,0,0,.05); }
+.dk-bar-sel:focus-visible, .dk-swap:focus-visible { outline: 2px solid #15803D; outline-offset: -2px; }
+.dk-swap { flex: none; width: 30px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: #111; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.dk-swap svg { stroke-width: 1.6; }
+.dk-swap:hover:not(:disabled) { background: rgba(0,0,0,.06); }
+.dk-swap:disabled { opacity: .4; cursor: default; }
+.dk-compose .dk-head .dk-model { max-width: 160px; color: var(--soft); }
 /* 窗口窄时先让两个下拉框变短（文字省略），按钮保持一行；实在放不下按钮整体换到下一行，不会一个字一个字地折 */
 .dk-outhead select { flex: 0 1 auto; min-width: 64px; }
 .dk-outhead .dk-row, .dk-outhead > .dk-link { flex: none; margin-left: auto; }

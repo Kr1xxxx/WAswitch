@@ -110,7 +110,7 @@ function setupTranslateIpc(ctx) {
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;
     // __back：回译成中文核对，用固定的忠实翻译提示词
     // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
-    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, context, draft, fix: true });
+    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, source, context, draft, fix: true });
     let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
       : typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
     if (modeId === '__back') return userTranslate({ text, mode, target, source });
@@ -171,7 +171,7 @@ function setupTranslateIpc(ctx) {
     temperature: 0.2,
   };
   const FIX_OUT = {
-    prompt: '你是{目标语言}母语的校对员。<text> 里是中文原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
+    prompt: '你是{目标语言}母语的校对员。<text> 里是原文，<draft> 里是{目标语言}译文，<context> 里是最近聊天记录，只用来理解意思。'
       + '检查译文是否准确表达原文、有没有漏译多译，修正语法和拼写，让说法自然、符合当地人聊天习惯，保持原来的语气。'
       + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
     temperature: 0.2,
@@ -314,7 +314,7 @@ function setupTranslateIpc(ctx) {
       langs: ctx.translator.publicConfig().langs,
       target: out.lang,
       targetSrc: out.from, // manual | customer | detected | default
-      autoTarget: (out.auto || out).lang, // 下拉里“自动（…）”显示的语言
+      autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
       accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
       canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
       // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话

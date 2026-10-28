@@ -1,13 +1,14 @@
 // 右侧面板的“翻译”页（shen 2026-10-25 选的方案 C 指挥舱侧栏，风格先沿用软件现有的）。
 // 上：当前对话收到的消息和译文（只读页面，和悬浮窗同一套）；
-// 下：写中文回复，选语气，翻好的译文可以直接改，改过就不会被自动覆盖。只“放进输入框”，永远不按发送。
+// 下：写回复（自动：中文翻成客户的语言，英文等翻成中文），翻好的译文可以直接改，改过就不会被自动覆盖。只“放进输入框”，永远不按发送。
 // 这个文件在 shell.js 之前加载，里面用到的 h、icon、kids、s、pn、tr、panelInsert 等都在 shell.js 里，运行时才调用。
 
 const dk = {
   listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
   stick: true, // 消息列表是不是停在最底下（用户自己滚动时更新）；在底下就跟着新消息滚
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
-  text: '', // 写的中文
+  text: '', // 写的回复（中文或外文）
+  srcLang: null, // 回复的原文语言，'' = 自动检测（记在本机，第一次用时读）
   out: '', // 译文（可以手动改）
   src: '', // 译文是从哪段中文翻的
   edited: false, // 译文手动改过
@@ -64,15 +65,26 @@ async function dockFetch() {
 }
 
 // ---- 发出 ----
-const outModeId = () => {
-  const list = (dk.st && dk.st.modes.out) || [];
-  return (list.find((m) => m.id === tr.outMode) || list[0] || {}).id || '';
-};
+// 语气按钮去掉了（shen 2026-10-28），固定用第一个“发出”模式（默认是“标准”：忠实翻译）
+const outModeId = () => (((dk.st && dk.st.modes.out) || [])[0] || {}).id || '';
+// 原文语言：自动检测或手动选的（存在本机）
+function dockSrc() {
+  if (dk.srcLang === null) { const v = LS('tr.outSrc') || ''; dk.srcLang = dk.st && dk.st.langs.includes(v) ? v : ''; }
+  return dk.srcLang;
+}
+// 目标语言是不是手动选的（读不到对话的号，手动选的记在号上）
+const dockManual = (st) => st.targetSrc === 'manual' || (!st.canRemember && !!st.accountLang);
+// 这一句实际翻成什么：{ source, target }
+function dockLangs(text = dk.text) {
+  const st = dk.st;
+  return ReplyLang.pick({ text, src: dockSrc(), manual: dockManual(st) ? st.target : '', autoTarget: st.autoTarget || st.target });
+}
 // 纠错：AI 对照中文原文和上下文校对现在的译文
 function dockFix() {
   if (dk.busy || !dk.st || !dk.out.trim()) return;
-  if (!dk.text.trim()) return dockSay('先写中文原文，纠错要对照它', true);
-  return dockRun({ req: { text: dk.text, fix: true, draft: dk.out, target: dk.st.target, ctxAccount: dk.st.accountId }, insert: false, acc: dk.st.accountId, title: dk.st.title });
+  if (!dk.text.trim()) return dockSay('先写原文，纠错要对照它', true);
+  const { source, target } = dockLangs();
+  return dockRun({ req: { text: dk.text, fix: true, draft: dk.out, target, source, ctxAccount: dk.st.accountId }, insert: false, acc: dk.st.accountId, title: dk.st.title });
 }
 // insert=true：翻译完直接放进输入框（不发送）。对话在翻译期间换了就不放
 // 同一句中文、同一种语言、同一个模式翻过的，主进程直接给记下的译文，不调模型；fresh=true（点“重新翻译”）才重新翻
@@ -82,7 +94,8 @@ async function dockTranslate(insert = false, fresh = false) {
   if (!text) return dockSay('先写要发的话', true);
   const modeId = outModeId();
   if (!modeId) return dockSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
-  const req = { text: dk.text, modeId, target: dk.st.target, ctxAccount: dk.st.accountId, fresh };
+  const { source, target } = dockLangs();
+  const req = { text: dk.text, modeId, target, source, ctxAccount: dk.st.accountId, fresh };
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
@@ -105,7 +118,7 @@ async function dockInsert() {
   dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
   dockRender(true);
 }
-// 放进输入框：有译文就放（改过的就放改过的）；中文改了又没手动改译文，先重新翻
+// 放进输入框：有译文就放（改过的就放改过的）；原文改了又没手动改译文，先重新翻
 function dockInsertKey() {
   if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
@@ -123,22 +136,38 @@ async function dockModel(id) {
 }
 
 // ---- 界面 ----
-// 发出时翻成哪种语言。默认“自动”：客户资料 > 从客户消息认出来的 > 英语；手动选的记在这个对话上
-function dockLangSel() {
+// 语言条（照 shen 2026-10-28 的参考图）：左边原文语言「自动检测」，中间 ⇄ 对调，右边目标语言「自动选择」。
+// 自动选择：中文翻成客户的语言（客户资料 > 从客户消息认出来的 > 英语），英文等别的语言翻成中文。
+// 手动选的目标语言记在这个对话上（读不到对话时记在号上），原文语言记在本机
+function dockLangBar() {
   const st = dk.st;
-  // 读不到对话（轻量模式等）时，手动选的语言记在号上
-  const manual = st.targetSrc === 'manual' || (!st.canRemember && !!st.accountLang);
-  const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的语言`, default: '认不出客户的语言，先用英语' };
-  const lang = h('select', { class: 'dk-lang', 'aria-label': '翻成哪种语言',
-    title: manual ? '你手动选的语言，已记住；选“自动”就跟着客户的语言' : (autoTip[st.targetSrc] || null), onchange: async (e) => {
-      const v = e.target.value;
-      dk.st = await window.wa.dockLang(st.accountId, st.title, v === '__auto' ? '' : v);
-      dockRender(true);
-    } },
-  h('option', { value: '__auto' }, `自动（${st.autoTarget || st.target}）`),
-  st.langs.map((l) => h('option', { value: l }, l)));
-  lang.value = manual ? st.target : '__auto';
-  return lang;
+  const manual = dockManual(st);
+  const toCustomer = ReplyLang.pick({ text: '中', autoTarget: st.autoTarget || st.target }).target;
+  const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的`, default: '认不出客户的语言，先用英语' };
+  const srcLangs = ['中文', ...st.langs.filter((l) => l !== '中文')];
+  const src = h('select', { class: 'dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认', onchange: (e) => {
+    dk.srcLang = e.target.value === '__auto' ? '' : e.target.value;
+    LS('tr.outSrc', dk.srcLang);
+    dockRender(true);
+  } }, h('option', { value: '__auto' }, '自动检测'), srcLangs.map((l) => h('option', { value: l }, l)));
+  src.value = dockSrc() || '__auto';
+  const setTarget = async (lang) => {
+    dk.st = await window.wa.dockLang(st.accountId, st.title, lang);
+    dockRender(true);
+  };
+  const tgt = h('select', { class: 'dk-bar-sel', 'aria-label': '翻成哪种语言',
+    title: manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
+      : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
+    onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
+  h('option', { value: '__auto' }, '自动选择'), st.langs.map((l) => h('option', { value: l }, l)));
+  tgt.value = manual ? st.target : '__auto';
+  const swapBtn = h('button', { class: 'dk-swap', title: '原文语言和目标语言对调（有译文就把译文换到上面）', 'aria-label': '对调语言', disabled: dk.busy, onclick: async () => {
+    const next = ReplyLang.swap({ text: dk.text, src: dockSrc(), manual: manual ? st.target : '', autoTarget: st.autoTarget || st.target });
+    dk.srcLang = next.src; LS('tr.outSrc', next.src);
+    if (dk.out.trim()) Object.assign(dk, { text: dk.out, out: '', src: '', edited: false, fixed: false, suggest: '', warn: [], forTitle: null });
+    await setTarget(next.manual);
+  } }, icon('swap', 18));
+  return h('div', { class: 'dk-bar' }, src, swapBtn, tgt);
 }
 
 // 翻译模型：选中就设为默认翻译服务商（和 设置 › 翻译 的默认服务商是同一个设置）
@@ -353,18 +382,9 @@ function dockField(box, getText, hint) {
 
 function dockCompose() {
   const st = dk.st;
-  // 发出模式直接做成按钮（原来的下拉框 + 语气按钮重复了，shen 2026-10-26）
-  const curMode = outModeId();
-  const modeChips = st.modes.out.length > 1 ? st.modes.out.map((m) => h('button', { class: `dk-chip${curMode === m.id ? ' on' : ''}`, 'aria-pressed': String(curMode === m.id), title: m.name, onclick: () => {
-    if (curMode === m.id) return;
-    tr.outMode = m.id; LS('tr.outMode', m.id);
-    // 换模式：没手动改过译文就按新模式重翻
-    if (dk.out && !dk.edited && dk.text.trim()) return dockTranslate(false);
-    dockRender(true);
-  } }, m.name)) : [];
   // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
   const keyHint = '回车翻译 · Shift + 回车换行';
-  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', placeholder: '用中文写要回的话', 'aria-label': '要回的话（中文）', 'aria-description': keyHint }, dk.text);
+  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', placeholder: '写要回的话：中文翻成客户的语言，英文翻成中文', 'aria-label': '要回的话', 'aria-description': keyHint }, dk.text);
   input.addEventListener('input', () => { dk.text = input.value; });
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
@@ -383,17 +403,17 @@ function dockCompose() {
   const editedTag = h('span', { class: 'dk-edited', hidden: !dk.edited }, '已手动修改');
   const status = h('span', { class: 'dk-status' }, editedTag,
     dk.fixed && !dk.edited ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
-    stale ? h('span', { class: 'dk-dim' }, '中文改过了') : null);
+    stale ? h('span', { class: 'dk-dim' }, '原文改过了') : null);
   return h('div', { class: 'dk-compose' },
-    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), h('span', { class: 'grow' }), ...modeChips),
+    // 模型选择放在“回复”后面（shen 2026-10-28）
+    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), dockModelSel('dk-lang', true)),
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
-      h('span', { class: 'dk-label' }, '→'), dockLangSel(), dockModelSel('dk-lang', true),
-      h('span', { class: 'grow' }),
+      dockLangBar(),
       dk.busy ? h('button', { class: 'dk-link', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
         : h('span', { class: 'dk-row' },
-          dk.out ? h('button', { class: 'dk-link', title: 'AI 对照中文原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
-          h('button', { class: 'dk-link', title: dk.out ? '按现在的中文和语气重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
+          dk.out ? h('button', { class: 'dk-link', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
+          h('button', { class: 'dk-link', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
     dockField(out, () => out.value, status),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
     dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
