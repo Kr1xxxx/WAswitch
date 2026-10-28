@@ -137,6 +137,31 @@ function glossaryPairs(role, toChinese) {
   return out;
 }
 const MAX_ROLE = 4000;
+// 内置“假发词汇”（shen 2026-10-28）：设置 › 翻译 里打开才用，默认关。左边中文，右边英文，两个方向都照这个翻。
+// 长的放前面（全蕾丝头套在头套前面），混元按顺序参考时先对上长的。
+const WIG_TERMS = [
+  ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'], ['全蕾丝头套', 'Full lace wig'], ['头套', 'Wig'],
+  ['胶片发', 'Tape hair'], ['辫发', 'Raw hair'], ['处女发', 'Virgin hair'],
+];
+// 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
+// 用户自己写了同一个中文词或同一个英文词的固定译法，就用用户的，词表里那一行不加。
+function roleWithWig(role, wig) {
+  const own = String(role || '');
+  if (!wig) return own;
+  const zh = new Set(); const en = new Set();
+  for (const raw of own.split(/\r?\n/)) {
+    const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
+    if (m) { zh.add(m[1].toLowerCase()); en.add(m[2].toLowerCase()); }
+  }
+  const lines = WIG_TERMS.filter(([a, b]) => !zh.has(a.toLowerCase()) && !en.has(b.toLowerCase())).map(([a, b]) => `${a} = ${b}`);
+  if (!lines.length) return own;
+  const keep = WIG_TERMS.filter(([a, b]) => lines.includes(`${a} = ${b}`));
+  // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
+  const back = keep.map(([a, b]) => `${b} → ${a}`);
+  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
+  const tail = '英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词）：';
+  return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}\n${back.join('\n')}`;
+}
 function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
   const terms = glossaryPairs(role, target === '中文');
@@ -266,6 +291,8 @@ class Translator {
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
+      // 内置假发词汇：默认关
+      wigTerms: false,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
@@ -306,6 +333,7 @@ class Translator {
           base.seeded = raw.seeded === true;
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
+          base.wigTerms = raw.wigTerms === true;
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
@@ -411,6 +439,8 @@ class Translator {
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
       rolePrompt: c.rolePrompt,
+      wigTerms: c.wigTerms === true,
+      wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
       canEncrypt: canEncrypt(this.deps.safeStorage),
@@ -474,6 +504,19 @@ class Translator {
     this.load().rolePrompt = text;
     this.save();
     return { ok: true };
+  }
+
+  // 假发词汇开关
+  setWigTerms(on) {
+    this.load().wigTerms = on === true;
+    this.save();
+    return { ok: true };
+  }
+
+  // 翻译和纠错实际用的角色设定（含打开的假发词汇）；话术记录也拿它当键，开关一变老译文就不用
+  roleText() {
+    const c = this.load();
+    return roleWithWig(c.rolePrompt, c.wigTerms === true);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -655,7 +698,7 @@ class Translator {
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
-    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, c.rolePrompt);
+    const messagesFor = (p) => buildMessages(mode, text, langs, context, draft, p.model, this.roleText());
     // DeepL 只管翻译：没设目标语言时，“收到”的模式翻成中文，其他翻成英语
     const deeplReq = { text, target: langs.target || (mode.direction === 'in' ? '中文' : '英语'), source: langs.source, context };
     const once = (p, signal) => (p.preset === 'deepl' ? this.callDeepl(p, deeplReq, signal) : this.call(p, messagesFor(p), { temperature, maxTokens, signal }));
@@ -731,5 +774,5 @@ class Translator {
   }
 }
 
-module.exports = { needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { WIG_TERMS, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 
