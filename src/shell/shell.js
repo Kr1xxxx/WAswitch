@@ -606,7 +606,12 @@ function fitTop() {
   }
   $top.classList.remove('fitting');
 }
-window.addEventListener('resize', () => fitTop());
+// 顶栏按自己的宽度重排，不看窗口：拖窗口、收起展开侧栏，宽度一变就重新藏放
+let topW = 0;
+new ResizeObserver(([e]) => {
+  const w = Math.round(e.contentRect.width);
+  if (w && w !== topW) { topW = w; fitTop(); }
+}).observe($top);
 
 function renderTop() {
   const acc = active();
