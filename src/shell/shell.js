@@ -531,12 +531,12 @@ const clockFormats = new Map();
 function clockParts(tz) {
   const key = tz || '';
   if (!clockFormats.has(key)) {
-    clockFormats.set(key, new Intl.DateTimeFormat('zh-CN', { ...(tz ? { timeZone: tz } : {}), hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' }));
+    clockFormats.set(key, new Intl.DateTimeFormat('zh-CN', { ...(tz ? { timeZone: tz } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
   }
   const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
   const hour = Number(parts.hour);
   const night = hour >= 22 || hour < 8;
-  return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
+  return { text: `${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
 // 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
 let peer = null;
@@ -555,10 +555,9 @@ function clockChip(acc) {
       chip.title = `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`;
       return;
     }
+    // 只写城市和时间，不写星期（设计复查第 2 条）：“伦敦 16:44  纽约 11:44  加州 08:44”
     const zones = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
-    // 星期只在第一个写：“伦敦 周二 16:44  纽约 11:44  加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
-    const day = (x) => x.text.split(' ')[0];
-    chip.lastChild.replaceChildren(...segs(...zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`)));
+    chip.lastChild.replaceChildren(...segs(...zones.map((x) => `${x.place} ${x.text}`)));
     const night = zones.every((x) => x.night); // 几个地方都是深夜 / 清晨才标黄
     chip.classList.toggle('night', night);
     chip.classList.remove('peer');
@@ -566,7 +565,7 @@ function clockChip(acc) {
     chip.title = `${zones.map((x) => `${x.place}（${x.tz}）`).join('、')}的时间，认不出客户时默认显示。打开有号码的私聊时，这里会换成客户的当地时间${night ? '。这几个地方现在都是休息时间' : ''}${own}`;
   };
   draw();
-  chip.draw = draw;
+  chip.draw = () => { draw(); fitTop(); };
   return chip;
 }
 window.wa.onPeerZone((z) => {
@@ -581,37 +580,20 @@ setInterval(() => {
   if (c && c.draw) c.draw();
 }, 20000);
 
-// 内存数字的说明：后台号涨到回收线会悄悄刷新一次，刷新后数字会一下变小，再慢慢涨回 300 MB 左右
-function memTitle(acc, lite) {
-  if (lite) return '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值';
-  const r = acc.lastRecycle;
-  const tip = '内存占用（近似值，只算这个号的页面进程）';
-  if (!r || !r.at) return tip;
-  const t = new Date(r.at);
-  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-  return `${tip}\n${hm} 在后台自动刷新过一次（当时 ${r.mb} MB），刷新后数字会先变小，几分钟内涨回正常。登录和聊天记录都不受影响。`;
-}
-
-// 顶栏的缩放比例：点一下展开 − / + 自己调，再点比例或点别处收起
-let zoomOpenFor = '';
-function zoomChip(acc) {
-  const pct = `${Math.round((acc.zoom || 0.9) * 100)}%`;
-  const key = s.platform === 'darwin' ? 'Cmd' : 'Ctrl';
-  const toggle = (e) => { e.stopPropagation(); zoomOpenFor = zoomOpenFor === acc.id ? '' : acc.id; renderTop(); };
-  if (zoomOpenFor !== acc.id) {
-    return h('button', { class: 'chip', type: 'button', title: `页面缩放 ${pct}，点一下调整（${key} + = / - / 0 也能调）`, onclick: toggle }, pct);
+// 顶栏放不下时按优先级整块藏起来，不出现省略号（设计复查第 2 条）。
+// data-fit 小的先藏：备注 → 线路 → 时钟 → 有问题的线路。账号名和右边三个按钮一直留着
+function fitTop() {
+  if ($top.hidden) return;
+  const items = [...$top.querySelectorAll('[data-fit]')].sort((x, y) => x.dataset.fit - y.dataset.fit);
+  items.forEach((el) => el.classList.remove('fit-off'));
+  $top.classList.add('fitting');
+  for (const el of items) {
+    if ($top.scrollWidth <= $top.clientWidth) break;
+    el.classList.add('fit-off');
   }
-  const step = (dir) => (e) => { e.stopPropagation(); window.wa.zoom(acc.id, dir); };
-  const z = acc.zoom || 0.9;
-  return h('span', { class: 'chip zoom-ctl', onclick: (e) => e.stopPropagation() },
-    h('button', { type: 'button', class: 'zbtn', title: '缩小', 'aria-label': '缩小', disabled: z <= 0.5, onclick: step(-1) }, '−'),
-    h('button', { type: 'button', class: 'zpct', title: '收起', onclick: toggle }, pct),
-    h('button', { type: 'button', class: 'zbtn', title: '放大', 'aria-label': '放大', disabled: z >= 2, onclick: step(1) }, '+'),
-    z !== 0.9 ? h('button', { type: 'button', class: 'zreset', title: '还原到默认 90%', onclick: step(0) }, '默认') : null);
+  $top.classList.remove('fitting');
 }
-const closeZoom = () => { if (zoomOpenFor) { zoomOpenFor = ''; renderTop(); } };
-document.addEventListener('click', closeZoom);
-window.addEventListener('blur', closeZoom); // 点进 WhatsApp 页面时也收起
+window.addEventListener('resize', () => fitTop());
 
 function renderTop() {
   const acc = active();
@@ -620,18 +602,23 @@ function renderTop() {
   // 锁着时顶栏只留一句“已锁定”：账号名、出口 IP、内存这些都不露出来
   if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
+  // 缩放和内存在右边“⋯”菜单里（设计复查第 2 条）
+  const exit = exitChip(acc);
+  exit.dataset.fit = acc.problem || exit.classList.contains('night') ? 4 : 2;
+  const clock = clockChip(acc);
+  clock.dataset.fit = 3;
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), emojiImg(acc, 16), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
+    emojiImg(acc, 16), h('span', { class: 'who', title: acc.note || null }, acc.name),
+    acc.note ? h('span', { class: 'who-note', 'data-fit': 1 }, acc.note) : null,
     h('span', { class: 'grow' }),
-    exitChip(acc),
-    !lite ? zoomChip(acc) : null,
-    clockChip(acc),
-    acc.memMB ? h('span', { class: 'chip', title: memTitle(acc, lite) }, `${acc.memMB} MB`) : null,
+    exit,
+    clock,
     // 右边三个按钮放成一组：刷新、工作台、账号菜单（shen 2026-10-27 把刷新挪到最前）
     h('span', { class: 'top-acts' },
       h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
       h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
       h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id, 'top') }, icon('more', 15)))));
+  fitTop();
 }
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；
