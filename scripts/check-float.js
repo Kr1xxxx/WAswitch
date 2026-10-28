@@ -91,6 +91,62 @@ async function core() {
   console.log('悬浮翻译逻辑自检通过');
   await keyRetry();
   await persisted();
+  await sendNoJump();
+}
+
+// 自己发消息时翻译栏不动（shen 2026-10-28）：页面只读最后 20 条，自己每发一条，最老的客户消息就被挤出读的范围。
+// 同一个对话里被挤出去的照样留着，列表不变、不推送、不重画；客户再发来才加在最后
+async function sendNoJump() {
+  const fc = new FloatCore({ translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  const opts = { auto: false, dailyCap: 500 };
+  // 20 条：客户 6 条，自己 14 条，客户的在前面
+  let page = Array.from({ length: 20 }, (_, i) => msg(i, ![0, 1, 4, 8, 12, 15].includes(i)));
+  const texts = () => fc.viewOf('S').items.map((x) => x.text);
+  assert(fc.ingest('S', { title: 'Emma', msgs: page }, opts));
+  const start = texts();
+  assert.strictEqual(start.length, 6);
+  let pushes = 0;
+  for (let i = 0; i < 16; i++) {
+    page = [...page.slice(1), msg(100 + i, true)]; // 发一条：最老的一条被挤出读的范围
+    if (fc.ingest('S', { title: 'Emma', msgs: page }, opts)) pushes += 1;
+    assert.deepStrictEqual(texts(), start, `发第 ${i + 1} 条后翻译栏的消息变了`);
+  }
+  assert.strictEqual(pushes, 0, '自己发消息不该让翻译栏重画');
+  assert(page.every((m) => m.out), '这时读到的 20 条全是自己发的');
+  // 客户回了一条：加在最后，前面的都还在
+  page = [...page.slice(1), msg(200)];
+  assert(fc.ingest('S', { title: 'Emma', msgs: page }, opts));
+  assert.deepStrictEqual(texts(), [...start, 'hola 200']);
+  // 换到别的对话再回来（和上次读到的接不上）：只显示这次读到的
+  fc.ingest('S', { title: 'Max', msgs: [msg(1, false, '999@c.us')] }, opts);
+  fc.ingest('S', { title: 'Emma', msgs: page }, opts);
+  assert.deepStrictEqual(texts(), ['hola 200']);
+  // 上次当成收到的、这次认出是自己发的（还在翻译中删不掉）：不留在列表上
+  {
+    let release;
+    const fc2 = new FloatCore({ translate: () => new Promise((res) => { release = () => res({ text: '译', warn: [] }); }) });
+    const a = { id: 'false_777@c.us_A', out: false, text: 'Hallo' };
+    const b = { id: 'false_777@c.us_B', out: false, text: 'Bis morgen' };
+    fc2.ingest('R', { title: 'Anna', msgs: [a, b] }, { auto: true, dailyCap: 500 });
+    await sleep(5);
+    fc2.manual('R', hashOf('R', b.id)); // b 排在 a 后面；先让 a 跑着
+    fc2.ingest('R', { title: 'Anna', msgs: [a, { ...b, id: 'true_777@c.us_B', out: true }] }, { auto: true, dailyCap: 500 });
+    assert.deepStrictEqual(fc2.viewOf('R').items.map((x) => x.text), ['Hallo']);
+    fc2.ingest('R', { title: 'Anna', msgs: [{ ...b, id: 'true_777@c.us_B', out: true }, msg(1, true, '777@c.us')] }, { auto: true, dailyCap: 500 });
+    assert.deepStrictEqual(fc2.viewOf('R').items.map((x) => x.text), ['Hallo'], '认出是自己发的那条不能被当成旧消息留下');
+    release();
+  }
+  // 轻量号一次读到的超过 40 条：一条不少，发消息也不变
+  const many = Array.from({ length: 60 }, (_, i) => msg(i, false, '555@c.us'));
+  fc.ingest('M', { title: 'Big', msgs: many }, opts);
+  assert(!fc.ingest('M', { title: 'Big', msgs: [...many.slice(1), msg(60, true, '555@c.us')] }, opts), '轻量号发消息也不重画');
+  assert.strictEqual(fc.viewOf('M').items.length, 60);
+  // 客户撤回了中间一条（没被挤出去，是不见了）：不留，也不会挪到前面
+  const rv = [msg(1, false, '666@c.us'), msg(2, false, '666@c.us'), msg(3, false, '666@c.us'), msg(4, true, '666@c.us')];
+  fc.ingest('V', { title: 'Rev', msgs: rv }, opts);
+  fc.ingest('V', { title: 'Rev', msgs: [rv[0], rv[2], rv[3]] }, opts);
+  assert.deepStrictEqual(fc.viewOf('V').items.map((x) => x.text), ['hola 1', 'hola 3']);
+  console.log('发消息时翻译栏不动自检通过');
 }
 
 // 填好密钥后：“没填密钥 / 密钥不对”失败的自动重翻；别的原因失败的不动；照每天上限；别的对话里的忘掉；纠错失败的恢复原译文
