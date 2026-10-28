@@ -495,6 +495,11 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-mini { max-width: 104px; color: var(--soft); }
 .dk-model { max-width: 150px; }
 /* 收到的消息：照 WhatsApp 收到的气泡。紧凑，时间小号灰字在右下角，纠错/编辑悬停才显示 */
+.dk-listbox { position: relative; flex: 1; min-height: 80px; display: flex; flex-direction: column; }
+/* 往上翻着时来了新消息：底部正中一个小按钮，点了回到最新（样式同撤销条） */
+.dk-newpill { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 2; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 12px 0 8px; border-radius: var(--r-full); border: var(--hair) solid var(--slate-7); background: var(--slate-1); color: var(--slate-12); font: inherit; font-size: var(--fs-s); white-space: nowrap; cursor: pointer; box-shadow: 0 4px 12px var(--slate-a3); }
+.dk-newpill:hover { background: var(--slate-2); }
+.dk-newpill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .dk-list { position: relative; flex: 1; min-height: 80px; overflow-y: auto; overflow-anchor: none; padding: 8px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
 .dk-item { position: relative; align-self: flex-start; max-width: 92%; min-width: 72px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px 6px 9px; border-radius: var(--r-m); background: var(--slate-3); border: var(--hair) solid var(--slate-6); }
 .dk-item.wide { align-self: stretch; max-width: none; }
