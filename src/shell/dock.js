@@ -31,6 +31,13 @@ const dk = {
   seenTitle: null,
   unread: 0,
   acc: null,
+  draftKey: '', // 回复框现在是哪个对话的草稿：`${号}|${chatKey}`，'' = 还没认出对话
+  draftSent: '', // 上次存的草稿（JSON），没变就不再发
+  draftTimer: null,
+  draftUsed: '', // 放进输入框时的草稿（JSON）：没再改就算用掉了，不再存
+  lastInput: 0, // 上次在回复框里打字的时间
+  typingBase: null, // 这一阵打字之前的草稿
+  redraw: false, // 换了对话：下次重画连回复框一起换
 };
 
 const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !s.locked && s.page === 'account');
@@ -47,6 +54,110 @@ function dockCountUnread() {
   if (dk.seen.size > 2000) dk.seen = new Set(st.items.map((it) => it.h));
   dk.unread = st.items.filter((it) => !dk.seen.has(it.h)).length;
 }
+
+// ---- 草稿 ----
+// 回复框写的话和译文按对话存在本机（主进程 drafts.js）：切到别的对话再切回来、重启软件都还在，清空回复框就删掉。
+// 认对话用主进程给的 chatKey（对话的 hash）；还没认出对话（刚打开号、打开还没有消息的新对话）时先不存，认出来以后归到那个对话。
+// 放进输入框以后草稿算用掉了：这次还留在框里，不再改就不存（切走、重启后不再出现）
+const DRAFT_TYPING_MS = 2500; // 网页号每 2 秒读一次页面：换对话后这么久以内打的字算新对话的
+const dockDraftOf = () => ({ text: dk.text, out: dk.out, src: dk.src, edited: dk.edited, fixed: dk.fixed, warn: dk.warn });
+function dockDraftSend(key, d) {
+  if (!key || !window.wa.dockDraft) return;
+  const [acc, chat] = key.split('|');
+  window.wa.dockDraft(acc, chat, d);
+}
+function dockDraftFlush() {
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = null;
+  if (!dk.draftKey) return;
+  const cur = JSON.stringify(dockDraftOf());
+  const used = cur === dk.draftUsed;
+  const json = used ? 'null' : cur;
+  if (json === dk.draftSent) return;
+  dk.draftSent = json;
+  dockDraftSend(dk.draftKey, used ? null : dockDraftOf());
+}
+// 打字时等停手 300ms 再存；重画时（翻译、纠错、对调这类一下子改完的）已经在等就不再往后推
+function dockDraftQueue(restart = true) {
+  if (!dk.draftKey || (!restart && dk.draftTimer)) return;
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = setTimeout(dockDraftFlush, 300);
+}
+// 点进回复框（点 WhatsApp 换对话再点回来，焦点必然重新进来）：从这一刻起打的字算“这一阵”
+function dockFocused() { dk.typingBase = dockDraftOf(); dk.lastInput = 0; }
+// 回复框里打了字（input 事件里、改 dk 之前调）：记下这一阵打字之前的草稿，换对话时用
+function dockTyped() {
+  const now = Date.now();
+  if (now - dk.lastInput > DRAFT_TYPING_MS) dk.typingBase = dockDraftOf();
+  dk.lastInput = now;
+}
+// 点 WhatsApp 页面换对话时焦点会离开软件界面；焦点还在回复框里说明是换完对话才点进来打的字
+const dockTypingNow = () => Date.now() - dk.lastInput < DRAFT_TYPING_MS && document.hasFocus() && !!document.activeElement && !!document.activeElement.closest('.dk-compose');
+// 回复框换成某个对话存的草稿（没有就清空）
+function dockLoadDraft(d, title) {
+  d = d || {};
+  Object.assign(dk, {
+    text: d.text || '', out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
+    suggest: '', forTitle: d.out ? title : null, msg: '', bad: false, msgPid: '',
+  });
+  dk.draftSent = JSON.stringify(dockDraftOf());
+  dk.draftUsed = '';
+  dk.redraw = true; // 回复框要换成这个对话的内容（正在打字也换）
+}
+// 没认出对话时写的字归到认出来的对话；那个对话原来就有草稿的话，原来的写在前面
+function dockCarry(d) {
+  if (d && (d.text || '').trim()) {
+    dk.text = dk.text.trim() ? `${d.text}\n${dk.text}` : d.text;
+    if (!dk.out.trim()) Object.assign(dk, { out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [] });
+    dk.redraw = true;
+  }
+  dk.draftSent = '';
+  dk.draftUsed = '';
+  dockDraftQueue();
+}
+// 主进程推来新状态：换了对话（或换了号）就先把上一个对话的草稿写下来，再换成这个对话的
+function dockAdopt(st) {
+  const key = st.accountId && st.chatKey ? `${st.accountId}|${st.chatKey}` : '';
+  if (dk.acc !== st.accountId) { dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastInput = 0; }
+  dk.st = st;
+  if (key === dk.draftKey) return;
+  const old = dk.draftKey;
+  if (!key) {
+    // 打开了还没有消息的对话（认不出是哪个）：上一个对话的写下来，回复框清空；这里写的等认出对话再存
+    dockDraftFlush();
+    dk.draftKey = '';
+    dockLoadDraft(null, st.title);
+    return;
+  }
+  if (!old) {
+    dk.draftKey = key;
+    if (dk.text.trim() || dk.out.trim()) dockCarry(st.draft);
+    else dockLoadDraft(st.draft, st.title);
+    return;
+  }
+  // 换对话后网页号要过一会儿才读到：刚点开新对话就打的字归到新对话，上一个对话留打字之前的那份
+  if (dockTypingNow() && !(st.draft && ((st.draft.text || '').trim() || (st.draft.out || '').trim()))) {
+    clearTimeout(dk.draftTimer);
+    dk.draftTimer = null;
+    const base = dk.typingBase || {};
+    const bt = base.text || '';
+    // 上一个对话留打字之前的那份；那时是空的就不动它（不删 300ms 前已经存好的）
+    if (bt.trim() || (base.out || '').trim()) dockDraftSend(old, base);
+    dk.draftUsed = '';
+    // 新对话只拿这一阵打的字：接在上一个对话的原文后面打的，前面那段留给上一个对话
+    if (bt && dk.text.startsWith(bt)) dk.text = dk.text.slice(bt.length).replace(/^\s+/, '');
+    if (dk.out === (base.out || '')) Object.assign(dk, { out: '', src: '', edited: false, fixed: false, warn: [], suggest: '', forTitle: null });
+    dk.draftKey = key;
+    dk.draftSent = '';
+    dk.redraw = true;
+    dockDraftQueue();
+    return;
+  }
+  dockDraftFlush();
+  dk.draftKey = key;
+  dockLoadDraft(st.draft, st.title);
+}
+window.addEventListener('beforeunload', dockDraftFlush);
 
 function dockReset() {
   Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false });
@@ -87,16 +198,16 @@ function dockWait(ms) {
 if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'dock') dockWait(Number(w.ms) || 0); });
 
 window.wa.onDock((st) => {
-  if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
-  if (dockHasNew(dk.st, st)) dk.pill = true;
-  dk.st = st;
+  const fresh = dockHasNew(dk.st, st); // 和上一次的状态比（换号时 dockAdopt 会清掉）
+  dockAdopt(st);
+  if (fresh) dk.pill = true;
   const before = dk.unread;
   dockCountUnread();
   if (dockVisible()) dockRender(false);
   if (before !== dk.unread && s) refreshPanelHead();
 });
 async function dockFetch() {
-  try { const st = await window.wa.dockGet(); if (st) { if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; } dk.st = st; dockCountUnread(); } } catch {}
+  try { const st = await window.wa.dockGet(); if (st) { dockAdopt(st); dockCountUnread(); } } catch {}
   dockRender(true);
 }
 
@@ -139,12 +250,13 @@ async function dockTranslate(insert = false, fresh = false) {
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
+  p.key = dk.draftKey;
   dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
   dockWait(0);
-  if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
+  if (!dk.st || p.acc !== dk.st.accountId || p.key !== dk.draftKey) return dockRender(true); // 换号、换对话了：作废（再翻一次直接用记下的译文）
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
@@ -155,8 +267,10 @@ async function dockRun(p) {
 async function dockInsert() {
   if (!dk.out.trim()) return dockSay('还没有译文', true);
   if (dk.st && dk.forTitle !== null && dk.st.title !== dk.forTitle) return dockSay('译文是给另一个对话翻的，没有放。看一下再点', true);
+  const key = dk.draftKey;
   await panelInsert(dk.out);
   dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
+  if (!dk.bad && dk.msg && key === dk.draftKey) { dk.draftUsed = JSON.stringify(dockDraftOf()); dockDraftFlush(); } // 放进去了：草稿用掉了
   dockRender(true);
 }
 // 放进输入框：有译文就放（改过的就放改过的）；原文改了又没手动改译文，先重新翻
@@ -195,7 +309,8 @@ function dockLangBar() {
   src.value = lt.src || '__auto';
   const setTarget = async (lang) => {
     lt.tgt = ''; lt.swapped = false;
-    dk.st = await window.wa.dockLang(st.accountId, st.title, lang);
+    const next = await window.wa.dockLang(st.accountId, st.title, lang);
+    if (next) dockAdopt(next);
     dockRender(true);
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
@@ -455,7 +570,8 @@ function dockCompose() {
   // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
   const keyHint = h('span', { class: 'dk-keyhint' }, ...segs('回车翻译', 'Shift + 回车换行'));
   const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', 'aria-label': '要回的话（中文翻成客户的语言，英文翻成中文）', 'aria-description': '回车翻译，Shift + 回车换行' }, dk.text);
-  input.addEventListener('input', () => { dk.text = input.value; });
+  input.addEventListener('input', () => { dockTyped(); dk.text = input.value; dockDraftQueue(); });
+  input.addEventListener('focus', dockFocused);
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
     if (e.shiftKey) return; // 换行
@@ -464,8 +580,11 @@ function dockCompose() {
     dockTranslate(false);
   });
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
+  out.addEventListener('focus', dockFocused);
   out.addEventListener('input', () => {
+    dockTyped();
     dk.out = out.value;
+    dockDraftQueue();
     if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
   });
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
@@ -523,7 +642,10 @@ function dockRender(force = false) {
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   const mark = dockScrollMark();
-  if (root && !force && typing) {
+  dockDraftQueue(false); // 翻译、纠错、对调这些改了草稿的，重画时一起存（没变就不发）
+  const redraw = dk.redraw;
+  dk.redraw = false;
+  if (root && !force && !redraw && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动

@@ -2304,6 +2304,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
   const wasPrimary = acc.primary;
   accounts = accounts.filter((a) => a.id !== id);
+  trIpc.forgetDrafts(id); // 号已经不在了：之后晚到的草稿不再收
   // 删掉主号后，第一个网页版账号自动成为主号
   const newPrimary = wasPrimary ? accounts.find((a) => a.mode === 'web') : null;
   if (newPrimary) newPrimary.primary = true;
@@ -3239,6 +3240,7 @@ app.on('before-quit', (event) => {
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
   if (trIpc.trStore) trIpc.trStore.flush(); // 还没写盘的译文
+  if (trIpc.drafts) trIpc.drafts.flush(); // 回复框的草稿
   // 还没写盘的通知记录马上写
   if (notifLogTimer) {
     clearTimeout(notifLogTimer);
@@ -3250,6 +3252,8 @@ app.on('before-quit', (event) => {
     liteHost.shutdown().finally(() => { liteFlushed = true; app.quit(); });
   }
 });
+// 关窗口时界面最后一次存的草稿可能晚于 before-quit 到：退出前再写一次
+app.on('will-quit', () => { if (trIpc.drafts) trIpc.drafts.flush(); });
 // 窗口只是隐藏，不因为“没有可见窗口”而退出
 app.on('window-all-closed', () => {});
 // macOS 点 Dock 图标时重新显示窗口

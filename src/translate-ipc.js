@@ -11,6 +11,7 @@ const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore')
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
+const { DraftStore } = require('./drafts');
 const { shortName } = require('./undo');
 const ReplyLang = require('./shell/reply-lang');
 
@@ -201,6 +202,8 @@ function setupTranslateIpc(ctx) {
   let floatReadable = 'loading'; // ok | nochat | qr | unreadable | loading
   let floatCore = null;
   let trStore = null; // 收到的消息的译文，永久存在磁盘上
+  let drafts = null; // 工作台回复框没发的草稿，每个对话一份（见 drafts.js）
+  const draftStore = () => drafts || (drafts = new DraftStore(path.join(app.getPath('userData'), 'reply-drafts.json')));
   // 自动翻译默认开，只有手动关掉的号是 false
   const floatAuto = (id) => !!id && ctx.translator.load().accountAuto[id] !== false;
   // 读当前对话的条件：右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
@@ -367,6 +370,8 @@ function setupTranslateIpc(ctx) {
       autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
       accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
       canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
+      chatKey: v.chatKey || '', // 回复框的草稿按它存（对话的 hash，不含号码）
+      draft: acc && v.chatKey ? draftStore().get(acc.id, v.chatKey) : null, // 这个对话上次没发的草稿
     };
   }
   function pushFloat() {
@@ -422,6 +427,11 @@ function setupTranslateIpc(ctx) {
     pushFloat();
     return floatState();
   });
+  // 回复框的草稿：写了、翻了、改了就存；清空就删。对话可能已经切走了（切走时才把上一个对话的写下来），所以按 chatKey 存，不看当前对话
+  onShell('dock:draft', ({ accountId, chatKey, draft } = {}) => {
+    if (!findAcc(accountId)) return;
+    draftStore().set(accountId, chatKey, draft);
+  });
   // 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
   handleShell('tr:auto', ({ accountId, on } = {}) => {
     const acc = findAcc(accountId);
@@ -452,6 +462,9 @@ function setupTranslateIpc(ctx) {
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatCore() { return floatCore; },
     get trStore() { return trStore; },
+    get drafts() { return drafts; },
+    // 删号：这个号的草稿一起删
+    forgetDrafts(id) { draftStore().forgetAccount(id); },
   };
 }
 

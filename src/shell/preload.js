@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('wa', {
   dockAuto: (on) => ipcRenderer.invoke('dock:auto', on === true),
   dockInMode: (id) => ipcRenderer.invoke('dock:inmode', id),
   dockLang: (accountId, title, lang) => ipcRenderer.invoke('dock:lang', { accountId, title, lang }),
+  dockDraft: (accountId, chatKey, draft) => ipcRenderer.send('dock:draft', { accountId, chatKey, draft }),
   replySave: (data) => ipcRenderer.invoke('reply:save', data),
   replyDelete: (id) => ipcRenderer.invoke('reply:delete', id),
   custSave: (data) => ipcRenderer.invoke('cust:save', data),
