@@ -136,11 +136,16 @@ async function sendNoJump() {
     assert.deepStrictEqual(fc2.viewOf('R').items.map((x) => x.text), ['Hallo'], '认出是自己发的那条不能被当成旧消息留下');
     release();
   }
-  // 轻量号一次读到的超过 40 条：一条不少
+  // 轻量号一次读到的超过 40 条：一条不少，发消息也不变
   const many = Array.from({ length: 60 }, (_, i) => msg(i, false, '555@c.us'));
   fc.ingest('M', { title: 'Big', msgs: many }, opts);
-  fc.ingest('M', { title: 'Big', msgs: [...many.slice(1), msg(60, true, '555@c.us')] }, opts);
-  assert.strictEqual(fc.viewOf('M').items.length, 59);
+  assert(!fc.ingest('M', { title: 'Big', msgs: [...many.slice(1), msg(60, true, '555@c.us')] }, opts), '轻量号发消息也不重画');
+  assert.strictEqual(fc.viewOf('M').items.length, 60);
+  // 客户撤回了中间一条（没被挤出去，是不见了）：不留，也不会挪到前面
+  const rv = [msg(1, false, '666@c.us'), msg(2, false, '666@c.us'), msg(3, false, '666@c.us'), msg(4, true, '666@c.us')];
+  fc.ingest('V', { title: 'Rev', msgs: rv }, opts);
+  fc.ingest('V', { title: 'Rev', msgs: [rv[0], rv[2], rv[3]] }, opts);
+  assert.deepStrictEqual(fc.viewOf('V').items.map((x) => x.text), ['hola 1', 'hola 3']);
   console.log('发消息时翻译栏不动自检通过');
 }
 
