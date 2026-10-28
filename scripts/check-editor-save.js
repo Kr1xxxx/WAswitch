@@ -31,6 +31,7 @@ const handlers = {};
 const COLORS = ['#25d366'];
 const ctx = {
   accounts: [],
+  groups: [],
   handleShell: (name, fn) => { handlers[name] = fn; },
   findAcc: (id) => ctx.accounts.find((a) => a.id === id),
   isParked: () => false,
@@ -129,6 +130,41 @@ const form = (extra) => ({ id: 'a1', name: '新名字', color: COLORS[0], proxy:
   compared = 0;
   await save(form());
   assert.strictEqual(compared, 0, '只改名字不该比');
+
+  // Audited proxy identity: endpoint alone cannot authorize changed credentials.
+  const success = () => ({ ok: true, ip: '9.9.9.9', country: 'US', timezone: 'America/New_York' });
+  const test = handlers['editor:test'];
+  const load = handlers['editor:load'];
+  const lf = { name: 'Lite', color: COLORS[0], proxy: 'http://alice@127.0.0.1:8080', password: 'test-one', mode: 'lite', liteConfirm: true };
+  ctx.accounts = [];
+  await test(lf);
+  assert.ok((await save({ ...lf, proxy: 'http://bob@127.0.0.1:8080' })).error, 'different username requires test');
+  assert.ok((await save({ ...lf, password: 'test-two' })).error, 'different password requires test');
+  assert.deepStrictEqual(await save(lf), { ok: true }, 'exact tested identity saves');
+  ctx.accounts = [];
+  await test(lf);
+  proxy.test = async () => ({ ok: false, error: 'synthetic failed test' });
+  await test(lf);
+  assert.ok((await save(lf)).error, 'failed retest invalidates prior success');
+  let finishOld;
+  proxy.test = () => new Promise(resolve => { finishOld = resolve; });
+  const oldTest = test(lf);
+  proxy.test = async () => ({ ok: false, error: 'synthetic newer failure' });
+  await test(lf);
+  finishOld(success()); await oldTest;
+  assert.ok((await save(lf)).error, 'late success cannot replace newer failed test');
+  proxy.test = () => new Promise(resolve => { finishOld = resolve; });
+  const closing = test(lf);
+  load(); finishOld(success()); await closing;
+  assert.ok((await save(lf)).error, 'reopening editor invalidates in-flight test');
+  proxy.test = async () => success();
+  await test({ ...lf, mode: 'web' });
+  assert.ok((await save(lf)).error, 'mode changes invalidate tested identity');
+  ctx.accounts = [webAcc({ id: 'l1', mode: 'lite', primary: false }), webAcc({ id: 'l2', mode: 'lite', primary: false })];
+  await test({ ...lf, id: 'l1' });
+  assert.ok((await save({ ...lf, id: 'l2' })).error, 'test cannot transfer between accounts');
+  ctx.accounts = [webAcc({ id: 'l1', mode: 'lite', primary: false, proxy: lf.proxy, proxyPassword: proxy.encryptPassword('test-one') })];
+  assert.ok((await save({ ...lf, id: 'l1', proxy: 'http://alice:changed-inline@127.0.0.1:8080', password: '' })).error, 'inline password changes also require a matching test');
 
   console.log('check-editor-save: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

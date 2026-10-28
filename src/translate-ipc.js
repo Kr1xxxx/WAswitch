@@ -226,9 +226,11 @@ function setupTranslateIpc(ctx) {
     trStore = new TrStore(guess);
     pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
       if (!trStore) return;
-      trStore.flush();
+      if (!trStore.flush()) return; // 写盘失败时保留脏缓存和原目录，不能开始搬家
       if (process.platform === 'win32') migrateTr(dir === dTrDir ? oldTrDir : dTrDir, dir);
-      if (dir !== trStore.dir) { trStore.setDir(dir); console.log(`译文存在：${dir}`); }
+      const moved = dir !== trStore.dir;
+      trStore.setDir(dir); // 同目录合并后也要丢弃旧的内存快照
+      if (moved) console.log(`译文存在：${dir}`);
     }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
     floatCore = new FloatCore({
       store: trStore,

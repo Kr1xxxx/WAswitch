@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { finished } = require('stream/promises');
 const { writeJsonAtomic } = require('./atomic');
 const errtext = require('./errtext');
 
@@ -30,6 +31,9 @@ function sha512File(file) {
 
 // 下载失败的原因说人话；自己写的中文原样用
 function downloadErrorText(e) {
+  if (e?.code === 'ENOSPC') return '磁盘空间不足，请腾出空间后重试';
+  if (['EACCES', 'EPERM', 'EROFS'].includes(e?.code)) return '无法写入模块文件夹，请检查权限后重试';
+  if (['EISDIR', 'ENOTDIR', 'ENOENT', 'EEXIST', 'EIO'].includes(e?.code)) return '无法写入模块文件，请检查存储路径和磁盘后重试';
   const raw = errtext.rawOf(e) || String(e && e.message || e);
   if (errtext.hasChinese(raw)) return raw;
   const status = Number(e && e.statusCode) || 0;
@@ -166,13 +170,16 @@ class McpModule {
     this.error = '';
     this.abort = new AbortController();
     this.changed();
-    fs.mkdirSync(this.o.dir, { recursive: true });
     const part = `${this.file}.part`;
-    const out = fs.createWriteStream(part);
+    let out;
+    let completed;
     const hash = crypto.createHash('sha512');
     let lastPush = 0;
     try {
-      await this.o.fetch(url, {
+      fs.mkdirSync(this.o.dir, { recursive: true });
+      out = fs.createWriteStream(part);
+      completed = finished(out);
+      await Promise.race([completed, this.o.fetch(url, {
         signal: this.abort.signal,
         maxBytes: MAX_BYTES,
         onData: (chunk, got, total) => {
@@ -182,8 +189,9 @@ class McpModule {
           this.percent = t ? Math.min(99, Math.floor((got / t) * 100)) : 0;
           if (Date.now() - lastPush > 200) { lastPush = Date.now(); this.changed(); }
         },
-      });
-      await new Promise((resolve, reject) => out.end((e) => (e ? reject(e) : resolve())));
+      })]);
+      out.end();
+      await completed;
       if (hash.digest('base64') !== expected.sha512) throw new Error('下载的文件校验不通过（sha512 不一致），已删除');
       fs.renameSync(part, this.file);
       // 第一次下载：开关一律从关开始，要用户自己打开（旧版本开着的也一样）
@@ -197,7 +205,9 @@ class McpModule {
       this.updating = false;
       this.o.log?.(`MCP 模块 ${expected.version} 已下载`);
     } catch (e) {
-      out.destroy();
+      this.abort.abort();
+      if (out) out.destroy();
+      if (completed) await completed.catch(() => {});
       try { fs.unlinkSync(part); } catch { /* 没写出来 */ }
       this.status = 'none';
       this.percent = 0;

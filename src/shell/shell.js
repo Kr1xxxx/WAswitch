@@ -1514,12 +1514,20 @@ function editorPage(id) {
         ? `提示：轻量号直连不经过系统代理，用这台电脑的真实 IP${liteOthers ? `，和${liteOthers}是同一个 IP` : ''}，有被关联的风险。`
         : `提示：和${webOthers}都是直连，都跟随系统代理，出口 IP 相同，有被关联的风险。`;
     };
+    let testGeneration = 0;
+    const invalidateTest = () => {
+      testGeneration += 1; tested = null; result.replaceChildren();
+      const key = testBtn.dataset.morph;
+      const progress = morphState[key];
+      if (progress && progress.st !== 'busy') {
+        clearTimeout(progress.timer); delete morphState[key]; morphPaint(testBtn);
+      }
+    };
     const onProxyChange = () => {
       drawLiteDirect();
       passwordRow.hidden = !/^https?:\/\/[^/@]+@/i.test(proxyInput.value.trim());
       callsRow.hidden = mode === 'lite' || !!proxyInput.value.trim();
-      result.replaceChildren();
-      tested = null;
+      invalidateTest();
       drawPresets();
       drawPortNote();
       drawTags();
@@ -1531,6 +1539,7 @@ function editorPage(id) {
     const groupRow = d.groups && d.groups.length ? h('label', { class: 'field' }, '分组', groupSel) : null;
     const proxyHint = h('span', { class: 'hint' });
     const onModeChange = () => {
+      invalidateTest();
       const lite = mode === 'lite';
       for (const b of modeCards.children) {
         const on = b.dataset.mode === mode;
@@ -1558,11 +1567,14 @@ function editorPage(id) {
       : [h('span', null, mode === 'lite' ? '修改代理后会重新连接，不需要重新扫码。' : '修改代理或时区后，这个账号的页面会重新加载，不需要重新扫码。')]);
     const sidePanel = h('div', { class: 'side-panel' });
     proxyInput.addEventListener('input', onProxyChange);
+    password.addEventListener('input', invalidateTest);
     region.addEventListener('change', drawTags);
 
     const runTest = async () => {
-      result.replaceChildren();
+      invalidateTest();
+      const generation = testGeneration;
       const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value, mode });
+      if (generation !== testGeneration) return { ok: false };
       if (localProxyPort(proxyInput.value)) probePorts();
       if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return { ok: false }; }
       tested = res;

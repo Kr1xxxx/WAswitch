@@ -75,6 +75,7 @@ const WHY = {
   not_empty: '输入框里已经有文字',
   focus: '光标不在聊天输入框里',
   changed: '放的时候页面状态变了',
+  no_history: '这个对话还没有聊天记录',
 };
 
 // 用户点了“放进输入框”但没放成：横幅上告诉用户下一步
@@ -85,6 +86,7 @@ const NOTE = {
   not_found: (c) => `轻量模式里没找到「${c}」这个对话（或有重名的），没有放`,
   not_empty: () => '输入框里已经有文字，没有放',
   changed: () => '页面还没准备好，稍后再点“放进输入框”',
+  no_history: (c) => `和「${c}」的对话还没有聊天记录，先手动发一条再点“放进输入框”`,
 };
 
 // deps（main.js 提供）：
@@ -108,32 +110,61 @@ function createDraftPlacer(deps) {
   async function fillWeb(acc, chat, text, byUser) {
     const wc = deps.webContents(acc.id);
     if (!wc) return 'changed';
-    const peer = await deps.waPage.readChatPeer(wc);
-    if (!deps.stillShown(acc.id)) return 'changed';
-    if (!peer || (!peer.title && !peer.chat)) return 'no_chat';
-    if (!chatMatches(chat, { title: peer.title, number: jidNumber(peer.chat) })) return 'other_chat';
-    const probe = probeOf(text);
-    const st = await deps.waPage.composeState(wc, probe);
-    if (!deps.stillShown(acc.id)) return 'changed';
-    if (!st || !st.box) return 'no_chat';
-    if (!byUser && !st.empty) return 'not_empty';
-    if (st.focus !== 'compose') return 'focus';
-    const saved = await saveClipboard(deps.clipboard);
-    await deps.clipboard.writeText(text); // 写完再贴，不然可能贴出原来剪贴板里的东西
-    if (!deps.stillShown(acc.id)) { await restoreClipboard(deps.clipboard, saved, deps.ClipboardItem); return 'changed'; }
-    wc.focus();
-    wc.paste();
-    for (let i = 0; i < CONFIRM_TRIES; i += 1) {
-      await deps.wait(CONFIRM_STEP_MS);
-      const after = await deps.waPage.composeState(wc, probe);
-      if (after && after.has) {
-        // 用户这期间自己复制了别的东西就不动剪贴板
-        if ((await deps.clipboard.readText()) === text) await restoreClipboard(deps.clipboard, saved, deps.ClipboardItem);
-        return 'ok';
+    // Before paste, any input invalidates placement. Afterwards, confirm the draft
+    // in the same chat even if typing has resumed; navigation always invalidates it.
+    let changed = false;
+    let navigated = false;
+    const invalidate = () => { changed = true; };
+    const invalidatePage = () => { navigated = true; invalidate(); };
+    const activity = (_event, input) => {
+      if (!['mouseMove', 'mouseEnter', 'mouseLeave', 'pointerMove', 'pointerRawUpdate'].includes(input?.type)) invalidate();
+    };
+    const events = [['before-input-event', invalidate], ['before-mouse-event', activity],
+      ['input-event', activity], ['did-start-navigation', invalidatePage], ['destroyed', invalidatePage]];
+    for (const [event, listener] of events) wc.on(event, listener);
+    let saved;
+    let pasted = false;
+    try {
+      const peer = await deps.waPage.readChatPeer(wc);
+      const valid = () => !changed && deps.stillShown(acc.id);
+      if (!valid()) return 'changed';
+      if (!peer || (!peer.title && !peer.chat)) return 'no_chat';
+      if (!chatMatches(chat, { title: peer.title, number: jidNumber(peer.chat) })) return 'other_chat';
+      if (!peer.chat) return 'no_history'; // 还没有消息的对话拿不到对话编号，没法确认贴对了地方
+      const probe = probeOf(text);
+      const stateError = (st) => {
+        if (!valid() || !st || st.chat !== peer.chat) return 'changed';
+        if (!st.box) return 'no_chat';
+        if (!byUser && !st.empty) return 'not_empty';
+        return st.focus === 'compose' ? '' : 'focus';
+      };
+      const initialError = stateError(await deps.waPage.composeState(wc, probe));
+      if (initialError) return initialError;
+      saved = await saveClipboard(deps.clipboard);
+      await deps.clipboard.writeText(text);
+      // Clipboard IPC can take time. Recheck target, contents and focus together afterwards.
+      const finalError = stateError(await deps.waPage.composeState(wc, probe));
+      if (finalError) return finalError;
+      wc.focus();
+      wc.paste();
+      pasted = true;
+      for (let i = 0; i < CONFIRM_TRIES; i += 1) {
+        await deps.wait(CONFIRM_STEP_MS);
+        const after = await deps.waPage.composeState(wc, probe);
+        if (navigated || !deps.stillShown(acc.id) || !after || after.chat !== peer.chat) return 'unconfirmed';
+        if (after.has) {
+          if ((await deps.clipboard.readText()) === text) await restoreClipboard(deps.clipboard, saved, deps.ClipboardItem);
+          return 'ok';
+        }
+        if (changed) return 'unconfirmed';
+      }
+      return 'unconfirmed';
+    } finally {
+      for (const [event, listener] of events) wc.removeListener(event, listener);
+      if (saved && !pasted && (await deps.clipboard.readText()) === text) {
+        await restoreClipboard(deps.clipboard, saved, deps.ClipboardItem);
       }
     }
-    // 没确认到：剪贴板里留着草稿（换回去的话，迟到的粘贴可能贴出用户原来剪贴板里的东西）
-    return 'unconfirmed';
   }
 
   async function fillLite(acc, chat, text, byUser) {

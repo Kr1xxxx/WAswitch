@@ -4,6 +4,7 @@
   "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
   "main": "src/main.js",
   "scripts": {
+    "check:audit": "node scripts/check-audit.js && node scripts/check-audit-server.mjs && node scripts/check-editor-save.js && node scripts/run-check-electron.js scripts/check-audit-ui.js scripts/check-editor-ui.js",
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
     "check:middot": "node scripts/check-no-middot.js",

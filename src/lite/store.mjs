@@ -163,7 +163,9 @@ export class ChatStore {
       if (keys.length > MAX_UNREAD_KEYS) keys.splice(0, keys.length - MAX_UNREAD_KEYS);
       this.unreadKeys.set(jid, keys);
     }
-    if (key.fromMe) { chat.unread = 0; this.unreadKeys.delete(jid); }
+    if (key.fromMe && (countUnread === true || (countUnread === 'newer' && item.ts >= latest))) {
+      chat.unread = 0; this.unreadKeys.delete(jid);
+    }
     this.save.schedule();
     return { jid, added: true, incoming };
   }

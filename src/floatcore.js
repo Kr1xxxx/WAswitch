@@ -12,6 +12,14 @@ const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
 const KEEP_VIEW = 40; // 读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
+// 从最近消息里截上下文：这条消息之前的几条；这条不在里面就不给（别的对话的内容不能串进来）
+function contextFrom(list, h) {
+  if (h) {
+    const i = list.findIndex((m) => m.h === h);
+    list = i >= 0 ? list.slice(0, i) : [];
+  }
+  return list.slice(-CONTEXT_N).map(({ out, text }) => ({ out, text }));
+}
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
 const chatOf = (dataId) => String(dataId).split('_')[1] || '';
@@ -88,13 +96,14 @@ class FloatCore {
     st.day.n += 1;
   }
 
-  queueAuto(accId, st, item, opts) {
+  // recent：这次读到的最近消息（ingest 还没写回 st.recent 时传进来），上下文从里面截
+  queueAuto(accId, st, item, opts, recent = st.recent) {
     if (item.state !== 'manual') return;
     if (item.text.length > AUTO_MAX_CHARS) { item.note = 'long'; return; }
     if (!this.canAuto(st, opts.dailyCap)) return;
     this.takeAuto(st);
     item.state = 'queued';
-    this.queue.push({ accId, h: item.h });
+    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h) });
   }
 
   // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
@@ -126,6 +135,9 @@ class FloatCore {
     const chat = msgs.length ? chatOf(msgs[msgs.length - 1].id) : '';
     const newChat = chat !== st.chat;
     const fresh = [];
+    // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
+    // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
+    const recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
     for (const m of msgs) {
       if (m.out) { this.dropOwn(accId, st, m.id); continue; }
       if (!String(m.text || '').trim()) continue;
@@ -142,7 +154,7 @@ class FloatCore {
     while (st.items.size > KEEP_PER_ACCOUNT) st.items.delete(st.items.keys().next().value);
     // 刚切到这个对话：已经在屏幕上的旧消息只补翻最后 5 条；之后新来的都算
     const candidates = newChat ? fresh.slice(-BACKFILL) : fresh;
-    if (opts.auto) for (const item of candidates) this.queueAuto(accId, st, item, opts);
+    if (opts.auto) for (const item of candidates) this.queueAuto(accId, st, item, opts, recent);
     let view = msgs.filter((m) => !m.out && String(m.text || '').trim()).map((m) => hashOf(accId, m.id));
     // 读页面只读最后 20 条（双方）：自己每发一条，最老的一条就被挤出去。还是同一个对话、和上次读到的接得上，
     // 挤出去的客户消息照样留在翻译栏上面，不然每发一条，翻译栏就少一条、整列往上跳（shen 2026-10-28）
@@ -160,8 +172,7 @@ class FloatCore {
     const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
-    // 当前对话最近的消息（双方都有，给翻译当上下文参考），只在内存里，不含 data-id
-    st.recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
+    st.recent = recent;
     st.view = view;
     this.pump();
     return changed;
@@ -183,7 +194,7 @@ class FloatCore {
     item.state = 'queued';
     item.err = '';
     item.errKind = '';
-    this.queue.unshift({ accId, h, manual: true, fix: fix === true });
+    this.queue.unshift({ accId, h, manual: true, fix: fix === true, context: this.contextOf(accId, h) });
     this.pump();
     return true;
   }
@@ -207,7 +218,7 @@ class FloatCore {
         if (this.canAuto(st, opts.dailyCap ?? Infinity)) {
           this.takeAuto(st);
           item.state = 'queued';
-          this.queue.push({ accId, h });
+          this.queue.push({ accId, h, context: this.contextOf(accId, h) });
         } else item.state = 'manual';
       }
       if (hit) touched.push(accId);
@@ -247,13 +258,7 @@ class FloatCore {
   // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）
   contextOf(accId, h) {
     const st = this.accs.get(accId);
-    if (!st) return [];
-    let list = st.recent;
-    if (h) {
-      const i = list.findIndex((m) => m.h === h);
-      list = i >= 0 ? list.slice(0, i) : list;
-    }
-    return list.slice(-CONTEXT_N).map(({ out, text }) => ({ out, text }));
+    return st ? contextFrom(st.recent, h) : [];
   }
 
   async pump() {
@@ -268,15 +273,16 @@ class FloatCore {
         item.state = 'running';
         this.onChange(job.accId);
         let r;
-        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: this.contextOf(job.accId, job.h) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context }); } catch { r = { error: '翻译失败', kind: 'other' }; }
         if (r && r.kind === 'busy') {
           // 面板正在翻：等一下再来（之前翻好的译文还在，状态先回到排队）
           item.state = 'queued';
           await new Promise((res) => setTimeout(res, 700));
           continue;
         }
-        this.queue.shift();
-        if (!this.accs.get(job.accId)) continue; // 号被删了
+        const index = this.queue.indexOf(job);
+        if (index >= 0) this.queue.splice(index, 1);
+        if (this.accs.get(job.accId) !== st) continue; // 号被删了或重建了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }

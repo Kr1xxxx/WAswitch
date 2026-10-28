@@ -171,11 +171,23 @@ function parsePre(raw) {
 // MCP 的 read_messages 可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
 const MAX_MSGS = 20;
 const MAX_MSGS_LIMIT = 50;
+// Shared read-only identity snapshot. Mixed/transitional DOMs fail closed.
+function chatIdentity(main) {
+  if (!main) return '';
+  const ids = new Set();
+  for (const el of main.querySelectorAll('[data-id]')) {
+    if (el.parentElement?.closest('[data-id]')) continue;
+    const id = /^(?:true|false)_([^_]+@(?:c\.us|s\.whatsapp\.net|g\.us|lid))_/.exec(el.getAttribute('data-id') || '');
+    if (id) ids.add(id[1]);
+  }
+  return ids.size === 1 ? [...ids][0] : '';
+}
 const readChatCode = (max = MAX_MSGS) => `(() => {
   const parsePre = ${parsePre.toString()};
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
+  const chat = (${chatIdentity.toString()})(main);
   // 没打开对话：还停在二维码页（没登录）时单独说，翻译页提示“扫码登录后可用”
   if (!main) return { ok: false, why: !first(document, S.loggedIn) && first(document, S.qr) ? 'qr' : 'nochat' };
   const t = first(main, S.title);
@@ -290,7 +302,7 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;
     if (!t && !rows) return { ok: false, why: 'nochat' };
-    if (!rows) return { ok: true, title, msgs: [] };
+    if (!rows) return { ok: true, title, chat, msgs: [] };
     return { ok: false, why: 'nomatch' };
   }
   const msgs = [];
@@ -305,7 +317,7 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     msgs.push({ id, out, text, t: r.t });
   }
   msgs.reverse();
-  return { ok: true, title, msgs };
+  return { ok: true, title, chat, msgs };
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
 
@@ -330,13 +342,13 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
       .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', msgs };
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs };
   } catch {
     return { ok: false, why: 'error' };
   }
 }
 
-// 顶栏“客户当地时间”用：当前打开的对话是谁。只读标题和第一条消息 data-id 中间那段（对话编号，
+// 顶栏“客户当地时间”用：当前打开的对话是谁。只读标题和消息 data-id 中间一致的对话编号，
 // 私聊是“号码@c.us”，群是“…@g.us”），不读消息内容。号码只留在主进程，见 customer-time.js
 const READ_PEER_CODE = `(() => {
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle })};
@@ -344,9 +356,7 @@ const READ_PEER_CODE = `(() => {
   if (!main) return null;
   let title = '';
   for (const sel of S.title) { const el = main.querySelector(sel); if (el) { title = String(el.getAttribute('title') || el.textContent || '').trim().slice(0, 100); break; } }
-  const m = main.querySelector('[data-id^="false_"], [data-id^="true_"]');
-  const parts = m ? String(m.getAttribute('data-id') || '').split('_') : [];
-  return { title, chat: (parts[1] || '').slice(0, 100) };
+  return { title, chat: (${chatIdentity.toString()})(main) };
 })()`;
 
 async function readChatPeer(wc) {
@@ -517,16 +527,17 @@ async function composeFocus(wc) {
 // probe 是草稿开头的一小段（空白已合并），用来确认粘贴已经生效，再把剪贴板换回去。
 // 返回 { focus: 'compose' | 'other', box, empty, has } | null（页面在加载或读不到）
 const COMPOSE_CODE = (probe) => `(() => {
+  const chat = (${chatIdentity.toString()})(document.querySelector(${JSON.stringify(SELECTORS.chatMain)}));
   const S = ${JSON.stringify(SELECTORS.composeBox)};
   const el = document.activeElement;
   const focus = el && el.isContentEditable && S.some((s) => el.closest(s)) ? 'compose' : 'other';
   let box = null;
   for (const s of S) { box = document.querySelector(s); if (box) break; }
-  if (!box) return { focus, box: false, empty: true, has: false };
+  if (!box) return { chat, focus, box: false, empty: true, has: false };
   const norm = (x) => String(x || '').replace(/\\s+/g, ' ').trim();
   const t = norm(box.innerText || box.textContent);
   const probe = ${JSON.stringify(String(probe || ''))};
-  return { focus, box: true, empty: !t, has: !!probe && t.includes(probe) };
+  return { chat, focus, box: true, empty: !t, has: !!probe && t.includes(probe) };
 })()`;
 
 async function composeState(wc, probe = '') {
@@ -534,7 +545,7 @@ async function composeState(wc, probe = '') {
   try {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: COMPOSE_CODE(probe) }]);
     if (!r || typeof r !== 'object') return null;
-    return { focus: r.focus === 'compose' ? 'compose' : 'other', box: r.box === true, empty: r.empty === true, has: r.has === true };
+    return { chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', focus: r.focus === 'compose' ? 'compose' : 'other', box: r.box === true, empty: r.empty === true, has: r.has === true };
   } catch {
     return null;
   }

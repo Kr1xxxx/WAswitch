@@ -22,7 +22,12 @@ const RUN_MAX_BATCHES = 20;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+const b64 = (bytes) => {
+  const data = new Uint8Array(bytes);
+  const chunks = [];
+  for (let i = 0; i < data.length; i += 0x8000) chunks.push(String.fromCharCode(...data.subarray(i, i + 0x8000)));
+  return btoa(chunks.join(''));
+};
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 
