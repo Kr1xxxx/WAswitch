@@ -25,8 +25,6 @@ const dk = {
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
   openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文完全隐藏
-  run: 0, // 第几次翻译回复框（旧的结果晚到就丢掉）
-  picked: '', // 回复框里现在是不是从聊天里选中送来的文字（再送一段来时不算覆盖草稿）
   seen: new Set(), // 看过的收到消息（给顶栏“翻译”算未读）
   seenTitle: null,
   unread: 0,
@@ -107,11 +105,9 @@ async function dockTranslate(insert = false, fresh = false) {
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
-  const run = ++dk.run;
   dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
-  if (run !== dk.run) return; // 翻译期间又选了新的文字送来（或撤销了）：这次的结果不要
   dk.busy = false;
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
@@ -133,36 +129,6 @@ function dockInsertKey() {
   if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
 }
-// 聊天里选中文字后点「翻译」（小按钮或右键菜单）：放进回复框直接翻。
-// 外文翻成中文，中文翻成客户的语言（和自己写的一样走“自动”）。这个对话手动选过目标语言时，外文还是翻成中文。
-// 回复框里原来有自己写的字：直接换掉，给几秒「撤销」放回去（不先问）
-async function dockPick({ accountId, text } = {}) {
-  if (typeof text !== 'string' || !text.trim()) return;
-  if (!dk.st || dk.st.accountId !== accountId) await dockFetch();
-  const st = dk.st;
-  if (!st || st.accountId !== accountId || !st.hasProvider) return;
-  if (dk.busy) {
-    dk.run += 1; // 正在翻的作废
-    dk.busy = false;
-    try { await window.wa.trCancel(); } catch {}
-  }
-  const keep = ['text', 'out', 'src', 'edited', 'fixed', 'suggest', 'warn', 'forTitle'];
-  const old = dk.text.trim() && dk.text !== dk.picked ? Object.fromEntries(keep.map((k) => [k, dk[k]])) : null;
-  const t = text.trim().slice(0, 4000);
-  Object.assign(dk, { text: t, picked: t, out: '', src: '', edited: false, fixed: false, suggest: '', warn: [], forTitle: null, msg: '', msgPid: '' });
-  Object.assign(dockLt(), { src: '', tgt: !ReplyLang.isChinese(t) && dockManual(st) ? '中文' : '', swapped: false });
-  if (old) {
-    showUndo('已替换回复框里的内容', 'panel', () => {
-      if (dk.busy) { dk.run += 1; dk.busy = false; window.wa.trCancel().catch(() => {}); }
-      Object.assign(dk, old, { picked: '', msg: '' });
-      Object.assign(dockLt(), { src: '', tgt: '', swapped: false });
-      dockRender(true);
-    });
-  }
-  return dockTranslate(false);
-}
-if (window.wa.onDockPick) window.wa.onDockPick((req) => dockPick(req));
-
 // 换默认翻译模型（和 设置 › 翻译 的“设为默认”是同一个设置）。选的是现在的备用，就把两个对调
 async function dockModel(id) {
   const st = dk.st;

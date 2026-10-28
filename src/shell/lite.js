@@ -104,7 +104,7 @@ function makeLitePage(id) {
   });
   input.addEventListener('input', () => { input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
-  // 选中消息里的文字：旁边出现「翻译」小按钮（和网页版账号一样，见 sel-translate.js）
+  // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
   msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
   msgs.addEventListener('scroll', liteSelHide, { passive: true });
 
@@ -175,13 +175,37 @@ function makeLitePage(id) {
   return { el, update, fill };
 }
 
-// ---- 选中文字后的「翻译」小按钮（轻量号的聊天页是软件自己的界面，按钮直接画在这里） ----
-// 放在选区最后一行下面，右边和选区末尾对齐；下面放不下就放到第一行上面
-let liteSelBtn = null;
-let liteSel = null; // { id, text }
+// ---- 选中文字后的「翻译」小按钮和悬浮译文窗（轻量号的聊天页是软件自己的界面，直接画在这里；样子和网页号的一样，共用 seltr/card.js） ----
+// 放在选区最后一行下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐
+let liteSelBox = null; // { wrap, card }
+let liteSel = null; // { id, text, mode, first, last, area }
 function liteSelHide() {
   liteSel = null;
-  if (liteSelBtn) liteSelBtn.hidden = true;
+  if (liteSelBox) liteSelBox.wrap.hidden = true;
+}
+function liteSelPlace() {
+  if (!liteSel || !liteSelBox) return;
+  const { wrap } = liteSelBox;
+  const { area, first, last } = liteSel;
+  const bw = wrap.offsetWidth;
+  const bh = wrap.offsetHeight;
+  let top = last.bottom + 4;
+  if (top + bh > area.bottom) top = first.top - 4 - bh;
+  top = Math.max(area.top, Math.min(area.bottom - bh, top));
+  const left = Math.max(area.left, Math.min(area.right - bw, liteSel.mode === 'card' ? last.left : last.right - bw));
+  Object.assign(wrap.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+async function liteSelGo() {
+  const cur = liteSel;
+  if (!cur || !liteSelBox) return;
+  cur.mode = 'card';
+  liteSelBox.card.set({ mode: 'card', busy: true });
+  liteSelPlace();
+  let r;
+  try { r = await window.wa.selTranslate(cur.id, cur.text); } catch { r = { error: '翻译失败' }; }
+  if (liteSel !== cur) return; // 期间收起了或换了别的选区
+  liteSelBox.card.set(r && typeof r.text === 'string' && r.text.trim() ? { mode: 'card', text: r.text } : { mode: 'card', error: (r && r.error) || '翻译失败' });
+  liteSelPlace();
 }
 function liteSelCheck(id, box) {
   const sel = document.getSelection();
@@ -192,33 +216,25 @@ function liteSelCheck(id, box) {
   if (!text || !inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
   const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
   if (!rects.length) return liteSelHide();
-  if (!liteSelBtn) {
-    liteSelBtn = h('button', { class: 'sel-tr', type: 'button', title: '在右侧翻译', hidden: true,
-      onmousedown: (e) => e.preventDefault(), // 不把选区点没
-      onclick: () => {
-        const p = liteSel;
-        liteSelHide();
-        if (!p || !s || p.id !== s.activeId) return;
-        window.wa.panelTab('translate');
-        dockPick({ accountId: p.id, text: p.text });
-      } }, icon('translate', 16), h('span', null, '翻译'));
-    document.body.append(liteSelBtn);
+  if (!liteSelBox) {
+    const card = window.SelCard({ go: liteSelGo, retry: liteSelGo, copy: (t) => window.wa.panelCopy(t) });
+    const wrap = h('div', { class: 'sel-pop', hidden: true }, card.root);
+    document.body.append(wrap);
+    liteSelBox = { wrap, card };
   }
-  liteSel = { id, text: text.slice(0, 4000) };
-  liteSelBtn.hidden = false;
-  const area = box.getBoundingClientRect();
-  const last = rects[rects.length - 1];
-  const bw = liteSelBtn.offsetWidth;
-  const bh = liteSelBtn.offsetHeight;
-  let top = last.bottom + 4;
-  if (top + bh > area.bottom) top = rects[0].top - 4 - bh;
-  top = Math.max(area.top, Math.min(area.bottom - bh, top));
-  const left = Math.max(area.left, Math.min(area.right - bw, last.right - bw));
-  Object.assign(liteSelBtn.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+  liteSel = { id, text: text.slice(0, 4000), mode: 'button', first: rects[0], last: rects[rects.length - 1], area: box.getBoundingClientRect() };
+  liteSelBox.card.set({ mode: 'button' });
+  liteSelBox.wrap.hidden = false;
+  liteSelPlace();
 }
-document.addEventListener('mousedown', (e) => { if (liteSelBtn && !liteSelBtn.hidden && !liteSelBtn.contains(e.target)) liteSelHide(); }, true);
-document.addEventListener('keydown', () => { if (liteSel) liteSelHide(); }, true);
-document.addEventListener('selectionchange', () => { if (liteSel) { const sel = document.getSelection(); if (!sel || sel.isCollapsed) liteSelHide(); } });
+// 点到按钮和译文窗外面、按键、选区没了（按钮状态时）就收起
+document.addEventListener('mousedown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('keydown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('selectionchange', () => {
+  if (!liteSel || liteSel.mode !== 'button') return;
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) liteSelHide();
+});
 
 // shell.js 调用：返回这个账号的聊天页（同一个元素），并更新内容
 function litePage(acc, lite) {

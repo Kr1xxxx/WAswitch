@@ -1732,8 +1732,8 @@ function setupPageMenu(wc, ses, id) {
       );
     } else if (p.selectionText) {
       items.push({ label: '复制', role: 'copy' });
-      // 和选中后出现的小按钮同一条路：放进右侧翻译页翻译
-      if (p.selectionText.trim()) items.push({ label: '翻译', click: () => selTr.go(id, p.selectionText) });
+      // 和选中后出现的小按钮同一条路：在选区旁边弹出悬浮译文窗
+      if (p.selectionText.trim()) items.push({ label: '翻译', click: () => selTr.fromMenu(id, wc, p.selectionText, { x: p.x, y: p.y }) });
     }
     if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
   });
@@ -2785,14 +2785,13 @@ handleShell('netlog:clear', () => {
 // ---- 面板 ----
 onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
-function openPanelTab(tab) {
+onShell('panel:tab', (tab) => {
   if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
   if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
   panelOpen = true;
   refresh();
-}
-onShell('panel:tab', openPanelTab);
+});
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
 handleShell('reply:delete', (id) => {
@@ -2924,7 +2923,7 @@ const ctx = {
 
 // ---- 翻译和悬浮翻译窗（在 translate-ipc.js） ----
 const trIpc = setupTranslateIpc(ctx);
-// ---- 聊天里选中文字后的「翻译」小按钮（在 sel-translate.js） ----
+// ---- 聊天里选中文字后的「翻译」小按钮和悬浮译文窗（在 sel-translate.js） ----
 const selTr = createSelTranslate({
   win: () => win,
   lockLocalPage,
@@ -2934,11 +2933,8 @@ const selTr = createSelTranslate({
   },
   viewOf: (id) => views.get(id) || null,
   readSelection: (wc) => waPage.readSelection(wc),
-  send: (id, text) => {
-    openPanelTab('translate');
-    if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('dock:pick', { accountId: id, text });
-    focusActive(); // 点按钮时焦点到了按钮上：还给聊天页
-  },
+  translate: (text) => trIpc.selTranslate(text),
+  copy: (text) => clipboard.writeText(text),
 });
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);

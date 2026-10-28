@@ -1,12 +1,12 @@
 // 自检：聊天里选中文字后的「翻译」小按钮（src/sel-translate.js、wa-page.js 的 readSelection）。
 // 1. 读选区只在隔离环境里只读：不改页面、不改选区；只认右侧聊天区消息上的选区（输入框、对话列表不算）
-// 2. 按钮放在选区下面、右边对齐；下面放不下就放上面；不出账号页面
+// 2. 按钮放在选区下面、右边对齐，译文窗左边对齐；下面放不下就放上面；不出账号页面
 // 运行：npx electron scripts/check-sel-translate.js（Linux 无界面环境用 xvfb-run）
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const waPage = require('../src/wa-page');
-const { placeButton, BTN } = require('../src/sel-translate');
+const { placeButton, placeBox, BTN, CARD_W, PAD } = require('../src/sel-translate');
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -27,6 +27,10 @@ const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}
   check(left.x >= view.x, '选区在最左边：按钮不出账号页面');
   const right = placeButton({ x: 790, y: 200, w: 200, h: 20, top: 200 }, view, 1);
   check(right.x + right.width <= view.x + view.width, '选区超出右边：按钮不出账号页面');
+  const card = placeBox(sel, view, 1, { width: CARD_W, height: 100 }, 'left');
+  check(card.x + PAD === 300 + 100 && card.y + PAD === 60 + 220 + 4, `译文窗左边和选区最后一行开头对齐（${card.x},${card.y}）`);
+  const cardR = placeBox({ x: 700, y: 200, w: 60, h: 20, top: 200 }, view, 1, { width: CARD_W, height: 100 }, 'left');
+  check(cardR.x + cardR.width === view.x + view.width, '选区靠右：译文窗贴着右边，不出账号页面');
 }
 
 // ---- 读选区 ----
