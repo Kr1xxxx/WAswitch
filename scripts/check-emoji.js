@@ -17,6 +17,20 @@ const extra = fs.readdirSync(path.join(DIR, 'svg')).filter((f) => !EMOJI.valid(f
 assert.deepStrictEqual(extra, [], `svg 目录里有没用到的图：${extra.join(', ')}`);
 assert.ok(fs.existsSync(path.join(DIR, 'LICENSE')), '缺 LICENSE');
 
+// 默认顺序：新装第 1 个号四叶草，第 2 个皇冠；用户自己选走了某个，就跳过它
+assert.deepStrictEqual(EMOJI.FIRST, ['clover', 'crown']);
+EMOJI.FIRST.forEach((id) => assert.ok(EMOJI.valid(id), `默认 emoji 不在列表里：${id}`));
+assert.strictEqual(EMOJI.pick([]), 'clover');
+assert.strictEqual(EMOJI.pick(['clover']), 'crown');
+assert.strictEqual(EMOJI.pick(['fox']), 'clover');
+assert.strictEqual(EMOJI.pick(['crown']), 'clover');
+const third = EMOJI.pick(['clover', 'crown'], () => 0);
+assert.ok(!['clover', 'crown'].includes(third) && EMOJI.valid(third));
+// 按新建流程连着加两个号（每次都把已有的号传进去）
+const seq = [];
+seq.push(EMOJI.pick(seq)); seq.push(EMOJI.pick(seq));
+assert.deepStrictEqual(seq, ['clover', 'crown']);
+
 // 随机挑：没用完时不重复；全用完了也要给一个
 const used = EMOJI.IDS.slice(0, EMOJI.IDS.length - 1);
 for (let i = 0; i < 20; i += 1) assert.strictEqual(EMOJI.pick(used), EMOJI.IDS[EMOJI.IDS.length - 1]);
