@@ -6,6 +6,7 @@
 const dk = {
   listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
   stick: true, // 消息列表是不是停在最底下（用户自己滚动时更新）；在底下就跟着新消息滚
+  pill: false, // 往上翻着的时候来了新消息：列表底部显示「新消息」，点了回到最底下；滚回底部、换对话就收起
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的回复（中文或外文）
   // 语言条的临时选择，只管当前这个对话（换对话、换号回到自动）：src 原文语言（'' = 自动检测），
@@ -19,6 +20,7 @@ const dk = {
   forTitle: null, // 译文是给哪个对话翻的
   warn: [],
   busy: false,
+  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（按钮上倒计时）
   msg: '',
   bad: false,
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
@@ -47,14 +49,46 @@ function dockCountUnread() {
 }
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false });
   dk.seen.clear();
+}
+
+// 同一个对话、用户不在最底下，最后一条换成了以前没有的消息 = 来了新消息。
+// 翻译中 → 译文、补回旧译文、上面的消息被挤掉，最后一条都不变；撤回最新一条，最后一条变成以前就有的，都不算
+function dockHasNew(prev, st) {
+  if (dk.stick || !prev || !st || !dockVisible()) return false;
+  // dk.stick 可能过期（窗口拉高后不用滚了、滚回底的那一下被当成程序滚的）：再看一眼列表现在是不是在底下
+  const l = $panel.querySelector('.dk-host .dk-list');
+  if (!l || l.scrollHeight - l.scrollTop - l.clientHeight <= 24) { dk.stick = true; return false; }
+  if (prev.accountId !== st.accountId || prev.title !== st.title || !prev.items.length || !st.items.length) return false;
+  const last = st.items[st.items.length - 1].h;
+  return !prev.items.some((it) => it.h === last);
 }
 
 function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
 
+// 服务商太忙、等着重试：转圈的按钮显示还要等几秒，等完回到「翻译中」
+let dkWaitTimer = 0;
+function dockBusyText() {
+  const left = dk.waitUntil ? Math.ceil((dk.waitUntil - Date.now()) / 1000) : 0;
+  return left > 0 ? `${left} 秒后重试… 取消` : '翻译中… 取消';
+}
+function dockWait(ms) {
+  dk.waitUntil = ms > 0 && dk.busy ? Date.now() + ms : 0;
+  clearInterval(dkWaitTimer);
+  const paint = () => {
+    const b = document.querySelector('.dk-cancel');
+    if (b) b.textContent = dockBusyText();
+    if (!dk.waitUntil || Date.now() >= dk.waitUntil) clearInterval(dkWaitTimer);
+  };
+  if (dk.waitUntil) dkWaitTimer = setInterval(paint, 250);
+  paint();
+}
+if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'dock') dockWait(Number(w.ms) || 0); });
+
 window.wa.onDock((st) => {
   if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
+  if (dockHasNew(dk.st, st)) dk.pill = true;
   dk.st = st;
   const before = dk.unread;
   dockCountUnread();
@@ -109,6 +143,7 @@ async function dockRun(p) {
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
+  dockWait(0);
   if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
@@ -297,14 +332,33 @@ function dockItemRow(it, last) {
     dockMeta(it));
 }
 
+// 「新消息」浮在消息列表底部正中，不占列表的高度（不影响滚动位置）。box 是包着列表的 .dk-listbox
+function dockPillSync(box) {
+  if (!box) return;
+  const old = box.querySelector('.dk-newpill');
+  const play = fxChanged('dk-pill', dk.pill, false);
+  if (!dk.pill) { if (old) old.remove(); return; }
+  if (old) return;
+  const pill = h('button', { class: 'dk-newpill', onclick: () => {
+    const list = box.querySelector('.dk-list');
+    dk.pill = false; dk.stick = true;
+    if (list) { list.scrollTop = list.scrollHeight; list._setTop = list.scrollTop; }
+    dockPillSync(box);
+  } }, icon('down', 14), '新消息');
+  box.append(play ? fxPlay(pill, 'fx-fade') : pill);
+}
+
 function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
+  const box = h('div', { class: 'dk-listbox' }, list);
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
   // 程序自己设的滚动（恢复位置）也会触发 scroll：滚动距离没变就不算用户滚的
   list.addEventListener('scroll', () => {
-    if (!list.isConnected || list.scrollTop === list._setTop) return;
+    if (!list.isConnected) return;
+    if (list.scrollTop === list._setTop) { list._setTop = null; return; } // 程序设一次只发一次 scroll，只吞这一次
     dk.stick = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+    if (dk.stick && dk.pill) { dk.pill = false; dockPillSync(box); }
   }, { passive: true });
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
@@ -323,7 +377,8 @@ function dockIncoming() {
   });
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
-  return list;
+  dockPillSync(box);
+  return box;
 }
 
 // 重画时保持滚动位置（翻译中、点纠错/编辑都不跳）。
@@ -337,7 +392,7 @@ function dockScrollMark() {
   const same = dk.listKey === key;
   dk.listKey = key;
   if (!same || !prev || !prev.isConnected) dk.stick = true;
-  if (dk.stick) return { bottom: true };
+  if (dk.stick) { dk.pill = false; return { bottom: true }; }
   // 用 offsetTop（列表是 position: relative）：不受淡入、上浮这些动画的位移影响
   const top = prev.scrollTop;
   const row = [...prev.querySelectorAll('.dk-item[data-h]')].find((r) => r.offsetTop + r.offsetHeight > top + 1);
@@ -425,7 +480,7 @@ function dockCompose() {
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       dockLangBar(),
-      dk.busy ? h('button', { class: 'dk-btn', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
+      dk.busy ? h('button', { class: 'dk-btn dk-cancel', onclick: () => window.wa.trCancel() }, dockBusyText())
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-btn', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
           h('button', { class: 'dk-btn', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
@@ -471,7 +526,8 @@ function dockRender(force = false) {
   if (root && !force && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
-    const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
+    const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动
+    dockPillSync(list);
     root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
     dockScrollRestore(mark);
     return;
