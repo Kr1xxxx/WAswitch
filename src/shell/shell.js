@@ -1175,6 +1175,8 @@ function trCapBox(c, apply) {
   });
   return h('label', { class: 'tr-cap' }, '每月上限', box, '字符');
 }
+// 不会纠错的服务商：DeepL 和混元翻译模型（hy-mt）只会重翻一遍
+const trNoFix = (p) => p.preset === 'deepl' || /^hy-mt/i.test(p.model || '');
 // 服务商「测试」：结果在按钮上显示，没通过的原因写在服务商下面
 function trTestBtn(p, attrs) {
   return morphBtn(`trTest:${p.id}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, async () => {
@@ -1197,7 +1199,7 @@ function translatePage(page) {
     if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
     apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
   } },
-    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => p.preset !== 'deepl' || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
+    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => !trNoFix(p) || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
     hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
   fixSel.value = c.fixId || '';
   const fixP = c.providers.find((p) => p.id === c.fixId);
@@ -1263,10 +1265,13 @@ function translatePage(page) {
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
         p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
       h('span', { class: 'hint' }, ...segs(p.preset === 'deepl' ? '机器翻译' : p.model, p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥')),
-      h('span', { class: 'hint' }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
+      // 没有测试结果时不占地方，模型和密钥尾号少被截断
+      h('span', { class: 'hint', style: trTestRes[p.id] ? null : { flex: 'none' } }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         trTestBtn(p, { class: 'pn-btn' }),
-        p.id !== c.primaryId ? h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认') : null,
+        // 每行按钮一样多，上下对齐：已经是默认 / 纠错的，或不会纠错的（DeepL、混元翻译模型），按钮还在，只是点不了
+        h('button', { class: 'pn-btn', disabled: p.id === c.primaryId, onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认'),
+        h('button', { class: 'pn-btn', disabled: p.id === c.fixId || trNoFix(p), title: trNoFix(p) ? '不会纠错' : null, onclick: async () => apply(await window.wa.trRoles(undefined, undefined, p.id)) }, '设为纠错'),
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
         h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trProviderDelete(p.id)) }, '删除'))))
       : h('span', { class: 'hint' }, '还没有。')),
@@ -1274,7 +1279,7 @@ function translatePage(page) {
     c.providers.length > 1 ? setRow('备用服务商', '', fb) : null,
     c.providers.length ? setRow('纠错服务商', '',
       h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
-        fixP && (/^hy-mt/i.test(fixP.model) || fixP.preset === 'deepl') ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
+        fixP && trNoFix(fixP) ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
     setRow('翻译的网络', '',
       // “已保存”跟在后面；出错的话比较长，放到下面一行
       h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px' } },

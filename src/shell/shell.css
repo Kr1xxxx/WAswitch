@@ -421,6 +421,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .pn-item .acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .pn-btn { white-space: nowrap; border: var(--hair) solid var(--line); background: var(--white); border-radius: var(--r-s); padding: 2px 8px; font: inherit; font-size: var(--fs-s); color: var(--soft); cursor: pointer; }
 .pn-btn:hover { color: var(--text); border-color: var(--slate-7); }
+.pn-btn:disabled, .pn-btn:disabled:hover { color: var(--slate-8); border-color: var(--line); cursor: default; }
 .pn-btn.primary { background: var(--text); color: var(--white); border-color: var(--text); }
 .pn-tag { display: inline-block; padding: 0 6px; border-radius: var(--r-s); background: var(--slate-3); font-size: var(--fs-s); color: var(--soft); margin-right: 4px; }
 .pn-form { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
