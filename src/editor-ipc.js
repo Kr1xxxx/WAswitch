@@ -18,6 +18,7 @@ function setupEditorIpc(ctx) {
   // 新号的图标：随机挑一个别的号没用的
   const nextEmoji = () => EMOJI.pick(ctx.accounts.map((a) => a.emoji));
   let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
+  const groupIdOf = (acc) => (acc && acc.groupId && ctx.groups.some((g) => g.id === acc.groupId) ? acc.groupId : '');
 
   handleShell('editor:load', (id) => {
     const acc = findAcc(id);
@@ -37,6 +38,9 @@ function setupEditorIpc(ctx) {
       uiLanguage: fingerprint.UI_LANGUAGE_LABEL,
       mode: acc ? acc.mode : 'web',
       allowCalls: !!(acc && acc.allowCalls),
+      // 分组：有分组时编辑页里选。新号默认放进正在看的那个号所在的组
+      groups: ctx.groups.map((g) => ({ id: g.id, name: g.name })),
+      groupId: groupIdOf(acc || findAcc(ctx.activeId)),
       // 新账号：还没有主号时默认就是主号
       primary: acc ? acc.primary : !ctx.accounts.some((a) => a.primary),
       primaryName: ctx.accounts.find((a) => a.primary && a.id !== id)?.name || '',
@@ -89,7 +93,7 @@ function setupEditorIpc(ctx) {
     return res;
   });
 
-  handleShell('editor:save', async ({ id, name, note, phone, color, emoji, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls } = {}) => {
+  handleShell('editor:save', async ({ id, name, note, phone, color, emoji, proxy: proxyText, password, region, mode, primary, liteConfirm, allowCalls, groupId } = {}) => {
     name = String(name || '').trim().slice(0, 40);
     note = cleanNote(note);
     phone = cleanPhone(phone);
@@ -220,6 +224,8 @@ function setupEditorIpc(ctx) {
       }
       refresh();
     }
+    // 选了别的分组：放到那个组的最后（没传就不动）
+    if (typeof groupId === 'string' && groupId !== groupIdOf(acc) && (!groupId || ctx.groups.some((g) => g.id === groupId))) ctx.moveAccount(acc.id, groupId, null);
     notifier.refresh();
     // 不弹窗提醒去自检：后台自动和主号比一次出口，撞了在侧栏和顶栏标出来
     if (remindCheck) ctx.comparePrimary();
