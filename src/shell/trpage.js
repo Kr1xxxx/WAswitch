@@ -124,6 +124,8 @@ function tpOutPane(which) {
   const o = { pane, box, err, model, copy, foot, count };
   // 纠错只在翻成外文时有用（中文译文自己就能看懂），每栏用自己选的模型
   o.fix = morphBtn(`tp-fix${which}`, { idle: '纠错', busy: '纠错中', ok: '已纠错', err: '重试' }, () => tpFix(which), { class: 'tp-btn tp-fix primary' });
+  // 纠错中再点一下 = 取消（和「翻译中」一样）
+  o.fix.addEventListener('click', () => { if (o.fix.dataset.st === 'busy' && tp.busy) window.wa.trPageCancel(); }, true);
   foot.append(o.fix);
   if (which === 2) {
     o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: (e) => tpSetOpen2(false, e) }, icon('up', 14));
@@ -154,7 +156,8 @@ function tpBuild() {
   const inCount = tpCountEl();
   const go = morphBtn('tp-go', { idle: '翻译', busy: '翻译中', ok: '已翻译', err: '重试' }, () => tpRun(), { class: 'tp-btn tp-go primary' });
   // 翻译中再点一下 = 取消（捕获阶段先看状态，morphBtn 自己的点击会忽略转圈时的点击）
-  go.addEventListener('click', () => { if (go.dataset.st === 'busy' && tp.busy) { tp.cancelled = true; window.wa.trCancel(); } }, true);
+  // 翻译页走自己的翻译通道，取消只取消这一页的，不碰工作台
+  go.addEventListener('click', () => { if (go.dataset.st === 'busy' && tp.busy) { tp.cancelled = true; window.wa.trPageCancel(); } }, true);
   const src = h('select', { class: 'tp-lang', 'aria-label': '原文语言', onchange: (e) => { tp.src = e.target.value === '__auto' ? '' : e.target.value; tpLabels(); } });
   const tgt = h('select', { class: 'tp-lang', 'aria-label': '目标语言', onchange: (e) => { tp.tgt = e.target.value === '__auto' ? '' : e.target.value; tpLabels(); } });
   const swap = h('button', { class: 'tp-icon tp-swap', type: 'button', 'aria-label': '对调语言', onclick: () => tpSwap() }, icon('swap', 16));
@@ -314,7 +317,8 @@ function tpUpdate() {
   ui.open2.hidden = !canCompare || open;
   const p2 = provs.find((p) => p.id === tp.p2);
   ui.open2.querySelector('.tp-open2-model').textContent = p2 ? tpProvName(p2) : '';
-  tpOff(ui.go, !tp.busy && !ui.input.value.trim());
+  // 忙的时候：主按钮在转圈就能点（点了取消）；纠错这类不归它管的忙，主按钮先不能点
+  tpOff(ui.go, tp.busy ? ui.go.dataset.st !== 'busy' : !ui.input.value.trim());
   ui.clear.style.visibility = ui.input.value ? '' : 'hidden';
   tpCount(ui.inCount, ui.input.value);
   for (const o of [ui.o1, ui.o2]) tpCount(o.count, o.box.hidden ? '' : o.box.value);
@@ -480,6 +484,23 @@ async function tpRunOne(o, req) {
   let r;
   try { r = await window.wa.trPage(req); } catch { r = { error: '翻译失败' }; }
   if (r && !r.error) tpSetOut(o, r.text); else tpShowOut(o, r);
+  return !!(r && !r.error);
+}
+// 换模型重翻、展开补翻也是在翻译：主按钮一样显示「翻译中」，再点一下取消。run 返回 true = 翻好了
+async function tpGoBusy(run) {
+  const go = tp.ui.go;
+  const set = (st) => {
+    const m = morphState['tp-go'];
+    if (m) clearTimeout(m.timer);
+    morphState['tp-go'] = { st };
+    morphPaint(go);
+  };
+  set('busy');
+  let ok = false;
+  try { ok = await run(); } finally {
+    set(ok ? 'ok' : 'idle');
+    if (ok) morphState['tp-go'].timer = setTimeout(() => set('idle'), MORPH_HOLD);
+  }
 }
 // 译文出来时淡入
 function tpSetOut(o, text) {
@@ -494,13 +515,16 @@ async function tpRerun(which) {
   const text = ui.input.value;
   if (tp.busy || !text.trim() || (!o.box.value.trim() && o.err.hidden)) return;
   const { source, target } = tpPick(text);
-  tp.busy = true;
-  o.box.value = ''; tpShowOut(o, null);
-  tpUpdate();
-  await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
-  tp.busy = false;
-  tpUpdate();
-  tpLoadCfg();
+  await tpGoBusy(async () => {
+    tp.busy = true;
+    o.box.value = ''; tpShowOut(o, null);
+    tpUpdate();
+    const ok = await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
+    tp.busy = false;
+    tpUpdate();
+    tpLoadCfg();
+    return ok;
+  });
 }
 
 // 展开对照栏时：上面已经有译文、对照栏还空着，就只补翻对照这一栏
@@ -509,12 +533,15 @@ async function tpFillCompare() {
   const text = ui.input.value;
   if (tp.busy || !text.trim() || !ui.o1.box.value.trim() || ui.o2.box.value.trim()) return;
   const { source, target } = tpPick(text);
-  tp.busy = true;
-  tpUpdate();
-  await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
-  tp.busy = false;
-  tpUpdate();
-  tpLoadCfg();
+  await tpGoBusy(async () => {
+    tp.busy = true;
+    tpUpdate();
+    const ok = await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
+    tp.busy = false;
+    tpUpdate();
+    tpLoadCfg();
+    return ok;
+  });
 }
 
 async function tpFix(which) {
