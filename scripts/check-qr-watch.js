@@ -72,7 +72,8 @@ const CHATS_HTML = '<div id="side"><div id="pane-side">对话列表</div></div>'
     const shellC = await cdp(shellT.webSocketDebuggerUrl);
     const pageC = await cdp(pageT.webSocketDebuggerUrl);
     // 只看左边的账号侧栏：右侧工作台默认打开，翻译页在二维码页也会显示“扫码登录后可用”，不算侧栏变化
-    const sideText = () => shellC.evaluate("(document.getElementById('side') || document.body).innerText");
+    // 窗口不到 1200 宽时侧栏自动只显示图标，状态在账号行的悬停提示里，一起算上
+    const sideText = () => shellC.evaluate("(() => { const el = document.getElementById('side') || document.body; return el.innerText + '\\n' + [...el.querySelectorAll('.row[title]')].map((e) => e.title).join('\\n'); })()");
     const waitFor = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return Date.now() - t0; await sleep(200); } return -1; };
 
     // 1. 页面加载完、停在二维码页：几秒内侧栏显示“等待扫码/需要扫码登录”（以前要等 1 分钟后的第一次检查）

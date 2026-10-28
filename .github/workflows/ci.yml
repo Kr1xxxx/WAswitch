@@ -36,6 +36,8 @@ jobs:
         run: npm run check:customer-time
       - name: 字号自检（最多四种，最小 12px）
         run: npm run check:font-sizes
+      - name: 圆角和动效检查（6 / 10 / 14 / 圆形，250ms ease-out）
+        run: npm run check:radius-motion
       - name: 账号图标 emoji 自检
         run: npm run check:emoji
       - name: 悬浮翻译自检
@@ -46,6 +48,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 侧栏 + 号（添加账号、添加分组）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+      - name: 顶栏放不下时整块藏起、不出省略号
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
       - name: 翻译页 ⇄（没翻过先认原文语言）

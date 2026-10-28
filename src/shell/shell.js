@@ -181,7 +181,7 @@ function rawDetail(text) {
 
 // ---------- 过渡动画 ----------
 // 界面每次状态变化都整块重画，CSS transition 接不上。这里按“槽位”记住上次的值，值真的变了才给新元素放一次动画。
-// 动画只用 opacity/transform，时长在 shell.css 的 --fx-* 里统一改；系统开了“减少动态效果”就不动
+// 动画只用 opacity/transform，时长在 src/tokens.css 的 --fx 里统一改；系统开了“减少动态效果”就不动
 const fxLast = new Map();
 function fxChanged(slot, key, first = true) {
   const had = fxLast.has(slot);
@@ -322,7 +322,7 @@ function accountRow(acc) {
   // 名字下面一行：有问题时写问题，平时写这个号登录的手机号（连接方式在悬停提示里）。锁着时不露手机号
   const sub = acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : s.locked ? '' : acc.phone;
   const row = h('button', {
-    class: `row${on ? ' on' : ''}${on && sideFx ? ' fx-on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
+    class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
     oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
   },
@@ -353,9 +353,9 @@ function groupHead(g) {
     return h('div', { class: 'group-head editing' }, icon('down', 12), input);
   }
   const quiet = g && g.muted;
-  // 箭头一直是朝下的那个，折起来转 -90°；刚点过就放一次转动
+  // 箭头一直是朝下的那个，折起来转 -90°（不放动画）
   const chev = g ? icon('down', 12) : null;
-  if (chev) { chev.classList.add('gchev'); fx(`grp:${g.id}`, !!g.collapsed, chev, g.collapsed ? 'fx-rot-close' : 'fx-rot-open', false); }
+  if (chev) chev.classList.add('gchev');
   const head = h('button', {
     class: `group-head${g && g.collapsed ? ' closed' : ''}`,
     title: g ? `${name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
@@ -389,23 +389,17 @@ function accountList() {
     out.push(groupHead(g));
     // 折叠的组只藏起侧栏里的行（页面照常开着、照常收消息）；正在看的那个号仍然露出来
     const rows = s.accounts.filter((a) => a.groupId === g.id && (!g.collapsed || (a.id === s.activeId && s.page === 'account'))).map(accountRow);
-    // 刚展开的组：里面的号淡入
-    if (fxChanged(`grprows:${g.id}`, !!g.collapsed, false) && !g.collapsed) rows.forEach((r) => fxPlay(r));
     out.push(...rows);
   }
   return out;
 }
 
-let sideFx = false;
 function renderSide() {
   if (dragId) { sideStale = true; return; }
   // 正在给分组改名：不重画，免得输入框被换掉
   const editing = document.activeElement && document.activeElement.classList.contains('group-name');
   if (editing && s.editGroupId) return;
   const mac = s.platform === 'darwin';
-  // 侧栏高亮换了（切账号、切设置页）：新高亮那一行淡入
-  sideFx = fxChanged('side-on', s.page === 'account' ? `a:${s.activeId}` : s.page === 'editor' ? `e:${s.editorId || ''}` : s.page, false);
-  const setFx = s.page === 'settings' && fxChanged('set-tab', settingsTab, false);
   $side.replaceChildren();
   $side.append(h('div', { class: 'win-drag' }));
   if (s.page === 'settings') {
@@ -414,7 +408,7 @@ function renderSide() {
       h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
         i ? h('div', { class: 'tab-group' }, title) : null,
         ...tabs.map(([id, label]) =>
-          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
+          h('button', { class: `tab${settingsTab === id ? ' on' : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
             id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
@@ -426,7 +420,7 @@ function renderSide() {
     h('div', { class: 'label side-label' }, s.collapsed ? null : h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))), addBtn()),
     h('div', { class: 'list' }, accountList()),
     s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
-    h('button', { class: `row tool-row${s.page === 'translate' ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
+    h('button', { class: `row tool-row${s.page === 'translate' ? ' on' : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
       h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
     h('div', { class: 'grow' })));
   const upd = updateCard();
@@ -545,12 +539,12 @@ const clockFormats = new Map();
 function clockParts(tz) {
   const key = tz || '';
   if (!clockFormats.has(key)) {
-    clockFormats.set(key, new Intl.DateTimeFormat('zh-CN', { ...(tz ? { timeZone: tz } : {}), hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' }));
+    clockFormats.set(key, new Intl.DateTimeFormat('zh-CN', { ...(tz ? { timeZone: tz } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
   }
   const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
   const hour = Number(parts.hour);
   const night = hour >= 22 || hour < 8;
-  return { text: `${parts.weekday} ${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
+  return { text: `${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
 // 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
 let peer = null;
@@ -569,10 +563,9 @@ function clockChip(acc) {
       chip.title = `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`;
       return;
     }
+    // 只写城市和时间，不写星期（设计复查第 2 条）：“伦敦 16:44  纽约 11:44  加州 08:44”
     const zones = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
-    // 星期只在第一个写：“伦敦 周二 16:44  纽约 11:44  加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
-    const day = (x) => x.text.split(' ')[0];
-    chip.lastChild.replaceChildren(...segs(...zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`)));
+    chip.lastChild.replaceChildren(...segs(...zones.map((x) => `${x.place} ${x.text}`)));
     const night = zones.every((x) => x.night); // 几个地方都是深夜 / 清晨才标黄
     chip.classList.toggle('night', night);
     chip.classList.remove('peer');
@@ -580,7 +573,7 @@ function clockChip(acc) {
     chip.title = `${zones.map((x) => `${x.place}（${x.tz}）`).join('、')}的时间，认不出客户时默认显示。打开有号码的私聊时，这里会换成客户的当地时间${night ? '。这几个地方现在都是休息时间' : ''}${own}`;
   };
   draw();
-  chip.draw = draw;
+  chip.draw = () => { draw(); fitTop(); };
   return chip;
 }
 window.wa.onPeerZone((z) => {
@@ -595,37 +588,20 @@ setInterval(() => {
   if (c && c.draw) c.draw();
 }, 20000);
 
-// 内存数字的说明：后台号涨到回收线会悄悄刷新一次，刷新后数字会一下变小，再慢慢涨回 300 MB 左右
-function memTitle(acc, lite) {
-  if (lite) return '轻量模式账号共用一个后台进程，这里是平均到每个号的近似值';
-  const r = acc.lastRecycle;
-  const tip = '内存占用（近似值，只算这个号的页面进程）';
-  if (!r || !r.at) return tip;
-  const t = new Date(r.at);
-  const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-  return `${tip}\n${hm} 在后台自动刷新过一次（当时 ${r.mb} MB），刷新后数字会先变小，几分钟内涨回正常。登录和聊天记录都不受影响。`;
-}
-
-// 顶栏的缩放比例：点一下展开 − / + 自己调，再点比例或点别处收起
-let zoomOpenFor = '';
-function zoomChip(acc) {
-  const pct = `${Math.round((acc.zoom || 0.9) * 100)}%`;
-  const key = s.platform === 'darwin' ? 'Cmd' : 'Ctrl';
-  const toggle = (e) => { e.stopPropagation(); zoomOpenFor = zoomOpenFor === acc.id ? '' : acc.id; renderTop(); };
-  if (zoomOpenFor !== acc.id) {
-    return h('button', { class: 'chip', type: 'button', title: `页面缩放 ${pct}，点一下调整（${key} + = / - / 0 也能调）`, onclick: toggle }, pct);
+// 顶栏放不下时按优先级整块藏起来，不出现省略号（设计复查第 2 条）。
+// data-fit 小的先藏：备注 → 线路 → 时钟 → 有问题的线路。账号名和右边三个按钮一直留着
+function fitTop() {
+  if ($top.hidden) return;
+  const items = [...$top.querySelectorAll('[data-fit]')].sort((x, y) => x.dataset.fit - y.dataset.fit);
+  items.forEach((el) => el.classList.remove('fit-off'));
+  $top.classList.add('fitting');
+  for (const el of items) {
+    if ($top.scrollWidth <= $top.clientWidth) break;
+    el.classList.add('fit-off');
   }
-  const step = (dir) => (e) => { e.stopPropagation(); window.wa.zoom(acc.id, dir); };
-  const z = acc.zoom || 0.9;
-  return h('span', { class: 'chip zoom-ctl', onclick: (e) => e.stopPropagation() },
-    h('button', { type: 'button', class: 'zbtn', title: '缩小', 'aria-label': '缩小', disabled: z <= 0.5, onclick: step(-1) }, '−'),
-    h('button', { type: 'button', class: 'zpct', title: '收起', onclick: toggle }, pct),
-    h('button', { type: 'button', class: 'zbtn', title: '放大', 'aria-label': '放大', disabled: z >= 2, onclick: step(1) }, '+'),
-    z !== 0.9 ? h('button', { type: 'button', class: 'zreset', title: '还原到默认 90%', onclick: step(0) }, '默认') : null);
+  $top.classList.remove('fitting');
 }
-const closeZoom = () => { if (zoomOpenFor) { zoomOpenFor = ''; renderTop(); } };
-document.addEventListener('click', closeZoom);
-window.addEventListener('blur', closeZoom); // 点进 WhatsApp 页面时也收起
+window.addEventListener('resize', () => fitTop());
 
 function renderTop() {
   const acc = active();
@@ -634,28 +610,32 @@ function renderTop() {
   // 锁着时顶栏留空：账号名、出口 IP、内存这些都不露出来；「聊天已锁定」只在中间的锁屏卡片上写一次
   if (s.locked) { $top.replaceChildren(); return; }
   const lite = acc.mode === 'lite';
+  // 缩放和内存在右边“⋯”菜单里（设计复查第 2 条）
+  const exit = exitChip(acc);
+  exit.dataset.fit = acc.problem || exit.classList.contains('night') ? 4 : 2;
+  const clock = clockChip(acc);
+  clock.dataset.fit = 3;
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), emojiImg(acc, 16), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
+    emojiImg(acc, 16), h('span', { class: 'who', title: acc.note || null }, acc.name),
+    acc.note ? h('span', { class: 'who-note', 'data-fit': 1 }, acc.note) : null,
     h('span', { class: 'grow' }),
-    exitChip(acc),
-    !lite ? zoomChip(acc) : null,
-    clockChip(acc),
-    acc.memMB ? h('span', { class: 'chip', title: memTitle(acc, lite) }, `${acc.memMB} MB`) : null,
+    exit,
+    clock,
     // 右边三个按钮放成一组：刷新、工作台、账号菜单（shen 2026-10-27 把刷新挪到最前）
     h('span', { class: 'top-acts' },
       h('button', { class: 'icon-btn', title: lite ? '重新连接' : '刷新', 'aria-label': lite ? '重新连接' : '刷新', onclick: () => window.wa.reload(acc.id) }, icon('reload', 15)),
       h('button', { class: `icon-btn${s.panelOpen ? ' on' : ''}`, title: `工作台：客户资料、话术、翻译（${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'} + Shift + K）`, 'aria-label': '工作台', 'aria-pressed': String(!!s.panelOpen), onclick: () => window.wa.panelToggle() }, icon('book', 15)),
       h('button', { class: 'icon-btn', title: '账号菜单（右键账号也可以打开）', 'aria-label': '账号菜单', onclick: () => window.wa.context(acc.id, 'top') }, icon('more', 15)))));
+  fitTop();
 }
 
 // 右侧工作台顶部的切页：客户资料 / 话术 / 翻译（翻译有未读数）。翻译页时右边是自动翻译开关；
 // 没有收起按钮了（shen 2026-10-27），收起用顶栏的“工作台”按钮或 Ctrl/Cmd + Shift + K
 function panelHead() {
-  const tabFx = fxChanged('wb-tab-head', s.panelTab || 'translate', false);
   const tab = (id, label, ic) => {
     const on = s.panelTab === id;
     const badge = id === 'translate' && !on && dk.unread > 0 ? h('span', { class: 'tb-badge', 'aria-label': `${dk.unread} 条新消息` }, dk.unread > 99 ? '99+' : String(dk.unread)) : null;
-    return h('button', { class: `tb-tab${on ? ` on${tabFx ? ' fx-on' : ''}` : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
+    return h('button', { class: `tb-tab${on ? ' on' : ''}`, role: 'tab', 'aria-selected': String(on), onclick: () => { if (!on) window.wa.panelTab(id); } }, ic ? icon(ic, 15) : null, label, badge);
   };
   return h('div', { class: 'wb-tabs', role: 'tablist', 'aria-label': '工作台' },
     tab('customers', '客户资料'), tab('replies', '话术'), tab('translate', '翻译', 'translate'),
@@ -671,7 +651,6 @@ function refreshPanelHead() {
 function renderAi() {
   const r = s.aiRequest;
   $ai.hidden = !r;
-  if (fxChanged('ai', !!r, false) && r) fxPlay($ai, 'fx-down');
   if (!r) return;
   if (r.kind === 'draft') {
     // AI 起草了一条回复：给用户看开头，点“放进输入框”才放，发送永远自己按
@@ -1306,7 +1285,6 @@ function translatePage(page) {
 function renderPanel(force = false) {
   const show = !!s.panelOpen && !s.locked && s.page === 'account';
   $panel.hidden = !show;
-  if (fxChanged('panel-open', show, false) && show) fxPlay($panel, 'fx-panel');
   if (!show) return;
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
   const tab = s.panelTab || 'translate';
@@ -1938,7 +1916,7 @@ function settingsPage() {
     const a = s.about;
     page.append(
       h('div', { class: 'hstack', style: { gap: '18px' } },
-        h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,.25)' } }),
+        h('img', { class: 'about-icon', src: '../../assets/icon.png', alt: '', width: '64', height: '64' }),
         h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: 'var(--fs-m)' } }, `版本 ${a.version}`))),
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
