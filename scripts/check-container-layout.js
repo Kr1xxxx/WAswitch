@@ -10,7 +10,8 @@ const assert = require('assert');
 const { app, BrowserWindow } = require('electron');
 
 const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'shell', 'shell.css'), 'utf8');
-const viewport = css.match(/@media[^{]*\b(min-|max-)?(width|height)\b[^{]*\{/g) || [];
+// 先去掉注释，注释里写 @media (max-width…) 不算；看窗口的条件：宽、高、横竖屏、宽高比、device-*
+const viewport = css.replace(/\/\*[\s\S]*?\*\//g, '').match(/@media[^{]*\b(width|height|orientation|aspect-ratio|device-[a-z-]+)\b[^{]*\{/g) || [];
 
 app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});

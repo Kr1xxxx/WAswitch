@@ -151,8 +151,8 @@ body.collapsed .foot .upd-check { display: none; }
 #aibar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #aibar .btn { height: 30px; padding: 0 14px; }
 #aibar .grow.bad { color: var(--danger); }
-#topbar .who { color: var(--text); white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: ellipsis; }
-#topbar .who-note { color: var(--muted); font-size: var(--fs-s); white-space: nowrap; word-break: normal; }
+#topbar .who { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#topbar .who-note { color: var(--muted); font-size: var(--fs-s); white-space: nowrap; }
 /* 顶栏放不下时整块藏起放不下的（shell.js fitTop，顶栏自己宽度一变就重排），不缩成省略号；右边三个按钮永远留在顶栏里 */
 #topbar > * { flex-shrink: 0; }
 #topbar > .who { flex-shrink: 1; min-width: 0; }
@@ -469,7 +469,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: var(--hair) solid var(--line); background: var(--white); }
 .wb-tools { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 6px; }
 .wb-tools .dk-mini { min-width: 0; max-width: 84px; }
-.tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; white-space: nowrap; word-break: normal; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: var(--fs-m); color: var(--muted); cursor: pointer; }
+.tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: var(--fs-m); color: var(--muted); cursor: pointer; }
 .tb-tab:hover { color: var(--text); background: var(--slate-a2); }
 .tb-tab.on { color: var(--text); font-weight: 600; }
 /* 选中下划线单独画一层，切页时能从中间展开 */
