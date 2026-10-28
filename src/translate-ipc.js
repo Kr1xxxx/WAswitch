@@ -118,14 +118,16 @@ function setupTranslateIpc(ctx) {
   });
   handleShell('tr:cancel', () => userCancel());
   // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
-  // providerId = 这一栏选的模型（只用它，不换备用）；纠错走纠错服务商。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
+  // providerId = 这一栏选的模型（只用它，不换备用，纠错也用它）。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
   const PAGE_MODE = { prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。', temperature: 0.2 };
   handleShell('tr:page', async ({ text, source, target, providerId, fix, draft } = {}) => {
     if (typeof text !== 'string') return { error: '先放一段要翻译的文字', kind: 'input' };
-    const detected = source ? '' : detectLang(text);
+    const detected = source ? '' : detectLang(text.slice(0, 2000));
+    const pid = typeof providerId === 'string' ? providerId : '';
+    // 纠错也用这一栏选的模型（按钮就在模型旁边）
     const r = fix === true && typeof draft === 'string' && draft.trim()
-      ? await userTranslate({ text, mode: FIX_OUT, target, source, draft, fix: true })
-      : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: typeof providerId === 'string' ? providerId : '' });
+      ? await userTranslate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
+      : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: pid });
     return { ...r, detected };
   });
   // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面

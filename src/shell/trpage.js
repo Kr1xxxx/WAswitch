@@ -6,7 +6,6 @@
 
 const TP_KEY = 'trPage';
 const TP_HIST_MAX = 20;
-const TP_RESET_MS = 1800;
 const tp = {
   el: null,
   cfg: null, // tr:config 的 config
@@ -14,6 +13,7 @@ const tp = {
   tgt: '', // 手动选的目标语言，'' = 自动选择
   detected: '', // 上次翻译认出来的原文语言（只显示）
   p1: '', p2: '', open2: true,
+  autoFold: false, // 原文太长（超出输入框）：这一次自动收起对照栏，只翻一栏（不改记下的展开/收起）
   hist: [],
   busy: false,
   ui: null,
@@ -32,27 +32,11 @@ function tpSavePrefs() {
   try { localStorage.setItem(TP_KEY, JSON.stringify({ p1: tp.p1, p2: tp.p2, open2: tp.open2, hist: tp.hist })); } catch {}
 }
 
-// 按钮原地变：空闲 → 进行中（不能点）→ 成功（1.8 秒后复原）/ 失败（停住等重试）。宽度固定，不挤动旁边
-function tpMorph(cls, labels, onclick) {
-  const layers = {};
-  const btn = h('button', { class: `tp-morph ${cls}`, type: 'button', 'data-state': 'idle', onclick: () => { if (btn.dataset.state !== 'loading') onclick(); } },
-    ...['idle', 'loading', 'success', 'error'].filter((k) => labels[k]).map((k) => {
-      layers[k] = h('span', { class: `tp-layer tp-${k}` },
-        k === 'loading' ? h('span', { class: 'tp-spin', 'aria-hidden': 'true' }) : k === 'success' ? icon('check', 14) : k === 'error' ? icon('warn', 14) : null,
-        labels[k]);
-      return layers[k];
-    }));
-  let timer = null;
-  btn.setState = (st) => {
-    clearTimeout(timer);
-    btn.dataset.state = st;
-    btn.disabled = st === 'loading';
-    btn.setAttribute('aria-busy', String(st === 'loading'));
-    btn.setAttribute('aria-label', labels[st] || labels.idle);
-    if (st === 'success') timer = setTimeout(() => btn.setState('idle'), TP_RESET_MS);
-  };
-  btn.setState('idle');
-  return btn;
+// 状态按钮用 shell.js 的 morphBtn（和设置里的保存、测试同一套）。_off = 不能点
+function tpOff(btn, off) {
+  if (btn._off === off) return;
+  btn._off = off;
+  morphPaint(btn);
 }
 
 function tpProviders() { return (tp.cfg && tp.cfg.providers) || []; }
@@ -108,18 +92,18 @@ function tpOutPane(which) {
   const box = h('textarea', { class: 'tp-text', 'aria-label': which === 1 ? '译文' : '对照译文', spellcheck: 'false' });
   const err = h('div', { class: 'tp-err', role: 'alert', hidden: true });
   const model = tpModelSel(which);
-  const copy = tpMorph('tp-copy', { idle: '复制', success: '已复制' }, async () => {
-    if (!box.value.trim()) return;
+  const copy = morphBtn(`tp-copy${which}`, { idle: '复制', ok: '已复制' }, async () => {
+    if (!box.value.trim()) return {};
     await window.wa.panelCopy(box.value);
-    copy.setState('success');
-  });
+    return { ok: true };
+  }, { class: 'tp-btn tp-copy primary' });
   const foot = h('div', { class: 'tp-foot' }, model, h('span', { class: 'grow' }));
   // 报错放在译文本来出现的位置（左上）
   const pane = h('div', { class: 'tp-pane tp-out' }, err, box, foot);
   const o = { pane, box, err, model, copy, foot };
   if (which === 1) {
     // 纠错只在翻成外文时有用（中文译文自己就能看懂）
-    o.fix = tpMorph('tp-fix', { idle: '纠错', loading: '纠错中', success: '已纠错', error: '重试' }, () => tpFix());
+    o.fix = morphBtn('tp-fix', { idle: '纠错', busy: '纠错中', ok: '已纠错', err: '重试' }, () => tpFix(), { class: 'tp-btn tp-fix primary' });
     foot.append(o.fix);
   } else {
     o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: () => tpSetOpen2(false) }, icon('up', 14));
@@ -134,15 +118,22 @@ function tpBuild() {
   const input = h('textarea', { class: 'tp-text', placeholder: '输入或粘贴文字', 'aria-label': '原文', spellcheck: 'false' });
   input.addEventListener('input', () => { tpIdle(); tpLabels(); tpUpdate(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); tpRun(); }
+    // 输入法还在选字（Windows 上是 keyCode 229）时回车不算
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (!go.disabled && !tp.busy) go.click();
+    }
   });
   const clear = h('button', { class: 'tp-icon', type: 'button', 'aria-label': '清空', onclick: () => {
     input.value = '';
     for (const o of [ui.o1, ui.o2]) { o.box.value = ''; tpShowOut(o, null); }
     tp.detected = '';
+    tp.autoFold = false;
     tpIdle(); tpLabels(); tpUpdate(); input.focus();
   } }, icon('close', 14));
-  const go = tpMorph('tp-go', { idle: '翻译', loading: '翻译中', success: '已翻译', error: '重试' }, () => tpRun());
+  const go = morphBtn('tp-go', { idle: '翻译', busy: '翻译中', ok: '已翻译', err: '重试' }, () => tpRun(), { class: 'tp-btn tp-go primary' });
+  // 翻译中再点一下 = 取消（捕获阶段先看状态，morphBtn 自己的点击会忽略转圈时的点击）
+  go.addEventListener('click', () => { if (go.dataset.st === 'busy' && tp.busy) { tp.cancelled = true; window.wa.trCancel(); } }, true);
   const src = h('select', { class: 'tp-lang', 'aria-label': '原文语言', onchange: (e) => { tp.src = e.target.value === '__auto' ? '' : e.target.value; tpLabels(); } });
   const tgt = h('select', { class: 'tp-lang', 'aria-label': '目标语言', onchange: (e) => { tp.tgt = e.target.value === '__auto' ? '' : e.target.value; tpLabels(); } });
   const swap = h('button', { class: 'tp-icon tp-swap', type: 'button', 'aria-label': '对调语言', onclick: () => tpSwap() }, icon('swap', 16));
@@ -173,8 +164,11 @@ function tpBuild() {
 
 // 改了原文或清空：主按钮回到「翻译」（不留着上一次的已翻译 / 重试）
 function tpIdle() {
-  const go = tp.ui.go;
-  if (go.dataset.state !== 'loading' && go.dataset.state !== 'idle') go.setState('idle');
+  const m = morphState['tp-go'];
+  if (!m || m.st === 'idle' || m.st === 'busy') return;
+  clearTimeout(m.timer);
+  morphState['tp-go'] = { st: 'idle' };
+  morphPaint(tp.ui.go);
 }
 
 // 清空最近记录：直接清，8 秒内可以撤销
@@ -205,8 +199,9 @@ function tpUndoHist() {
 function tpLabels() {
   const ui = tp.ui;
   const text = ui.input.value;
-  const r = tpPick(text);
-  const srcAuto = text.trim() ? (r.source || tp.detected) : '';
+  // “自动”那一项显示的是选自动时会得到什么，不受另一边手动选的影响
+  const srcAuto = text.trim() ? (ReplyLang.isChinese(text) ? '中文' : tp.detected) : '';
+  const r = ReplyLang.pick({ text, src: tp.src, manual: '', autoTarget: '英语' });
   const fill = (sel, autoLabel, list, cur) => {
     const want = ['__auto', ...list].join('|');
     if (sel.dataset.list !== want) {
@@ -221,8 +216,10 @@ function tpLabels() {
   fill(ui.tgt, text.trim() || tp.tgt ? `自动选择（${r.target}）` : '自动选择', langs, tp.tgt);
 }
 
+function tpOpen2() { return tp.open2 && !tp.autoFold; }
 function tpSetOpen2(on) {
   tp.open2 = on;
+  tp.autoFold = false;
   tpSavePrefs();
   tpUpdate();
   (on ? tp.ui.o2.fold : tp.ui.open2).focus();
@@ -231,7 +228,7 @@ function tpSetOpen2(on) {
 
 // 栏里的报错：服务商名在底栏已经有了，这里只说缺什么，后面跟一个去处理的链接
 function tpShowOut(o, r) {
-  const err = r && r.error ? r : null;
+  const err = r && r.error && r.kind !== 'cancel' ? r : null;
   o.err.replaceChildren();
   o.err.hidden = !err;
   o.box.hidden = !!err;
@@ -256,15 +253,16 @@ function tpUpdate() {
   tpFillModels(ui.o2.model, tp.p2);
   // 只有一个模型时没东西可对照，第二栏整个不显示
   const canCompare = provs.length > 1;
-  ui.o2.pane.hidden = !canCompare || !tp.open2;
-  ui.open2.hidden = !canCompare || tp.open2;
+  const open = tpOpen2();
+  ui.o2.pane.hidden = !canCompare || !open;
+  ui.open2.hidden = !canCompare || open;
   const p2 = provs.find((p) => p.id === tp.p2);
   ui.open2.querySelector('.tp-open2-model').textContent = p2 ? tpProvName(p2) : '';
-  ui.go.disabled = tp.busy || !ui.input.value.trim();
+  tpOff(ui.go, !tp.busy && !ui.input.value.trim());
   ui.swap.disabled = tp.busy;
   const toForeign = tpPick(ui.input.value).target !== '中文';
   ui.o1.fix.hidden = !toForeign || !ui.o1.box.value.trim() || !ui.input.value.trim();
-  ui.o1.fix.disabled = tp.busy;
+  tpOff(ui.o1.fix, tp.busy && ui.o1.fix.dataset.st !== 'busy');
   // 没译文时「复制」先藏起来（位置留着，有了译文不跳）
   for (const o of [ui.o1, ui.o2]) o.copy.style.visibility = o.box.value.trim() ? '' : 'hidden';
   tpFitSelect(ui.o1.model); tpFitSelect(ui.o2.model);
@@ -293,12 +291,14 @@ function tpTime(at) {
 async function tpRun() {
   const ui = tp.ui;
   const text = ui.input.value;
-  if (tp.busy || !text.trim()) return;
+  if (tp.busy || !text.trim()) return {};
   if (!tp.cfg) await tpLoadCfg();
   const { source, target } = tpPick(text);
-  const both = tp.open2 && tpProviders().length > 1;
+  // 超长原文（输入框装不下要滚动）：默认只用第一栏的模型翻，对照栏收起，想看可以再展开
+  tp.autoFold = ui.input.scrollHeight > ui.input.clientHeight + 2;
+  const both = tpOpen2() && tpProviders().length > 1;
   tp.busy = true;
-  ui.go.setState('loading');
+  tp.cancelled = false;
   for (const o of both ? [ui.o1, ui.o2] : [ui.o1]) { o.box.value = ''; tpShowOut(o, null); }
   // 收着的对照栏清掉旧译文，免得展开时看到上一句的
   if (!both) { ui.o2.box.value = ''; tpShowOut(ui.o2, null); }
@@ -307,10 +307,11 @@ async function tpRun() {
   try { r1 = await window.wa.trPage({ text, source, target, providerId: tp.p1 }); } catch { r1 = { error: '翻译失败' }; }
   if (r1 && !r1.error) ui.o1.box.value = r1.text; else tpShowOut(ui.o1, r1);
   tp.detected = (r1 && r1.detected) || '';
-  if (both) await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
+  if (both && !tp.cancelled) await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
   tp.busy = false;
   const ok = r1 && !r1.error;
-  ui.go.setState(ok ? 'success' : TP_RETRY.includes(r1 && r1.kind) || !(r1 && r1.kind) ? 'error' : 'idle');
+  // 只有重试可能有用的失败才显示「重试」；没填密钥、取消这些回到「翻译」
+  const res = ok ? { ok: true } : TP_RETRY.includes(r1 && r1.kind) || !(r1 && r1.kind) ? { ok: false } : {};
   if (ok) {
     tp.hist = [{ src: text, out: r1.text, from: source || tp.detected, to: target, at: Date.now() }, ...tp.hist.filter((x) => x.src !== text)].slice(0, TP_HIST_MAX);
     tpSavePrefs();
@@ -318,7 +319,9 @@ async function tpRun() {
   }
   tpLabels();
   tpUpdate();
+  return res;
 }
+
 async function tpRunOne(o, req) {
   let r;
   try { r = await window.wa.trPage(req); } catch { r = { error: '翻译失败' }; }
@@ -357,16 +360,18 @@ async function tpFix() {
   const ui = tp.ui;
   const text = ui.input.value;
   const draft = ui.o1.box.value;
-  if (tp.busy || !text.trim() || !draft.trim()) return;
+  if (tp.busy || !text.trim() || !draft.trim()) return {};
   const { source, target } = tpPick(text);
   tp.busy = true;
-  ui.o1.fix.setState('loading');
   tpUpdate();
   let r;
-  try { r = await window.wa.trPage({ text, source, target, fix: true, draft }); } catch { r = { error: '纠错失败' }; }
+  // 纠错用这一栏选的模型（按钮就在模型旁边）
+  try { r = await window.wa.trPage({ text, source, target, fix: true, draft, providerId: tp.p1 }); } catch { r = { error: '纠错失败' }; }
   tp.busy = false;
-  if (r && !r.error) { ui.o1.box.value = r.text; tpShowOut(ui.o1, null); ui.o1.fix.setState('success'); } else { tpShowOut(ui.o1, r); ui.o1.fix.setState('error'); }
+  const ok = r && !r.error;
+  if (ok) { ui.o1.box.value = r.text; tpShowOut(ui.o1, null); } else tpShowOut(ui.o1, r);
   tpUpdate();
+  return ok ? { ok: true } : r && r.kind === 'cancel' ? {} : { ok: false };
 }
 
 // ⇄：原文语言和目标语言对调；有译文就把译文换到左边当原文
