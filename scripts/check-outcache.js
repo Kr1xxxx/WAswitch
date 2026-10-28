@@ -1,11 +1,12 @@
 // 发出的译文记录自检（话术不重复翻）：同一句中文 + 同一种语言 + 同一个模式第二次不再调翻译；
 // 中文改了、换语言、换模式、改模式提示词都重新翻；fresh（重新翻译）重新调并更新记录；失败不记；
+// 改了角色设定（固定译法）重新翻；译文带原文没有的联系方式、或超过存储上限的不记；用过的最后删；
 // 存到磁盘，重启（新的 TrStore）后还在；最多留 OUT_MAX 条。不连网络。
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { TrStore } = require('../src/trstore');
+const { TrStore, TR_MAX } = require('../src/trstore');
 const { makeOutTranslate, OUT_ACC, OUT_CHAT } = require('../src/outcache');
 
 (async () => {
@@ -14,10 +15,13 @@ const { makeOutTranslate, OUT_ACC, OUT_CHAT } = require('../src/outcache');
   const calls = [];
   let n = 0;
   let fail = false;
+  let role = '';
+  let reply = null; // 下一次翻译固定返回这个（测不记的情况）
   const run = makeOutTranslate({
     store: () => store,
-    translate: async (a) => { calls.push(`${a.text}|${a.target}|${a.mode.prompt}`); n += 1; return fail ? { error: '网络', kind: 'network' } : { text: `${a.target}:${a.text}#${n}`, warn: [] }; },
+    translate: async (a) => { calls.push(`${a.text}|${a.target}|${a.mode.prompt}`); n += 1; if (reply) { const r = reply; reply = null; return r; } return fail ? { error: '网络', kind: 'network' } : { text: `${a.target}:${a.text}#${n}`, warn: [] }; },
     warnOf: () => [],
+    extra: () => role,
   });
   const biz = { id: 'm1', prompt: '商务', temperature: 0.3 };
   const r1 = await run({ text: '您好，货已发出', target: '英语', mode: biz, context: [{ out: false, text: 'a' }] });
@@ -41,6 +45,20 @@ const { makeOutTranslate, OUT_ACC, OUT_CHAT } = require('../src/outcache');
   assert(!r3.cached && r3.text.endsWith('#6'));
   const r4 = await run({ text: '您好，货已发出', target: '英语', mode: biz });
   assert(r4.cached && r4.text === r3.text, '重新翻译后记下的是新的一版');
+  // 改了角色设定（固定译法）：重新翻；改回去又用原来记下的
+  role = '样品 = sample';
+  assert(!(await run({ text: '您好，货已发出', target: '英语', mode: biz })).cached, '改了固定译法要重新翻');
+  assert((await run({ text: '您好，货已发出', target: '英语', mode: biz })).cached);
+  role = '';
+  assert((await run({ text: '您好，货已发出', target: '英语', mode: biz })).cached && calls.length === 7);
+  // 译文里冒出原文没有的联系方式（黄色提醒）：不记
+  reply = { text: 'call +44 20 7946 0958', warn: ['442079460958'] };
+  assert(!(await run({ text: '请联系我', target: '英语', mode: biz })).cached);
+  assert(!(await run({ text: '请联系我', target: '英语', mode: biz })).cached, '带可疑联系方式的译文不能记');
+  // 超过存储上限的译文（会被截断）：不记，免得下次给半截
+  reply = { text: 'x'.repeat(TR_MAX + 1), warn: [] };
+  assert(!(await run({ text: '很长一段', target: '英语', mode: biz })).cached);
+  assert(!(await run({ text: '很长一段', target: '英语', mode: biz })).cached, '超长译文不能记');
   // 翻译失败不记，下次照样调
   fail = true;
   assert((await run({ text: '新的一句', target: '英语', mode: biz })).error);
@@ -57,12 +75,16 @@ const { makeOutTranslate, OUT_ACC, OUT_CHAT } = require('../src/outcache');
   const r5 = await run({ text: '您好，货已发出', target: '英语', mode: biz });
   assert(r5.cached && r5.text === r3.text);
   assert.strictEqual(calls.length, before);
-  // 上限：最多留 3000 条，最早的先删
+  // 上限：最多留 3000 条，最久没用的先删（刚用过的记录时间更新）
   store.put('x1', 'c', 'a', { tr: 'A' });
   for (let i = 0; i < 5; i += 1) { store.put('x1', 'c', `t${i}`, { tr: `T${i}` }); store.load('x1', 'c').data[require('../src/trstore').textKey(`t${i}`)].at = 1000 + i; }
   store.cap('x1', 'c', 3);
   assert.strictEqual(Object.keys(store.load('x1', 'c').data).length, 3);
   assert(!store.get('x1', 'c', 't0') && !store.get('x1', 'c', 't1') && store.get('x1', 'c', 't4'));
+  const old = store.get(OUT_ACC, OUT_CHAT, require('../src/outcache').outKey({ text: '您好，货已发出', target: '英语', mode: biz }, '')).at;
+  await new Promise((ok) => setTimeout(ok, 5));
+  await run({ text: '您好，货已发出', target: '英语', mode: biz });
+  assert(store.get(OUT_ACC, OUT_CHAT, require('../src/outcache').outKey({ text: '您好，货已发出', target: '英语', mode: biz }, '')).at > old, '用过的记录时间要更新');
   store.flush();
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('发出的译文记录自检通过');
