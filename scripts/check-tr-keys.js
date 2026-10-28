@@ -16,6 +16,8 @@ app.whenReady().then(async () => {
   await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
   const js = (f, ...a) => w.webContents.executeJavaScript(`(${f})(${a.map((x) => JSON.stringify(x)).join(',')})`);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 等到页面条件成立（CI 的机器慢，不靠固定等待）；超时就照常往下走，让后面的断言报出具体哪里不对
+  const until = async (f, ms = 5000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await js(f)) return true; await wait(50); } return false; };
   const shot = async (name) => { if (process.env.SHOT_DIR) fs.writeFileSync(path.join(process.env.SHOT_DIR, `${name}.png`), (await w.webContents.capturePage()).toPNG()); };
   const base = { accounts: [{ id: 'a1', name: 'Lukas', color: '#3b82f6', mode: 'web' }], groups: [], activeId: 'a1', platform: 'linux', collapsed: false, settings: {} };
   const go = (page) => js((st) => window.__cbs.state(st), { ...base, page });
@@ -30,15 +32,15 @@ app.whenReady().then(async () => {
     await js(() => { localStorage.clear(); });
     // 1) 翻译页右上角：混元「未启用」，点它 → 设置里混元的密钥框，光标在里面
     await go('translate');
-    await wait(400);
+    await until(() => document.querySelectorAll('.tp-prov').length === 3);
     const prov = await js(() => [...document.querySelectorAll('.tp-prov')].map((b) => b.textContent));
     assert(prov.some((t) => t.includes('腾讯混元') && t.includes('未启用')), `翻译页右上角应有「腾讯混元 未启用」 ${JSON.stringify(prov)}`);
     await js(() => [...document.querySelectorAll('.tp-prov')].find((b) => b.textContent.includes('腾讯混元')).click());
-    await wait(100);
+    await until(() => window.__calls.some((c) => c[0] === 'page') && trKeyFocus === 'new:hunyuan');
     let calls = await js(() => window.__calls.slice());
     assert(calls.some((c) => c[0] === 'page' && c[1] === 'settings'), `点混元应打开设置 ${JSON.stringify(calls)}`);
     await go('settings');
-    await wait(300);
+    await until(() => document.querySelectorAll('.tr-krow').length === 3 && document.activeElement && document.activeElement.type === 'password');
     let r = await rows();
     assert.deepStrictEqual(r.map((x) => x.name).sort(), ['DeepL', '智谱', '腾讯混元'].sort(), `简单设置应有三个密钥框 ${JSON.stringify(r)}`);
     const hy = r.find((x) => x.name === '腾讯混元');
@@ -56,7 +58,7 @@ app.whenReady().then(async () => {
       inp.value = 'sk-test-0000hyk1';
       row.querySelector('button').click();
     });
-    await wait(400);
+    await until(() => window.__calls.some((c) => c[0] === 'test') && [...document.querySelectorAll('.tr-krow')].some((x) => x.querySelector('input').placeholder === '已保存 ••hyk1'));
     calls = await js(() => window.__calls.slice());
     const save = calls.find((c) => c[0] === 'save');
     assert(save, `应调用保存 ${JSON.stringify(calls)}`);
@@ -70,6 +72,7 @@ app.whenReady().then(async () => {
     const ph = await js(() => [...document.querySelectorAll('.tr-krow')].find((x) => x.querySelector('.title b').textContent === '腾讯混元').querySelector('input').placeholder);
     assert.strictEqual(ph, '已保存 ••hyk1');
     // 保存后这一行换成了新 id：按钮还要接着显示「已保存」（Fable 审计 #238 必修 1）
+    await until(() => [...document.querySelectorAll('.tr-krow')].find((x) => x.querySelector('.title b').textContent === '腾讯混元').querySelector('button').dataset.st === 'ok', 1000);
     const btnSt = await js(() => [...document.querySelectorAll('.tr-krow')].find((x) => x.querySelector('.title b').textContent === '腾讯混元').querySelector('button').dataset.st);
     assert.strictEqual(btnSt, 'ok', `保存并测试通过后混元的按钮应是「已保存」 ${btnSt}`);
 
@@ -81,10 +84,9 @@ app.whenReady().then(async () => {
     await js(() => { window.__cfg.providers = []; window.__cfg.primaryId = ''; window.__cfg.fallbackId = ''; window.__cfg.fixId = ''; });
     await js(() => { tr.cfg = null; });
     await go('translate');
-    await wait(200);
     await go('settings');
     await js(() => trLoad());
-    await wait(300);
+    await until(() => document.querySelectorAll('.tr-krow').length === 3 && !document.querySelector('.tr-krow .pn-tag'));
     r = await rows();
     assert.deepStrictEqual(r.map((x) => x.name), ['智谱', '腾讯混元', 'DeepL'], `删光后应有三个空密钥框 ${JSON.stringify(r)}`);
     assert(r.every((x) => !x.tags.length), `空行不带标签 ${JSON.stringify(r)}`);
