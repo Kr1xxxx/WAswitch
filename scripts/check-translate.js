@@ -241,6 +241,25 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
+  // 假发词汇：默认关；打开后跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
+  assert.equal(t4.publicConfig().wigTerms,false); assert.equal(t4.roleText(),'贴牌 = private label');
+  assert.equal(t4.publicConfig().wigList.length,8);
+  assert(t4.setWigTerms(true).ok);
+  let rt=t4.roleText();
+  assert(rt.startsWith('贴牌 = private label\n\n'));
+  for (const l of ['配件 = Closure','前头 = Frontal','发帘 = Bundle','头套 = Wig','全蕾丝头套 = Full lace wig','胶片发 = Tape hair','辫发 = Raw hair','处女发 = Virgin hair']) assert(rt.split('\n').includes(l),l);
+  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('处女发 = Virgin hair'));
+  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().wigTerms,true);
+  rt=T.roleWithWig('配件 = Accessory\n假发 = wig',true);
+  assert(!rt.includes('配件 = Closure') && !rt.includes('头套 = Wig') && rt.includes('前头 = Frontal'),rt);
+  assert(T.roleWithWig('',true).startsWith('假发行业固定译法'));
+  assert.equal(T.roleWithWig('x',false),'x');
+  const wm=T.buildMessages({prompt:'p'},'I want a closure',{target:'中文'},undefined,'','hy-mt2-plus',T.roleWithWig('',true));
+  assert(wm[0].content.includes('Closure 翻译成 配件') && wm[0].content.includes('Virgin hair 翻译成 处女发') && !wm[0].content.includes('假发行业'),wm[0].content);
+  assert.equal(T.glossaryPairs(T.roleWithWig('',true),false).length,8); // 反方向的箭头行混元不当词条
+  assert(T.roleWithWig('',true).includes('Closure → 配件') && !rt.includes('Closure → 配件'));
+  assert(t4.setWigTerms(false).ok); assert.equal(t4.roleText(),'贴牌 = private label');
   fs.rmSync(d4,{recursive:true,force:true});
   // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
   const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));

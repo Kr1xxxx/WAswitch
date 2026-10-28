@@ -51,6 +51,7 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
   handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
+  handleShell('tr:wig', (on) => ({ ...ctx.translator.setWigTerms(on === true), ...trState() }));
   handleShell('tr:network', async (net) => {
     // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
     if (net && net.mode === 'proxy') {
@@ -102,8 +103,8 @@ function setupTranslateIpc(ctx) {
     return true;
   }
   // 发出的翻译：同一句中文、同一种语言、同一个模式翻过就直接用记下的译文（见 outcache.js）；fresh = 用户点了“重新翻译”
-  // 角色设定（固定译法）也算进记录的键：改了固定译法，老译文不再用
-  const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.load().rolePrompt });
+  // 角色设定（固定译法，含打开的假发词汇）也算进记录的键：改了固定译法或开关假发词汇，老译文不再用
+  const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.roleText() });
   handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft, fresh } = {}) => {
     // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;

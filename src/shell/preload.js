@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('wa', {
   trRoles: (primaryId, fallbackId, fixId) => ipcRenderer.invoke('tr:roles', { primaryId, fallbackId, fixId }),
   trFixZhipu: () => ipcRenderer.invoke('tr:fix:zhipu'),
   trRole: (text) => ipcRenderer.invoke('tr:role', text),
+  trWig: (on) => ipcRenderer.invoke('tr:wig', on === true),
   trNetwork: (mode, proxyUrl) => ipcRenderer.invoke('tr:network', { mode, proxyUrl }),
   trTest: (id) => ipcRenderer.invoke('tr:test', id),
   trRun: (data) => ipcRenderer.invoke('tr:run', data),

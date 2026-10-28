@@ -975,6 +975,14 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
+// 内置假发词汇开关（默认关）。打开后词表跟在角色设定后面一起带去翻译
+function trWigBox(c, apply) {
+  const list = (c.wigList || []).map((t) => `${t.zh} = ${t.en}`).join('　');
+  return h('div', { class: 'box' }, setRow('假发词汇',
+    '打开后翻译和纠错都按这些词固定翻，中译英、英译中都算。角色设定里自己写了同一个词的，用你写的。DeepL 不认这个词表。',
+    sw(c.wigTerms === true, '假发词汇', async (v) => { const r = await window.wa.trWig(v); if (!r.error) trSay = v ? '假发词汇已打开' : '假发词汇已关闭'; apply(r); }),
+    h('span', { class: 'desc' }, list)));
+}
 // 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
 function trKeysBox(c, apply) {
   if (!c.providers.length) return h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有翻译服务商，点上面的“详细设置”添加。'));
@@ -1074,7 +1082,9 @@ function translatePage(page) {
     page.append(...kids(...head,
       h('h2', { class: 'ov-h2' }, 'API 密钥'),
       h('p', { class: 'hint' }, '填好密钥就能翻译。服务商、网络、纠错、翻译模式都已经设好，一般不用改；要改点右上角“详细设置”。'),
-      trKeysBox(c, apply)));
+      trKeysBox(c, apply),
+      h('h2', { class: 'ov-h2' }, '行业词汇'),
+      trWigBox(c, apply)));
     return;
   }
   page.append(...kids(...head,
@@ -1112,6 +1122,7 @@ function translatePage(page) {
       h('span', { class: 'desc', style: { fontSize: '13px', lineHeight: '1.6', color: 'var(--muted)', whiteSpace: 'pre-line' } },
         '告诉 AI 你是谁、哪些词怎么翻，可以不填。一行一个“中文 = 外语”就是固定译法。\n'
         + '混元翻译模型只认固定译法，其他文字不起作用。')),
+    trWigBox(c, apply),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
     h('p', { class: 'hint' }, '每个模式是一段提示词。“发出”的模式用在“翻译”按钮，“收到”的用来翻客户发来的消息。'),
     trModeEdit ? trModeForm() : null,
