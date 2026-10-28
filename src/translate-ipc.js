@@ -2,6 +2,7 @@
 // 从 main.js 拆出来。会变的状态（activeId、page、translator 等）通过 ctx 读，见 main.js 里的 ctx。
 const { app, session, ipcMain, clipboard, shell, WebContentsView } = require('electron');
 const path = require('path');
+const RADIX = require('./colors/radix');
 const fs = require('fs');
 const proxy = require('./proxy');
 const waPage = require('./wa-page');
@@ -416,7 +417,7 @@ function setupTranslateIpc(ctx) {
     floatView = new WebContentsView({
       webPreferences: { preload: path.join(__dirname, 'float', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
     });
-    floatView.setBackgroundColor('#00000000');
+    floatView.setBackgroundColor(RADIX.TRANSPARENT);
     lockLocalPage(floatView.webContents);
     floatView.webContents.loadFile(path.join(__dirname, 'float', 'index.html'));
     ctx.win.contentView.addChildView(floatView);

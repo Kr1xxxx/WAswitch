@@ -33,6 +33,8 @@
     "check:customer-time": "node scripts/check-customer-time.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:font-sizes": "node scripts/check-font-sizes.js",
+    "check:colors": "node scripts/check-colors.js",
+    "make:colors": "node scripts/make-colors.js",
     "check:radius-motion": "node scripts/check-radius-motion.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
     "check:add-menu": "electron scripts/check-add-menu.js",
@@ -54,6 +56,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@radix-ui/colors": "3.0.0",
     "electron": "44.9.3",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
