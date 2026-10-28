@@ -61,6 +61,7 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
   handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
+  handleShell('tr:deepl-cap', (n) => ({ ...ctx.translator.setDeeplCap(n), ...trState() }));
   handleShell('tr:wig', (on) => ({ ...ctx.translator.setWigTerms(on === true), ...trState() }));
   handleShell('tr:lash', (on) => ({ ...ctx.translator.setLashTerms(on === true), ...trState() }));
   handleShell('tr:network', async (net) => {

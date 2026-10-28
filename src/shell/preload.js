@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('wa', {
   trRole: (text) => ipcRenderer.invoke('tr:role', text),
   trWig: (on) => ipcRenderer.invoke('tr:wig', on === true),
   trLash: (on) => ipcRenderer.invoke('tr:lash', on === true),
+  trDeeplCap: (n) => ipcRenderer.invoke('tr:deepl-cap', n),
   trNetwork: (mode, proxyUrl) => ipcRenderer.invoke('tr:network', { mode, proxyUrl }),
   trTest: (id) => ipcRenderer.invoke('tr:test', id),
   trRun: (data) => ipcRenderer.invoke('tr:run', data),
