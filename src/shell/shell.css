@@ -758,7 +758,11 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-count:empty { display: none; }
 /* 栏太窄（小窗口）时字符数让位给按钮，不把底栏挤出框 */
 .tp-pane { container-type: inline-size; }
-@container (max-width: 400px) { .tp-count { display: none; } }
+@container (max-width: 400px) {
+  .tp-count { display: none; }
+  /* 再窄（最小窗口 + 纠错）：模型名先让，超出的用省略号，按钮不出框 */
+  .tp select.tp-model { flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
+}
 /* 原文框有字时点记录：贴在那一行上方的小提示。外圆角 14 − 内边距 8 = 按钮 6 */
 .tp-pop { position: fixed; z-index: 30; display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 16px; border: var(--hair) solid var(--s6); border-radius: 14px; background: var(--s1); box-shadow: 0 4px 16px rgba(28, 32, 36, .08); }
 .tp-pop-text { margin-right: 12px; color: var(--s12); white-space: nowrap; }

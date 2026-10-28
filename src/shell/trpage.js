@@ -269,14 +269,15 @@ function tpFoldFx(on) {
   if (tpCalm() || !from || pane.hidden === bar.hidden) return;
   const el = on ? pane : bar;
   const to = el.offsetHeight;
+  const duration = parseFloat(getComputedStyle(el).getPropertyValue('--fx-state')) || 250;
   if (on) {
     // 展开：从对照条的高度长到整栏，里面的字等长开再淡入
-    pane.animate([{ flex: 'none', height: `${from}px`, overflow: 'hidden' }, { flex: 'none', height: `${to}px`, overflow: 'hidden' }], { duration: 250, easing: 'ease-out' });
-    for (const c of pane.children) c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.4 }, { opacity: 1 }], { duration: 250, easing: 'ease-out' });
+    pane.animate([{ flex: 'none', height: `${from}px`, overflow: 'hidden' }, { flex: 'none', height: `${to}px`, overflow: 'hidden' }], { duration, easing: 'ease-out' });
+    for (const c of pane.children) c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.4 }, { opacity: 1 }], { duration, easing: 'ease-out' });
   } else {
     // 收起：整栏缩成对照条，字先淡掉
-    bar.animate([{ height: `${from}px`, background: 'var(--s2)' }, { height: `${to}px` }], { duration: 250, easing: 'ease-out' });
-    for (const c of bar.children) c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.4 }, { opacity: 1 }], { duration: 250, easing: 'ease-out' });
+    bar.animate([{ height: `${from}px`, background: 'var(--s2)' }, { height: `${to}px` }], { duration, easing: 'ease-out' });
+    for (const c of bar.children) c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.4 }, { opacity: 1 }], { duration, easing: 'ease-out' });
   }
 }
 
@@ -372,7 +373,7 @@ function tpHist(fresh) {
   ui.histList.replaceChildren(...tp.hist.map((x) => h('button', { class: 'tp-hrow', type: 'button', title: x.src, onclick: (e) => {
     // 原文框里有还没翻过的字：先问一下再替换（翻过的在记录里还找得到，直接换）
     const cur = ui.input.value.trim();
-    if (cur && cur !== x.src && !tp.hist.some((y) => y.src === cur)) tpAsk(e.currentTarget, () => tpUseHist(x), e.detail === 0);
+    if (cur && cur !== x.src.trim() && !tp.hist.some((y) => y.src.trim() === cur)) tpAsk(e.currentTarget, () => tpUseHist(x), e.detail === 0);
     else tpUseHist(x);
   } },
   h('span', { class: 'tp-hsrc' }, x.src),
@@ -385,10 +386,10 @@ function tpHist(fresh) {
 function tpUseHist(x) {
   const ui = tp.ui;
   ui.input.value = x.src;
+  tpShowOut(ui.o1, null); tpShowOut(ui.o2, null);
   tpSetOut(ui.o1, x.out);
   ui.o2.box.value = '';
   tp.detected = '';
-  tpShowOut(ui.o1, null); tpShowOut(ui.o2, null);
   tpIdle(); tpLabels(); tpUpdate();
 }
 
@@ -418,6 +419,8 @@ function tpAsk(row, onYes, byKey) {
   const away = (e) => { if (!el.contains(e.target)) tpAskClose(); };
   const key = (e) => { if (e.key === 'Escape') { e.preventDefault(); tpAskClose(); } };
   const list = tp.ui.histList;
+  // Tab 把焦点移出小提示也算取消
+  el.addEventListener('focusout', (e) => { if (e.relatedTarget && !el.contains(e.relatedTarget)) tpAskClose(); });
   setTimeout(() => { if (tpPop && tpPop.el === el) document.addEventListener('pointerdown', away, true); }, 0);
   document.addEventListener('keydown', key, true);
   list.addEventListener('scroll', tpAskClose, { once: true });
@@ -557,7 +560,10 @@ async function tpLoadCfg() {
   try { r = await window.wa.trConfig(); } catch {}
   if (!r || !r.config) return;
   tp.cfg = r.config;
+  const was = [tp.p1, tp.p2];
   tpFixPicks();
+  // 服务商被删了、栏换了模型：那栏的旧译文不再对得上，清掉
+  if (tp.ui) [[tp.ui.o1, was[0], tp.p1], [tp.ui.o2, was[1], tp.p2]].forEach(([o, a, b]) => { if (a !== b) { o.box.value = ''; tpShowOut(o, null); } });
   tpSavePrefs();
   if (tp.ui) { tpLabels(); tpUpdate(); }
 }
