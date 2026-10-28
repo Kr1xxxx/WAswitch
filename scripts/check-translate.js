@@ -285,9 +285,9 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   // 假发词汇：默认关；打开后跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
   let rt;
   // 睫毛词汇：默认开（老设置没存过也算开），单独开关、单独存盘；密排排在睫毛前面
-  assert.equal(t4.publicConfig().lashTerms,true); assert.deepEqual(t4.publicConfig().lashList,[{zh:'密排',en:'Lash trays'},{zh:'睫毛',en:'Lash'}]);
+  assert.equal(t4.publicConfig().lashTerms,true); assert.deepEqual(t4.publicConfig().lashList,[{zh:'密排',en:'Lash trays'},{zh:'假睫毛',en:'Lash trays'},{zh:'睫毛',en:'Lash'}]);
   rt=t4.roleText();
-  assert(rt.startsWith('贴牌 = private label\n\n睫毛行业固定译法') && rt.includes('密排 = Lash trays\n睫毛 = Lash') && rt.includes('Lash trays → 密排\nLash → 睫毛') && !rt.includes('头套'),rt);
+  assert(rt.startsWith('贴牌 = private label\n\n睫毛行业固定译法') && rt.includes('密排 = Lash trays\n假睫毛 = Lash trays\n睫毛 = Lash') && rt.includes('Lash trays → 密排\nLash → 睫毛') && !rt.includes('→ 假睫毛') && !rt.includes('头套'),rt);
   assert(t4.setLashTerms(false).ok); assert.equal(t4.publicConfig().lashTerms,false);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().lashTerms,false);
   assert.equal(t4.publicConfig().wigTerms,false); assert.equal(t4.roleText(),'贴牌 = private label');
@@ -331,19 +331,25 @@ tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模�
   assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('Wig → 头套'));
   assert.equal(T.glossaryPairs(fr,false).length,8);
   assert(t4.setWigTerms(false).ok); assert.equal(t4.roleText(),'贴牌 = private label');
-  // 两套都开：合成一段，头句写“假发、睫毛”，假发在前；用户写过睫毛的用用户的
+  // 两套都开：合成一段，头句写“睫毛、假发”，睫毛在前（混元实测假发在前会把睫毛翻成 Lash trays）；用户写过睫毛的用用户的
   rt=T.roleWithTerms('',{wig:true,lash:true});
-  assert(rt.startsWith('假发、睫毛行业固定译法') && rt.indexOf('处女发 = Virgin hair')<rt.indexOf('密排 = Lash trays') && rt.includes('Lash → 睫毛') && rt.includes('wig 一律译成头套'),rt);
-  assert.equal(T.glossaryPairs(rt,true).length,10);
+  assert(rt.startsWith('睫毛、假发行业固定译法') && rt.indexOf('睫毛 = Lash\n')<rt.indexOf('头套 = Wig') && rt.indexOf('头套 = Wig')<rt.indexOf('全蕾丝头套') && rt.includes('Lash → 睫毛') && rt.includes('wig 一律译成头套'),rt);
+  assert.equal(T.glossaryPairs(rt,true).length,10); assert.equal(T.glossaryPairs(rt,false).length,11);
+  // 混元：中译英 假睫毛、密排 都给 Lash trays；英译中 Lash trays 只给 密排
+  assert(T.glossaryPairs(rt,false).includes('假睫毛 翻译成 Lash trays') && T.glossaryPairs(rt,true).includes('Lash trays 翻译成 密排') && !T.glossaryPairs(rt,true).includes('Lash trays 翻译成 假睫毛'));
+  assert.deepEqual(T.glossaryPairs('a = X\nb = x',true),['X 翻译成 a']); assert.equal(T.glossaryPairs('a = X\nb = x',false).length,2);
   rt=T.roleWithTerms('睫毛 = eyelash',{lash:true});
-  assert(rt.includes('密排 = Lash trays') && !rt.includes('睫毛 = Lash') && rt.includes('\n睫毛行业'),rt);
-  assert.equal(T.roleWithTerms('密排 = a\n睫毛 = b',{lash:true}),'密排 = a\n睫毛 = b');
+  assert(rt.includes('密排 = Lash trays') && !rt.split('\n').includes('睫毛 = Lash') && rt.includes('\n睫毛行业'),rt);
+  assert.equal(T.roleWithTerms('密排 = a\n假睫毛 = c\n睫毛 = b',{lash:true}),'密排 = a\n假睫毛 = c\n睫毛 = b');
+  assert(T.roleWithTerms('',{lash:true}).startsWith('睫毛行业固定译法（这些词在原文里一出现就必须用右边的英文，包括“假睫毛”），必须照用')); assert(!T.roleWithTerms('',{wig:true}).includes('假睫毛'));
+  assert(!T.roleWithTerms('假睫毛 = false lashes',{lash:true}).includes('包括“假睫毛”'));
+  rt=T.roleWithTerms('密排 = strip lashes',{lash:true}); assert(rt.includes('假睫毛 = Lash trays') && rt.includes('Lash trays → 假睫毛'),rt); // 密排被用户改了，假睫毛顶上反方向
   assert(T.roleWithTerms('',{lash:true},'德语').includes('“密排”写成 Lash trays'));
   assert.equal(T.roleWithTerms('x',{}),'x');
   // 老设置没有 lashTerms：默认开；开关打开后存盘
   const dL=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dL,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:true}));
   const tL=new T.Translator({seed:false,dir:dL,safeStorage:ss,sessionFor:()=>fake});
-  assert.equal(tL.publicConfig().lashTerms,true); assert(tL.roleText().startsWith('假发、睫毛行业'));
+  assert.equal(tL.publicConfig().lashTerms,true); assert(tL.roleText().startsWith('睫毛、假发行业'));
   assert(tL.setLashTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dL,'translate.json'),'utf8')).lashTerms,true);
   fs.rmSync(dL,{recursive:true,force:true});
   assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));
