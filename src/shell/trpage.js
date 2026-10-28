@@ -89,6 +89,19 @@ function tpFillModels(sel, cur) {
   sel.value = cur;
   sel.classList.toggle('single', provs.length < 2);
   sel.disabled = tp.busy || provs.length < 2;
+  tpFitSelect(sel);
+}
+// 下拉框按选中的名字定宽（原生 select 会按最长的选项撑开，箭头离字很远）
+let tpCanvas = null;
+function tpFitSelect(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !sel.isConnected) return;
+  const cs = getComputedStyle(sel);
+  tpCanvas = tpCanvas || document.createElement('canvas');
+  const c = tpCanvas.getContext('2d');
+  c.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 2;
+  sel.style.width = `${Math.ceil(c.measureText(opt.textContent).width + pad)}px`;
 }
 
 function tpOutPane(which) {
@@ -101,14 +114,16 @@ function tpOutPane(which) {
     copy.setState('success');
   });
   const foot = h('div', { class: 'tp-foot' }, model, h('span', { class: 'grow' }));
-  const pane = h('div', { class: 'tp-pane tp-out' }, box, err, foot);
+  // 报错放在译文本来出现的位置（左上）
+  const pane = h('div', { class: 'tp-pane tp-out' }, err, box, foot);
   const o = { pane, box, err, model, copy, foot };
   if (which === 1) {
+    // 纠错只在翻成外文时有用（中文译文自己就能看懂）
     o.fix = tpMorph('tp-fix', { idle: '纠错', loading: '纠错中', success: '已纠错', error: '重试' }, () => tpFix());
     foot.append(o.fix);
   } else {
     o.fold = h('button', { class: 'tp-icon tp-fold', type: 'button', 'aria-label': '收起对照', 'aria-expanded': 'true', onclick: () => tpSetOpen2(false) }, icon('up', 14));
-    pane.append(o.fold);
+    foot.append(o.fold);
   }
   foot.append(copy);
   return o;
@@ -117,7 +132,7 @@ function tpOutPane(which) {
 function tpBuild() {
   tpLoadPrefs();
   const input = h('textarea', { class: 'tp-text', placeholder: '输入或粘贴文字', 'aria-label': '原文', spellcheck: 'false' });
-  input.addEventListener('input', () => { tpLabels(); tpUpdate(); });
+  input.addEventListener('input', () => { tpIdle(); tpLabels(); tpUpdate(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); tpRun(); }
   });
@@ -125,7 +140,7 @@ function tpBuild() {
     input.value = '';
     for (const o of [ui.o1, ui.o2]) { o.box.value = ''; tpShowOut(o, null); }
     tp.detected = '';
-    tpLabels(); tpUpdate(); input.focus();
+    tpIdle(); tpLabels(); tpUpdate(); input.focus();
   } }, icon('close', 14));
   const go = tpMorph('tp-go', { idle: '翻译', loading: '翻译中', success: '已翻译', error: '重试' }, () => tpRun());
   const src = h('select', { class: 'tp-lang', 'aria-label': '原文语言', onchange: (e) => { tp.src = e.target.value === '__auto' ? '' : e.target.value; tpLabels(); } });
@@ -138,9 +153,11 @@ function tpBuild() {
   const histList = h('div', { class: 'tp-hist-list' });
   const hist = h('div', { class: 'tp-hist' },
     h('div', { class: 'tp-hist-head' }, h('span', null, '最近记录'),
-      h('button', { class: 'tp-link', type: 'button', onclick: () => { tp.hist = []; tpSavePrefs(); tpHist(); } }, '清空')),
+      h('button', { class: 'tp-link', type: 'button', onclick: () => tpClearHist() }, '清空')),
     histList);
-  const ui = { input, go, src, tgt, swap, o1, o2, open2, hist, histList };
+  const undo = h('div', { class: 'tp-undo', role: 'status', hidden: true }, h('span', null, '已清空最近记录'),
+    h('button', { class: 'tp-undo-btn', type: 'button', onclick: () => tpUndoHist() }, '撤销'));
+  const ui = { input, go, src, tgt, swap, o1, o2, open2, hist, histList, undo };
   tp.ui = ui;
   tp.el = h('div', { class: 'tp' },
     h('div', { class: 'tp-head' }, h('h1', null, '翻译')),
@@ -149,9 +166,39 @@ function tpBuild() {
       h('div', { class: 'tp-grid' },
         h('div', { class: 'tp-pane tp-in' }, input, h('div', { class: 'tp-foot' }, h('span', { class: 'grow' }), clear, go)),
         h('div', { class: 'tp-outs' }, o1.pane, o2.pane, open2)),
-      hist));
+      hist, undo));
   tpHist();
   return tp.el;
+}
+
+// 改了原文或清空：主按钮回到「翻译」（不留着上一次的已翻译 / 重试）
+function tpIdle() {
+  const go = tp.ui.go;
+  if (go.dataset.state !== 'loading' && go.dataset.state !== 'idle') go.setState('idle');
+}
+
+// 清空最近记录：直接清，8 秒内可以撤销
+let tpUndoTimer = null;
+let tpUndoList = null;
+function tpClearHist() {
+  if (!tp.hist.length) return;
+  tpUndoList = tp.hist;
+  tp.hist = [];
+  tpSavePrefs();
+  tpHist();
+  tp.ui.undo.hidden = false;
+  clearTimeout(tpUndoTimer);
+  tpUndoTimer = setTimeout(() => { tp.ui.undo.hidden = true; tpUndoList = null; }, 8000);
+}
+function tpUndoHist() {
+  clearTimeout(tpUndoTimer);
+  tp.ui.undo.hidden = true;
+  if (!tpUndoList) return;
+  // 撤销期间又翻了新的：新的在前，旧的接在后面
+  tp.hist = [...tp.hist, ...tpUndoList.filter((x) => !tp.hist.some((y) => y.src === x.src))].slice(0, TP_HIST_MAX);
+  tpUndoList = null;
+  tpSavePrefs();
+  tpHist();
 }
 
 // 语言下拉的“自动”那一项带上现在的结果：自动检测（英语）、自动选择（中文）
@@ -182,16 +229,24 @@ function tpSetOpen2(on) {
   if (on) tpFillCompare();
 }
 
+// 栏里的报错：服务商名在底栏已经有了，这里只说缺什么，后面跟一个去处理的链接
 function tpShowOut(o, r) {
   const err = r && r.error ? r : null;
   o.err.replaceChildren();
   o.err.hidden = !err;
-  if (err) {
-    o.err.append(h('span', null, err.error));
-    if (err.kind === 'auth' && err.providerId) o.err.append(h('button', { class: 'tp-link', type: 'button', onclick: () => trOpenKey(err.providerId) }, '填写密钥'));
-    else if (err.kind === 'config') o.err.append(h('button', { class: 'tp-link', type: 'button', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); } }, '去设置'));
-  }
+  o.box.hidden = !!err;
+  if (!err) return;
+  if (err.kind === 'auth' && err.providerId) {
+    const p = tpProviders().find((x) => x.id === err.providerId);
+    o.err.append(h('span', null, p && !p.hasKey ? '密钥未填写' : '密钥无效'),
+      h('button', { class: 'tp-link', type: 'button', onclick: () => trOpenKey(err.providerId) }, p && !p.hasKey ? '填写' : '修改'));
+  } else if (err.kind === 'config') {
+    o.err.append(h('span', null, err.error),
+      h('button', { class: 'tp-link', type: 'button', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); } }, '设置'));
+  } else o.err.append(h('span', null, err.error));
 }
+// 只有网络、超时、服务商忙这类重试可能有用的失败，主按钮才变「重试」
+const TP_RETRY = ['network', 'timeout', 'overload', 'server', 'busy', 'empty', 'other'];
 
 function tpUpdate() {
   const ui = tp.ui;
@@ -207,8 +262,12 @@ function tpUpdate() {
   ui.open2.querySelector('.tp-open2-model').textContent = p2 ? tpProvName(p2) : '';
   ui.go.disabled = tp.busy || !ui.input.value.trim();
   ui.swap.disabled = tp.busy;
-  ui.o1.fix.disabled = tp.busy || !ui.o1.box.value.trim() || !ui.input.value.trim();
-  for (const o of [ui.o1, ui.o2]) o.copy.disabled = !o.box.value.trim();
+  const toForeign = tpPick(ui.input.value).target !== '中文';
+  ui.o1.fix.hidden = !toForeign || !ui.o1.box.value.trim() || !ui.input.value.trim();
+  ui.o1.fix.disabled = tp.busy;
+  // 没译文时「复制」先藏起来（位置留着，有了译文不跳）
+  for (const o of [ui.o1, ui.o2]) o.copy.style.visibility = o.box.value.trim() ? '' : 'hidden';
+  tpFitSelect(ui.o1.model); tpFitSelect(ui.o2.model);
 }
 
 function tpHist() {
@@ -220,14 +279,11 @@ function tpHist() {
     ui.o2.box.value = '';
     tp.detected = '';
     tpShowOut(ui.o1, null); tpShowOut(ui.o2, null);
-    tpLabels(); tpUpdate();
+    tpIdle(); tpLabels(); tpUpdate();
   } },
-  h('span', { class: 'tp-hdir' }, `${tpShort(x.from)} → ${tpShort(x.to)}`),
   h('span', { class: 'tp-hsrc' }, x.src),
-  h('span', { class: 'tp-hout' }, x.out),
-  h('span', { class: 'tp-htime' }, tpTime(x.at)))));
+  h('span', { class: 'tp-hout' }, h('span', { class: 'tp-hout-text' }, x.out), h('span', { class: 'tp-htime' }, tpTime(x.at))))));
 }
-function tpShort(l) { return l ? String(l).replace(/语$/, '').replace(/^中文$/, '中') : '自动'; }
 function tpTime(at) {
   const d = new Date(at);
   const today = new Date().toDateString() === d.toDateString();
@@ -243,19 +299,18 @@ async function tpRun() {
   const both = tp.open2 && tpProviders().length > 1;
   tp.busy = true;
   ui.go.setState('loading');
-  for (const o of both ? [ui.o1, ui.o2] : [ui.o1]) { o.box.value = ''; o.box.placeholder = '翻译中…'; tpShowOut(o, null); }
+  for (const o of both ? [ui.o1, ui.o2] : [ui.o1]) { o.box.value = ''; tpShowOut(o, null); }
   // 收着的对照栏清掉旧译文，免得展开时看到上一句的
   if (!both) { ui.o2.box.value = ''; tpShowOut(ui.o2, null); }
   tpUpdate();
   let r1;
   try { r1 = await window.wa.trPage({ text, source, target, providerId: tp.p1 }); } catch { r1 = { error: '翻译失败' }; }
-  ui.o1.box.placeholder = '';
   if (r1 && !r1.error) ui.o1.box.value = r1.text; else tpShowOut(ui.o1, r1);
   tp.detected = (r1 && r1.detected) || '';
   if (both) await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
   tp.busy = false;
   const ok = r1 && !r1.error;
-  ui.go.setState(ok ? 'success' : 'error');
+  ui.go.setState(ok ? 'success' : TP_RETRY.includes(r1 && r1.kind) || !(r1 && r1.kind) ? 'error' : 'idle');
   if (ok) {
     tp.hist = [{ src: text, out: r1.text, from: source || tp.detected, to: target, at: Date.now() }, ...tp.hist.filter((x) => x.src !== text)].slice(0, TP_HIST_MAX);
     tpSavePrefs();
@@ -267,7 +322,6 @@ async function tpRun() {
 async function tpRunOne(o, req) {
   let r;
   try { r = await window.wa.trPage(req); } catch { r = { error: '翻译失败' }; }
-  o.box.placeholder = '';
   if (r && !r.error) o.box.value = r.text; else tpShowOut(o, r);
 }
 
@@ -279,7 +333,7 @@ async function tpRerun(which) {
   if (tp.busy || !text.trim() || (!o.box.value.trim() && o.err.hidden)) return;
   const { source, target } = tpPick(text);
   tp.busy = true;
-  o.box.value = ''; o.box.placeholder = '翻译中…'; tpShowOut(o, null);
+  o.box.value = ''; tpShowOut(o, null);
   tpUpdate();
   await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
   tp.busy = false;
@@ -293,7 +347,6 @@ async function tpFillCompare() {
   if (tp.busy || !text.trim() || !ui.o1.box.value.trim() || ui.o2.box.value.trim()) return;
   const { source, target } = tpPick(text);
   tp.busy = true;
-  ui.o2.box.placeholder = '翻译中…';
   tpUpdate();
   await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
   tp.busy = false;

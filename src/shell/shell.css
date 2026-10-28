@@ -655,15 +655,15 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .avatar.tool { background: #1c2024; color: #fff; }
 
 /* ---------- 翻译页（shen 2026-10-28 方案 A）----------
-   按 shen 的设计规范：Radix Slate 灰阶、0.5px 线、字号只用 12/14/16、嵌套圆角同心（外 14 − 内边距 8 = 按钮 6）、
+   按 shen 的设计规范：Radix Slate 灰阶、细线用 --hair、字号只用 12/14/16、嵌套圆角同心（外 14 − 内边距 8 = 按钮 6）、
    不加阴影；动画只有按钮状态的淡入淡出，250ms ease-out */
 .tp {
-  --s1: #fcfcfd; --s2: #f9f9fb; --s3: #f0f0f3; --s4: #e8e8ec; --s5: #e0e1e6; --s6: #d9d9e0; --s7: #cdced6;
+  --s1: #fcfcfd; --s2: #f9f9fb; --s3: #f0f0f3; --s4: #e8e8ec; --s5: #e0e1e6; --s6: #d9d9e0; --s7: #cdced6; --s8: #b9bbc6;
   --s11: #60646c; --s12: #1c2024; --g3: #e6f6eb; --g9: #30a46c; --g11: #218358; --r9: #e5484d; --r11: #ce2c31;
   --tp-ease: cubic-bezier(.2, .8, .2, 1);
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: 14px; line-height: 1.5;
 }
-.tp-head { flex: none; height: 48px; display: flex; align-items: center; padding: 0 24px; border-bottom: .5px solid var(--s5); }
+.tp-head { flex: none; height: 48px; display: flex; align-items: center; padding: 0 24px; border-bottom: var(--hair) solid var(--s5); }
 .tp-head h1 { font-size: 14px; font-weight: 600; letter-spacing: 0; }
 .tp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px 24px; }
 .tp-bar { flex: none; display: flex; align-items: center; gap: 4px; }
@@ -673,27 +673,27 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-bar .tp-icon { border-radius: 8px; }
 .tp-icon:hover:not(:disabled) { background: var(--s3); color: var(--s12); }
 .tp-icon:disabled { opacity: .5; cursor: default; }
-.tp-grid { flex: none; height: clamp(260px, 52vh, 460px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.tp-pane { position: relative; min-height: 0; display: flex; flex-direction: column; border: .5px solid var(--s6); border-radius: 14px; background: var(--s2); }
+/* 翻译是这页的主要内容：两栏占满剩下的高度，最近记录最多 4 行 */
+.tp-grid { flex: 1 1 auto; min-height: 240px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tp-pane { position: relative; min-height: 0; display: flex; flex-direction: column; border: var(--hair) solid var(--s6); border-radius: 14px; background: var(--s2); }
 .tp-in { border-color: var(--s7); background: var(--s1); }
-.tp-in:focus-within { border-color: var(--s11); }
+.tp-in:focus-within { border-color: var(--s8); }
 .tp-outs { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
 .tp-outs .tp-out { flex: 1; }
 .tp-text { flex: 1; min-height: 0; width: 100%; padding: 14px 16px 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; font-size: 16px; line-height: 1.6; color: var(--s12); user-select: text; }
 .tp-text::placeholder { color: var(--s11); }
-.tp-out:has(.tp-fold) .tp-text { padding-right: 48px; }
-.tp-fold { position: absolute; top: 8px; right: 8px; }
-.tp-err { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 16px 0; color: var(--r11); }
+/* 报错在译文的位置：左上，和正文同样的内边距 */
+.tp-err { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: baseline; gap: 4px 8px; padding: 14px 16px 0; color: var(--s11); }
+.tp-err .tp-link { font-size: 14px; color: var(--s12); }
 .tp-foot { flex: none; display: flex; align-items: center; gap: 4px; padding: 8px; }
-.tp select.tp-model { height: 32px; max-width: 60%; padding: 0 24px 0 8px; border: 0; border-radius: 6px; background-color: transparent; background-position: right 8px center; font-size: 12px; color: var(--s11); }
+.tp select.tp-model { flex: none; height: 32px; max-width: 60%; padding: 0 24px 0 8px; border: 0; border-radius: 6px; background-color: transparent; background-position: right 8px center; font-size: 12px; color: var(--s11); }
 .tp select.tp-model:hover:not(:disabled) { background-color: var(--s3); }
 .tp select.tp-model:disabled { opacity: .6; cursor: default; }
 .tp select.tp-model.single { opacity: 1; background-image: none; padding-right: 8px; }
-.tp-open2 { flex: none; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border: .5px solid var(--s6); border-radius: 10px; background: var(--s2); font: inherit; color: var(--s12); }
+.tp-open2 { flex: none; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border: var(--hair) solid var(--s6); border-radius: 14px; background: var(--s2); font: inherit; color: var(--s12); }
 .tp-open2:hover { background: var(--s3); }
 .tp-open2-model { font-size: 12px; color: var(--s11); }
 .tp-link { padding: 0; border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--s11); text-decoration: underline; text-underline-offset: 2px; }
-.tp-err .tp-link { font-size: 14px; color: var(--r11); }
 .tp-link:hover { color: var(--s12); }
 
 /* 按钮原地变状态（参考 MorphStatusButton）：几层文字叠在一起，只换透明度和底色，宽度固定不挤动旁边 */
@@ -707,14 +707,15 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-go[data-state="success"] { background: var(--g9); }
 .tp-go[data-state="error"] { background: var(--r9); }
 .tp-go[data-state="idle"]:disabled { background: var(--s5); color: var(--s11); }
-.tp-copy { width: 88px; background: var(--s5); color: var(--s12); }
+.tp-copy { width: 88px; background: var(--s3); color: var(--s12); }
+.tp-copy[data-state="idle"]:hover { background: var(--s4); }
+.tp-copy[data-state="idle"]:active { background: var(--s5); }
 .tp-copy[data-state="success"] { background: var(--g3); color: var(--g11); }
-.tp-copy[data-state="idle"]:disabled { background: var(--s3); color: var(--s11); }
 .tp-fix { width: 80px; background: transparent; color: var(--s12); font-weight: 400; }
 .tp-fix:hover:not(:disabled) { background: var(--s3); }
 .tp-fix[data-state="success"] { color: var(--g11); }
 .tp-fix[data-state="error"] { color: var(--r11); }
-.tp-fix[data-state="idle"]:disabled { color: var(--s11); opacity: .6; }
+.tp-fix:disabled:not([data-state="loading"]) { color: var(--s11); opacity: .6; }
 .tp-spin { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: tp-spin 800ms linear infinite; }
 @keyframes tp-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
@@ -722,14 +723,21 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
   .tp-spin { animation: none; }
 }
 
-.tp-hist { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tp-hist-head { flex: none; height: 32px; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 12px; font-size: 12px; font-weight: 500; color: var(--s11); }
-.tp-hist-head .tp-link { padding: 0 8px; text-decoration: none; }
-.tp-hist-list { min-height: 0; overflow-y: auto; }
-.tp-hrow { width: 100%; height: 40px; display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 48px; gap: 16px; align-items: center; padding: 0 12px;
-  border: 0; border-top: .5px solid var(--s5); border-radius: 0; background: transparent; font: inherit; color: var(--s12); text-align: left; }
+.tp-hist { flex: none; display: flex; flex-direction: column; }
+.tp-hist-head { flex: none; height: 32px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px; font-size: 12px; font-weight: 500; color: var(--s11); }
+.tp-hist-head .tp-link { text-decoration: none; }
+.tp-hist-list { max-height: 160px; overflow-y: auto; }
+/* 两列和上面两栏对齐：列间距 12，每列左边距 16（和栏里正文一样） */
+.tp-hrow { width: 100%; height: 40px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: center; padding: 0;
+  border: 0; border-top: var(--hair) solid var(--s5); border-radius: 0; background: transparent; font: inherit; color: var(--s12); text-align: left; }
 .tp-hrow:hover { background: var(--s2); }
-.tp-hrow > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tp-hdir, .tp-htime { font-size: 12px; color: var(--s11); }
-.tp-hout { color: var(--s11); }
-.tp-htime { text-align: right; }
+.tp-hsrc, .tp-hout-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-hsrc { padding-left: 16px; }
+.tp-hout { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+.tp-hout-text { flex: 1; color: var(--s11); }
+.tp-htime { flex: none; font-size: 12px; color: var(--s11); }
+/* 清空记录后的撤销条（样式同 #207 的撤销提示） */
+.tp-undo { flex: none; align-self: flex-start; display: flex; align-items: center; gap: 12px; height: 36px; padding: 4px 4px 4px 14px; border: var(--hair) solid var(--s7); border-radius: 10px; background: var(--s1); color: var(--s12); white-space: nowrap; animation: fx-fade 250ms ease-out backwards; }
+.tp-undo-btn { flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-weight: 600; color: var(--s12); }
+.tp-undo-btn:hover { background: var(--s3); }
+@media (prefers-reduced-motion: reduce) { .tp-undo { animation: none; } }
