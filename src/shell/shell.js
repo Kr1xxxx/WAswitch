@@ -148,14 +148,33 @@ const $lock = document.getElementById('lock');
 const $panel = document.getElementById('panel');
 let s = null; // 主进程推过来的状态
 let shown = ''; // 当前卡片里画的是哪个页面，用来决定是否重画
-let settingsTab = 'general';
+let settingsTab = 'quick'; // 打开设置先看到「快捷设置」
 let checkResult = null;
 let checkRunning = false;
+// 跑一次隔离自检（自检页和快捷设置共用，结果也共用）
+async function runCheckNow() {
+  checkRunning = true; render(true);
+  try { checkResult = await window.wa.runCheck(); } finally { checkRunning = false; render(true); }
+}
 // 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
 const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', detail: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
 let memClean = { busy: false, result: '' };
+// 立即清理内存（内存页和快捷设置共用）
+async function runMemClean() {
+  memClean.busy = true; memClean.result = ''; render(true);
+  const r = await window.wa.memClean();
+  memClean.busy = false;
+  if (r.error) memClean.result = r.error;
+  else {
+    const skip = r.skipped ? `${r.skipped} 个有未读、刚切走或正在加载/下载的跳过了。` : '';
+    if (r.recycled) memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${skip}`;
+    else if (r.skipped) memClean.result = `这次没有刷新。${skip}`;
+    else memClean.result = '后台账号都刚刷新过或占用不大，不用清理。';
+  }
+  render(true);
+}
 function refreshCacheSize() {
   if (cacheInfo.busy || Date.now() - cacheInfo.at < 30000) return;
   cacheInfo.at = Date.now();
@@ -303,7 +322,7 @@ function renderSide() {
       h('div', { class: 'list' }, settingsGroups().map(([title, tabs], i) => [
         i ? h('div', { class: 'tab-group' }, title) : null,
         ...tabs.map(([id, label]) =>
-          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; render(true); } }, label,
+          h('button', { class: `tab${settingsTab === id ? ` on${setFx ? ' fx-on' : ''}` : ''}`, onclick: () => { settingsTab = id; trSay = ''; render(true); } }, label,
             id === 'about' && updateReady() ? h('span', { class: 'tab-dot', title: '有新版本' }) : null))]).flat()));
     return;
   }
@@ -332,7 +351,7 @@ function renderSide() {
   const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
   if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => window.wa.showPage('settings') }, icon('gear', 17),
+    h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => { settingsTab = 'quick'; window.wa.showPage('settings'); render(true); } }, icon('gear', 17),
       updateReady() ? h('span', { class: 'dot new', 'aria-hidden': 'true' }) : null),
     s.settings?.showUpdateButton ? checkUpdateBtn() : null,
     bell));
@@ -361,12 +380,13 @@ function checkUpdateBtn() {
 // 下载中显示进度，下载好显示“重启更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
 let updateHidden = '';
 const updateReady = () => !!(s.update && s.update.status === 'downloaded');
-// 设置侧栏分组：常用设置在前，诊断和其他在后。
+// 设置侧栏分组：最上面是快捷设置（不带分组标题），常用设置在前，诊断和其他在后。
 // 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
 function settingsGroups() {
   const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
   return [
-    ['设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
+    ['', [['quick', '快捷设置']]],
+    ['分项设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
     ['诊断', [['check', '隔离自检'], ['net', '连接记录']]],
     ['其他', [showTeam ? ['team', '团队'] : null, ['mcp', 'AI 接口'], ['about', '关于']].filter(Boolean)],
   ];
@@ -831,7 +851,7 @@ async function trLoad() {
   try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {}
   tr.loading = false;
   if (!tr.cfg) return; // 读不到就不重画，免得一直重试
-  if (s.page === 'settings' && settingsTab === 'translate') render(true);
+  if (s.page === 'settings' && (settingsTab === 'translate' || settingsTab === 'quick')) render(true);
 }
 const modesFor = (dir) => tr.modes.filter((m) => m.direction === dir || m.direction === 'both');
 // ---------- 设置 › 翻译 ----------
@@ -1518,10 +1538,103 @@ function netPage(page) {
   return page;
 }
 
+// ---------- 设置 › 快捷设置 ----------
+// 设置的第一页：把常用的开关从各分页挑出来。每个开关用的都是原分页那一个（同一个设置、同一个接口），两边一起变。
+const goTab = (id) => { settingsTab = id; trSay = ''; render(true); };
+function qkHead(title, tab) {
+  return h('div', { class: 'qk-head' }, h('h2', { class: 'ov-h2' }, title),
+    h('button', { class: 'link-btn qk-more', 'aria-label': `${title}的更多设置`, onclick: () => goTab(tab) }, '更多 ›'));
+}
+function qkTile(k, v, tone, sub, action) {
+  return h('div', { class: 'qk-tile' },
+    h('span', { class: 'qk-k' }, k),
+    h('b', { class: `qk-v${tone ? ` ${tone}` : ''}` }, v),
+    h('span', { class: 'qk-s' }, sub),
+    action ? h('button', { class: 'link-btn qk-act', disabled: !!action.disabled, onclick: action.on }, action.label) : null);
+}
+function quickTiles() {
+  const st = s.settings;
+  // 内存
+  const autoOn = st.autoRecycle !== false;
+  const memTile = qkTile('内存', mb(s.totalMB || 0), autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB ? 'bad' : '',
+    autoOn && st.capMB > 0 ? `上限 ${mb(st.capMB)}` : '不设上限',
+    { label: memClean.busy ? '清理中…' : '立即清理', disabled: memClean.busy || !s.accounts.length, on: runMemClean });
+  // 翻译：默认服务商有没有填密钥
+  let trTile;
+  if (!tr.cfg) trTile = qkTile('翻译', '读取中…', '', '', null);
+  else {
+    const p = tr.cfg.providers.find((x) => x.id === tr.cfg.primaryId);
+    if (!p) trTile = qkTile('翻译', '没设服务商', 'bad', '要在翻译页添加', { label: '去设置', on: () => goTab('translate') });
+    else if (!p.hasKey) trTile = qkTile('翻译', '还没填密钥', 'bad', p.name, { label: '在下面填', on: () => { const el = document.querySelector('.qk-keys input'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } } });
+    else trTile = qkTile('翻译', '可以用', 'ok', p.preset === 'deepl' ? p.name : `${p.name} ${p.model}`, { label: '去看看', on: () => goTab('translate') });
+  }
+  // 隔离自检：显示这次打开软件后最近一次的结果（和自检页同一份）
+  let ckTile;
+  if (checkRunning) ckTile = qkTile('隔离自检', '检查中…', '', '大约几秒', null);
+  else if (!checkResult) ckTile = qkTile('隔离自检', '还没查', '', '看有没有号用了本机 IP', { label: '开始检查', disabled: !s.accounts.length, on: runCheckNow });
+  else {
+    const bad = checkResult.items.filter((c) => c.level === 'bad').length;
+    const warn = checkResult.items.filter((c) => c.level === 'warn').length;
+    const at = `${String(checkResult.time).split(' ').pop().slice(0, 5)} 查的`;
+    if (bad || warn) ckTile = qkTile('隔离自检', bad ? `${bad} 个问题` : `${warn} 个提醒`, bad ? 'bad' : 'warn', at, { label: '去看看', on: () => goTab('check') });
+    else ckTile = qkTile('隔离自检', '全部通过', 'ok', at, { label: '再查一次', on: runCheckNow });
+  }
+  // 版本和检查更新
+  const u = s.update;
+  const ust = u ? u.status : 'dev';
+  const usub = {
+    dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每 6 小时自动检查',
+  }[ust] || '';
+  const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
+    ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
+      : { label: '检查更新', disabled: ['dev', 'off', 'checking', 'downloading'].includes(ust), on: () => window.wa.updateCheckOnly() });
+  return h('div', { class: 'qk-tiles' }, memTile, trTile, ckTile, upTile);
+}
+function quickPage(page) {
+  const st = s.settings;
+  if (!tr.cfg) trLoad();
+  const mod = s.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+  const apply = (r) => { tr.cfg = r.config; tr.modes = r.modes; if (r.error) trSay = r.error; render(true); };
+  page.append(...kids(
+    h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '快捷设置'),
+      h('p', { class: 'lead' }, '常用的都在这里，改了马上生效，和左边各页是同一个开关。更细的设置点「更多 ›」。')),
+    quickTiles(),
+    memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null,
+    h('div', null,
+      qkHead('消息提醒', 'notify'),
+      setRow('提示音', '新消息弹窗时响一声。',
+        sw(st.popupSound !== false, '弹窗提示音', (v) => window.wa.setSetting('popupSound', v))),
+      setRow('弹窗自动消失', '只在你用着电脑时倒计时，离开电脑时卡片一直留着。',
+        h('select', { 'aria-label': '弹窗自动消失时间', onchange: (e) => window.wa.setSetting('popupSeconds', Number(e.target.value)) },
+          (s.popupChoices || [4, 6, 10, 0]).map((n) => h('option', { value: String(n), selected: st.popupSeconds === n }, n ? `${n} 秒` : '不自动消失'))))),
+    h('div', null,
+      qkHead('锁定和窗口', 'general'),
+      setRow('聊天锁', `这么久不动电脑就遮住聊天，消息照常收。${mod} + L 随时锁定。`,
+        h('span', { class: 'hstack', style: { gap: '8px', flex: 'none' } },
+          h('select', { 'aria-label': '聊天锁等待时间', onchange: (e) => window.wa.setSetting('lockMinutes', Number(e.target.value)) },
+            (s.lockChoices || [0, 5]).map((m) => h('option', { value: String(m), selected: st.lockMinutes === m }, m ? `${m} 分钟` : '关闭'))),
+          h('button', { class: 'btn', disabled: !s.accounts.length, title: s.accounts.length ? '' : '还没有账号', onclick: () => window.wa.lock(true) }, '立即锁定'))),
+      s.canLoginItem ? setRow('开机自动启动', '开机后缩在托盘里，在后台收消息。',
+        sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null),
+    h('div', { class: 'qk-keys' },
+      qkHead('翻译密钥', 'translate'),
+      h('p', { class: 'hint', style: { margin: '0 0 10px' } }, '填好密钥就能翻译，其他都已经设好。'),
+      trSay ? h('div', { class: 'hint', role: 'status', style: { marginBottom: '8px' } }, trSay) : null,
+      tr.cfg && !tr.cfg.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
+      tr.cfg ? trKeysBox(tr.cfg, apply) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '加载中…'))),
+    h('div', null,
+      qkHead('内存', 'memory'),
+      setRow('自动回收后台账号', '后台账号内存涨多了就自动刷新一下，不退出登录、不漏消息。具体数值在内存页调。',
+        sw(st.autoRecycle !== false, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v))))));
+}
+
 function settingsPage() {
   const st = s.settings;
   const page = h('div', { class: 'page narrow' });
-  if (settingsTab === 'memory') {
+  if (settingsTab === 'quick') {
+    quickPage(page);
+  } else if (settingsTab === 'memory') {
     const max = Math.max(800, ...s.accounts.map((a) => a.memMB || 0));
     const autoOn = st.autoRecycle !== false;
     const select = h('select', { 'aria-label': '单个账号刷新线', onchange: (e) => window.wa.setSetting('recycleMB', Number(e.target.value)) },
@@ -1544,19 +1657,7 @@ function settingsPage() {
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台'))),
         h('span', { class: 'hint' }, '大概数字，实际会略高一点。')),
       setRow('立即清理内存', '把内存涨得多的后台账号刷新一下。不会退出登录，不会漏消息。',
-        h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: async () => {
-          memClean.busy = true; memClean.result = ''; render(true);
-          const r = await window.wa.memClean();
-          memClean.busy = false;
-          if (r.error) memClean.result = r.error;
-          else {
-            const skip = r.skipped ? `${r.skipped} 个有未读、刚切走或正在加载/下载的跳过了。` : '';
-            if (r.recycled) memClean.result = `已刷新 ${r.recycled} 个后台账号，预计省下约 ${mb(r.savedMB)}，一分钟内占用数字会更新。${skip}`;
-            else if (r.skipped) memClean.result = `这次没有刷新。${skip}`;
-            else memClean.result = '后台账号都刚刷新过或占用不大，不用清理。';
-          }
-          render(true);
-        } }, memClean.busy ? '清理中…' : '立即清理'),
+        h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: runMemClean }, memClean.busy ? '清理中…' : '立即清理'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
       setRow('自动回收后台账号', '后台账号内存涨多了，就自动刷新一下。不退出登录，不漏消息；正在看的和有未读的不动。',
         sw(autoOn, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v)),
@@ -1631,11 +1732,7 @@ function settingsPage() {
   } else if (settingsTab === 'mcp') {
     mcpPage(page, s.mcp);
   } else if (settingsTab === 'check') {
-    const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: async () => {
-      checkRunning = true; render(true);
-      checkResult = await window.wa.runCheck();
-      checkRunning = false; render(true);
-    } }, checkRunning ? '检查中…' : (checkResult ? '重新检查' : '开始检查'));
+    const run = h('button', { class: 'btn primary', disabled: checkRunning || !s.accounts.length, onclick: runCheckNow }, checkRunning ? '检查中…' : (checkResult ? '重新检查' : '开始检查'));
     page.append(
       h('div', { class: 'hstack', style: { justifyContent: 'space-between', alignItems: 'flex-end' } },
         h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '隔离自检'),
@@ -1938,7 +2035,7 @@ function render(forceContent = false) {
   renderLock();
   renderPanel();
   // 刚进 设置 › 翻译：重新读一次配置（面板或悬浮窗里可能拨过某个号的自动翻译）
-  const onTr = s.page === 'settings' && settingsTab === 'translate';
+  const onTr = s.page === 'settings' && (settingsTab === 'translate' || settingsTab === 'quick');
   if (fxChanged('tr-view', onTr, false) && onTr && tr.cfg) trLoad();
 
   // 卡片内容：账号页每次都画（很轻）；编辑页只在打开时画一次，避免打字时被重置
