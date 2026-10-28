@@ -36,6 +36,7 @@
     "check:radius-motion": "node scripts/check-radius-motion.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
     "check:add-menu": "electron scripts/check-add-menu.js",
+    "check:topbar": "electron scripts/check-topbar-fit.js",
     "check:sel-translate": "electron scripts/check-sel-translate.js",
     "check:tp-swap": "electron scripts/check-tp-swap.js",
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
