@@ -146,24 +146,17 @@ body.collapsed .foot .upd-check { display: none; }
 #aibar .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #aibar .btn { height: 30px; padding: 0 14px; }
 #aibar .grow.bad { color: var(--danger); }
-#topbar .who { color: var(--muted); font-size: var(--fs-s); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 窗口窄时：先缩账号名和备注，再缩时钟（省略号，鼠标停上去看全），右边三个按钮永远留在顶栏里 */
+#topbar .who { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#topbar .who-note { color: var(--muted); font-size: var(--fs-s); white-space: nowrap; }
+/* 窗口窄时整块藏起放不下的（shell.js fitTop），不缩成省略号；右边三个按钮永远留在顶栏里 */
 #topbar > * { flex-shrink: 0; }
-#topbar > .who { flex-shrink: 10; min-width: 0; }
-#topbar > .grow { flex-shrink: 1; }
-#topbar > .chip.clock, #topbar > .chip.exit { flex-shrink: 1; min-width: 44px; overflow: hidden; }
-#topbar > .chip.clock > span, #topbar > .chip.exit > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#topbar > .who { flex-shrink: 1; min-width: 0; }
+#topbar.fitting > .who { flex-shrink: 0; }
+#topbar > .fit-off { display: none; }
 .chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: var(--r-m); background: var(--slate-3); font-size: var(--fs-s); color: var(--soft); white-space: nowrap; }
 .chip.bad { background: var(--red-3); color: var(--danger); }
 .chip.night { background: var(--amber-3); color: var(--amber-11); }
 button.chip { border: 0; font: inherit; font-size: var(--fs-s); cursor: pointer; }
-.chip.zoom-ctl { gap: 2px; padding: 0 4px; -webkit-app-region: no-drag; }
-.zoom-ctl button { border: 0; background: none; font: inherit; font-size: var(--fs-s); color: var(--text); cursor: pointer; height: 22px; border-radius: var(--r-s); }
-.zoom-ctl .zbtn { width: 22px; font-size: var(--fs-l); line-height: 1; }
-.zoom-ctl .zpct { padding: 0 4px; min-width: 38px; }
-.zoom-ctl .zreset { padding: 0 6px; color: var(--soft); }
-.zoom-ctl button:hover:not(:disabled) { background: var(--slate-4); }
-.zoom-ctl button:disabled { opacity: .35; cursor: default; }
 #content { flex: 1; min-height: 0; overflow-y: auto; user-select: text; }
 #content[hidden], #lock[hidden] { display: none; }
 #lock { flex: 1; min-height: 0; }
@@ -381,7 +374,7 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 /* 编辑页：标题旁的帮助链接、底部固定的按钮栏（窗口不高时也看得到“保存”） */
 .field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .field-head .help { font-size: var(--fs-s); font-weight: 400; }
-.sticky-btns { position: sticky; bottom: 0; background: var(--white); padding: 12px 0 4px; margin-top: -4px; z-index: 1; }
+.sticky-btns { position: sticky; bottom: 0; background: var(--white); padding: 12px 0 4px; margin-top: -4px; z-index: 1; border-top: var(--hair) solid var(--line); }
 
 /* 聊天锁 */
 .lockpage { height: 100%; display: flex; align-items: center; justify-content: center; }
@@ -626,11 +619,11 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tr-krow .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .tr-krow .title { display: flex; align-items: center; }
 .tr-krow .desc { font-size: var(--fs-s); line-height: 1.6; color: var(--muted); }
-.tr-krow input { width: 240px; }
+.tr-krow input { width: 240px; height: 32px; box-sizing: border-box; border: var(--hair) solid var(--field); border-radius: var(--r-m); padding: 0 12px; font-size: var(--fs-m); background: var(--white); }
 .tr-krow:has(> .tr-cap) { flex-wrap: wrap; row-gap: 8px; }
 .tr-cap { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--fs-s); color: var(--muted); }
 .tr-krow > .tr-cap { flex-basis: 100%; }
-.tr-cap input.tr-cap-in, .tr-krow input.tr-cap-in { width: 112px; height: 28px; font-size: var(--fs-s); }
+.tr-cap input.tr-cap-in, .tr-krow input.tr-cap-in { width: 112px; height: 28px; box-sizing: border-box; border: var(--hair) solid var(--field); border-radius: var(--r-m); padding: 0 10px; font-size: var(--fs-s); background: var(--white); }
 
 /* 报错原话：默认收起，点“详细信息”展开 */
 .err-raw { margin-top: 6px; font-size: var(--fs-s); color: var(--muted); text-align: left; }
