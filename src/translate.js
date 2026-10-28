@@ -229,9 +229,9 @@ function needsKey(p) {
 }
 // 报错里点名是哪个服务商（“去填密钥”按钮靠 pid 打开它的表单）
 const provName = (p) => (p && p.name) || '翻译服务';
-const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}还没填密钥`, pid: p.id });
-// 429（太忙或额度用完）只说这一句，不接服务商原话（shen 2026-10-28）
 const nameGap = (name) => (/[A-Za-z0-9)]$/.test(name) ? ' ' : '');
+const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}${nameGap(provName(p))}还没填密钥`, pid: p.id });
+// 429（太忙或额度用完）只说这一句，不接服务商原话（shen 2026-10-28）
 const tooFastText = (name) => `${name}${nameGap(name)}请求太频繁，请重试`;
 
 // name：服务商名字（例如“智谱”“OpenRouter”），报错里写明是谁出的问题
@@ -748,7 +748,8 @@ class Translator {
     this.busy = { controller };
     const started = Date.now();
     const fb = this.provider(c.fallbackId);
-    const chain = [primary, !pinned && fb && fb.id !== primary.id ? fb : null].filter(Boolean);
+    // 备用没填密钥就不换过去，免得把默认服务商的错换成“备用还没填密钥”
+    const chain = [primary, !pinned && fb && fb.id !== primary.id && !needsKey(fb) ? fb : null].filter(Boolean);
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
@@ -775,7 +776,9 @@ class Translator {
           this.stats.ok += 1;
           return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
         } catch (e) {
-          lastErr = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
+          const err = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
+          // 备用自己配置不对（密钥、地址、模型、语言）：还是报默认服务商的错
+          if (!(i > 0 && lastErr && ['auth', 'config', 'lang', 'model', 'bad'].includes(err.kind))) lastErr = err;
         } finally {
           clearTimeout(timer);
           controller.signal.removeEventListener('abort', onCancel);

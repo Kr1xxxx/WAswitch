@@ -97,6 +97,19 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   behave=[busy,busy]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'OpenRouter 请求太频繁，请重试');
   tr.setRoles({primaryId:pid,fallbackId:fbKeep});
+  // 出厂配置：智谱默认、DeepL 备用但没填密钥。智谱没余额：不换到没密钥的备用，还是只说智谱那句
+  const dlNo=tr.saveProvider({preset:'deepl'}); assert(dlNo.ok, JSON.stringify(dlNo));
+  tr.setRoles({primaryId:fbKeep,fallbackId:dlNo.id});
+  behave=[broke]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,1);
+  behave=[busy,busy]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert.equal(q.kind,'overload');
+  // 备用有密钥但不对：报默认服务商的错，不报备用的
+  tr.setRoles({primaryId:fbKeep,fallbackId:pid});
+  behave=[broke,{status:401,body:'{}'}]; calls=[];
+  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,2);
+  tr.deleteProvider(dlNo.id);
+  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
   // cancel
   behave=['hang']; calls=[];
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);
