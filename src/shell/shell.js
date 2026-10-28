@@ -928,7 +928,7 @@ function trProviderForm() {
     setRow('名称', '', name),
     deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '', base),
     deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', preset.value === 'hunyuan' ? '填腾讯云 TokenHub 的密钥。' : '', key,
+    setRow('API 密钥', { hunyuan: '填腾讯云 TokenHub 的密钥。', deepl: '免费版（以 :fx 结尾）和付费版都能用。' }[preset.value] || '', key,
       preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
@@ -1115,7 +1115,7 @@ function translatePage(page) {
     h('h2', { class: 'ov-h2' }, '角色设定'),
     h('div', { class: 'box tr-form' },
       trRoleBox(c, apply),
-      h('span', { class: 'desc' }, '混元翻译模型只认“中文 = 外语”这样的固定译法。')),
+      h('span', { class: 'hint' }, '混元翻译模型只认“中文 = 外语”这样的固定译法。')),
     trWigBox(c, apply),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
     h('p', { class: 'hint' }, '工作台的回复用排第一个的“发出”模式。'),
@@ -1213,9 +1213,9 @@ function editorPage(id) {
     let mode = d.mode;
     // 主号：只能用网页版。已经是主号的不能在这里取消，要在别的号里勾选来更换
     const primary = h('input', { type: 'checkbox', checked: d.primary, disabled: d.primary && !d.isNew });
-    const primaryHint = h('span', { class: 'hint' },
-      d.primary && !d.isNew ? '要换主号，在另一个网页版账号里勾选。'
-        : d.primaryName ? `现在的主号是「${d.primaryName}」，勾选后改为这个号。` : '');
+    const primaryText = d.primary && !d.isNew ? '要换主号，在另一个网页版账号里勾选。'
+      : d.primaryName ? `现在的主号是「${d.primaryName}」，勾选后改为这个号。` : '';
+    const primaryHint = primaryText ? h('span', { class: 'hint' }, primaryText) : null;
     const primaryRow = h('div', { class: 'field' }, '主号',
       h('label', { class: 'check-row' }, primary, h('span', null, '这是主号')), primaryHint);
     const liteConfirm = h('input', { type: 'checkbox' });
@@ -1411,6 +1411,7 @@ function editorPage(id) {
           ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
           : `\n注意：和「${res.sameAs}」的出口 IP 相同，两个号会被认为在同一个地方。`;
       }
+      if (res.direct === 'system') text += '\nClash 开着系统代理时是当前节点的 IP，换节点就会变。';
       if (res.direct === 'real') text += '\n轻量号直连不经过系统代理；想让它走 Clash，要开 Clash 的 TUN 模式。';
       result.replaceChildren(h('div', { class: `note ${res.sameAs ? 'bad' : 'ok'}`, style: { whiteSpace: 'pre-line' } }, text));
       drawTags();
