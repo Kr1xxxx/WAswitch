@@ -44,7 +44,7 @@ function fromLite(view, jid) {
     const text = String(m.text || '').replace(LITE_LABEL, '');
     if (!text.trim()) continue;
     const d = m.ts ? new Date(m.ts * 1000) : null;
-    msgs.push({ id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes() } : null });
+    msgs.push({ id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes(), at: d.getTime() } : null });
   }
   const listed = (Array.isArray(view.chats) ? view.chats : []).find((c) => c && c.jid === jid);
   // 没名字的私聊用号码当标题（和 WhatsApp 网页一样），客户名单能按号码对上
@@ -68,7 +68,7 @@ class FloatCore {
   acc(accId) {
     let st = this.accs.get(accId);
     if (!st) {
-      st = { chat: '', title: '', items: new Map(), view: [], recent: [], minute: [], day: { d: '', n: 0 }, paused: '' };
+      st = { chat: '', title: '', items: new Map(), view: [], recent: [], seen: [], newest: 0, minute: [], day: { d: '', n: 0 }, paused: '' };
       this.accs.set(accId, st);
     }
     return st;
@@ -134,6 +134,9 @@ class FloatCore {
     const msgs = (read.msgs || []).filter((m) => m && typeof m.id === 'string');
     const chat = msgs.length ? chatOf(msgs[msgs.length - 1].id) : '';
     const newChat = chat !== st.chat;
+    const hs = msgs.map((m) => hashOf(accId, m.id));
+    const newest = Math.max(0, ...msgs.map((m) => (m.t && Number.isFinite(m.t.at) ? m.t.at : 0)));
+    if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
@@ -174,8 +177,22 @@ class FloatCore {
     st.title = read.title || '';
     st.recent = recent;
     st.view = view;
+    st.seen = hs;
+    st.newest = newChat ? newest : Math.max(st.newest, newest);
     this.pump();
     return changed;
+  }
+
+  // 用户往上翻聊天记录：WhatsApp 把最下面的新消息从页面上拿掉了，读到的最后 20 条是更早的。
+  // 这样的读数整个不用，翻译栏一直是对话里最新的那些，不跟着滑动变（shen 2026-10-28）。
+  // 上次读到的最后一条还在、或者页面说停在最下面：照常用（最新的那条被删了也不会卡住）
+  behind(st, read, hs, newest) {
+    if (!st.seen.length || read.bottom === true) return false;
+    if (hs.includes(st.seen[st.seen.length - 1])) return false;
+    if (read.bottom === false) return true;
+    // 页面说不清在哪：读到的最新一条比以前读到的早，或者最后一条是以前就读到过的旧消息
+    if (newest && st.newest && newest < st.newest) return true;
+    return hs.length > 0 && st.seen.includes(hs[hs.length - 1]);
   }
 
   // 打开自动翻译：当前对话最近 5 条还没翻的补上

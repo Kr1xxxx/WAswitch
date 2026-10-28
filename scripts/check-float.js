@@ -92,6 +92,7 @@ async function core() {
   await keyRetry();
   await persisted();
   await sendNoJump();
+  scrollNoBottom();
 }
 
 // 自己发消息时翻译栏不动（shen 2026-10-28）：页面只读最后 20 条，自己每发一条，最老的客户消息就被挤出读的范围。
@@ -147,6 +148,49 @@ async function sendNoJump() {
   fc.ingest('V', { title: 'Rev', msgs: [rv[0], rv[2], rv[3]] }, opts);
   assert.deepStrictEqual(fc.viewOf('V').items.map((x) => x.text), ['hola 1', 'hola 3']);
   console.log('发消息时翻译栏不动自检通过');
+}
+
+// 页面说不清停在哪（bottom 是 null）：靠消息时间、和上次读到的接不接得上，认出是往上翻了（@lid 对话）
+function scrollNoBottom() {
+  const opts = { auto: false, dailyCap: 500 };
+  const lid = '98765432101234@lid';
+  const at = (i) => Date.parse('2026-03-02T08:00:00Z') + i * 60000;
+  const all = (timed) => Array.from({ length: 120 }, (_, i) => ({ ...msg(i, i % 3 !== 0, lid), ...(timed ? { t: { h: 8, mi: i % 60, at: at(i) } } : {}) }));
+  for (const timed of [true, false]) {
+    const fc = new FloatCore({ translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+    const list = all(timed);
+    const read = (end) => ({ title: 'Amanda Hardy', msgs: list.slice(end - 20, end), bottom: null });
+    const texts = () => fc.viewOf('N').items.map((x) => x.text);
+    fc.ingest('N', read(120), opts);
+    const start = texts();
+    // 有时间的：一直翻到最早也认得出；没时间的：只认得出和上次读到的接得上的那一段
+    const ends = timed ? [115, 100, 80, 60, 40, 20, 60, 100, 119] : [115, 110, 105, 101];
+    for (const e of ends) {
+      assert(!fc.ingest('N', read(e), opts), `${timed ? '有' : '没'}时间，翻到 ${e} 时翻译栏不该重画`);
+      assert.deepStrictEqual(texts(), start, `${timed ? '有' : '没'}时间，翻到 ${e} 时翻译栏变了`);
+    }
+    assert(!fc.ingest('N', read(120), opts));
+    assert.deepStrictEqual(texts(), start);
+  }
+  // 最新一条被删了（页面上不见了）：停在最下面就照常用；说不清在哪时，客户再发来一条也照常加上，不会卡住
+  {
+    const fc = new FloatCore({ translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+    const list = all(true);
+    const texts = () => fc.viewOf('D').items.map((x) => x.text);
+    fc.ingest('D', { title: 'A', msgs: list.slice(100, 120), bottom: true }, opts);
+    // 最后一条（自己发的 119）删了，页面往前多露出一条客户的 99：停在最下面，这次读到的照常用
+    assert(fc.ingest('D', { title: 'A', msgs: list.slice(99, 119), bottom: true }, opts));
+    assert.strictEqual(texts()[0], 'hola 99');
+    const fc2 = new FloatCore({ translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+    fc2.ingest('E', { title: 'A', msgs: list.slice(100, 120), bottom: null }, opts);
+    const next = { ...msg(500, false, lid), t: { h: 10, mi: 0, at: at(200) } };
+    assert(fc2.ingest('E', { title: 'A', msgs: [...list.slice(100, 118), list[119], next].slice(-20), bottom: null }, opts));
+    assert.strictEqual(fc2.viewOf('E').items.slice(-1)[0].text, 'hola 500');
+    // 换了对话：照常显示新对话的
+    fc2.ingest('E', { title: 'B', msgs: [msg(1, false, '111222333444555@lid')], bottom: false }, opts);
+    assert.deepStrictEqual(fc2.viewOf('E').items.map((x) => x.text), ['hola 1']);
+  }
+  console.log('说不清停在哪时翻译栏也不变自检通过');
 }
 
 // 填好密钥后：“没填密钥 / 密钥不对”失败的自动重翻；别的原因失败的不动；照每天上限；别的对话里的忘掉；纠错失败的恢复原译文
@@ -353,6 +397,68 @@ async function persisted() {
   console.log('轻量号翻译自检通过');
 }
 
+// 上下滑聊天记录时翻译栏不变（shen 2026-10-28「上下滑客户聊天记录为什么右侧聊天记录会一直变」）：
+// WhatsApp 往上翻时会把最下面的新消息从页面上拿掉，只读最后 20 条就读到了更早的消息。
+// 仿一个这样的页面（@lid 对话，一次只留 40 条），往上翻、再翻回来，翻译栏一直是对话里最新的那些
+async function scrollStable(w, waPage) {
+  const N = 120;
+  await w.webContents.executeJavaScript(`(() => {
+    const lid = '98765432101234@lid';
+    const pad = (n) => String(n).padStart(2, '0');
+    window.__msgs = Array.from({ length: ${N} + 5 }, (_, i) => {
+      const out = i % 3 !== 0;
+      const pre = '[' + pad(8 + Math.floor(i / 60)) + ':' + pad(i % 60) + ', 2026/3/2] ' + (out ? 'Ich' : 'Amanda') + ': ';
+      return '<div role="row"><div data-id="' + out + '_' + lid + '_3EB0' + i + '" class="' + (out ? 'message-out' : 'message-in') + '"><div class="copyable-text" data-pre-plain-text="' + pre + '"><span class="selectable-text copyable-text"><span>' + (out ? 'reply ' : 'msg ') + i + '</span></span></div></div></div>';
+    });
+    document.querySelector('#main') && document.querySelector('#main').remove();
+    document.body.insertAdjacentHTML('beforeend', '<div id="main" style="width:600px"><header><span title="Amanda Hardy">Amanda Hardy</span></header>'
+      + '<div id="sc" style="height:300px;overflow-y:auto"><div role="application"></div></div><footer></footer></div>');
+    // end：页面上留着的最后一条（不含）；往上翻时 WhatsApp 只留 40 条，最下面的新消息被拿掉
+    window.__show = (end, bottom) => {
+      const app = document.querySelector('[role=application]');
+      app.innerHTML = window.__msgs.slice(Math.max(0, end - 40), end).join('');
+      const sc = document.getElementById('sc');
+      sc.scrollTop = bottom ? sc.scrollHeight : Math.floor(sc.scrollHeight / 3);
+      return sc.scrollHeight - sc.clientHeight - sc.scrollTop;
+    };
+    return 1; })()`);
+  const fc = new FloatCore({ translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  const opts = { auto: false, dailyCap: 500 };
+  const show = (end, bottom) => w.webContents.executeJavaScript(`window.__show(${end}, ${bottom})`);
+  const texts = () => fc.viewOf('L').items.map((x) => x.text);
+  await show(N, true);
+  const r0 = await waPage.readOpenChat(w.webContents);
+  assert(r0.ok && r0.msgs.length === 20, JSON.stringify(r0));
+  assert.strictEqual(r0.bottom, true, '停在最下面');
+  fc.ingest('L', r0, opts);
+  const start = texts();
+  assert.strictEqual(start[start.length - 1], 'msg 117');
+  // 往上翻到最早，再翻回来：翻译栏一直不变、不重画
+  const ends = [];
+  for (let e = N - 5; e >= 40; e -= 5) ends.push(e);
+  for (let e = 45; e < N; e += 5) ends.push(e);
+  for (const e of ends) {
+    await show(e, false);
+    const r = await waPage.readOpenChat(w.webContents);
+    assert(r.ok, JSON.stringify(r));
+    assert.strictEqual(r.bottom, false, `翻到 ${e} 时认出不在最下面`);
+    assert(!fc.ingest('L', r, opts), `翻到 ${e} 时翻译栏不该重画`);
+    assert.deepStrictEqual(texts(), start, `翻到 ${e} 时翻译栏变了`);
+  }
+  // 回到最下面：还是原样
+  await show(N, true);
+  assert(!fc.ingest('L', await waPage.readOpenChat(w.webContents), opts));
+  assert.deepStrictEqual(texts(), start);
+  // 往上翻着的时候客户又发来一条：页面上没有，先不变；回到最下面就加在最后
+  await show(N - 30, false);
+  fc.ingest('L', await waPage.readOpenChat(w.webContents), opts);
+  assert.deepStrictEqual(texts(), start);
+  await show(N + 1, true);
+  assert(fc.ingest('L', await waPage.readOpenChat(w.webContents), opts));
+  assert.deepStrictEqual(texts(), [...start, 'msg 120']);
+  console.log('上下滑聊天记录时翻译栏不变自检通过');
+}
+
 core().then(() => {
   // 只读脚本：在 Electron 里跑（由 xvfb-run electron 调用时才跑）
   if (!process.versions.electron) return;
@@ -450,6 +556,7 @@ core().then(() => {
       assert.strictEqual(fcw.accs.get('W').day.n, 6, '只有收到的算额度');
       assert.deepStrictEqual(fcw.viewOf('W').items.map((x) => x.text), ['On commande ?', 'Parfait'], '翻译列表只有客户的');
     }
+    await scrollStable(w, waPage);
     // 有消息行但一条都认不出：才算读不到
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="X">X</span></header><div role="row"><div>hi</div></div>'; 1`);
     assert.strictEqual((await waPage.readOpenChat(w.webContents)).why, 'nomatch');
