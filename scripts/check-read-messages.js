@@ -31,6 +31,8 @@ async function main() {
   // ---------- 网页版页面 ----------
   const w = new BrowserWindow({ show: true, width: 900, height: 700 });
   await w.loadFile(path.join(__dirname, 'fixtures', 'wa-chat.html'));
+  // This fixture also exercises group parsing elsewhere; a real open chat has one conversation ID.
+  await w.webContents.executeJavaScript(`document.querySelector('[data-id="false_222@g.us_EEE_333@c.us"]').setAttribute('data-id', 'false_111@c.us_EEE'); true`);
   const html = () => w.webContents.executeJavaScript('document.body.innerHTML');
 
   // ---------- 轻量版聊天缓存 ----------
@@ -149,6 +151,13 @@ async function main() {
   const r4 = await call({ id: 'w1' });
   check(r4.isError && /换了对话/.test(r4.content[0].text), '网页版：确认期间换了对话就不读');
   await w.webContents.executeJavaScript(`document.querySelector('header span').setAttribute('title', 'Carlos García'); document.querySelector('header span').textContent = 'Carlos García';`);
+
+  tick();
+  state.confirmAnswers.push('once');
+  state.onConfirm = () => w.webContents.executeJavaScript(`document.querySelectorAll('[data-id]').forEach(el => el.setAttribute('data-id', el.getAttribute('data-id').replace('111@c.us', '999@c.us'))); true`);
+  const sameTitle = await call({ id: 'w1' });
+  check(sameTitle.isError && /换了对话/.test(sameTitle.content[0].text), '重名对话：确认期间编号改变时拒绝读取');
+  await w.webContents.executeJavaScript(`document.querySelectorAll('[data-id]').forEach(el => el.setAttribute('data-id', el.getAttribute('data-id').replace('999@c.us', '111@c.us'))); true`);
 
   // 拒绝
   tick();

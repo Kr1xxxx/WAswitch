@@ -1,0 +1,71 @@
+---
+title: MorphStatusButton
+description: A single button that morphs through idle, loading, success, and error states in place, with no layout shift.
+category: Interactive
+---
+
+## Preview
+
+<PreviewCard live title="MorphStatusButton" note="Click to run a fake async action">
+  <MorphStatusButtonDemo />
+</PreviewCard>
+
+## Variants
+
+### It fails sometimes
+
+When the returned promise rejects, the button drops into its error state.
+
+<PreviewCard title="Doomed to fail" note="This one always rejects">
+  <MorphStatusButtonFailDemo />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/morph-status-button</Cmd>
+
+## Usage
+
+```tsx
+import { MorphStatusButton } from "@/components/evil-buttons/morph-status-button";
+
+export function ButtonDemo() {
+  return (
+    <MorphStatusButton
+      successLabel="Saved"
+      onClick={async () => {
+        await saveChanges();
+      }}
+    >
+      Save changes
+    </MorphStatusButton>
+  );
+}
+```
+
+```tsx
+<MorphStatusButton status={isPending ? "loading" : "idle"}>
+  Save changes
+</MorphStatusButton>
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes except `onClick` (which is overloaded to accept an async handler).
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Idle label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Save changes"` | Idle label used when no children are provided. |
+| `loadingLabel` | `React.ReactNode` | `"Working…"` | Label shown while the action is in flight. |
+| `successLabel` | `React.ReactNode` | `"Done"` | Label shown after the action resolves. |
+| `errorLabel` | `React.ReactNode` | `"It broke. Your fault."` | Label shown after the action rejects. |
+| `onClick` | `(e) => void \| Promise<unknown>` | - | Click handler. Returning a promise triggers the auto state machine. |
+| `status` | `"idle" \| "loading" \| "success" \| "error"` | - | Controlled status; disables promise-based transitions when set. |
+| `resetAfter` | `number` | `1800` | Milliseconds to stay in success/error before resetting. Set to `0` to stay. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Return a promise from `onClick` and it shows loading, then success or error.
+- Disabled and `aria-busy` while loading.

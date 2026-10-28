@@ -152,7 +152,7 @@ function dockLangBar() {
   const toCustomer = ReplyLang.pick({ text: '中', autoTarget: st.autoTarget || st.target }).target;
   const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的`, default: '认不出客户的语言，先用英语' };
   const srcLangs = ['中文', ...st.langs.filter((l) => l !== '中文')];
-  const src = h('select', { class: 'dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认（只管这个对话）', onchange: (e) => {
+  const src = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认（只管这个对话）', onchange: (e) => {
     lt.src = e.target.value === '__auto' ? '' : e.target.value;
     lt.swapped = false;
     dockRender(true);
@@ -163,7 +163,7 @@ function dockLangBar() {
     dk.st = await window.wa.dockLang(st.accountId, st.title, lang);
     dockRender(true);
   };
-  const tgt = h('select', { class: 'dk-bar-sel', 'aria-label': '翻成哪种语言',
+  const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
     title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
       : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
     onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
@@ -218,7 +218,7 @@ function dockItemEdit(it) {
 }
 function dockSuggestBox(text, take, drop) {
   return h('div', { class: 'dk-suggest' },
-    h('span', { class: 'dk-label' }, '纠错建议（你改过这条，没有直接替换）'),
+    h('span', { class: 'dk-label' }, '纠错建议'),
     h('span', { class: 'dk-tr' }, text),
     h('span', { class: 'dk-row' }, h('button', { class: 'pn-btn primary', onclick: take }, '采用'), h('button', { class: 'pn-btn', onclick: drop }, '不用')));
 }
@@ -406,7 +406,7 @@ function dockCompose() {
     if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点“重新翻译”', true);
     dockTranslate(false);
   });
-  const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）', placeholder: '译文会显示在这里，可以直接改' }, dk.out);
+  const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
   out.addEventListener('input', () => {
     dk.out = out.value;
     if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
@@ -423,13 +423,13 @@ function dockCompose() {
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       dockLangBar(),
-      dk.busy ? h('button', { class: 'dk-link', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
+      dk.busy ? h('button', { class: 'dk-btn', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
         : h('span', { class: 'dk-row' },
-          dk.out ? h('button', { class: 'dk-link', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
-          h('button', { class: 'dk-link', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
+          dk.out ? h('button', { class: 'dk-btn', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
+          h('button', { class: 'dk-btn', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
     dockField(out, () => out.value, status),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
-    dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
+    dk.warn.length ? h('div', { class: 'tr-warn' }, `原文没有：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },
       h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey }, '放进输入框')));
 }
@@ -452,6 +452,9 @@ function dockRender(force = false) {
   if (!dk.st || dk.st.accountId !== s.activeId) { if (!dk.fetching) { dk.fetching = true; dockFetch().finally(() => { dk.fetching = false; }); } if (!dk.st) { host.replaceChildren(h('div', { class: 'hint dk-hint' }, '加载中…')); return; } }
   const st = dk.st;
   if (!st.accountId) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '先添加一个 WhatsApp 账号。')); return; }
+  // 账号出了问题（代理不通、退出登录等）：读不到对话，工作台只留一句，不显示「正在读当前对话…」和回复框
+  const acc = s.accounts.find((a) => a.id === s.activeId);
+  if (acc && acc.problem) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '账号连上后可用。')); return; }
   if (!st.hasProvider) {
     host.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
       h('span', { class: 'hint' }, '还没设置翻译服务。'),

@@ -1,0 +1,69 @@
+---
+title: CopyButton
+description: A copy button that briefly shows the copied text above itself, so you see exactly what landed on the clipboard.
+category: Utility
+---
+
+## Preview
+
+<PreviewCard live>
+  <CopyButton value="pnpm dlx shadcn@latest add @evilbuttons/copy-button" />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/copy-button</Cmd>
+
+## Usage
+
+```tsx
+import { CopyButton } from "@/components/evil-buttons/copy-button";
+
+export function ButtonDemo() {
+  return (
+    <CopyButton
+      value="npm install evil-buttons"
+      onCopy={(text) => console.log("Copied", text)}
+    />
+  );
+}
+```
+
+## Variants
+
+### Custom labels
+
+Name the action after what it copies.
+
+<PreviewCard>
+  <CopyButton value="git clone https://github.com/radiumcoders/Evil-Buttons.git" copyLabel="Copy clone URL" copiedLabel="Clone URL copied" />
+</PreviewCard>
+
+### Secret value
+
+Turn off `showValue` when the text shouldn't be flashed on screen, like an API key.
+
+<PreviewCard>
+  <CopyButton value="sk_live_51Hx9example" copyLabel="Copy API key" copiedLabel="API key copied" showValue={false} timeout={3000} />
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props except `value` and `onCopy`, and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `value` | `string` | - | Text written to the clipboard. Required. |
+| `timeout` | `number` | `1500` | Milliseconds before the button returns to idle. |
+| `copyLabel` | `React.ReactNode` | `"Copy"` | Label shown before copying. |
+| `copiedLabel` | `React.ReactNode` | `"Copied"` | Label shown after a successful copy. |
+| `errorLabel` | `React.ReactNode` | `"Failed"` | Label shown when the clipboard write fails. |
+| `showValue` | `boolean` | `true` | Show the copied text in a small chip above the button after copying. |
+| `onCopy` | `(value: string) => void` | - | Fired with the copied text after a successful write. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Falls back to `execCommand` on plain HTTP.
+- Never changes width between states.
+- Announces copy success or failure to screen readers.

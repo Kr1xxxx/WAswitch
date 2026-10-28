@@ -74,7 +74,9 @@ app.whenReady().then(async () => {
   await chat.loadFile(path.join(__dirname, 'fixtures', 'wa-chat.html'));
   const cw = chat.webContents;
   while (cw.isLoading()) await new Promise((r) => setTimeout(r, 20));
-  // 顶栏“客户当地时间”：只读标题和第一条消息的对话编号，不改页面
+  check((await waPage.readChatPeer(cw)).chat === '', '多个聊天编号的过渡页面不推测当前对话');
+  await cw.executeJavaScript(`document.querySelector('[data-id="false_222@g.us_EEE_333@c.us"]').setAttribute('data-id', 'false_111@c.us_EEE'); true`);
+  // 顶栏“客户当地时间”：只读标题和一致的对话编号，不改页面
   const peerBefore = await cw.executeJavaScript('document.documentElement.outerHTML');
   const peer = await waPage.readChatPeer(cw);
   check(peer && peer.title === 'Carlos García' && peer.chat === '111@c.us', `readChatPeer：读到对话标题和对话编号（${JSON.stringify(peer)}）`);

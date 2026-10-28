@@ -83,13 +83,15 @@ class TrStore {
   flush() {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     for (const [k, e] of this.mem) if (e.dirty) this.write(k, e);
+    return [...this.mem.values()].every((e) => !e.dirty);
   }
 
   // 换存放位置（启动后查完盘才知道放哪）：先把没写盘的写到旧位置，再清掉内存，之后读写都在新位置
   setDir(dir) {
-    this.flush();
+    if (!this.flush()) return false;
     this.mem.clear();
     this.dir = dir;
+    return true;
   }
 
   // 删号：磁盘上的译文保留，只把内存里的写盘后放掉
@@ -161,7 +163,7 @@ async function dirInfo(dir) {
 }
 
 // 旧位置的译文搬到新位置（一次性；之后旧文件夹没了就什么都不做）。跨盘不能 rename，所以复制再删。
-// 新位置已有同名文件的不覆盖（新的为准）。
+// 同名文件按记录合并：保留两边独有的译文，冲突用时间较新的。成功写入才删除对应源文件。
 function migrate(from, to) {
   if (!from || !to || path.resolve(from) === path.resolve(to)) return 0;
   let accs;
@@ -172,14 +174,28 @@ function migrate(from, to) {
       fs.mkdirSync(path.join(to, a.name), { recursive: true });
       for (const f of fs.readdirSync(path.join(from, a.name))) {
         if (!f.endsWith('.json')) continue;
+        const src = path.join(from, a.name, f);
         const dst = path.join(to, a.name, f);
-        if (fs.existsSync(dst)) continue;
-        fs.copyFileSync(path.join(from, a.name, f), dst);
+        const read = (file) => {
+          const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('译文文件格式不对');
+          return data;
+        };
+        const source = read(src);
+        const merged = fs.existsSync(dst) ? read(dst) : {};
+        for (const [key, rec] of Object.entries(source)) {
+          if (!Object.hasOwn(merged, key) || (rec?.at || 0) > (merged[key]?.at || 0)) {
+            Object.defineProperty(merged, key, { value: rec, enumerable: true, writable: true, configurable: true });
+          }
+        }
+        writeJsonAtomic(dst, merged);
+        fs.unlinkSync(src);
         n++;
       }
+      try { fs.rmdirSync(path.join(from, a.name)); } catch { /* 保留未处理的文件 */ }
     } catch (err) { console.warn(`译文搬家失败：${err.message}`); return n; } // 出错就留着旧的，下次再搬
   }
-  try { fs.rmSync(from, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmdirSync(from); } catch { /* 保留未处理的文件 */ }
   return n;
 }
 

@@ -36,12 +36,28 @@ jobs:
         run: npm run check:customer-time
       - name: 字号自检（最多四种，最小 12px）
         run: npm run check:font-sizes
+      - name: 圆角和动效检查（6 / 10 / 14 / 圆形，250ms ease-out）
+        run: npm run check:radius-motion
+      - name: 颜色检查（只用 Radix UI Colors）
+        run: npm run check:colors
+      - name: 账号图标 emoji 自检
+        run: npm run check:emoji
       - name: 悬浮翻译自检
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
       - name: 删除不弹确认、撤销提示自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
+      - name: 侧栏 + 号（添加账号、添加分组）自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+      - name: 顶栏放不下时整块藏起、不出省略号
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
+      - name: 选中文字翻译按钮（只读选区、按钮位置）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
+      - name: 翻译页 ⇄（没翻过先认原文语言）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-tp-swap.js
+      - name: 翻译页重翻、补翻、纠错时转圈可取消
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-trpage-busy.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归
@@ -74,6 +90,8 @@ jobs:
         run: npm run check:atomic
       - name: 编辑页保存自检
         run: npm run check:editor
+      - name: 审计修复回归（竞态、存储、权限和真实编辑界面）
+        run: xvfb-run -a npm run check:audit
       - name: 导出导入去重自检
         run: npm run check:records
       - name: 导入文件编码自检

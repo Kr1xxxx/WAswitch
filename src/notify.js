@@ -26,6 +26,17 @@ const MAX_POPPED = 200; // 每个号最多记多少个客户“弹过哪一条�
 const HOLD_MS = 3 * 60 * 1000; // 重连（切网、页面重新加载）最后一次动静之后这么久内，未读数回到原来的数不算新消息
 
 const asset = (name) => path.join(__dirname, '..', 'assets', name);
+// 托盘菜单里账号名前面的 emoji（src/emoji/png，带 @2x 高分屏版本）
+const EMOJI = require('./emoji/list');
+const emojiIcons = new Map();
+function emojiIcon(id) {
+  if (!EMOJI.valid(id)) return undefined;
+  if (!emojiIcons.has(id)) {
+    const img = nativeImage.createFromPath(path.join(__dirname, 'emoji', 'png', `${id}.png`));
+    emojiIcons.set(id, img.isEmpty() ? undefined : img);
+  }
+  return emojiIcons.get(id);
+}
 
 class Notifier {
   // hooks: { getAccounts(), isMuted(acc), getWindow(), activate(id), quit(), readChats(acc), popup, openChat(id, jid), isActive(id),
@@ -404,6 +415,7 @@ class Notifier {
       const mb = this.hooks.memoryOf ? this.hooks.memoryOf(acc.id) : 0;
       return {
         label: `${isOffline(acc.id) ? '⚠ ' : ''}${acc.name}${n ? `（${n}）` : ''}${[isOffline(acc.id) ? '断线' : '', this.muted(acc) ? '不弹通知' : '', mb ? `${mb} MB` : ''].filter(Boolean).map((t) => `${GAP}${t}`).join('')}`,
+        icon: emojiIcon(acc.emoji),
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });

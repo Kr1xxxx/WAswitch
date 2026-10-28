@@ -17,6 +17,7 @@ const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
+const { addMenuTemplate } = require('./add-menu');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
@@ -47,6 +48,7 @@ const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
 const { setupTranslateIpc } = require('./translate-ipc');
+const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
@@ -102,9 +104,30 @@ const GAP = 8; // 右侧卡片和窗口边缘的间距
 const TOPBAR = 44; // 卡片顶栏高度
 const AIBAR = 44; // “AI 想切换账号”横幅的高度
 const PANEL_W = 380; // 右侧工作台（客户资料 / 话术 / 翻译）的宽度
+// 窗口窄时给 WhatsApp 让地方：小于 1200 宽侧栏自动只显示图标，小于 1000 宽工作台默认收起（设计复查第 1 条）。
+// 窄窗口里用户自己点开的，这次保持打开，直到窗口再变宽
+const NARROW_SIDE = 1200;
+const NARROW_PANEL = 1000;
+const narrowOpen = { side: false, panel: false };
+let lastNarrow = { side: false, panel: false };
+function winWidth() { return win && !win.isDestroyed() ? win.getContentBounds().width : Infinity; }
+const narrowSide = () => winWidth() < NARROW_SIDE;
+const narrowPanel = () => winWidth() < NARROW_PANEL;
+// 窗口宽窄变了：变宽后忘掉窄窗口里手动点开的，下次变窄照样自动收起
+function syncNarrow() {
+  const now = { side: narrowSide(), panel: narrowPanel() };
+  for (const k of ['side', 'panel']) if (!now[k] && lastNarrow[k]) narrowOpen[k] = false;
+  const changed = now.side !== lastNarrow.side || now.panel !== lastNarrow.panel;
+  lastNarrow = now;
+  return changed;
+}
 const TYPING_MS = 30 * 1000; // 这么久内按过键，算用户正在用
 const NOTE_MAX = 200;
-const COLORS = ['#16A34A', '#7C3AED', '#EA580C', '#2563EB', '#DB2777', '#475569'];
+// 账号颜色（Radix 9 号实色，见 src/colors/radix.js）
+const RADIX = require('./colors/radix');
+const COLORS = RADIX.ACCOUNT_COLORS;
+// 账号头像的 emoji（打包在 src/emoji 里）
+const EMOJI = require('./emoji/list');
 const SOURCE_URL = 'https://github.com/Kr1xxxx/WAswitch';
 const canLoginItem = process.platform === 'win32' || process.platform === 'darwin';
 // 开机自启时是否直接缩在托盘（在 app ready 之后判断）。
@@ -297,7 +320,7 @@ function loadAccounts() {
     // 手机号：登录后自动读到的，或用户在编辑里自己填的（phoneManual）。同样只在本机显示，不给 MCP
     acc.phone = cleanPhone(acc.phone);
     acc.phoneManual = acc.phoneManual === true && !!acc.phone;
-    acc.color = COLORS.includes(acc.color) ? acc.color : COLORS[i % COLORS.length];
+    acc.color = RADIX.accountColor(acc.color) || COLORS[i % COLORS.length]; // 0.5.12 以前的旧颜色换成同位置的新颜色
     acc.proxy = typeof acc.proxy === 'string' ? acc.proxy : '';
     acc.proxyPassword = typeof acc.proxyPassword === 'string' ? acc.proxyPassword : '';
     acc.exitLabel = typeof acc.exitLabel === 'string' ? acc.exitLabel : '';
@@ -327,6 +350,13 @@ function loadAccounts() {
     acc.teamNote = typeof acc.teamNote === 'string' ? acc.teamNote.slice(0, 500) : '';
     acc.teamCrm = acc.teamCrm === true && !!acc.teamId;
     acc.teamExpected = typeof acc.teamExpected === 'string' && /^[A-Z]{2}$/.test(acc.teamExpected) ? acc.teamExpected : '';
+  });
+  // 头像 emoji：老版本没有，或者存的不在这一套里，随机给一个别的号没用的（加载后会写回文件，只换一次）
+  const usedEmoji = list.map((a) => a.emoji).filter((e) => EMOJI.valid(e));
+  list.forEach((acc) => {
+    if (EMOJI.valid(acc.emoji)) return;
+    acc.emoji = EMOJI.pick(usedEmoji);
+    usedEmoji.push(acc.emoji);
   });
   // 只能有一个主号；没有时把第一个网页版账号设为主号
   const primaries = list.filter((a) => a.primary);
@@ -372,6 +402,10 @@ function nextName() {
   let n = accounts.length + 1;
   while (used.has(`账号 ${n}`)) n += 1;
   return `账号 ${n}`;
+}
+
+function nextEmoji() {
+  return EMOJI.pick(accounts.map((a) => a.emoji));
 }
 
 function nextColor() {
@@ -526,10 +560,11 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | welcome
+let page = 'account'; // account | editor | settings | overview | translate | welcome
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
+let editorEmoji = null; // 新建账号时编辑页先随机给的 emoji，重新渲染编辑页时不变
 let quitting = false;
 // MCP 想切号或打开添加页、但用户正在打字时，先挂起，在窗口顶部问用户
 let aiRequest = null; // { kind: 'switch' | 'add' | 'draft' | 'open', id?, name?, region? }（draft 见 draft-place.js，open 见 chat-open.js）
@@ -584,7 +619,7 @@ async function readUnreadChats(acc) {
 // 自带通知弹窗（屏幕右上角）。所有提醒都走它，不用系统通知
 const popup = new PopupWindow({
   getWindow: () => win,
-  account: (id) => { const a = accounts.find((x) => x.id === id); return a ? { name: a.name, color: a.color } : null; },
+  account: (id) => { const a = accounts.find((x) => x.id === id); return a ? { name: a.name, color: a.color, emoji: a.emoji } : null; },
   locked: () => locked,
   settings: () => settings,
   onOpen: (card) => notifier.open(card),
@@ -959,8 +994,20 @@ function proxyLabel(acc) {
   return `${acc.exitLabel || p.scheme} ${p.port}`;
 }
 
+// 侧栏是否只显示图标：设置里选了，或者窗口窄（窄窗口里用户点了展开就展开）
+function sideCollapsed() {
+  if (page === 'settings') return false;
+  return settings.sidebarCollapsed || (narrowSide() && !narrowOpen.side);
+}
 function sideWidth() {
-  return page !== 'settings' && settings.sidebarCollapsed ? SIDE_COLLAPSED : SIDE_EXPANDED;
+  return sideCollapsed() ? SIDE_COLLAPSED : SIDE_EXPANDED;
+}
+function toggleSide() {
+  if (!narrowSide()) { setSetting('sidebarCollapsed', !settings.sidebarCollapsed); return; }
+  const open = sideCollapsed();
+  narrowOpen.side = open;
+  if (open && settings.sidebarCollapsed) setSetting('sidebarCollapsed', false);
+  else refresh();
 }
 
 // ---------- 聊天锁 ----------
@@ -1014,9 +1061,12 @@ let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
 let translator = null;
-const panelShown = () => panelOpen && page === 'account' && !locked && visibleAccounts().length > 0;
-function togglePanel(on = !panelOpen) {
+// 窗口窄时工作台默认收起，用户点开才显示
+const panelWanted = () => panelOpen && (!narrowPanel() || narrowOpen.panel);
+const panelShown = () => panelWanted() && page === 'account' && !locked && visibleAccounts().length > 0;
+function togglePanel(on = !panelWanted()) {
   panelOpen = !!on;
+  if (narrowPanel()) narrowOpen.panel = panelOpen;
   refresh();
 }
 // 停着的号（团队收回等）名下的客户也不显示、不提醒，数据保留
@@ -1100,7 +1150,8 @@ function layout() {
     }
     memoryManager.markBackground(id, !current || !win.isVisible());
   }
-  trIpc.layoutFloat(bounds);
+  trIpc.layoutFloat();
+  selTr.sync();
   syncLiteWatch();
 }
 
@@ -1196,12 +1247,11 @@ function pushState() {
     aiRequest: aiRequestForShell(),
     update: updater ? updater.snapshot() : null,
     mcp: mcpModule ? mcpModule.view() : null,
-    collapsed: settings.sidebarCollapsed,
+    collapsed: sideCollapsed(),
     team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
     locked,
     panelOpen: panelShown(),
     panelTab,
-    floatOpen: trIpc.floatOpen,
     lockChoices: memory.LOCK_CHOICES,
     popupChoices: memory.POPUP_SECONDS,
     // 分组：每组带上未读总数，折叠后组头上也能看到
@@ -1222,6 +1272,7 @@ function pushState() {
         note: acc.note,
         phone: acc.phone,
         color: acc.color,
+        emoji: acc.emoji,
         muted: acc.muted,
         groupId: groupOf(acc) ? acc.groupId : '',
         groupMuted: !!groupOf(acc)?.muted,
@@ -1360,7 +1411,7 @@ async function unparkAccount(acc) {
 // 后台新分来的号：建一个本地账号，先不联网，等员工填代理
 function createTeamSeat(seat) {
   const acc = {
-    id: newAccountId(accounts), name: seat.name, color: COLORS.includes(seat.color) ? seat.color : nextColor(), proxy: '', proxyPassword: '', exitLabel: '',
+    id: newAccountId(accounts), name: seat.name, color: RADIX.accountColor(seat.color) || nextColor(), emoji: nextEmoji(), proxy: '', proxyPassword: '', exitLabel: '',
     fingerprint: fingerprint.generate('auto'), muted: false, mode: seat.mode, primary: false,
     liteKey: seat.mode === 'lite' ? newLiteKey() : '', loggedIn: false, allowCalls: false,
     teamId: seat.teamId, teamHidden: false, teamNeedsProxy: true, teamNote: seat.note, teamExpected: seat.expected, teamCrm: seat.crm === true,
@@ -1574,7 +1625,7 @@ function loadProblem(acc, code, desc, port) {
       : nodeDead ? `Clash 开着，${p.port} 端口也通，但这个端口对应的节点连不出去。去 Clash 给这个端口换个节点。`
       : node ? (local ? 'Clash 开着，但当前节点打不开 WhatsApp，在 Clash 里换个节点试试。' : '代理连上了，但通过它打不开 WhatsApp，代理那边的网络可能有问题。')
         : local ? '通常是 Clash 没开，或者 Clash 里没开这个端口。' : '代理可能停了，或者地址、端口不对。';
-    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: `这个号先暂停联网，不会改用直连，手机上的消息不会丢。${why}`, detail: raw, retrying: !auth };
+    return { kind: 'proxy', title, short: node && local ? '节点不通' : '代理连不上', text: why, detail: raw, retrying: !auth };
   }
   if (acc.proxy && (kind === 'dns' || kind === 'timeout' || kind === 'reset')) {
     return { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: `${errtext.netReason(desc, { proxy: p && !p.error ? p : null })}。`, detail: raw, retrying: true };
@@ -1695,8 +1746,8 @@ function setSpellcheck(id, on) {
   applySpellcheck(acc);
   pushState();
 }
-// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴。不提供“检查元素”
-function setupPageMenu(wc, ses) {
+// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴，选中聊天文字时还有「翻译」。不提供“检查元素”
+function setupPageMenu(wc, ses, id) {
   wc.on('context-menu', (_e, p) => {
     const items = [];
     if (p.misspelledWord) {
@@ -1714,6 +1765,8 @@ function setupPageMenu(wc, ses) {
       );
     } else if (p.selectionText) {
       items.push({ label: '复制', role: 'copy' });
+      // 和选中后出现的小按钮同一条路：在选区旁边弹出悬浮译文窗
+      if (p.selectionText.trim()) items.push({ label: '翻译', click: () => selTr.fromMenu(id, wc, p.selectionText, { x: p.x, y: p.y }) });
     }
     if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
   });
@@ -1748,7 +1801,8 @@ async function createView(acc, loadDelay = 0) {
   const wc = view.webContents;
   wc.setWebRTCIPHandlingPolicy(webrtcPolicy(acc));
   setupNavigationGuards(wc);
-  setupPageMenu(wc, ses);
+  setupPageMenu(wc, ses, acc.id);
+  selTr.watch(acc.id, wc);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
 
@@ -1963,8 +2017,8 @@ const LITE_PROBLEMS = {
       title: local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理连不上 WhatsApp`,
       short: '节点不通',
       text: local
-        ? `这个号先暂停联网，不会改用直连，手机上的消息不会丢。Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
-        : `这个号先暂停联网，不会改用直连，手机上的消息不会丢。代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
+        ? `Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
+        : `代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
       detail: raw,
       retrying: true,
     };
@@ -2193,6 +2247,7 @@ function openEditor(id, prefill = null) {
   editorPrefill = acc ? null : prefill;
   editorId = acc ? acc.id : null;
   editorColor = acc ? acc.color : nextColor();
+  editorEmoji = acc ? acc.emoji : nextEmoji();
   editorNonce += 1;
   editorIpc.resetTest();
   editorDirty = false;
@@ -2560,7 +2615,7 @@ app.whenReady().then(async () => {
   const winH = Math.max(600, Math.min(960, Math.round(wa.height * 0.92)));
   win = new BaseWindow({
     width: winW, height: winH, center: true, minWidth: 900, minHeight: 600, show: false,
-    title: 'WAswitch', backgroundColor: '#E6E9ED',
+    title: 'WAswitch', backgroundColor: RADIX.hex('slate', 3),
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
     ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
@@ -2600,7 +2655,9 @@ app.whenReady().then(async () => {
   lockLocalPage(shellView.webContents);
   shellView.webContents.loadFile(path.join(__dirname, 'shell', 'index.html'));
   shellView.webContents.on('did-finish-load', pushState);
-  win.on('resize', layout);
+  // 宽窄跨过 1200 / 1000 时侧栏和工作台要跟着收起展开，界面也要重画
+  win.on('resize', () => { if (syncNarrow()) refresh(); else layout(); });
+  syncNarrow(); // 记下打开时的宽窄
 
   liteHost = new LiteHost({ dataDir: app.getPath('userData') });
   bindLiteEvents();
@@ -2761,14 +2818,13 @@ handleShell('netlog:clear', () => {
   return true;
 });
 // ---- 面板 ----
-onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelOpen));
+onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !panelWanted()));
 // 顶栏的“话术 / 客户 / 翻译”：点哪个就打开面板到哪一页
 onShell('panel:tab', (tab) => {
   if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
   if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
-  panelOpen = true;
-  refresh();
+  togglePanel(true);
 });
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
@@ -2837,14 +2893,17 @@ handleShell('panel:export', async ({ kind, format } = {}) => {
     parked = rows.filter(parkedCustomer).length;
     rows = rows.map((c) => ({ ...c, accountName: names.get(c.accountId) || '' }));
   }
-  const json = format === 'json';
+  // 只有一个「导出」按钮：格式在保存对话框里选（默认 CSV），按保存的扩展名决定写哪种
   const stamp = new Date().toISOString().slice(0, 10);
+  const csvFilter = { name: 'CSV（Excel 可以打开）', extensions: ['csv'] };
+  const jsonFilter = { name: 'JSON', extensions: ['json'] };
   const r = await dialog.showSaveDialog(win, {
     title: STORE_LABEL[kind][1],
-    defaultPath: path.join(app.getPath('documents'), `${STORE_LABEL[kind][0]}-${stamp}.${json ? 'json' : 'csv'}`),
-    filters: [json ? { name: 'JSON', extensions: ['json'] } : { name: 'CSV（Excel 可以打开）', extensions: ['csv'] }],
+    defaultPath: path.join(app.getPath('documents'), `${STORE_LABEL[kind][0]}-${stamp}.${format === 'json' ? 'json' : 'csv'}`),
+    filters: format === 'json' ? [jsonFilter, csvFilter] : [csvFilter, jsonFilter],
   });
   if (r.canceled || !r.filePath) return null;
+  const json = path.extname(r.filePath).toLowerCase() === '.json';
   const out = json
     ? JSON.stringify(rows.map(({ deleted, reminded, updatedAt, ...rest }) => rest), null, 2)
     : records.toCsv(kind, rows);
@@ -2873,6 +2932,8 @@ handleShell('panel:import', async ({ kind } = {}) => {
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
 const ctx = {
   get accounts() { return accounts; },
+  get groups() { return groups; },
+  moveAccount,
   get activeId() { return activeId; },
   set activeId(v) { activeId = v; },
   get page() { return page; },
@@ -2885,6 +2946,7 @@ const ctx = {
   get customerStore() { return customerStore; },
   get editorPrefill() { return editorPrefill; },
   get editorColor() { return editorColor; },
+  get editorEmoji() { return editorEmoji; },
   get liteGuardHits() { return liteGuardHits; },
   get liteHost() { return liteHost; },
   offerUndo,
@@ -2898,9 +2960,23 @@ const ctx = {
 
 // ---- 翻译和悬浮翻译窗（在 translate-ipc.js） ----
 const trIpc = setupTranslateIpc(ctx);
+// ---- 聊天里选中文字后的「翻译」小按钮和悬浮译文窗（在 sel-translate.js） ----
+const selTr = createSelTranslate({
+  win: () => win,
+  lockLocalPage,
+  canShow: (id) => {
+    const acc = findAcc(id);
+    return !!acc && !isLite(acc) && id === activeId && page === 'account' && !locked && !problems.has(id) && !!win && win.isVisible() && !win.isMinimized();
+  },
+  viewOf: (id) => views.get(id) || null,
+  readSelection: (wc) => waPage.readSelection(wc),
+  translate: (text) => trIpc.selTranslate(text),
+  copy: (text) => clipboard.writeText(text),
+  focus: () => focusActive(),
+});
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);
-onShell('collapse', () => setSetting('sidebarCollapsed', !settings.sidebarCollapsed));
+onShell('collapse', () => toggleSide());
 onShell('lock', (on) => setLocked(on === true));
 onShell('setting', ({ key, value } = {}) => setSetting(key, value));
 onShell('reload', (id) => {
@@ -3038,6 +3114,8 @@ onShell('context', (id, from) => {
         { label: '还原到默认 90%', accelerator: 'CmdOrCtrl+0', registerAccelerator: false, enabled: (acc.zoom || DEFAULT_ZOOM) !== DEFAULT_ZOOM, click: () => stepZoom(id, 0) },
       ],
     },
+    // 内存数字从顶栏挪到这里（设计复查第 2 条），只看不点；轻量号是平均到每个号的近似值
+    ...(memoryManager.usageMB.get(id) ? [{ label: `内存${isLite(acc) ? '约' : ''} ${memoryManager.usageMB.get(id)} MB`, enabled: false }] : []),
     { type: 'separator' },
     // 不用拖也能排：上移、下移、移到分组
     { label: '上移', click: () => stepAccount(id, -1) },
@@ -3101,7 +3179,15 @@ onShell('acc:move', ({ id, groupId, beforeId } = {}) => {
   if (typeof id !== 'string' || typeof (groupId ?? '') !== 'string') return;
   moveAccount(id, groupId || '', typeof beforeId === 'string' ? beforeId : null);
 });
-onShell('group:create', () => createGroup(null));
+// 侧栏 + 号：添加账号或分组。菜单在按钮下方弹出
+onShell('add:menu', ({ x, y } = {}) => {
+  const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) } : {};
+  Menu.buildFromTemplate(addMenuTemplate({
+    canGroup: groups.length < GROUP_MAX,
+    addAccount: async () => { if (await confirmLeaveEditor()) openEditor(null); },
+    addGroup: () => createGroup(null),
+  })).popup({ window: win, ...at });
+});
 onShell('group:rename', ({ id, name } = {}) => {
   if (editGroupId === id) editGroupId = '';
   const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -3148,6 +3234,7 @@ onShell('update:install', () => { if (!updater) return; if (updater.state.manual
 let liteFlushed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  selTr.shutdown(); // 选中文字的按钮/译文窗先拆掉，退出时不再处理账号页面的鼠标事件
   if (crmQueue) crmQueue.saveNow();
   if (netLog) netLog.flush();
   if (trIpc.trStore) trIpc.trStore.flush(); // 还没写盘的译文

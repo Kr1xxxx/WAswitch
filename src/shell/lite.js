@@ -36,7 +36,7 @@ function makeLitePage(id) {
   const list = h('div', { class: 'lite-list', role: 'list' });
   const title = h('div', { class: 'lite-head' });
   const msgs = h('div', { class: 'lite-msgs', role: 'log' });
-  const input = h('textarea', { rows: '1', maxlength: '4000', placeholder: '输入消息，Enter 发送，Shift + Enter 换行', 'aria-label': '输入消息' });
+  const input = h('textarea', { rows: '1', maxlength: '4000', placeholder: '输入消息', 'aria-label': '输入消息', 'aria-description': 'Enter 发送，Shift + Enter 换行' });
   const sendBtn = h('button', { class: 'btn primary', type: 'button' }, '发送');
   const err = h('div', { class: 'lite-err', role: 'alert' });
   const conv = h('div', { class: 'lite-conv' }, title, msgs, err, h('div', { class: 'lite-compose' }, input, sendBtn));
@@ -50,6 +50,19 @@ function makeLitePage(id) {
   let lastMsgKey = '';
   let statusKey = '';
   let sending = false;
+  const drafts = new Map();
+
+  function rememberDraft() {
+    if (openJid) drafts.set(openJid, { text: input.value });
+  }
+
+  function switchChat(jid) {
+    if (jid === openJid) return;
+    openJid = jid;
+    input.value = drafts.get(jid)?.text || '';
+    input.style.height = '';
+    err.textContent = '';
+  }
 
   function drawList() {
     const q = search.value.trim().toLowerCase();
@@ -57,7 +70,7 @@ function makeLitePage(id) {
     const top = list.scrollTop;
     list.replaceChildren(...shown.map((c) => h('button', {
       class: `lite-chat${c.jid === openJid ? ' on' : ''}`, role: 'listitem', title: c.name,
-      onclick: () => { openJid = c.jid; drawList(); window.wa.liteOpen(id, c.jid); },
+      onclick: () => { switchChat(c.jid); drawList(); window.wa.liteOpen(id, c.jid); },
     },
     h('span', { class: 'lite-chat-top' }, h('b', null, c.name), h('small', null, liteTime(c.ts))),
     h('span', { class: 'lite-chat-bottom' }, h('span', { class: 'lite-preview' }, c.preview || ''), c.unread ? h('span', { class: 'pill' }, c.unread > 99 ? '99+' : c.unread) : null))));
@@ -87,23 +100,45 @@ function makeLitePage(id) {
   async function send() {
     const text = input.value;
     if (sending || !text.trim() || !openJid) return;
+    const jid = openJid;
+    // 提交就清空输入框（和 WhatsApp 一样），发送期间接着打的字不会和已发出的话混在一起
+    drafts.delete(jid);
+    input.value = '';
+    input.style.height = '';
     sending = true;
     sendBtn.disabled = true;
     err.textContent = '';
-    const res = await window.wa.liteSend(id, openJid, text);
-    sending = false;
-    sendBtn.disabled = false;
-    if (res && res.error) { err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : [])); return; }
-    input.value = '';
-    input.style.height = '';
-    input.focus();
+    // 没发出去：原文放回去。用户这期间在这个对话里又写了别的就不覆盖
+    const restore = () => {
+      if (drafts.get(jid)?.text) return;
+      drafts.set(jid, { text });
+      if (openJid === jid) { input.value = text; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; }
+    };
+    try {
+      const res = await window.wa.liteSend(id, jid, text);
+      if (res && res.error) {
+        restore();
+        if (openJid === jid) err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : []));
+        return;
+      }
+      if (openJid === jid) input.focus();
+    } catch {
+      restore();
+      if (openJid === jid) err.textContent = '发送失败，请重试';
+    } finally {
+      sending = false;
+      sendBtn.disabled = false;
+    }
   }
   sendBtn.onclick = send;
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
-  input.addEventListener('input', () => { input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
+  input.addEventListener('input', () => { rememberDraft(); input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
+  // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
+  msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
+  msgs.addEventListener('scroll', liteSelHide, { passive: true });
 
   // 没连上时盖在聊天页上面的提示（连接中、扫码、二维码过期）
   function drawStatus(acc, lite) {
@@ -142,7 +177,7 @@ function makeLitePage(id) {
     if (!open) { drawStatus(acc, lite); return; }
     statusKey = '';
     const openChanged = lite.openJid !== openJid;
-    openJid = lite.openJid;
+    switchChat(lite.openJid);
     const view = lite.view;
     if (view && view.rev !== lastRev) {
       lastRev = view.rev;
@@ -171,6 +206,90 @@ function makeLitePage(id) {
 
   return { el, update, fill };
 }
+
+// ---- 选中文字后的「翻译」小按钮和悬浮译文窗（轻量号的聊天页是软件自己的界面，直接画在这里；样子和网页号的一样，共用 seltr/card.js） ----
+// 放在选区最后一行下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐
+let liteSelBox = null; // { wrap, card }
+let liteSel = null; // { id, text, mode, first, last, area }
+function liteSelHide() {
+  liteSel = null;
+  if (liteSelBox) liteSelBox.wrap.hidden = true;
+}
+function liteSelPlace() {
+  if (!liteSel || !liteSelBox) return;
+  const { wrap } = liteSelBox;
+  const { area, first, last } = liteSel;
+  const bw = wrap.offsetWidth;
+  const bh = wrap.offsetHeight;
+  let top = last.bottom + 4;
+  if (top + bh > area.bottom) top = first.top - 4 - bh;
+  top = Math.max(area.top, Math.min(area.bottom - bh, top));
+  const left = Math.max(area.left, Math.min(area.right - bw, liteSel.mode === 'card' ? last.left : last.right - bw));
+  Object.assign(wrap.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+async function liteSelGo() {
+  const cur = liteSel;
+  if (!cur || !liteSelBox) return;
+  cur.mode = 'card';
+  liteSelBox.card.set({ mode: 'card', busy: true });
+  liteSelPlace();
+  let r;
+  try { r = await window.wa.selTranslate(cur.id, cur.text); } catch { r = { error: '翻译失败' }; }
+  if (liteSel !== cur) return; // 期间收起了或换了别的选区
+  liteSelBox.card.set(r && typeof r.text === 'string' && r.text.trim() ? { mode: 'card', text: r.text } : { mode: 'card', error: (r && r.error) || '翻译失败' });
+  liteSelPlace();
+}
+// 只取消息正文（.text）里被选中的部分：拖选整条消息时不带上发送人和时间
+function liteSelText(r) {
+  const parts = [];
+  let last = null;
+  for (const t of document.querySelectorAll('.lite-msgs .lite-msg .text')) {
+    if (!r.intersectsNode(t)) continue;
+    const part = document.createRange();
+    part.selectNodeContents(t);
+    if (r.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(r.startContainer, r.startOffset);
+    if (r.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(r.endContainer, r.endOffset);
+    if (last) parts.push('\n');
+    parts.push(part.toString());
+    last = t;
+  }
+  return parts.join('').trim();
+}
+function liteSelCheck(id, box) {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return liteSelHide();
+  const r = sel.getRangeAt(0);
+  const inside = (n) => !!n && box.contains(n.nodeType === 1 ? n : n.parentElement);
+  if (!inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
+  const text = liteSelText(r) || String(sel.toString() || '').trim();
+  if (!text) return liteSelHide();
+  const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+  if (!rects.length) return liteSelHide();
+  if (!liteSelBox) {
+    const card = window.SelCard({ go: liteSelGo, retry: liteSelGo, copy: (t) => window.wa.panelCopy(t) });
+    const wrap = h('div', { class: 'sel-pop', hidden: true }, card.root);
+    document.body.append(wrap);
+    liteSelBox = { wrap, card };
+  }
+  liteSel = { id, text: text.slice(0, 4000), mode: 'button', first: rects[0], last: rects[rects.length - 1], area: box.getBoundingClientRect() };
+  liteSelBox.card.set({ mode: 'button' });
+  liteSelBox.wrap.hidden = false;
+  liteSelPlace();
+}
+// 点到按钮和译文窗外面、按键（Ctrl/Cmd 组合键除外，好让 Ctrl+C 复制）、选区没了（按钮状态时）、
+// 改窗口大小、换号、锁定、离开账号页就收起
+document.addEventListener('mousedown', (e) => { if (liteSel && !liteSelBox.wrap.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('keydown', (e) => {
+  if (!liteSel || liteSelBox.wrap.contains(e.target) || e.ctrlKey || e.metaKey || ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+  liteSelHide();
+}, true);
+window.addEventListener('resize', () => { if (liteSel) liteSelHide(); });
+if (window.wa.onState) window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
+document.addEventListener('selectionchange', () => {
+  if (!liteSel || liteSel.mode !== 'button') return;
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) liteSelHide();
+});
 
 // shell.js 调用：返回这个账号的聊天页（同一个元素），并更新内容
 function litePage(acc, lite) {

@@ -1,0 +1,61 @@
+---
+title: TrollButton
+description: A button that dodges the cursor until it runs out of stamina, then gives up and lets you click it.
+category: Mischief
+---
+
+## Preview
+
+<PreviewCard live>
+  <TrollButton>Catch Me</TrollButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/troll-button</Cmd>
+
+## Usage
+
+```tsx
+import TrollButton from "@/components/evil-buttons/troll-button";
+
+export function ButtonDemo() {
+  return (
+    <TrollButton giveUpAfter={3000} onClick={() => console.log("Caught it")}>
+      Click If You Can
+    </TrollButton>
+  );
+}
+```
+
+## Variants
+
+### Stubborn
+
+A long chase over a wide area before it gives in.
+
+<PreviewCard>
+  <TrollButton giveUpAfter={8000} range={220} fleeRadius={90} surrenderLabel="Okay, you win">Never</TrollButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Button label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Click Me"` | Label used when no children are provided. |
+| `surrenderLabel` | `React.ReactNode` | `"Fine, click me"` | Label shown once the button gives up. |
+| `giveUpAfter` | `number` | `3500` | Milliseconds of chasing before it gives up. The timer starts on the first dodge. |
+| `fleeRadius` | `number` | `56` | How close in px the cursor can get to the button's edge before it dodges. |
+| `range` | `number` | `140` | Maximum distance in px it strays from its resting spot. |
+| `resetAfter` | `number` | `1500` | Milliseconds after a successful click before it starts fleeing again. `0` keeps it caught. |
+| `onClick` | `(event) => void` | - | Only fires once the button has given up. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- On touch, taps make it dodge instead.
+- Keyboard clicks always go through.
+- `prefers-reduced-motion` turns the fleeing off.

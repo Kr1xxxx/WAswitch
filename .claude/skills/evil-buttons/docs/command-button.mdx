@@ -1,0 +1,80 @@
+---
+title: CommandButton
+description: A button with a global keyboard shortcut, shown as keycaps that sink as you hold each key.
+category: Utility
+---
+
+## Preview
+
+<PreviewCard live>
+  <CommandButton shortcut="mod+s">Save</CommandButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/command-button</Cmd>
+
+## Usage
+
+```tsx
+import { CommandButton } from "@/components/evil-buttons/command-button";
+
+export function ButtonDemo() {
+  return (
+    <CommandButton
+      shortcut="mod+s"
+      onCommand={save}
+      onClick={save}
+    >
+      Save
+    </CommandButton>
+  );
+}
+```
+
+## Variants
+
+### Three keys
+
+Each part of the shortcut gets its own cap.
+
+<PreviewCard>
+  <CommandButton shortcut="mod+shift+p">Command palette</CommandButton>
+</PreviewCard>
+
+### Named keys
+
+`enter`, `esc`, `space`, and the arrow keys render as symbols or short names.
+
+<PreviewCard>
+  <CommandButton shortcut="mod+enter">Send</CommandButton>
+</PreviewCard>
+
+### No keycaps
+
+Hide the caps with `showShortcut={false}`.
+
+<PreviewCard>
+  <CommandButton shortcut="alt+n" showShortcut={false}>New file</CommandButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `shortcut` | `string` | `"mod+s"` | Parts separated by `+`. Accepts `mod`, `ctrl`, `alt`, `shift`, named keys like `enter` or `esc`, and any single key. |
+| `onCommand` | `() => void` | - | Fired when the keyboard shortcut is pressed. |
+| `onClick` | `(event) => void` | - | Fired when the button is clicked. The keycaps press on click too. |
+| `preventDefault` | `boolean` | `true` | Stops the browser's own handling of the shortcut, like the save dialog on ⌘S. |
+| `showShortcut` | `boolean` | `true` | Show the shortcut as keycaps inside the button. |
+| `children` | `React.ReactNode` | `"Save"` | The button label. |
+| `className` | `string` | - | Extra classes passed to the button. |
+| `disabled` | `boolean` | - | Disables the button and its shortcut. |
+
+## Good to know
+
+- `mod` means ⌘ on Mac and Ctrl everywhere else.
+- Holding the shortcut fires `onCommand` once, not on repeat.
+- Sets `aria-keyshortcuts` for screen readers.

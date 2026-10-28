@@ -2,7 +2,8 @@
 // 所有文字都用 textContent 放进去，不拼 HTML。
 (() => {
   const zone = document.getElementById('zone');
-  const LOGO = '<svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26282C"/><stop offset="1" stop-color="#0B0B0D"/></linearGradient><linearGradient id="la" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#EBCF92"/><stop offset="1" stop-color="#B48A45"/></linearGradient></defs><rect width="100" height="100" rx="22" fill="url(#lg)"/><path d="M43 35A22 22 0 0 1 65 57A22 22 0 0 1 43 79H21V57A22 22 0 0 1 43 35Z" fill="#fff"/><path d="M69 21A10 10 0 0 1 79 31V41H69A10 10 0 0 1 59 31A10 10 0 0 1 69 21Z" fill="url(#la)"/></svg>';
+  // App 图标（品牌图，和 assets/logo.svg 同一张，不走界面配色）
+  const logo = (cls) => { const img = document.createElement('img'); img.src = '../../assets/logo.svg'; img.alt = ''; img.className = cls; return img; };
   const LOCK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
   const seen = new Set(); // 已经画过的卡片，只有新卡片带滑入动画
   let state = { cards: [], more: 0, platform: 'darwin' };
@@ -15,7 +16,7 @@
   };
   const svg = (markup, cls) => {
     const tpl = document.createElement('template');
-    tpl.innerHTML = markup; // 只用上面两个写死的图标
+    tpl.innerHTML = markup; // 只用上面写死的锁图标
     const el = tpl.content.firstElementChild;
     if (cls) el.setAttribute('class', cls);
     return el;
@@ -33,17 +34,17 @@
     const a = c.avatar || {};
     if (a.lock) {
       const el = h('span', 'av lock');
-      el.append(svg(LOCK), svg(LOGO, 'badge'));
+      el.append(svg(LOCK), logo('badge'));
       return el;
     }
     if (a.logo) {
       const el = h('span', 'av logo');
-      el.append(svg(LOGO, 'big'));
+      el.append(logo('big'));
       return el;
     }
     const el = h('span', 'av', a.text || '#');
-    el.style.background = a.color || '#5A5F8C';
-    el.append(svg(LOGO, 'badge'));
+    el.style.background = a.color || 'var(--slate-11)';
+    el.append(logo('badge'));
     return el;
   }
 
@@ -68,8 +69,17 @@
     if (c.acc && c.kind === 'msg') {
       const meta = h('div', 'meta');
       const chip = h('span', 'acc');
-      const dot = h('i');
-      dot.style.background = c.acc.color || '#888';
+      // 账号的 emoji 图标（主进程只发这一套里的名字）；没有时还是颜色小圆点
+      let dot;
+      if (/^[a-z]+$/.test(c.acc.emoji || '')) {
+        dot = document.createElement('img');
+        dot.className = 'emo';
+        dot.alt = '';
+        dot.src = `../emoji/svg/${c.acc.emoji}.svg`;
+      } else {
+        dot = h('i');
+        dot.style.background = c.acc.color || 'var(--slate-9)';
+      }
       chip.append(dot, document.createTextNode(c.acc.name || ''));
       meta.append(chip);
       body.append(meta);

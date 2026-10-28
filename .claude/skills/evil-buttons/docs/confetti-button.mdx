@@ -1,0 +1,53 @@
+---
+title: ConfettiButton
+description: A ringed dark button with a sparkle icon that fires a restrained confetti burst on click.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="ConfettiButton" note="Click for confetti">
+  <ConfettiButton />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/confetti-button</Cmd>
+
+## Usage
+
+```tsx
+import { ConfettiButton } from "@/components/evil-buttons/confetti-button";
+
+export function ButtonDemo() {
+  return (
+    <ConfettiButton
+      colors={["#fafafa", "#a3a3a3", "#93c5fd"]}
+      onCelebrate={() => console.log("Celebrated!")}
+    >
+      Celebrate
+    </ConfettiButton>
+  );
+}
+```
+
+## Props
+
+The component spreads native `button` props. `onClick` still fires before the burst; call `event.preventDefault()` to skip it.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Button label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Continue"` | Label used when no children are provided. |
+| `particleCount` | `number` | `80` | Confetti particles per burst. |
+| `spread` | `number` | `64` | Confetti spread in degrees. |
+| `startVelocity` | `number` | `32` | Launch velocity of the burst. |
+| `colors` | `string[]` | muted neutrals + soft accents | Custom confetti colors. |
+| `icon` | `boolean` | `true` | Show the leading sparkle icon. |
+| `onCelebrate` | `() => void` | - | Fired after each confetti burst. |
+| `className` | `string` | - | Extra classes merged onto the button. |
+
+## Good to know
+
+- Confetti comes from `canvas-confetti`.
+- Skipped under `prefers-reduced-motion`.

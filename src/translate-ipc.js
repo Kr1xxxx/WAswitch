@@ -1,22 +1,22 @@
-// 翻译和悬浮翻译窗的接口：翻译设置、用户点的翻译、读当前对话自动翻译、悬浮窗和面板“翻译”页、译文存放位置。
+// 翻译的接口：翻译设置、用户点的翻译、读当前对话自动翻译、面板“翻译”页、译文存放位置。
 // 从 main.js 拆出来。会变的状态（activeId、page、translator 等）通过 ctx 读，见 main.js 里的 ctx。
-const { app, session, ipcMain, clipboard, shell, WebContentsView } = require('electron');
+const { app, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const proxy = require('./proxy');
 const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { needsKey, extraContacts } = require('./translate');
-const { TrStore, pickDir: pickTrDir, migrate: migrateTr, dirInfo: trDirInfo } = require('./trstore');
+const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
 const { shortName } = require('./undo');
+const ReplyLang = require('./shell/reply-lang');
 
 function setupTranslateIpc(ctx) {
   const {
     handleShell, onShell, findAcc, isLite, views, problems, parkedCustomer, panelShown, liteChat,
-    layout, pushState, focusActive, lockLocalPage, insertText,
   } = ctx;
 
   // 翻译请求用单独的内存会话，和任何 WhatsApp 账号都不共用 cookie 和代理
@@ -61,7 +61,9 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
   handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
+  handleShell('tr:deepl-cap', (n) => ({ ...ctx.translator.setDeeplCap(n), ...trState() }));
   handleShell('tr:wig', (on) => ({ ...ctx.translator.setWigTerms(on === true), ...trState() }));
+  handleShell('tr:lash', (on) => ({ ...ctx.translator.setLashTerms(on === true), ...trState() }));
   handleShell('tr:network', async (net) => {
     // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
     if (net && net.mode === 'proxy') {
@@ -129,6 +131,12 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:cancel', () => userCancel());
   // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
   // providerId = 这一栏选的模型（只用它，不换备用，纠错也用它）。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
+  // 用单独的翻译通道（translator.lane()）：不让工作台的自动翻译排队等，也不等它
+  let pageLane = null;
+  const pageTr = () => {
+    if (!pageLane || Object.getPrototypeOf(pageLane) !== ctx.translator) pageLane = ctx.translator.lane();
+    return pageLane;
+  };
   const PAGE_MODE = { prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。', temperature: 0.2 };
   handleShell('tr:page', async ({ text, source, target, providerId, fix, draft } = {}) => {
     if (typeof text !== 'string') return { error: '先放一段要翻译的文字', kind: 'input' };
@@ -136,10 +144,23 @@ function setupTranslateIpc(ctx) {
     const pid = typeof providerId === 'string' ? providerId : '';
     // 纠错也用这一栏选的模型（按钮就在模型旁边）
     const r = fix === true && typeof draft === 'string' && draft.trim()
-      ? await userTranslate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
-      : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: pid });
+      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
+      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, providerId: pid });
     return { ...r, detected };
   });
+  handleShell('tr:page:cancel', () => pageTr().cancel());
+  // 聊天里选中文字后的悬浮译文窗（sel-translate.js、轻量号聊天页）：外文翻成中文，中文翻成客户的语言（和工作台“自动”一样）。
+  // 忠实翻译、不带上下文；同一句翻过的直接用记下的译文
+  async function selTranslate(text) {
+    if (typeof text !== 'string' || !text.trim()) return { error: '没有选中文字', kind: 'input' };
+    const t = text.trim().slice(0, 4000);
+    const zh = ReplyLang.isChinese(t);
+    const st = floatState();
+    const target = zh ? (st.autoTarget && st.autoTarget !== '中文' ? st.autoTarget : '英语') : '中文';
+    const r = await outTranslate({ text: t, mode: PAGE_MODE, target, source: zh ? '中文' : '' });
+    return { ...r, target };
+  }
+  handleShell('seltr:translate', ({ accountId, text } = {}) => (accountId === ctx.activeId ? selTranslate(text) : { error: '当前账号变了，请重新选', kind: 'input' }));
   // 当前对话对上的客户（用客户填的语言翻译）。只在用户点翻译时读一次对话标题，隔离环境只读，不碰页面
   const chatCustomer = (accId, title) => matchChatCustomer(ctx.customerStore.list().filter((c) => !parkedCustomer(c)), accId, title);
   handleShell('tr:chatlang', async (accountId) => {
@@ -168,24 +189,16 @@ function setupTranslateIpc(ctx) {
 
   // ---- 悬浮翻译窗（shen 2026-10-24 选的方案 B） ----
   // 只读当前打开的对话（隔离环境，见 wa-page.js 的 readOpenChat），不改页面、不碰输入框。
-  // 悬浮窗是软件自己的小视图，叠在 WhatsApp 视图上面；关掉就销毁。读到的消息和译文只在内存里。
-  const FLOAT_W = 340;
-  const FLOAT_MIN_H = 260;
-  const FLOAT_MAX_H = 480;
-  const FLOAT_PILL = { width: 130, height: 34 };
-  const FLOAT_COMPOSE_GAP = 76; // 底部留给 WhatsApp 输入框，不盖住
-  let floatView = null;
-  let floatOpen = false;
+  // 读当前对话、自动翻译收到的消息，给右侧工作台的「翻译」页用（原来的悬浮翻译窗已经删掉，名字里的 float 是历史沿用）
   let floatTimer = null;
   let floatFails = 0;
   let floatReadable = 'loading'; // ok | nochat | qr | unreadable | loading
-  let floatArea = null; // 账号视图的位置（layout 算出来的）
   let floatCore = null;
   let trStore = null; // 收到的消息的译文，永久存在磁盘上
   // 自动翻译默认开，只有手动关掉的号是 false
   const floatAuto = (id) => !!id && ctx.translator.load().accountAuto[id] !== false;
-  // 读当前对话的条件之一：悬浮窗开着，或者右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
-  const readerOn = () => (floatOpen && !!floatView) || panelShown();
+  // 读当前对话的条件：右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
+  const readerOn = () => panelShown();
   let floatBusy = false;
   function floatInMode() {
     const cfg = ctx.translator.load();
@@ -213,9 +226,11 @@ function setupTranslateIpc(ctx) {
     trStore = new TrStore(guess);
     pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
       if (!trStore) return;
-      trStore.flush();
+      if (!trStore.flush()) return; // 写盘失败时保留脏缓存和原目录，不能开始搬家
       if (process.platform === 'win32') migrateTr(dir === dTrDir ? oldTrDir : dTrDir, dir);
-      if (dir !== trStore.dir) { trStore.setDir(dir); console.log(`译文存在：${dir}`); }
+      const moved = dir !== trStore.dir;
+      trStore.setDir(dir); // 同目录合并后也要丢弃旧的内存快照
+      if (moved) console.log(`译文存在：${dir}`);
     }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
     floatCore = new FloatCore({
       store: trStore,
@@ -334,7 +349,6 @@ function setupTranslateIpc(ctx) {
       fallbackId: cfg.fallbackId || '',
       providers: (cfg.providers || []).map((p) => ({ id: p.id, name: p.name, model: p.model || '' })), // 翻译页的“换模型”下拉，不带密钥
       engine: primary ? (primary.model || primary.name) : '',
-      collapsed: cfg.float.collapsed,
       modes: {
         out: modes.filter((m) => m.direction !== 'in').map(({ id, name }) => ({ id, name })),
         in: modes.filter((m) => m.direction !== 'out').map(({ id, name }) => ({ id, name })),
@@ -346,22 +360,16 @@ function setupTranslateIpc(ctx) {
       autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
       accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
       canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
-      // 悬浮窗用：不是号的默认语言时，手动改只管这一个对话
-      targetFrom: out.from === 'default' ? '' : (out.name || '这个对话'),
     };
   }
   function pushFloat() {
-    const both = floatView && !floatView.webContents.isDestroyed();
-    const dock = panelShown() && ctx.shellView && !ctx.shellView.webContents.isDestroyed();
-    if (!both && !dock) return;
-    const st = floatState();
-    if (both) floatView.webContents.send('float:state', st);
-    if (dock) ctx.shellView.webContents.send('dock:state', st);
+    if (!panelShown() || !ctx.shellView || ctx.shellView.webContents.isDestroyed()) return;
+    ctx.shellView.webContents.send('dock:state', floatState());
   }
   let floatLastAcc = null;
-  function layoutFloat(area) {
-    floatArea = area;
-    // 换了号：重新开始读，悬浮窗和面板只显示新号的内容
+  // 每次重新布局时调用（切号、面板开关、回到账号页、解锁）：按需要开始或重新开始读当前对话
+  function layoutFloat() {
+    // 换了号：重新开始读，面板只显示新号的内容
     if (readerOn() && ctx.activeId !== floatLastAcc) {
       floatLastAcc = ctx.activeId;
       floatFails = 0;
@@ -370,81 +378,7 @@ function setupTranslateIpc(ctx) {
       scheduleFloat(200);
     } else if (readerOn() && !floatTimer && !floatBusy) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
     if (!readerOn()) floatLastAcc = null;
-    if (!floatView) return;
-    const acc = findAcc(ctx.activeId);
-    const show = floatOpen && ctx.page === 'account' && !ctx.locked && !!acc && !problems.has(acc.id) && area.width > FLOAT_W + 40;
-    floatView.setVisible(show);
-    if (!show) return;
-    const pos = ctx.translator.load().float;
-    const pill = pos.collapsed;
-    const w = pill ? FLOAT_PILL.width : FLOAT_W;
-    const h = pill ? FLOAT_PILL.height : Math.max(FLOAT_MIN_H, Math.min(FLOAT_MAX_H, area.height - 64 - FLOAT_COMPOSE_GAP));
-    const maxX = area.x + area.width - w - 8;
-    const maxY = area.y + area.height - h - FLOAT_COMPOSE_GAP;
-    const x = Math.max(area.x + 8, Math.min(maxX, area.x + area.width - w - pos.dx));
-    const y = Math.max(area.y + 8, Math.min(Math.max(area.y + 8, maxY), area.y + pos.dy));
-    floatView.setBounds({ x, y, width: w, height: h });
-    // 账号视图重建时会被加到最上面：保证悬浮窗始终在最上层
-    const kids = ctx.win.contentView.children;
-    if (kids[kids.length - 1] !== floatView) ctx.win.contentView.addChildView(floatView);
   }
-  function openFloat() {
-    if (floatView) { floatOpen = true; layout(); scheduleFloat(0); pushState(); return; }
-    floatOpen = true;
-    floatView = new WebContentsView({
-      webPreferences: { preload: path.join(__dirname, 'float', 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
-    });
-    floatView.setBackgroundColor('#00000000');
-    lockLocalPage(floatView.webContents);
-    floatView.webContents.loadFile(path.join(__dirname, 'float', 'index.html'));
-    ctx.win.contentView.addChildView(floatView);
-    floatReadable = 'loading';
-    floatFails = 0;
-    layout();
-    scheduleFloat(300);
-    pushState();
-  }
-  function closeFloat() {
-    floatOpen = false;
-    if (floatTimer) { clearTimeout(floatTimer); floatTimer = null; }
-    if (floatView) {
-      const v = floatView;
-      floatView = null;
-      try { ctx.win.contentView.removeChildView(v); } catch {}
-      if (!v.webContents.isDestroyed()) v.webContents.close();
-    }
-    focusActive();
-    pushState();
-  }
-  // 只接受悬浮窗自己发来的
-  const fromFloat = (e) => !!floatView && !floatView.webContents.isDestroyed() && e.sender === floatView.webContents;
-  const handleFloat = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
-    if (!fromFloat(e)) throw new Error('not allowed');
-    return fn(...args);
-  });
-  const onFloat = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromFloat(e)) fn(...args); });
-  onShell('float:toggle', (on) => { if (typeof on === 'boolean' ? on : !floatOpen) openFloat(); else closeFloat(); });
-  onFloat('float:ready', () => pushFloat());
-  onFloat('float:close', () => closeFloat());
-  onFloat('float:collapse', (on) => { ctx.translator.setFloat({ pos: { collapsed: on === true } }); layout(); pushFloat(); });
-  let floatDrag = null;
-  onFloat('float:move', ({ dx, dy } = {}) => {
-    if (!floatView || !floatArea || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
-    const b = floatView.getBounds();
-    floatDrag = floatDrag || { x: b.x, y: b.y };
-    floatDrag.x += Math.max(-500, Math.min(500, dx));
-    floatDrag.y += Math.max(-500, Math.min(500, dy));
-    const a = floatArea;
-    const x = Math.max(a.x + 8, Math.min(a.x + a.width - b.width - 8, floatDrag.x));
-    const y = Math.max(a.y + 8, Math.min(Math.max(a.y + 8, a.y + a.height - b.height - FLOAT_COMPOSE_GAP), floatDrag.y));
-    floatView.setBounds({ ...b, x, y });
-  });
-  onFloat('float:moveend', () => {
-    floatDrag = null;
-    if (!floatView || !floatArea) return;
-    const b = floatView.getBounds();
-    ctx.translator.setFloat({ pos: { dx: floatArea.x + floatArea.width - b.width - b.x, dy: b.y - floatArea.y } });
-  });
   function readerItem(h, fix) {
     if (typeof h !== 'string' || !ctx.activeId) return null;
     floatCore.manual(ctx.activeId, h, fix === true);
@@ -461,9 +395,6 @@ function setupTranslateIpc(ctx) {
     return { ok: true };
   }
   const readerInMode = (id) => { if (typeof id === 'string' && ctx.modeStore.get(id)) ctx.translator.setFloat({ inMode: id }); pushFloat(); return true; };
-  handleFloat('float:item', (h) => readerItem(h, false));
-  handleFloat('float:auto', readerAuto);
-  handleFloat('float:inmode', readerInMode);
   // 面板“翻译”页用的同一套（只接受软件界面发来的）
   handleShell('dock:get', () => floatState());
   handleShell('dock:item', ({ h, fix } = {}) => readerItem(h, fix));
@@ -484,15 +415,6 @@ function setupTranslateIpc(ctx) {
     pushFloat();
     return floatState();
   });
-  handleFloat('float:compose', ({ text, modeId, target, accountId } = {}) => {
-    if (accountId !== ctx.activeId) return { error: '当前账号变了，请重新翻译', kind: 'input' };
-    const mode = typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
-    return outTranslate({ text, mode, target, context: floatCore.contextOf(ctx.activeId) }); // 带上当前对话最近几条当上下文；翻过的直接用记下的
-  });
-  handleFloat('float:cancel', () => userCancel());
-  handleFloat('float:insert', ({ accountId, text } = {}) => insertText(accountId, text));
-  handleFloat('float:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
-  handleFloat('float:lang', ({ accountId, lang } = {}) => { if (accountId === ctx.activeId && findAcc(accountId)) ctx.translator.setAccountLang(accountId, lang); pushFloat(); return true; });
   // 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
   handleShell('tr:auto', ({ accountId, on } = {}) => {
     const acc = findAcc(accountId);
@@ -503,12 +425,6 @@ function setupTranslateIpc(ctx) {
     return trState();
   });
   handleShell('tr:dailycap', (n) => { ctx.translator.setFloat({ dailyCap: n }); pushFloat(); return trState(); });
-  // 关于页：译文存在哪、占多大
-  handleShell('trdir:info', async () => {
-    if (!trStore) return null;
-    const dir = trStore.dir;
-    return { dir, ...(await trDirInfo(dir)) };
-  });
   onShell('trdir:open', () => {
     if (!trStore) return;
     const dir = trStore.dir;
@@ -522,11 +438,11 @@ function setupTranslateIpc(ctx) {
     setupFloatCore,
     pushFloat,
     layoutFloat,
+    selTranslate,
     // MCP translate_text 用：和用户点的翻译同一条队列
     userTranslate,
     // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
-    get floatOpen() { return floatOpen; },
     get floatCore() { return floatCore; },
     get trStore() { return trStore; },
   };

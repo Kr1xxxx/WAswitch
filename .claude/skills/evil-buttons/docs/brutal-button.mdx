@@ -1,0 +1,52 @@
+---
+title: BrutalButton
+description: A NeoBrutalism style button with sharp shadows and stark borders.
+category: Styles
+---
+
+## Preview
+
+<PreviewCard live title="BrutalButton" note="Interactive">
+  <BrutalButton>Deploy Doom</BrutalButton>
+</PreviewCard>
+
+### Custom Variant
+
+You can easily override the default theme-aware colors to create your own flavor of neobrutalism.
+
+<PreviewCard title="Custom Colors" note="Interactive">
+  <div className="flex gap-4">
+    <BrutalButton color="#a3e635" textColor="#000000" radius={12}>Brutal Doom</BrutalButton>
+  </div>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/brutal-button</Cmd>
+
+## Usage
+
+```tsx
+import { BrutalButton } from "@/components/evil-buttons/brutal-button";
+
+export function ButtonDemo() {
+  return (
+    <BrutalButton>
+      Launch
+    </BrutalButton>
+  );
+}
+```
+
+## Props
+
+| Prop          | Type                                   | Default    | Description                                      |
+| ------------- | -------------------------------------- | ---------- | ------------------------------------------------ |
+| `color`       | `string`                               | `var(--background)` | Background color of the button.                  |
+| `textColor`   | `string`                               | `var(--foreground)` | Text color of the button.                        |
+| `hasBorder`   | `boolean`                              | `true`              | Toggle the border.                               |
+| `borderColor` | `string`                               | `var(--foreground)` | Color of the border.                             |
+| `hasShadow`   | `boolean`                              | `true`              | Toggle the sharp shadow.                         |
+| `shadowColor` | `string`                               | `var(--foreground)` | Color of the shadow.                             |
+| `className`   | `string`                               | -          | Extra classes passed to the wrapper.             |
+| `children`    | `React.ReactNode`                      | -          | The visible button label or content.             |

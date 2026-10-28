@@ -1,0 +1,84 @@
+---
+title: FrameButton
+description: A futuristic button with springy corner markers that spread on hover and lock on when pressed, plus a scan sweep.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live>
+  <FrameButton>Get Started</FrameButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/frame-button</Cmd>
+
+## Usage
+
+### Button
+
+```tsx
+import { FrameButton } from "@/components/evil-buttons/frame-button";
+
+export function ButtonDemo() {
+  return <FrameButton>Get Started</FrameButton>;
+}
+```
+
+### Link
+
+```tsx
+import { FrameButton } from "@/components/evil-buttons/frame-button";
+
+export function ButtonDemo() {
+  return (
+    <FrameButton as="link" href="https://github.com/radiumcoders/evil-buttons">
+      Star on GitHub
+    </FrameButton>
+  );
+}
+```
+
+## Variants
+
+### `secondary`
+
+Fills in with the foreground color on hover.
+
+<PreviewCard>
+  <FrameButton variant="secondary">Get Started</FrameButton>
+</PreviewCard>
+
+### `outline`
+
+<PreviewCard>
+  <FrameButton variant="outline">Get Started</FrameButton>
+</PreviewCard>
+
+### Glow
+
+<PreviewCard>
+  <FrameButton variant="outline" glow hoverOffset={8}>Engage</FrameButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props, or anchor props when `as="link"`.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | The button content. |
+| `variant` | `"default" \| "secondary" \| "outline"` | `"default"` | Visual style of the button. |
+| `glow` | `boolean` | `false` | Blooms a soft glow behind the button on hover. |
+| `size` | `number \| string` | `14` | Corner marker size in px, or a Tailwind size class like `"size-4"`. |
+| `offset` | `number` | `6` | Distance in px the markers sit outside the button's edge. |
+| `hoverOffset` | `number` | `5` | How far in px the markers spread on hover. |
+| `as` | `"button" \| "link"` | `"button"` | Renders a button or a Next.js `Link`. |
+| `href` | `Route \| UrlObject` | - | Link destination when `as="link"`. |
+| `className` | `string` | - | Extra classes passed to the root element. |
+
+## Good to know
+
+- `FrameMarkers` is exported on its own.
+- Markers are borders, not icons, so they stay crisp at any size.

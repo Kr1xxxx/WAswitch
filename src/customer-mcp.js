@@ -8,7 +8,7 @@
 //   parked(customer) -> 这个客户的账号停用了
 //   onChange()
 const digits = (p) => String(p || '').replace(/\D/g, '');
-const copy = (c) => (c ? { id: c.id, accountId: c.accountId, name: c.name, phone: c.phone, tags: [...c.tags], note: c.note, followUpAt: c.followUpAt, reminded: c.reminded } : null);
+const copy = (c) => (c ? { id: c.id, accountId: c.accountId, name: c.name, phone: c.phone, tags: [...c.tags], note: c.note, followUpAt: c.followUpAt, reminded: c.reminded, lang: c.lang, updatedAt: c.updatedAt } : null);
 
 function customerHooks({ store, findAcc, parked, onChange = () => {} }) {
   const visible = (c) => !!c && !parked(c) && (!c.accountId || !!findAcc(c.accountId));

@@ -15,6 +15,16 @@ const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成�
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
+// DeepL 每个使用者（这台电脑上的这个软件）每月最多翻多少字符：默认 10 万，可以在 DeepL 的设置里改（shen 2026-10-28）。
+// 换密钥也接着算，每月 1 号清零
+const DEEPL_MONTH_CAP = 100000;
+const DEEPL_CAP_MIN = 1000;
+const DEEPL_CAP_MAX = 1e9;
+const CAP_ERR = `每月上限填 ${DEEPL_CAP_MIN} 到 ${DEEPL_CAP_MAX} 之间的数`;
+const monthKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const deeplChars = (text) => [...text].length;
+// 100000 -> 「10 万」，12345 -> 「12345 」
+const capText = (n) => (n % 10000 === 0 ? `${n / 10000} 万` : `${n} `);
 const clampNum = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
 
 // 深度思考：'' 默认（不传参数）| disabled | enabled。新服务商默认关（翻译用不上，关掉更快）；自定义和混元默认不传
@@ -88,7 +98,7 @@ const CONTEXT_GUARD = '<context> 和 </context> 之间是同一个对话最近�
 const CONTEXT_MAX_ITEMS = 8;
 const CONTEXT_ITEM_CHARS = 300;
 const CONTEXT_MAX_CHARS = 1500;
-const escTags = (t) => String(t).split('</text>').join('</ text>').split('</context>').join('</ context>').split('<context>').join('< context>');
+const escTags = (t) => String(t).split('</text>').join('</ text>').split('<text>').join('< text>').split('</context>').join('</ context>').split('<context>').join('< context>');
 
 // 上下文：[{ out, text }]，从旧到新。只留最近 8 条，每条最多 300 字，合计最多 1500 字（从最新往前取）
 // 返回裁好的 [{ out, text }]（从旧到新，text 已压成一行）；下面三种格式都用它
@@ -130,9 +140,13 @@ const isMtModel = (model) => /^hy-mt/i.test(String(model || ''));
 // 角色设定里“A = B”这样的行当固定译法（左边中文，右边外语）；翻成中文时反过来用
 function glossaryPairs(role, toChinese) {
   const out = [];
+  const seen = new Set();
   for (const raw of String(role || '').split(/\r?\n/)) {
     const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
-    if (m && out.length < 60) out.push(toChinese ? `${m[2]} 翻译成 ${m[1]}` : `${m[1]} 翻译成 ${m[2]}`);
+    if (!m || out.length >= 60) continue;
+    // 翻成中文时，同一个外语词只用第一行（例如 密排、假睫毛 都是 Lash trays，翻回来用 密排）
+    if (toChinese) { const k = m[2].toLowerCase(); if (seen.has(k)) continue; seen.add(k); }
+    out.push(toChinese ? `${m[2]} 翻译成 ${m[1]}` : `${m[1]} 翻译成 ${m[2]}`);
   }
   return out;
 }
@@ -144,34 +158,52 @@ const WIG_TERMS = [
   ['头套', 'Wig'], ['全蕾丝头套', 'Full lace wig'], ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'],
   ['胶片发', 'Tape hair'], ['辫发', 'Raw hair'], ['处女发', 'Virgin hair'],
 ];
-// 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
+// 内置“睫毛词汇”（shen 2026-10-28）：和假发词汇一样单独一套、单独开关，但默认开。
+// 密排排在睫毛前面：长的词先配，“密排”不会被拆开翻成 Lash。
+// 假睫毛也译成 Lash trays（shen 2026-10-28；不加这行混元会翻成 fake Lash trays），排在睫毛前面。
+// 英文翻回中文时 Lash trays 只用第一个（密排）。
+const LASH_TERMS = [['密排', 'Lash trays'], ['假睫毛', 'Lash trays'], ['睫毛', 'Lash']];
+// 真正带去翻译的角色设定：用户自己写的在前；打开的行业词表（假发、睫毛）合成一段接在后面。
 // 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
 // target：这次翻成什么语言。翻成法语、德语等英语以外的外语时多说一句：整句用那种语言、只有这些英文词原样保留
 // （shen 2026-10-28：非英语也用英文行业词；glm-4-flash 不说这句会把 Virgin hair 翻成 Cheveux vierges）。不传 target 或翻成中文、英语 = 原来的写法。
-function roleWithWig(role, wig, target = '') {
+// on：{ wig, lash } 哪套打开；老的调用传 true/false = 只管假发词汇
+function roleWithTerms(role, on, target = '') {
   const own = String(role || '');
-  if (!wig) return own;
+  const sets = typeof on === 'object' && on ? on : { wig: on === true };
+  // 两套都开时睫毛在前（假发在前时混元会把“睫毛”也翻成 Lash trays，2026-10-28 实测 3/3；睫毛在前 3/3 对）
+  const all = [...(sets.lash ? LASH_TERMS : []), ...(sets.wig ? WIG_TERMS : [])];
+  if (!all.length) return own;
   const taken = new Set();
   for (const raw of own.split(/\r?\n/)) {
     const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
     if (m) { taken.add(m[1].toLowerCase()); taken.add(m[2].toLowerCase()); }
   }
-  const keep = WIG_TERMS.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
+  const keep = all.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
   if (!keep.length) return own;
+  const has = (list) => keep.some(([a]) => list.some(([x]) => x === a));
+  const trade = [has(LASH_TERMS) ? '睫毛' : '', has(WIG_TERMS) ? '假发' : ''].filter(Boolean).join('、');
   const lines = keep.map(([a, b]) => `${a} = ${b}`);
-  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
+  // glm-4-flash 对“假睫毛”印象太深（总翻成 false eyelashes），头句里点名说一次就照用了（2026-10-28 实测 12/12）
+  const must = keep.some(([a]) => a === '假睫毛') ? '（这些词在原文里一出现就必须用右边的英文，包括“假睫毛”）' : '';
+  const head = `${trade}行业固定译法${must}，必须照用（左边中文，右边英文）：`;
   const lang = LANGS.includes(target) ? target : '中文';
   // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
-  const back = keep.map(([a, b]) => `${b} → ${a}`);
+  // 同一个英文词对着几个中文词时（Lash trays：密排、假睫毛），反方向只用排在前面的那个
+  const seen = new Set();
+  const back = keep.filter(([, b]) => !seen.has(b.toLowerCase()) && seen.add(b.toLowerCase())).map(([a, b]) => `${b} → ${a}`);
   // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
   const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
-  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：\n${back.join('\n')}`;
+  // 两套都开时 glm-4-flash 只靠头句还会把假睫毛翻成 false eyelashes，这里再点名一次（2026-10-28 Fable 实测 6/6 改对）
+  const fakeNote = keep.some(([a]) => a === '假睫毛') ? '；假睫毛一律译成 Lash trays，不译成 false eyelashes' : '';
+  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}${fakeNote}）：\n${back.join('\n')}`;
   if (lang !== '中文' && lang !== '英语') {
     const ex = keep.slice(0, 2).map(([a, b]) => `“${a}”写成 ${b}`).join('、');
     tail += `\n译文整句必须用${lang}写，只有上面右边这几个英文词原样嵌在${lang}句子里（行业通用叫法），例如${ex}，不用${lang}自己的词，其他内容照常翻成${lang}。`;
   }
   return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}`;
 }
+const roleWithWig = roleWithTerms;
 function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
   const terms = glossaryPairs(role, target === '中文');
@@ -202,6 +234,8 @@ function buildMessages(mode, text, langs, context, draft, model, role) {
 // 去掉模型偶尔加的“以下是翻译：”、整段引号和 <text> 标签
 function cleanOutput(out) {
   let t = String(out || '').trim();
+  // 译文后面又开一个 <text>：模型在自己编例句（glm-4-flash 开着行业词汇时会编好几段），从那截断
+  t = t.split(/\n\s*<text>/i)[0].trim();
   t = t.replace(/^<text>\s*/i, '').replace(/\s*<\/text>$/i, '').trim();
   t = t.replace(/^(以下是|下面是)?(翻译|译文)(结果)?[:：]\s*/, '').replace(/^(here is the )?translation[:：]\s*/i, '').trim();
   const pairs = [['"', '"'], ['“', '”'], ['「', '」'], ["'", "'"]];
@@ -229,14 +263,17 @@ function needsKey(p) {
 }
 // 报错里点名是哪个服务商（“去填密钥”按钮靠 pid 打开它的表单）
 const provName = (p) => (p && p.name) || '翻译服务';
-const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}还没填密钥`, pid: p.id });
+const nameGap = (name) => (/[A-Za-z0-9)]$/.test(name) ? ' ' : '');
+const noKey = (p) => ({ kind: 'auth', text: `${provName(p)}${nameGap(provName(p))}还没填密钥`, pid: p.id });
+// 429（太忙或额度用完）只说这一句，不接服务商原话（shen 2026-10-28）
+const tooFastText = (name) => `${name}${nameGap(name)}请求太频繁，请重试`;
 
 // name：服务商名字（例如“智谱”“OpenRouter”），报错里写明是谁出的问题
 function statusError(status, name = '') {
-  const who = name ? `${name}${/[A-Za-z0-9)]$/.test(name) ? ' ' : ''}` : '服务商';
+  const who = name ? `${name}${nameGap(name)}` : '服务商';
   if (status === 401 || status === 403) return { kind: 'auth', text: `${who}的密钥不对或没有权限` };
   if (status === 402) return { kind: 'quota', text: `${who}账户没余额了` };
-  if (status === 429) return { kind: 'quota', text: `${who}请求太频繁或超出额度，稍后再试` };
+  if (status === 429) return { kind: 'quota', text: tooFastText(name || '服务商') };
   if (status === 404) return { kind: 'model', text: `${who}的地址或模型名不对` };
   if (status === 400 || status === 422) return { kind: 'bad', text: `${who}拒绝了这次请求（可能是模型名不对或文字太长）` };
   if (status >= 500) return { kind: 'server', text: `${who}那边出错了，稍后再试` };
@@ -301,12 +338,14 @@ class Translator {
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
-      // 内置假发词汇：默认关
-      wigTerms: false,
+      // 内置假发词汇、睫毛词汇：都默认开
+      wigTerms: true, lashTerms: true,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
-      autoDefaultOn: false };
+      autoDefaultOn: false,
+      // DeepL 这个月用了多少字符（所有 DeepL 密钥合起来算）
+      deeplUsage: { month: '', chars: 0 }, deeplCap: DEEPL_MONTH_CAP };
     let migrated = false;
     try {
       if (fs.existsSync(this.file)) {
@@ -343,7 +382,21 @@ class Translator {
           base.seeded = raw.seeded === true;
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
-          base.wigTerms = raw.wigTerms === true;
+          base.wigTerms = raw.wigTerms !== false; // 没存过（老设置）= 默认开
+          base.lashTerms = raw.lashTerms !== false; // 没存过（老设置）= 默认开
+          base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
+          const du = raw.deeplUsage;
+          if (du && typeof du === 'object') {
+            if (/^\d{4}-\d{2}$/.test(du.month)) base.deeplUsage = { month: du.month, chars: clampNum(du.chars, 0, 1e9, 0) };
+            else {
+              // #216 那版按密钥分开记：同一个月的合起来
+              for (const v of Object.values(du)) {
+                if (!v || !/^\d{4}-\d{2}$/.test(v.month)) continue;
+                if (v.month > base.deeplUsage.month) base.deeplUsage = { month: v.month, chars: 0 };
+                if (v.month === base.deeplUsage.month) base.deeplUsage.chars += clampNum(v.chars, 0, 1e9, 0);
+              }
+            }
+          }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
@@ -434,11 +487,33 @@ class Translator {
 
   provider(id) { return this.load().providers.find((p) => p.id === id) || null; }
 
+  now() { return this.deps.now ? this.deps.now() : Date.now(); }
+  // DeepL 本月已用字符数（换月了就是 0）
+  deeplUsed() {
+    const u = this.load().deeplUsage;
+    return u.month === monthKey(this.now()) ? u.chars : 0;
+  }
+  validCap(n) {
+    const v = Number(n);
+    return Number.isFinite(v) && v >= DEEPL_CAP_MIN && v <= DEEPL_CAP_MAX;
+  }
+  setDeeplCap(n) {
+    if (!this.validCap(n)) return { error: CAP_ERR };
+    this.load().deeplCap = Math.round(Number(n));
+    this.save();
+    return { ok: true };
+  }
+  addDeeplUsage(n) {
+    this.load().deeplUsage = { month: monthKey(this.now()), chars: this.deeplUsed() + n };
+    this.save();
+  }
+
   // 给界面看的配置：没有密钥，只有尾号
   publicConfig() {
     const c = this.load();
     return {
-      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc })),
+      providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc,
+        ...(p.preset === 'deepl' ? { usage: { used: this.deeplUsed(), cap: c.deeplCap } } : {}) })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
       fixId: c.fixId,
@@ -449,8 +524,11 @@ class Translator {
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
       rolePrompt: c.rolePrompt,
-      wigTerms: c.wigTerms === true,
+      wigTerms: c.wigTerms !== false,
+      deeplCap: c.deeplCap,
       wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
+      lashTerms: c.lashTerms !== false,
+      lashList: LASH_TERMS.map(([zh, en]) => ({ zh, en })),
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
       canEncrypt: canEncrypt(this.deps.safeStorage),
@@ -469,6 +547,8 @@ class Translator {
     if (!model && !deepl) return { error: '请填模型名' };
     if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join('、')}` };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
+    const hasCap = deepl && data.monthCap !== undefined && data.monthCap !== '';
+    if (hasCap && !this.validCap(data.monthCap)) return { error: CAP_ERR };
     if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
     let p = typeof data.id === 'string' ? c.providers.find((x) => x.id === data.id) : null;
     if (!p) {
@@ -486,6 +566,8 @@ class Translator {
       p.keyTail = newKey.slice(-4);
     }
     if (!c.primaryId || !this.provider(c.primaryId)) c.primaryId = p.id;
+    // DeepL 表单里的「每月上限」（整个软件一个上限，不分密钥）
+    if (hasCap) this.setDeeplCap(data.monthCap);
     this.save();
     return { ok: true, id: p.id };
   }
@@ -545,10 +627,17 @@ class Translator {
     return { ok: true };
   }
 
-  // 翻译和纠错实际用的角色设定（含打开的假发词汇）；话术记录也拿它当键，开关一变老译文就不用
+  // 睫毛词汇开关
+  setLashTerms(on) {
+    this.load().lashTerms = on === true;
+    this.save();
+    return { ok: true };
+  }
+
+  // 翻译和纠错实际用的角色设定（含打开的假发、睫毛词汇）；话术记录也拿它当键，开关一变老译文就不用
   roleText(target = '') {
     const c = this.load();
-    return roleWithWig(c.rolePrompt, c.wigTerms === true, target);
+    return roleWithTerms(c.rolePrompt, { wig: c.wigTerms !== false, lash: c.lashTerms !== false }, target);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -633,12 +722,24 @@ class Translator {
     return false;
   }
 
+  // 另开一条翻译通道：配置、密钥、DeepL 用量都和本体共用，只有“正在翻的那一条”分开。
+  // 翻译页用它，不和工作台的自动翻译、回复翻译互相排队，取消也只取消自己
+  lane() {
+    const l = Object.create(this);
+    l.busy = null;
+    l.load = () => this.load(); // 配置只放在本体上，两条通道看到的永远是同一份
+    return l;
+  }
+
   // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }
   async callDeepl(p, { text, target, source, context }, signal) {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
     if (!key) throw noKey(p);
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
+    const n = deeplChars(text);
+    const cap = this.load().deeplCap;
+    if (this.deeplUsed() + n > cap) throw { kind: 'quota', text: `DeepL 本月 ${capText(cap)}字符已用完，下月 1 号恢复` };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
     if (DEEPL_LANGS[source]) body.source_lang = DEEPL_LANGS[source][0];
     const ctx = deeplContext(context);
@@ -648,7 +749,7 @@ class Translator {
     if (!res.ok) {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
-      if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
+      if (res.status === 429) throw { kind: 'overload', text: tooFastText(provName(p)), status: 429 };
       if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
@@ -658,6 +759,7 @@ class Translator {
       out = j && Array.isArray(j.translations) && j.translations[0] && j.translations[0].text;
     } catch { out = ''; }
     if (typeof out !== 'string' || !out.trim()) throw { kind: 'empty', text: '服务商没有返回译文' };
+    this.addDeeplUsage(n);
     return out.trim();
   }
 
@@ -703,9 +805,11 @@ class Translator {
     if (!res.ok) {
       const err = statusError(res.status, provName(p));
       const detail = providerDetail(text, key);
-      // 429 多半是“服务繁忙/限流”（混元 hy-mt2-plus 常见），不是没钱：不带英文原话，交给上层重试和换备用
-      if (res.status === 429 && !/余额|欠费|insufficient|balance|arrear|billing|quota exceeded/i.test(detail)) {
-        throw { kind: 'overload', text: `${p.name || '翻译服务'}现在太忙（服务商限流），稍后再试`, status: 429 };
+      // 429：限流（混元 hy-mt2-plus 常见）原地重试一次再换备用；说的是余额不足（智谱 1113）就不重试，直接换备用。
+      // 两种都只提示“请求太频繁，请重试”，不接服务商原话
+      if (res.status === 429) {
+        const broke = /余额|欠费|资源包|充值|insufficient|balance|arrear|billing|quota exceeded/i.test(detail) || /"code"\s*:\s*"?1113\b/.test(text);
+        throw { kind: broke ? 'quota' : 'overload', text: tooFastText(provName(p)), status: 429 };
       }
       // 密钥错时带上服务商 id，界面给“去填密钥”按钮
       throw withDetail(err, res.status, detail, p);
@@ -743,7 +847,8 @@ class Translator {
     this.busy = { controller };
     const started = Date.now();
     const fb = this.provider(c.fallbackId);
-    const chain = [primary, !pinned && fb && fb.id !== primary.id ? fb : null].filter(Boolean);
+    // 备用没填密钥就不换过去，免得把默认服务商的错换成“备用还没填密钥”
+    const chain = [primary, !pinned && fb && fb.id !== primary.id && !needsKey(fb) ? fb : null].filter(Boolean);
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
@@ -770,15 +875,16 @@ class Translator {
           this.stats.ok += 1;
           return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
         } catch (e) {
-          lastErr = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
+          const err = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
+          // 备用自己配置不对（密钥、地址、模型、语言）：还是报默认服务商的错
+          if (!(i > 0 && lastErr && ['auth', 'config', 'lang', 'model', 'bad'].includes(err.kind))) lastErr = err;
         } finally {
           clearTimeout(timer);
           controller.signal.removeEventListener('abort', onCancel);
         }
-        // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
-        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
+        // 网络、超时、服务商太忙、余额用完和 5xx 换备用；密钥、模型名错了或用户取消不换
+        if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload', 'quota'].includes(lastErr.kind)) break;
       }
-      if (lastErr.kind === 'overload' && chain.length < 2 && !pinned) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
       // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单；英文原话放 detail
@@ -809,5 +915,5 @@ class Translator {
   }
 }
 
-module.exports = { WIG_TERMS, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

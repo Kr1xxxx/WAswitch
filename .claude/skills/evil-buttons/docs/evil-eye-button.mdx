@@ -1,0 +1,52 @@
+---
+title: EvilEyeButton
+description: An obsidian pill with a burning evil eye behind its label that tracks the cursor across the page, focuses on hover, and blinks.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="EvilEyeButton" note="Move, hover, and press">
+  <EvilEyeButton>I see you</EvilEyeButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/evil-eye-button</Cmd>
+
+## Usage
+
+```tsx
+import { EvilEyeButton } from "@/components/evil-buttons/evil-eye-button";
+
+export function ButtonDemo() {
+  return <EvilEyeButton eyeColor="#38bdf8">I see you</EvilEyeButton>;
+}
+```
+
+## Props
+
+The component spreads native `button` props and forwards its ref. Every eye prop updates live without rebuilding the shader.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Button label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"I see you"` | Label used when no children are provided. |
+| `eyeColor` | `string` | `"#ff6f37"` | Iris, glow, and hairline color, as hex. |
+| `intensity` | `number` | `1.3` | Brightness of the flames. |
+| `pupilSize` | `number` | `0.62` | Size of the slit pupil. Lower values make it tighter. |
+| `irisWidth` | `number` | `0.22` | Width of the iris ring. |
+| `glowIntensity` | `number` | `0.5` | Strength of the glow around the iris. |
+| `scale` | `number` | `1.7` | Size of the eye in the button. Higher values spread the flames wider. |
+| `noiseScale` | `number` | `0.8` | Scale of the flame noise. |
+| `pupilFollow` | `number` | `0.8` | How far the pupil tracks the cursor, 0 to 1. |
+| `flameSpeed` | `number` | `0.8` | Speed of the flames. |
+| `blink` | `boolean` | `true` | Blink every few seconds on its own. It always blinks on press. |
+| `eyeClassName` | `string` | - | Extra classes for the eye layer behind the label. |
+| `labelClassName` | `string` | - | Extra classes for the label. |
+| `className` | `string` | - | Extra classes merged onto the button. |
+
+## Good to know
+
+- Self-contained WebGL, ported from React Bits' `EvilEye`.
+- The pupil follows the cursor across the whole page.

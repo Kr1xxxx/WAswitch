@@ -4,37 +4,39 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>MCP 接口设置</title>
+  <link rel="stylesheet" href="../colors/radix.css">
   <link rel="stylesheet" href="../fonts/fonts.css">
+  <link rel="stylesheet" href="../tokens.css">
   <style>
     /* 和主界面同一套样式（字体、开关、圆角按钮） */
-    :root { --text: #16181d; --muted: #4a505a; --line: #eceef1; --ok: #05603a; --danger: #b42318; }
+    :root { --text: var(--slate-12); --muted: var(--slate-11); --line: var(--slate-6); --ok: var(--green-11); --danger: var(--red-11); }
     /* 细线：高分屏 0.5px，普通屏 1px */
     :root { --hair: 1px; }
     @media (min-resolution: 2dppx) { :root { --hair: .5px; } }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 28px 32px; font: var(--fs-m)/1.5 var(--font-ui); color: var(--text); background: #fff; }
+    body { margin: 0; padding: 28px 32px; font: var(--fs-m)/1.5 var(--font-ui); color: var(--text); background: var(--white); }
     h1 { margin: 0 0 6px; font-size: var(--fs-xl); letter-spacing: -.01em; }
     h2 { margin: 26px 0 8px; font-size: var(--fs-l); }
     p, li { line-height: 1.6; }
     .hint { color: var(--muted); font-size: var(--fs-s); }
     .switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: var(--hair) solid var(--line); font-weight: 600; cursor: pointer; }
     .switch.sub { font-weight: 400; }
-    .switch input { appearance: none; -webkit-appearance: none; flex: none; order: 2; width: 42px; height: 24px; margin: 0; border-radius: 12px; background: #c9ced6; position: relative; cursor: pointer; transition: background .15s; }
-    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left .15s; }
-    .switch input:checked { background: #16a34a; }
+    .switch input { appearance: none; -webkit-appearance: none; flex: none; order: 2; width: 42px; height: 24px; margin: 0; border-radius: var(--r-full); background: var(--slate-7); position: relative; cursor: pointer; transition: background-color var(--fx) var(--fx-ease); }
+    .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: var(--r-full); background: var(--white); box-shadow: 0 1px 2px var(--slate-a6); transition: left var(--fx) var(--fx-ease); }
+    .switch input:checked { background: var(--green-9); }
     .switch input:checked::after { left: 20px; }
     .switch input:disabled { opacity: .5; cursor: default; }
-    .switch input:focus-visible, button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    .switch input:focus-visible, button:focus-visible { outline: 2px solid var(--blue-8); outline-offset: 2px; }
     ul { margin: 4px 0; padding-left: 18px; font-size: var(--fs-m); }
     li button { height: 26px; padding: 0 10px; margin-left: 6px; font-size: var(--fs-s); }
     #state { font-size: var(--fs-m); min-height: 20px; margin-top: 6px; }
     #state.ok { color: var(--ok); }
     #state.bad { color: var(--danger); }
-    pre { margin: 0; padding: 12px 14px; background: #f7f8fa; border: var(--hair) solid #e3e6ea; border-radius: 10px; font: var(--fs-s)/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
+    pre { margin: 0; padding: 12px 14px; background: var(--slate-2); border: var(--hair) solid var(--slate-6); border-radius: var(--r-m); font: var(--fs-s)/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
     .block { display: flex; flex-direction: column; gap: 8px; }
     .actions { display: flex; gap: 10px; }
-    button { height: 36px; padding: 0 16px; border-radius: 18px; border: var(--hair) solid #e3e6ea; background: #fff; color: inherit; font: inherit; font-size: var(--fs-m); cursor: pointer; }
-    button:hover { background: #f7f8fa; }
+    button { height: 36px; padding: 0 16px; border-radius: var(--r-m); border: var(--hair) solid var(--slate-6); background: var(--white); color: inherit; font: inherit; font-size: var(--fs-m); cursor: pointer; }
+    button:hover { background: var(--slate-2); }
     table { width: 100%; border-collapse: collapse; font-size: var(--fs-m); }
     th, td { text-align: left; padding: 8px 4px; border-bottom: var(--hair) solid var(--line); }
     th { color: var(--muted); font-weight: 600; font-size: var(--fs-s); }
@@ -48,9 +50,9 @@
     .ailog li button { flex: none; margin-left: 0; }
     #undoMsg.ok { color: var(--ok); }
     #undoMsg.bad { color: var(--danger); }
-    button.copy-ok, button.copy-ok:hover { color: #15803D; border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
-    .copy-ok svg { animation: copy-pop .34s cubic-bezier(.2, .9, .3, 1.35); }
-    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw .28s .06s ease-out forwards; }
+    button.copy-ok, button.copy-ok:hover { color: var(--green-11); border-color: var(--green-6); background: var(--green-2); display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+    .copy-ok svg { animation: copy-pop var(--fx) var(--fx-ease); }
+    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw var(--fx) var(--fx-ease) forwards; }
     @keyframes copy-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     @keyframes copy-draw { to { stroke-dashoffset: 0; } }
     @media (prefers-reduced-motion: reduce) { .copy-ok svg, .copy-ok svg path { animation: none; stroke-dashoffset: 0; } }
