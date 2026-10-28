@@ -54,7 +54,7 @@
   const ACCOUNT_COLORS = ACCOUNT.map(([f, n]) => light[f][n - 1]);
   // 0.5.12 及以前的账号颜色（不是 Radix 的），读旧配置、团队后台旧数据时换成同位置的新颜色
   const LEGACY = { '#16a34a': 0, '#7c3aed': 1, '#ea580c': 2, '#2563eb': 3, '#db2777': 4, '#475569': 5 };
-  // 通知弹窗里客户头像的底色（按客户名字挑一个），11 号上放白字
+  // 通知弹窗里客户头像的底色（按客户名字挑一个）。用 11 号不用 9 号：brown / gold / cyan 等的 9 号太浅，白字看不清
   const AVATAR_COLORS = ['brown', 'cyan', 'grass', 'crimson', 'indigo', 'gold', 'teal', 'plum'].map((f) => light[f][10]);
 
   const hex = (family, step) => {
