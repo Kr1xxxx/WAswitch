@@ -104,6 +104,9 @@ function makeLitePage(id) {
   });
   input.addEventListener('input', () => { input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
+  // 选中消息里的文字：旁边出现「翻译」小按钮（和网页版账号一样，见 sel-translate.js）
+  msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
+  msgs.addEventListener('scroll', liteSelHide, { passive: true });
 
   // 没连上时盖在聊天页上面的提示（连接中、扫码、二维码过期）
   function drawStatus(acc, lite) {
@@ -171,6 +174,51 @@ function makeLitePage(id) {
 
   return { el, update, fill };
 }
+
+// ---- 选中文字后的「翻译」小按钮（轻量号的聊天页是软件自己的界面，按钮直接画在这里） ----
+// 放在选区最后一行下面，右边和选区末尾对齐；下面放不下就放到第一行上面
+let liteSelBtn = null;
+let liteSel = null; // { id, text }
+function liteSelHide() {
+  liteSel = null;
+  if (liteSelBtn) liteSelBtn.hidden = true;
+}
+function liteSelCheck(id, box) {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return liteSelHide();
+  const text = String(sel.toString() || '').trim();
+  const r = sel.getRangeAt(0);
+  const inside = (n) => !!n && box.contains(n.nodeType === 1 ? n : n.parentElement);
+  if (!text || !inside(r.startContainer) || !inside(r.endContainer)) return liteSelHide();
+  const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+  if (!rects.length) return liteSelHide();
+  if (!liteSelBtn) {
+    liteSelBtn = h('button', { class: 'sel-tr', type: 'button', title: '在右侧翻译', hidden: true,
+      onmousedown: (e) => e.preventDefault(), // 不把选区点没
+      onclick: () => {
+        const p = liteSel;
+        liteSelHide();
+        if (!p || !s || p.id !== s.activeId) return;
+        window.wa.panelTab('translate');
+        dockPick({ accountId: p.id, text: p.text });
+      } }, icon('translate', 16), h('span', null, '翻译'));
+    document.body.append(liteSelBtn);
+  }
+  liteSel = { id, text: text.slice(0, 4000) };
+  liteSelBtn.hidden = false;
+  const area = box.getBoundingClientRect();
+  const last = rects[rects.length - 1];
+  const bw = liteSelBtn.offsetWidth;
+  const bh = liteSelBtn.offsetHeight;
+  let top = last.bottom + 4;
+  if (top + bh > area.bottom) top = rects[0].top - 4 - bh;
+  top = Math.max(area.top, Math.min(area.bottom - bh, top));
+  const left = Math.max(area.left, Math.min(area.right - bw, last.right - bw));
+  Object.assign(liteSelBtn.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+document.addEventListener('mousedown', (e) => { if (liteSelBtn && !liteSelBtn.hidden && !liteSelBtn.contains(e.target)) liteSelHide(); }, true);
+document.addEventListener('keydown', () => { if (liteSel) liteSelHide(); }, true);
+document.addEventListener('selectionchange', () => { if (liteSel) { const sel = document.getSelection(); if (!sel || sel.isCollapsed) liteSelHide(); } });
 
 // shell.js 调用：返回这个账号的聊天页（同一个元素），并更新内容
 function litePage(acc, lite) {

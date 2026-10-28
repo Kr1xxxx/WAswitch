@@ -44,6 +44,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 侧栏 + 号（添加账号、添加分组）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+      - name: 选中文字翻译按钮（只读选区、按钮位置）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归

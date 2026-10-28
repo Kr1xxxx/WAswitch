@@ -1,0 +1,16 @@
+/* 颜色用 Radix slate（和撤销条同一套）：底 1，边框 7，悬停 3，字 12 */
+:root { --hair: 1px; }
+@media (min-resolution: 2dppx) { :root { --hair: .5px; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+body { display: flex; align-items: center; justify-content: center; font: var(--fs-m)/1 var(--font-ui); }
+#go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  width: 64px; height: 28px; padding: 0; border: var(--hair) solid #cdced6; border-radius: 8px;
+  background: #fcfcfd; color: #1c2024; font: inherit; font-weight: 500; cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+}
+#go:hover { background: #f0f0f3; }
+#go:active { background: #e8e8ec; }
+#go:focus-visible { outline: 2px solid #0090ff; outline-offset: 1px; }
+#go svg { flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

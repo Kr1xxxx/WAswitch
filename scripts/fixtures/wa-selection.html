@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WhatsApp</title>
+<style>body{margin:0;font:15px sans-serif;display:flex;height:100vh}#side{width:200px}#main{flex:1;display:flex;flex-direction:column}[role=application]{flex:1;padding:20px}</style></head><body>
+<div id="side"><div id="pane-side"><div role="row"><span title="Sarah Johnson" id="name">Sarah Johnson</span></div></div></div>
+<div id="main"><header><span title="Sarah Johnson">Sarah Johnson</span></header>
+<div role="application">
+<div data-id="false_12125550147@c.us_M1" class="message-in"><div class="copyable-text" data-pre-plain-text="[04:28, 26/10/2026] Sarah: "><span class="selectable-text"><span id="m1">May you send tracking number please</span></span></div></div>
+<div data-id="false_12125550147@c.us_M2" class="message-in"><div class="copyable-text" data-pre-plain-text="[04:28, 26/10/2026] Sarah: "><span class="selectable-text"><span id="m2">For the 1st package</span></span></div></div>
+</div><footer><div contenteditable="true" id="compose">draft text here</div></footer></div>
+<script>
+  // 记下页面上发生的事：读选区不能改页面、不能点、不能滚
+  window.__events = { mutations: 0, clicks: 0, scrolls: 0, sel: 0 };
+  new MutationObserver((l) => { window.__events.mutations += l.length; }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  addEventListener('click', () => { window.__events.clicks += 1; }, true);
+  addEventListener('scroll', () => { window.__events.scrolls += 1; }, true);
+</script>
+</body></html>

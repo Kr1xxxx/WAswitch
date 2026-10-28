@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('wa', {
   onPanelChanged: (cb) => ipcRenderer.on('panel:changed', () => cb()),
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
   dockGet: () => ipcRenderer.invoke('dock:get'),
+  onDockPick: (cb) => ipcRenderer.on('dock:pick', (_e, req) => cb(req)),
   dockItem: (h, fix) => ipcRenderer.invoke('dock:item', { h, fix: fix === true }),
   dockSuggest: (accountId, h, take) => ipcRenderer.invoke('dock:suggest', { accountId, h, take: take === true }),
   dockEdit: (accountId, h, text) => ipcRenderer.invoke('dock:edit', { accountId, h, text }),

@@ -296,6 +296,11 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .lite-msg .text { white-space: pre-wrap; word-break: break-word; }
 .lite-msg .from { font-size: var(--fs-s); font-weight: 600; color: #1d4ed8; }
 .lite-msg .time { align-self: flex-end; font-size: var(--fs-s); color: var(--muted); }
+/* 选中消息文字后的「翻译」小按钮（和网页版账号上那个 src/seltr 一样）：Radix slate 底 1、边框 7、悬停 3、字 12 */
+.sel-tr { position: fixed; z-index: 55; display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 64px; height: 28px; padding: 0; border: var(--hair) solid #cdced6; border-radius: 8px; background: #fcfcfd; color: #1c2024; font-size: var(--fs-m); font-weight: 500; line-height: 1; box-shadow: 0 1px 4px rgba(0, 0, 0, .08); -webkit-app-region: no-drag; }
+.sel-tr[hidden] { display: none; }
+.sel-tr:hover { background: #f0f0f3; }
+.sel-tr:active { background: #e8e8ec; }
 .lite-err { min-height: 0; padding: 0 16px; font-size: var(--fs-s); color: var(--danger); }
 .lite-err:not(:empty) { padding: 6px 16px 0; }
 .lite-compose { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: var(--hair) solid var(--line); }
