@@ -1092,7 +1092,7 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
-// 内置行业词汇开关：假发（默认关）、睫毛（默认开），各自单独存。打开后词表跟在角色设定后面一起带去翻译
+// 内置行业词汇开关：假发、睫毛（都默认开），各自单独存。打开后词表跟在角色设定后面一起带去翻译
 function trWigBox(c, apply) {
   // 每个词条不拆行（“胶片发”不会断成两行）
   const terms = (list) => h('span', { class: 'desc' }, (list || []).flatMap((t, i) => [i ? '　' : '', h('span', { style: { whiteSpace: 'nowrap' } }, `${t.zh} = ${t.en}`)]));
@@ -1102,7 +1102,7 @@ function trWigBox(c, apply) {
   const last = row('睫毛词汇', c.lashTerms !== false, c.lashList, (v) => window.wa.trLash(v));
   last.style.borderBottom = 'none';
   return h('div', { class: 'box' },
-    row('假发词汇', c.wigTerms === true, c.wigList, (v) => window.wa.trWig(v)),
+    row('假发词汇', c.wigTerms !== false, c.wigList, (v) => window.wa.trWig(v)),
     last,
     h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。DeepL 不用词表。'));
 }
