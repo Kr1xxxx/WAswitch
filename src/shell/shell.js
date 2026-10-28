@@ -47,6 +47,7 @@ const ICONS = {
   update: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.9-3.9L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.9L21 15"/><path d="M21 20v-5h-5"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
   copy: '<rect x="4" y="8" width="12" height="12" rx="2.5"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
   swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
@@ -84,6 +85,59 @@ function copyFlash(btn) {
     btn._copyTimer = null;
     btn._copyOld = null;
   }, 1500);
+}
+
+// 状态按钮：点了要等结果的按钮，在原位置转圈，再显示 ✓ 或 ✗ 一会儿，然后变回原样。
+// 几种状态的文字叠在同一格里，按钮宽度取最宽的那个，切换时不跳。
+// 界面经常整块重画，状态记在 morphState[key] 里，重画出来的新按钮照样显示；结束后按 key 找到页面上的按钮更新。
+// run() 返回 { ok: true/false }；返回别的（比如没填完就提前 return）直接回到原样。
+// labels: { idle, busy, ok?, err? }，没给 ok/err 就不显示那一步。
+// 状态由主进程推送决定时传 attrs.busy（true/false）：点了先转圈，之后跟着推送重画
+const morphState = {};
+const MORPH_HOLD = 1800;
+function morphPaint(b) {
+  const m = morphState[b.dataset.morph];
+  const st = b._busy ? 'busy' : (m && m.st) || 'idle';
+  if (b._st && b._st !== st) { b.classList.remove('mb-anim'); void b.offsetWidth; b.classList.add('mb-anim'); }
+  b._st = st;
+  b.dataset.st = st;
+  // 转圈时不用 disabled：disabled 会把键盘焦点丢掉。点击由下面的判断挡住
+  b.disabled = b._off;
+  b.setAttribute('aria-disabled', String(b._off || st === 'busy'));
+  b.setAttribute('aria-busy', String(st === 'busy'));
+}
+function morphBtn(key, labels, run, attrs = {}) {
+  const { disabled, busy, ...rest } = attrs;
+  const part = (st, mark, text) => (text ? h('span', { class: `mb-${st}` }, mark, text) : null);
+  const b = h('button', { type: 'button', ...rest, class: `${rest.class || 'btn'} morph`, 'data-morph': key, 'aria-live': 'polite' },
+    part('idle', null, labels.idle),
+    part('busy', h('span', { class: 'mb-spin', 'aria-hidden': 'true' }), labels.busy),
+    part('ok', icon('check', 14), labels.ok),
+    part('err', icon('x', 14), labels.err));
+  b._off = !!disabled;
+  b._busy = !!busy;
+  if (busy !== undefined) {
+    b.addEventListener('click', () => { if (b._busy) return; b._busy = true; morphPaint(b); run(); });
+    morphPaint(b);
+    return b;
+  }
+  b.addEventListener('click', async () => {
+    const m = morphState[key];
+    if ((m && m.st === 'busy') || b._busy) return;
+    if (m) clearTimeout(m.timer);
+    const set = (st) => {
+      morphState[key] = { st };
+      document.querySelectorAll(`[data-morph="${CSS.escape(key)}"]`).forEach(morphPaint);
+    };
+    set('busy');
+    let r;
+    try { r = await run(); } catch (e) { console.error('[morphBtn]', key, e); r = { ok: false }; }
+    const st = r && r.ok === true && labels.ok ? 'ok' : r && r.ok === false && labels.err ? 'err' : 'idle';
+    set(st);
+    if (st !== 'idle') morphState[key].timer = setTimeout(() => set('idle'), MORPH_HOLD);
+  });
+  morphPaint(b);
+  return b;
 }
 
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
@@ -175,7 +229,9 @@ async function runMemClean() {
     else memClean.result = '后台账号都刚刷新过或占用不大，不用清理。';
   }
   render(true);
+  return { ok: !r.error };
 }
+const memCleanBtn = (cls) => morphBtn('memClean', { idle: '立即清理', busy: '清理中', ok: '完成', err: '失败' }, runMemClean, { class: cls, disabled: !s.accounts.length });
 function refreshCacheSize() {
   if (cacheInfo.busy || Date.now() - cacheInfo.at < 30000) return;
   cacheInfo.at = Date.now();
@@ -993,12 +1049,14 @@ function trKeysBox(c, apply) {
     const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
       placeholder: p.hasKey ? `已填（尾号 ${p.keyTail}），不改就留空` : '粘贴 API 密钥' });
     const save = async () => {
-      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return; }
+      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return null; }
       const r = await window.wa.trProviderSave({ id: p.id, preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, thinking: p.thinking });
-      if (!r.error) { trSay = `「${p.name}」的密钥已保存`; trTestRes[p.id] = ''; }
+      if (!r.error) { trSay = ''; trTestRes[p.id] = ''; trTestRaw[p.id] = ''; }
       apply(r);
+      return { ok: !r.error };
     };
-    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    const saveBtn = morphBtn(`trKeySave:${p.id}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '失败' }, save, { class: 'btn primary sm' });
+    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') saveBtn.click(); });
     if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
     const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
     const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
@@ -1009,9 +1067,19 @@ function trKeysBox(c, apply) {
         trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
         link),
       h('span', { class: 'hstack', style: { gap: '6px' } }, key,
-        h('button', { class: 'btn primary sm', onclick: save }, '保存'),
-        h('button', { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; render(true); } }, '测试')));
+        saveBtn,
+        trTestBtn(p, { class: 'btn sm', disabled: !p.hasKey, title: p.hasKey ? '' : '先填密钥' })));
   }));
+}
+// 服务商「测试」：结果在按钮上显示，没通过的原因写在服务商下面
+function trTestBtn(p, attrs) {
+  return morphBtn(`trTest:${p.id}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, async () => {
+    if (trTestRes[p.id]) { trTestRes[p.id] = ''; trTestRaw[p.id] = ''; render(true); }
+    const r = await window.wa.trTest(p.id);
+    if (!r.ok) { trTestRes[p.id] = r.error; trTestRaw[p.id] = r.detail || ''; }
+    render(true);
+    return { ok: !!r.ok };
+  }, attrs);
 }
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
@@ -1096,7 +1164,7 @@ function translatePage(page) {
       h('span', { class: 'hint' }, `${p.preset === 'deepl' ? '机器翻译' : p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
       h('span', { class: 'hint' }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
       h('span', { class: 'hstack', style: { gap: '4px' } },
-        h('button', { class: 'pn-btn', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; trTestRaw[p.id] = r.ok ? '' : r.detail || ''; render(true); } }, '测试'),
+        trTestBtn(p, { class: 'pn-btn' }),
         p.id !== c.primaryId ? h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认') : null,
         h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
         h('button', { class: 'pn-btn', onclick: async () => { if (!await confirmDelete({ title: `删除服务商「${delName(p.name)}」？`, detail: `保存的密钥也会一起删掉。${p.id === c.primaryId ? '它是现在的默认服务商，删了以后要重新选一个。' : ''}` })) return; apply(await window.wa.trProviderDelete(p.id)); } }, '删除'))))
@@ -1271,7 +1339,7 @@ function editorPage(id) {
     const error = h('div', { class: 'hint', role: 'alert', style: { color: '#B42318', minHeight: '18px' } });
     const swatches = h('div', { class: 'swatches' });
     const presets = h('div', { class: 'presets' });
-    const testBtn = h('button', { class: 'btn', type: 'button' }, '测试');
+    const testBtn = morphBtn(`editorTest:${d.id || 'new'}:${s.editorNonce}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
     const saveBtn = h('button', { class: 'btn primary', type: 'button' }, d.isNew ? '保存并扫码登录' : '保存');
 
     const drawSwatches = () => swatches.replaceChildren(...COLORS.map((c, i) => h('button', {
@@ -1399,17 +1467,13 @@ function editorPage(id) {
     proxyInput.addEventListener('input', onProxyChange);
     region.addEventListener('change', drawTags);
 
-    testBtn.onclick = async () => {
+    const runTest = async () => {
       const direct = !proxyInput.value.trim();
-      testBtn.disabled = true;
-      testBtn.textContent = '测试中…';
       result.replaceChildren(h('div', { class: 'note plain' }, !direct ? '正在通过这个代理访问 ipinfo.io …'
         : mode === 'lite' ? '正在用这台电脑的网络（不经过系统代理）访问 ipinfo.io …' : '正在跟随系统代理访问 ipinfo.io …'));
       const res = await window.wa.editorTest({ id: d.id, proxy: proxyInput.value, password: password.value, mode });
-      testBtn.disabled = false;
-      testBtn.textContent = '重新测试';
       if (localProxyPort(proxyInput.value)) probePorts();
-      if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return; }
+      if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return { ok: false }; }
       tested = res;
       const place = [res.country, res.city].filter(Boolean).join(' · ');
       let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
@@ -1426,6 +1490,7 @@ function editorPage(id) {
       if (res.direct === 'real') text += '\n轻量号直连不经过系统代理；想让它走 Clash，要开 Clash 的 TUN 模式。';
       result.replaceChildren(h('div', { class: `note ${res.sameAs ? 'bad' : 'ok'}`, style: { whiteSpace: 'pre-line' } }, text));
       drawTags();
+      return { ok: true };
     };
 
     saveBtn.onclick = async () => {
@@ -1562,7 +1627,7 @@ function qkTile(k, v, tone, sub, action) {
     h('span', { class: 'qk-k' }, k),
     h('b', { class: `qk-v${tone ? ` ${tone}` : ''}` }, v),
     h('span', { class: 'qk-s' }, sub),
-    action ? h('button', { class: 'link-btn qk-act', disabled: !!action.disabled, onclick: action.on }, action.label) : null);
+    action instanceof Node ? action : action ? h('button', { class: 'link-btn qk-act', disabled: !!action.disabled, onclick: action.on }, action.label) : null);
 }
 function quickTiles() {
   const st = s.settings;
@@ -1570,7 +1635,7 @@ function quickTiles() {
   const autoOn = st.autoRecycle !== false;
   const memTile = qkTile('内存', mb(s.totalMB || 0), autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB ? 'bad' : '',
     autoOn && st.capMB > 0 ? `上限 ${mb(st.capMB)}` : '不设上限',
-    { label: memClean.busy ? '清理中…' : '立即清理', disabled: memClean.busy || !s.accounts.length, on: runMemClean });
+    memCleanBtn('link-btn qk-act'));
   // 翻译：默认服务商有没有填密钥
   let trTile;
   if (!tr.cfg) trTile = qkTile('翻译', '读取中…', '', '', null);
@@ -1669,7 +1734,7 @@ function settingsPage() {
           h('span', { class: 'hint' }, a.problem ? a.problemShort : a.mode === 'lite' ? '轻量模式' : a.id === s.activeId ? '正在看' : '后台'))),
         h('span', { class: 'hint' }, '大概数字，实际会略高一点。')),
       setRow('立即清理内存', '把内存涨得多的后台账号刷新一下。不会退出登录，不会漏消息。',
-        h('button', { class: 'btn', disabled: memClean.busy || !s.accounts.length, onclick: runMemClean }, memClean.busy ? '清理中…' : '立即清理'),
+        memCleanBtn('btn'),
         memClean.result ? h('span', { class: 'hint', role: 'status' }, memClean.result) : null),
       setRow('自动回收后台账号', '后台账号内存涨多了，就自动刷新一下。不退出登录，不漏消息；正在看的和有未读的不动。',
         sw(autoOn, '自动回收后台账号', (v) => window.wa.setSetting('autoRecycle', v)),
@@ -1685,7 +1750,7 @@ function settingsPage() {
           sw(st.lowMemoryMode, '省内存模式', (v) => window.wa.setSetting('lowMemoryMode', v)))),
       setRow('清理缓存文件',
         `释放硬盘空间。不会退出登录，不删聊天记录。${cacheInfo.mb === null ? '' : `当前缓存约 ${mb(cacheInfo.mb)}。`}`,
-        h('button', { class: 'btn', disabled: cacheInfo.busy || !s.accounts.length, onclick: async () => {
+        morphBtn('cacheClean', { idle: '清理', busy: '清理中', ok: '完成', err: '失败' }, async () => {
           cacheInfo.busy = true; cacheInfo.result = ''; render(true);
           const r = await window.wa.clearCache();
           cacheInfo.busy = false;
@@ -1696,7 +1761,8 @@ function settingsPage() {
             cacheInfo.result = `至少释放了 ${mb(r.freedMB)}${r.skipped ? `，${r.skipped} 个正在出错或加载的账号这次跳过了` : ''}。`;
           }
           render(true);
-        } }, cacheInfo.busy ? '清理中…' : '清理'),
+          return { ok: !r.error };
+        }, { disabled: cacheInfo.busy || !s.accounts.length }),
         cacheInfo.result ? h('span', { class: 'hint', role: 'status' }, cacheInfo.result) : null));
     refreshCacheSize();
   } else if (settingsTab === 'notify') {
@@ -1891,13 +1957,13 @@ function teamPage(t, accounts = []) {
       ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
       t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
       h('div', { class: 'btns' },
-        h('button', { class: 'btn', disabled: teamForm.busy, onclick: async () => {
-          teamForm.busy = true; render(true);
+        morphBtn('teamSync', { idle: '立即同步', busy: '同步中', ok: '已同步', err: '失败' }, async () => {
+          teamForm.result = ''; render(true);
           const r = await window.wa.teamSync();
-          teamForm.busy = false;
-          teamForm.result = r && r.ok ? '✓ 已同步' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
+          teamForm.result = r && r.ok ? '' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
           render(true);
-        } }, teamForm.busy ? '同步中…' : '立即同步'),
+          return { ok: !!(r && r.ok) };
+        }),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
       result,
       teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
@@ -1934,14 +2000,15 @@ function teamPage(t, accounts = []) {
         a.name))) : null,
     h('div', { class: 'box' }, fieldList('登记后会上传', t.uploadFields), fieldList('不会上传', t.neverUpload),
       h('label', { class: 'check-row' }, consent, '我看过上面的清单，同意上传这些内容')),
-    h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: !teamForm.consent || teamForm.busy, onclick: async () => {
+    h('div', { class: 'btns' }, morphBtn('teamEnroll', { idle: '登记', busy: '登记中', err: '失败' }, async () => {
       teamForm.busy = true; teamForm.result = ''; render(true);
       const r = await window.wa.teamEnroll({ server: teamForm.server, code: teamForm.code, deviceName: teamForm.deviceName, localIds: [...teamForm.picked], consent: teamForm.consent });
       teamForm.busy = false;
       teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功'; teamForm.detail = (r && r.detail) || '';
       if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
       render(true);
-    } }, teamForm.busy ? '登记中…' : '登记')),
+      return { ok: !!(r && r.ok) };
+    }, { class: 'btn primary', disabled: !teamForm.consent })),
     result));
   return wrap;
 }
@@ -1969,7 +2036,7 @@ function updateBox(u) {
     : u.status === 'downloading' ? h('button', { class: 'btn', onclick: () => window.wa.updateCheck() }, '下好后自动重启')
     : u.status === 'downloaded'
       ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '现在重启并更新')
-      : h('button', { class: 'btn', disabled: busy, onclick: () => window.wa.updateCheck() }, busy ? '检查中…' : '检查并更新');
+      : morphBtn('updateCheck', { idle: '检查并更新', busy: '检查中' }, () => window.wa.updateCheck(), { busy });
   return h('div', { class: `update-box ${t}`, role: 'status' },
     h('div', { class: 'upd-main' },
       h('span', { class: 'upd-mark' }, mark),
