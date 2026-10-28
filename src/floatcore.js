@@ -50,7 +50,8 @@ function fromLite(view, jid) {
   // 没名字的私聊用号码当标题（和 WhatsApp 网页一样），客户名单能按号码对上
   const user = String(jid).split('@')[0].split(':')[0];
   const number = String(jid).endsWith('@s.whatsapp.net') ? `+${user}` : '';
-  return { ok: true, title: view.title || (listed && listed.name) || number, msgs };
+  // 轻量号拿到的总是对话里最新的那些（不跟着滑动变），算停在最下面
+  return { ok: true, title: view.title || (listed && listed.name) || number, msgs, bottom: true };
 }
 
 class FloatCore {
@@ -189,6 +190,8 @@ class FloatCore {
   behind(st, read, hs, newest) {
     if (!st.seen.length || read.bottom === true) return false;
     if (hs.includes(st.seen[st.seen.length - 1])) return false;
+    // 读到了比以前都新的消息：往上翻只会露出更早的，所以照常用（位置认错了、一下来了 20 多条也不会卡住）
+    if (newest && newest > st.newest) return false;
     if (read.bottom === false) return true;
     // 页面说不清在哪：读到的最新一条比以前读到的早，或者最后一条是以前就读到过的旧消息
     if (newest && st.newest && newest < st.newest) return true;

@@ -186,6 +186,10 @@ function scrollNoBottom() {
     const next = { ...msg(500, false, lid), t: { h: 10, mi: 0, at: at(200) } };
     assert(fc2.ingest('E', { title: 'A', msgs: [...list.slice(100, 118), list[119], next].slice(-20), bottom: null }, opts));
     assert.strictEqual(fc2.viewOf('E').items.slice(-1)[0].text, 'hola 500');
+    // 页面把位置认错了（说不在最下面），但读到了更新的消息：照常加上，不冻住
+    const later = { ...msg(501, false, lid), t: { h: 10, mi: 1, at: at(201) } };
+    assert(fc2.ingest('E', { title: 'A', msgs: [...list.slice(102, 118), list[119], later], bottom: false }, opts));
+    assert.strictEqual(fc2.viewOf('E').items.slice(-1)[0].text, 'hola 501');
     // 换了对话：照常显示新对话的
     fc2.ingest('E', { title: 'B', msgs: [msg(1, false, '111222333444555@lid')], bottom: false }, opts);
     assert.deepStrictEqual(fc2.viewOf('E').items.map((x) => x.text), ['hola 1']);
