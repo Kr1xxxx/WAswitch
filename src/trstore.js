@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { writeJsonAtomic } = require('./atomic');
 
 const KEEP_IN_MEMORY = 20; // 内存里最多留 20 个对话的译文
+const TR_MAX = 4000; // 一条译文最多存多少字（再长截断）
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
 
@@ -54,7 +55,7 @@ class TrStore {
   put(acc, chat, text, rec) {
     const e = this.load(acc, chat);
     if (!e || !rec || typeof rec.tr !== 'string' || !rec.tr.trim()) return;
-    e.data[textKey(text)] = { tr: rec.tr.slice(0, 4000), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
+    e.data[textKey(text)] = { tr: rec.tr.slice(0, TR_MAX), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
     e.dirty = true;
     if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, 1000);
   }
@@ -182,4 +183,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
+module.exports = { TrStore, TR_MAX, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
