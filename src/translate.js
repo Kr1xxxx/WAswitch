@@ -98,7 +98,7 @@ const CONTEXT_GUARD = '<context> 和 </context> 之间是同一个对话最近�
 const CONTEXT_MAX_ITEMS = 8;
 const CONTEXT_ITEM_CHARS = 300;
 const CONTEXT_MAX_CHARS = 1500;
-const escTags = (t) => String(t).split('</text>').join('</ text>').split('</context>').join('</ context>').split('<context>').join('< context>');
+const escTags = (t) => String(t).split('</text>').join('</ text>').split('<text>').join('< text>').split('</context>').join('</ context>').split('<context>').join('< context>');
 
 // 上下文：[{ out, text }]，从旧到新。只留最近 8 条，每条最多 300 字，合计最多 1500 字（从最新往前取）
 // 返回裁好的 [{ out, text }]（从旧到新，text 已压成一行）；下面三种格式都用它
@@ -194,7 +194,9 @@ function roleWithTerms(role, on, target = '') {
   const back = keep.filter(([, b]) => !seen.has(b.toLowerCase()) && seen.add(b.toLowerCase())).map(([a, b]) => `${b} → ${a}`);
   // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
   const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
-  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：\n${back.join('\n')}`;
+  // 两套都开时 glm-4-flash 只靠头句还会把假睫毛翻成 false eyelashes，这里再点名一次（2026-10-28 Fable 实测 6/6 改对）
+  const fakeNote = keep.some(([a]) => a === '假睫毛') ? '；假睫毛一律译成 Lash trays，不译成 false eyelashes' : '';
+  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}${fakeNote}）：\n${back.join('\n')}`;
   if (lang !== '中文' && lang !== '英语') {
     const ex = keep.slice(0, 2).map(([a, b]) => `“${a}”写成 ${b}`).join('、');
     tail += `\n译文整句必须用${lang}写，只有上面右边这几个英文词原样嵌在${lang}句子里（行业通用叫法），例如${ex}，不用${lang}自己的词，其他内容照常翻成${lang}。`;
@@ -232,6 +234,8 @@ function buildMessages(mode, text, langs, context, draft, model, role) {
 // 去掉模型偶尔加的“以下是翻译：”、整段引号和 <text> 标签
 function cleanOutput(out) {
   let t = String(out || '').trim();
+  // 译文后面又开一个 <text>：模型在自己编例句（glm-4-flash 开着行业词汇时会编好几段），从那截断
+  t = t.split(/\n\s*<text>/i)[0].trim();
   t = t.replace(/^<text>\s*/i, '').replace(/\s*<\/text>$/i, '').trim();
   t = t.replace(/^(以下是|下面是)?(翻译|译文)(结果)?[:：]\s*/, '').replace(/^(here is the )?translation[:：]\s*/i, '').trim();
   const pairs = [['"', '"'], ['“', '”'], ['「', '」'], ["'", "'"]];
