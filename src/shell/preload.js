@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('wa', {
   trTest: (id) => ipcRenderer.invoke('tr:test', id),
   trRun: (data) => ipcRenderer.invoke('tr:run', data),
   trCancel: () => ipcRenderer.invoke('tr:cancel'),
+  trPage: (data) => ipcRenderer.invoke('tr:page', data),
   trChatLang: (accountId) => ipcRenderer.invoke('tr:chatlang', accountId),
   trLang: (accountId, lang) => ipcRenderer.invoke('tr:lang', { accountId, lang }),
   tmodeSave: (data) => ipcRenderer.invoke('tmode:save', data),

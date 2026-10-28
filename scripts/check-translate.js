@@ -66,6 +66,16 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   behave=[busy,busy,null]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===3, JSON.stringify(q));
   // 全都忙：中文提示，不带英文原话
+  // 翻译页指定服务商：只用它，失败也不换备用；找不到就报错，不偷偷用默认的
+  const pinId=tr.load().fallbackId;
+  behave=[null]; calls=[];
+  q=await tr.translate({text:'你好',mode,providerId:pinId});
+  assert(q.text==='Hola' && !q.fallback && calls[0].url.startsWith('https://open.bigmodel.cn'), JSON.stringify(q));
+  behave=['net',null]; calls=[];
+  q=await tr.translate({text:'你好',mode,providerId:pinId});
+  assert.equal(q.kind,'network'); assert.equal(calls.length,1);
+  calls=[]; q=await tr.translate({text:'你好',mode,providerId:'gone'});
+  assert.equal(q.kind,'config'); assert.equal(calls.length,0);
   behave=[busy,busy,busy,busy]; calls=[];
   q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'overload'); assert(!/busy|capacity/i.test(q.error) && /忙/.test(q.error), q.error);
   // 429 但说的是余额不足：不重试

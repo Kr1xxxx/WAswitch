@@ -42,6 +42,8 @@ const ICONS = {
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   next: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="m6 15 6-6 6 6"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
   right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   update: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
@@ -399,6 +401,9 @@ function renderSide() {
       accountList(),
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: 'var(--fs-m)' } }, '添加账号'))),
+    s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
+    h('button', { class: `row tool-row${s.page === 'translate' ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
+      h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
     h('div', { class: 'grow' })));
   const upd = updateCard();
   if (upd) $side.append(upd);
@@ -671,6 +676,7 @@ const UNDO_MAX_MS = 14000; // 主进程 15 秒后就不认了：鼠标停在上�
 let undoBox = null;
 let undoTimer = null;
 let undoCap = null;
+let undoGone = null;
 function hideUndo() {
   clearTimeout(undoTimer);
   clearTimeout(undoCap);
@@ -678,12 +684,17 @@ function hideUndo() {
   undoCap = null;
   if (undoBox) undoBox.remove();
   undoBox = null;
+  const g = undoGone;
+  undoGone = null;
+  if (g) g();
 }
 function undoRect(where) {
   const visible = (el) => el && !el.hidden && el.getBoundingClientRect().width > 0;
   const panel = document.getElementById('panel');
   const list = panel && panel.querySelector('.pn-list');
   if (where === 'panel' && visible(panel)) return { r: (visible(list) ? list : panel).getBoundingClientRect(), at: 'bottom' };
+  const hist = document.querySelector('.tp-hist');
+  if (where === 'tp-hist' && s.page === 'translate' && visible(hist)) return { r: hist.getBoundingClientRect(), at: 'middle' };
   if (s.page === 'account' && visible($top)) return { r: $top.getBoundingClientRect(), at: 'middle' };
   return { r: document.getElementById('body').getBoundingClientRect(), at: 'bottom' };
 }
@@ -705,11 +716,12 @@ async function runUndo(o) {
   else if (o.kind === 'notif') loadNotifLog();
   else if (o.kind === 'netlog') loadNetLog();
 }
-window.wa.onUndoOffer((o) => {
-  if (!o || !Number.isInteger(o.token)) return;
+// 也给只存在界面里的东西用（翻译页的最近记录）：onUndo 自己放回去，onGone 在撤销条没点就消失时调用
+function showUndo(text, where, onUndo, onGone) {
   hideUndo();
-  const btn = h('button', { class: 'undo-btn', type: 'button', onclick: () => runUndo(o) }, '撤销');
-  undoBox = h('div', { class: 'undo', role: 'status', 'data-where': o.where || 'body' }, h('span', { class: 'undo-text' }, String(o.text || '')), btn);
+  undoGone = onGone || null;
+  const btn = h('button', { class: 'undo-btn', type: 'button', onclick: () => { undoGone = null; hideUndo(); onUndo(); } }, '撤销');
+  undoBox = h('div', { class: 'undo', role: 'status', 'data-where': where || 'body' }, h('span', { class: 'undo-text' }, String(text || '')), btn);
   // 鼠标停在上面时不消失
   const arm = () => { clearTimeout(undoTimer); undoTimer = setTimeout(hideUndo, UNDO_SHOW_MS); };
   undoBox.addEventListener('mouseenter', () => clearTimeout(undoTimer));
@@ -718,6 +730,10 @@ window.wa.onUndoOffer((o) => {
   placeUndo();
   arm();
   undoCap = setTimeout(hideUndo, UNDO_MAX_MS);
+}
+window.wa.onUndoOffer((o) => {
+  if (!o || !Number.isInteger(o.token)) return;
+  showUndo(o.text, o.where, () => runUndo(o));
 });
 window.addEventListener('resize', placeUndo);
 
@@ -2079,10 +2095,11 @@ function lockPage() {
   return lockEl;
 }
 
-// 锁着时只盖住账号页面（网页版和轻量模式的聊天），设置、编辑、总览这些页面照常能打开使用。
+// 锁着时只盖住账号页面（网页版和轻量模式的聊天）和翻译页，设置、编辑、总览这些页面照常能打开使用。
 // 锁定状态一直保留：从设置页切回任何账号，看到的还是锁屏卡片，要右滑解锁才能看聊天
 function renderLock() {
-  const on = !!s.locked && s.page === 'account';
+  // 翻译页也盖住：译文和最近记录里有客户原话
+  const on = !!s.locked && (s.page === 'account' || s.page === 'translate');
   const was = !$lock.hidden;
   $lock.hidden = !on;
   $content.hidden = on;
@@ -2126,6 +2143,10 @@ function render(forceContent = false) {
     // 有新的未读时顺便刷新记录
     else if (s.accounts.reduce((n, a) => n + (a.unread || 0), 0) !== overviewTotal) loadNotifLog();
     overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
+  } else if (s.page === 'translate') {
+    // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
+    const el = trPage(key !== shown);
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
   } else if (acc && !acc.problem && acc.mode === 'lite') {
