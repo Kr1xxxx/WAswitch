@@ -50,8 +50,23 @@ const DEFAULT_MODES = [
   { name: '标准', direction: 'out', prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。' },
   { name: '商务正式', direction: 'out', prompt: '把用户的文字翻译成{目标语言}，语气礼貌、专业，适合报价、合同和正式沟通。保留数字、链接和换行。' },
   { name: '销售跟进', direction: 'out', prompt: '把用户的文字翻译成{目标语言}，语气热情但不夸大，不编造任何承诺；如果原文有下一步安排，译文结尾要清楚说出来。保留数字和链接。' },
-  { name: '看懂客户', direction: 'in', prompt: '把用户的文字翻译成中文。译文之后另起一行，用一句话写出对方的语气和主要要求，以“【要点】”开头。' },
+  { name: '看懂客户', direction: 'in', prompt: '把用户的文字忠实地翻译成中文。只输出译文，保留数字、链接、表情和换行，不增不减内容。' },
 ];
+
+// 以前默认的提示词换掉了：老用户没改过的话启动时换成新的（名字和旧提示词都对得上才换，换过就对不上了，不用记 flag）
+// 「看懂客户」以前在译文后面加一行【要点】总结，shen 2026-10-28 不要
+const UPDATED_MODES = [
+  { name: '看懂客户', old: '把用户的文字翻译成中文。译文之后另起一行，用一句话写出对方的语气和主要要求，以“【要点】”开头。' },
+];
+function updateModes(store) {
+  let n = 0;
+  for (const m of store.list()) {
+    const u = UPDATED_MODES.find((r) => r.name === m.name && r.old === m.prompt);
+    const now = u && DEFAULT_MODES.find((d) => d.name === u.name);
+    if (now && store.upsert({ ...m, prompt: now.prompt })) n++;
+  }
+  return n;
+}
 
 // 以前默认带的「口语亲切」（shen 2026-10-26 默认去掉）。老用户没改过的话启动时删一次
 const RETIRED_MODES = [
@@ -920,5 +935,5 @@ class Translator {
   }
 }
 
-module.exports = { WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

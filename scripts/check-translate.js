@@ -137,6 +137,14 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert(!ms2.get(old1.id) && ms2.get(old2.id));
   ms2.upsert({name:'口语亲切',direction:'out',prompt:T.RETIRED_MODES[0].prompt});
   assert.equal(T.retireModes(ms2,true),0);
+  // 收到的消息默认只出译文，不加【要点】；老用户没改过的「看懂客户」换成新提示词，改过的不动
+  assert(!T.DEFAULT_MODES.some((m)=>m.prompt.includes('要点')));
+  const in1=ms2.upsert({name:'看懂客户',direction:'in',prompt:T.UPDATED_MODES[0].old});
+  const in2=ms2.upsert({name:'看懂客户',direction:'in',prompt:'我改过的，要【要点】'});
+  assert.equal(T.updateModes(ms2),1);
+  assert.equal(ms2.get(in1.id).prompt,T.DEFAULT_MODES.find((m)=>m.name==='看懂客户').prompt);
+  assert.equal(ms2.get(in2.id).prompt,'我改过的，要【要点】');
+  assert.equal(T.updateModes(ms2),0);
   for(let i=0;i<300;i++) ms.upsert({name:'m'+i,prompt:'p'},{save:false});
   assert.equal(ms.list().length,200);
   assert.equal(R.KINDS.tmodes.clean({name:'x',prompt:'p',direction:'evil',temperature:'9'}).direction,'both');

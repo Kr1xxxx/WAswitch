@@ -91,6 +91,7 @@ async function core() {
   console.log('悬浮翻译逻辑自检通过');
   await keyRetry();
   await persisted();
+  await noWordsGist();
   await sendNoJump();
   scrollNoBottom();
 }
@@ -260,6 +261,50 @@ async function keyRetry() {
 }
 
 // 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留
+// 时间、数字、表情这类没有文字的消息不翻；存着的旧译文显示时去掉以前默认模式加的【要点】那行（shen 2026-10-28）
+async function noWordsGist() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const { noWords, dropGist } = require('../src/floatcore');
+  for (const t of ['08:02', '28-1', '+1 (555) 010-2233', '👍👍', '12/03/2026', '...', '$120']) assert(noWords(t), t);
+  for (const t of ['ok', 'And ok…', '谢谢', 'Größe M', '2 wigs']) assert(!noWords(t), t);
+  assert.strictEqual(dropGist('谢谢，请发送发票\n\n【要点】客户要求发送发票'), '谢谢，请发送发票');
+  assert.strictEqual(dropGist('第一行\n第二行\n【要点】客户确认'), '第一行\n第二行');
+  assert.strictEqual(dropGist('【要点】只有这一行'), '【要点】只有这一行');
+  assert.strictEqual(dropGist('普通译文'), '普通译文');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-'));
+  const store = new TrStore(dir);
+  const sent = [];
+  const fc = new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  const chat = '777@c.us';
+  const ck = hashOf('G', `chat|${chat}`);
+  store.put('G', ck, 'Thanks, please send the invoice', { tr: '谢谢，请发送发票\n\n【要点】客户要求发送发票' });
+  store.put('G', ck, 'Paid', { tr: '已付\n【要点】我自己写的', edited: true });
+  const msgs = [msg(1, false, chat, 'Thanks, please send the invoice'), msg(2, false, chat, 'Paid'), msg(3, false, chat, '08:02'),
+    msg(4, false, chat, '28-1'), msg(5, false, chat, 'And ok…')];
+  fc.ingest('G', { title: 'g', msgs }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['And ok…'], '时间、编号不翻，存过的不再翻');
+  const items = fc.viewOf('G').items;
+  assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), [['done', '谢谢，请发送发票'], ['done', '已付\n【要点】我自己写的'], ['skip', ''], ['skip', ''], ['done', '译:And ok…']]);
+  // 不翻的：点不了翻译、改不了
+  assert(!fc.manual('G', items[2].h));
+  assert(!fc.edit('G', items[2].h, 'x'));
+  // 用户自己的「收到」模式要要点：存着的要点不删；客户原文里本来就有【要点】也不删
+  let keep = true;
+  const fc2 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  store.put('G', ck, '客户写的【要点】', { tr: '客户\n【要点】原文就有' });
+  fc2.ingest('G', { title: 'g', msgs: [msg(1, false, chat, 'Thanks, please send the invoice')] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc2.viewOf('G').items[0].tr, '谢谢，请发送发票\n\n【要点】客户要求发送发票');
+  keep = false;
+  const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
+  assert.strictEqual(fc3.viewOf('G').items[0].tr, '客户\n【要点】原文就有');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 async function persisted() {
   const fs = require('fs');
   const os = require('os');

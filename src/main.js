@@ -26,7 +26,7 @@ const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
 const { customerHooks } = require('./customer-mcp');
-const { Translator, DEFAULT_MODES, retireModes } = require('./translate');
+const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
@@ -2672,6 +2672,7 @@ app.whenReady().then(async () => {
     retireModes(modeStore, fs.existsSync(flag));
     fs.writeFileSync(flag, '1');
   } catch (e) { console.warn(`旧翻译模式清理失败：${e.message}`); }
+  try { updateModes(modeStore); } catch (e) { console.warn(`翻译模式更新失败：${e.message}`); }
   translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: trIpc.translateSession });
   trIpc.applyTranslateNet().catch(() => {});
   trIpc.setupFloatCore();
