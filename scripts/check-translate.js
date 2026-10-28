@@ -24,6 +24,7 @@ let calls=[];
 let behave=[];
 const fake={fetch:async(url,opt)=>{calls.push({url,opt});const b=behave.shift();if(b==='net')throw new Error('x');if(b==='hang')return new Promise((res,rej)=>opt.signal.addEventListener('abort',()=>rej(new Error('ab'))));const st=b&&b.status||200;const body=b&&b.body||JSON.stringify({choices:[{message:{content:'Hola'}}]});return {ok:st<300,status:st,body:null,text:async()=>body};}};
 const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
+tr.setLashTerms(false); // 睫毛词汇默认开；下面这些检查只看模式提示词，先关掉（睫毛词汇单独在后面查）
 (async()=>{
   let r=tr.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y',key:'sk-secret1234'});
   assert(r.ok,JSON.stringify(r));
@@ -195,6 +196,7 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
     {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
     {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1'}));
   const th=new T.Translator({seed:false,dir:d2,safeStorage:ss,sessionFor:()=>fake});
+  th.setLashTerms(false);
   const [h1,h2]=th.load().providers;
   assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
   assert.equal(h1.keyEnc,''); // 换地址：密钥清掉
@@ -281,10 +283,17 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
   assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
   // 假发词汇：默认关；打开后跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
+  let rt;
+  // 睫毛词汇：默认开（老设置没存过也算开），单独开关、单独存盘；密排排在睫毛前面
+  assert.equal(t4.publicConfig().lashTerms,true); assert.deepEqual(t4.publicConfig().lashList,[{zh:'密排',en:'Lash trays'},{zh:'睫毛',en:'Lash'}]);
+  rt=t4.roleText();
+  assert(rt.startsWith('贴牌 = private label\n\n睫毛行业固定译法') && rt.includes('密排 = Lash trays\n睫毛 = Lash') && rt.includes('Lash trays → 密排\nLash → 睫毛') && !rt.includes('头套'),rt);
+  assert(t4.setLashTerms(false).ok); assert.equal(t4.publicConfig().lashTerms,false);
+  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().lashTerms,false);
   assert.equal(t4.publicConfig().wigTerms,false); assert.equal(t4.roleText(),'贴牌 = private label');
   assert.equal(t4.publicConfig().wigList.length,8);
   assert(t4.setWigTerms(true).ok);
-  let rt=t4.roleText();
+  rt=t4.roleText();
   assert(rt.startsWith('贴牌 = private label\n\n'));
   for (const l of ['配件 = Closure','前头 = Frontal','发帘 = Bundle','头套 = Wig','全蕾丝头套 = Full lace wig','胶片发 = Tape hair','辫发 = Raw hair','处女发 = Virgin hair']) assert(rt.split('\n').includes(l),l);
   // 头套排第一行（glm-4-flash 实测排在全蕾丝头套后面会翻错），wig 不译假发点名说了
@@ -322,6 +331,22 @@ const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,ret
   assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('Wig → 头套'));
   assert.equal(T.glossaryPairs(fr,false).length,8);
   assert(t4.setWigTerms(false).ok); assert.equal(t4.roleText(),'贴牌 = private label');
+  // 两套都开：合成一段，头句写“假发、睫毛”，假发在前；用户写过睫毛的用用户的
+  rt=T.roleWithTerms('',{wig:true,lash:true});
+  assert(rt.startsWith('假发、睫毛行业固定译法') && rt.indexOf('处女发 = Virgin hair')<rt.indexOf('密排 = Lash trays') && rt.includes('Lash → 睫毛') && rt.includes('wig 一律译成头套'),rt);
+  assert.equal(T.glossaryPairs(rt,true).length,10);
+  rt=T.roleWithTerms('睫毛 = eyelash',{lash:true});
+  assert(rt.includes('密排 = Lash trays') && !rt.includes('睫毛 = Lash') && rt.includes('\n睫毛行业'),rt);
+  assert.equal(T.roleWithTerms('密排 = a\n睫毛 = b',{lash:true}),'密排 = a\n睫毛 = b');
+  assert(T.roleWithTerms('',{lash:true},'德语').includes('“密排”写成 Lash trays'));
+  assert.equal(T.roleWithTerms('x',{}),'x');
+  // 老设置没有 lashTerms：默认开；开关打开后存盘
+  const dL=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dL,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:true}));
+  const tL=new T.Translator({seed:false,dir:dL,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tL.publicConfig().lashTerms,true); assert(tL.roleText().startsWith('假发、睫毛行业'));
+  assert(tL.setLashTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dL,'translate.json'),'utf8')).lashTerms,true);
+  fs.rmSync(dL,{recursive:true,force:true});
+  assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));
   fs.rmSync(d4,{recursive:true,force:true});
   // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
   const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));

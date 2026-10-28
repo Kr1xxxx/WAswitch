@@ -154,22 +154,30 @@ const WIG_TERMS = [
   ['头套', 'Wig'], ['全蕾丝头套', 'Full lace wig'], ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'],
   ['胶片发', 'Tape hair'], ['辫发', 'Raw hair'], ['处女发', 'Virgin hair'],
 ];
-// 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
+// 内置“睫毛词汇”（shen 2026-10-28）：和假发词汇一样单独一套、单独开关，但默认开。
+// 密排排在睫毛前面：长的词先配，“密排”不会被拆开翻成 Lash。
+const LASH_TERMS = [['密排', 'Lash trays'], ['睫毛', 'Lash']];
+// 真正带去翻译的角色设定：用户自己写的在前；打开的行业词表（假发、睫毛）合成一段接在后面。
 // 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
 // target：这次翻成什么语言。翻成法语、德语等英语以外的外语时多说一句：整句用那种语言、只有这些英文词原样保留
 // （shen 2026-10-28：非英语也用英文行业词；glm-4-flash 不说这句会把 Virgin hair 翻成 Cheveux vierges）。不传 target 或翻成中文、英语 = 原来的写法。
-function roleWithWig(role, wig, target = '') {
+// on：{ wig, lash } 哪套打开；老的调用传 true/false = 只管假发词汇
+function roleWithTerms(role, on, target = '') {
   const own = String(role || '');
-  if (!wig) return own;
+  const sets = typeof on === 'object' && on ? on : { wig: on === true };
+  const all = [...(sets.wig ? WIG_TERMS : []), ...(sets.lash ? LASH_TERMS : [])];
+  if (!all.length) return own;
   const taken = new Set();
   for (const raw of own.split(/\r?\n/)) {
     const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
     if (m) { taken.add(m[1].toLowerCase()); taken.add(m[2].toLowerCase()); }
   }
-  const keep = WIG_TERMS.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
+  const keep = all.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
   if (!keep.length) return own;
+  const has = (list) => keep.some(([a]) => list.some(([x]) => x === a));
+  const trade = [has(WIG_TERMS) ? '假发' : '', has(LASH_TERMS) ? '睫毛' : ''].filter(Boolean).join('、');
   const lines = keep.map(([a, b]) => `${a} = ${b}`);
-  const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
+  const head = `${trade}行业固定译法，必须照用（左边中文，右边英文）：`;
   const lang = LANGS.includes(target) ? target : '中文';
   // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
   const back = keep.map(([a, b]) => `${b} → ${a}`);
@@ -182,6 +190,7 @@ function roleWithWig(role, wig, target = '') {
   }
   return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}`;
 }
+const roleWithWig = roleWithTerms;
 function buildMtMessages(text, langs, context, role) {
   const target = langs.target || '中文';
   const terms = glossaryPairs(role, target === '中文');
@@ -314,8 +323,8 @@ class Translator {
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
       rolePrompt: '',
-      // 内置假发词汇：默认关
-      wigTerms: false,
+      // 内置假发词汇：默认关；睫毛词汇：默认开
+      wigTerms: false, lashTerms: true,
       // 出厂默认服务商只放一次；用户删光了也不再放回来
       seeded: false, seedVer: 0,
       // 自动翻译改成默认开之后迁移过一次老设置
@@ -359,6 +368,7 @@ class Translator {
           base.seedVer = Number(raw.seedVer) || 0;
           if (typeof raw.rolePrompt === 'string') base.rolePrompt = raw.rolePrompt.slice(0, MAX_ROLE);
           base.wigTerms = raw.wigTerms === true;
+          base.lashTerms = raw.lashTerms !== false; // 没存过（老设置）= 默认开
           base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
           const du = raw.deeplUsage;
           if (du && typeof du === 'object') {
@@ -502,6 +512,8 @@ class Translator {
       wigTerms: c.wigTerms === true,
       deeplCap: c.deeplCap,
       wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
+      lashTerms: c.lashTerms !== false,
+      lashList: LASH_TERMS.map(([zh, en]) => ({ zh, en })),
       presets: Object.entries(PRESETS).map(([id, p]) => ({ id, ...p })),
       langs: LANGS,
       canEncrypt: canEncrypt(this.deps.safeStorage),
@@ -600,10 +612,17 @@ class Translator {
     return { ok: true };
   }
 
-  // 翻译和纠错实际用的角色设定（含打开的假发词汇）；话术记录也拿它当键，开关一变老译文就不用
+  // 睫毛词汇开关
+  setLashTerms(on) {
+    this.load().lashTerms = on === true;
+    this.save();
+    return { ok: true };
+  }
+
+  // 翻译和纠错实际用的角色设定（含打开的假发、睫毛词汇）；话术记录也拿它当键，开关一变老译文就不用
   roleText(target = '') {
     const c = this.load();
-    return roleWithWig(c.rolePrompt, c.wigTerms === true, target);
+    return roleWithTerms(c.rolePrompt, { wig: c.wigTerms === true, lash: c.lashTerms !== false }, target);
   }
 
   setNetwork({ mode, proxyUrl } = {}) {
@@ -872,5 +891,5 @@ class Translator {
   }
 }
 
-module.exports = { WIG_TERMS, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
+module.exports = { WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, needsKey, DEEPL_LANGS, THINKING, glossaryPairs, DAILY_CAPS, Translator, PRESETS, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, checkBaseUrl, fillPrompt, buildMessages, isMtModel, contextBlock, cleanOutput, extraContacts, statusError, providerDetail, isLocalHost };
 

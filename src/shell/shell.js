@@ -1082,7 +1082,7 @@ function trModeForm() {
 let trRoleDraft = null; // 没保存的角色设定（重画时不丢）
 function trRoleBox(c, apply) {
   const ta = h('textarea', { maxlength: '4000', 'aria-label': '角色设定', style: { minHeight: '160px' },
-    placeholder: '例如：\n你是睫毛产品的外贸业务员，翻译要专业、礼貌。\n这些词固定这样翻译：\n睫毛盘 = lash tray\n贴牌 = private label' },
+    placeholder: '例如：\n你是睫毛产品的外贸业务员，翻译要专业、礼貌。\n这些词固定这样翻译：\n贴牌 = private label' },
   trRoleDraft ?? (c.rolePrompt || ''));
   ta.addEventListener('input', () => { trRoleDraft = ta.value; });
   return h('div', { class: 'col', style: { gap: '8px' } }, ta,
@@ -1092,13 +1092,19 @@ function trRoleBox(c, apply) {
       apply(r);
     } }, '保存角色设定')));
 }
-// 内置假发词汇开关（默认关）。打开后词表跟在角色设定后面一起带去翻译
+// 内置行业词汇开关：假发（默认关）、睫毛（默认开），各自单独存。打开后词表跟在角色设定后面一起带去翻译
 function trWigBox(c, apply) {
-  const list = (c.wigList || []).map((t) => `${t.zh} = ${t.en}`).join('　');
-  return h('div', { class: 'box' }, setRow('假发词汇',
-    '角色设定里写过的词以你写的为准。DeepL 不用这个词表。',
-    sw(c.wigTerms === true, '假发词汇', async (v) => { const r = await window.wa.trWig(v); if (!r.error) trSay = v ? '假发词汇已打开' : '假发词汇已关闭'; apply(r); }),
-    h('span', { class: 'desc' }, list)));
+  // 每个词条不拆行（“胶片发”不会断成两行）
+  const terms = (list) => h('span', { class: 'desc' }, (list || []).flatMap((t, i) => [i ? '　' : '', h('span', { style: { whiteSpace: 'nowrap' } }, `${t.zh} = ${t.en}`)]));
+  const row = (title, on, list, set) => setRow(title, '',
+    sw(on, title, async (v) => { const r = await set(v); if (!r.error) trSay = v ? `${title}已打开` : `${title}已关闭`; apply(r); }), terms(list));
+  // 最后一行不画底线（和 API 密钥框一样），提示句直接跟在下面
+  const last = row('睫毛词汇', c.lashTerms !== false, c.lashList, (v) => window.wa.trLash(v));
+  last.style.borderBottom = 'none';
+  return h('div', { class: 'box' },
+    row('假发词汇', c.wigTerms === true, c.wigList, (v) => window.wa.trWig(v)),
+    last,
+    h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。DeepL 不用词表。'));
 }
 // 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
 function trKeysBox(c, apply) {
