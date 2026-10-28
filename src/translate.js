@@ -246,7 +246,7 @@ function statusError(status, name = '') {
 function withDetail(err, status, detail, p) {
   const pid = err.kind === 'auth' && p ? { pid: p.id } : {};
   if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status, ...pid };
-  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status} · ${detail}` : `HTTP ${status}` };
+  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}` };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
 function providerDetail(body, key = '') {
@@ -490,13 +490,35 @@ class Translator {
     return { ok: true, id: p.id };
   }
 
+  // 返回删掉的服务商和它原来的位置、用途（撤销时传给 restoreProvider），没有这个服务商返回 null
   deleteProvider(id) {
     const c = this.load();
+    const index = c.providers.findIndex((p) => p.id === id);
+    const snap = index >= 0 ? { provider: { ...c.providers[index] }, index, primaryId: c.primaryId, fallbackId: c.fallbackId, fixId: c.fixId } : null;
     c.providers = c.providers.filter((p) => p.id !== id);
     if (c.primaryId === id) c.primaryId = c.providers[0] ? c.providers[0].id : '';
     if (c.fallbackId === id || c.fallbackId === c.primaryId) c.fallbackId = '';
     if (c.fixId === id) c.fixId = '';
     this.save();
+    return snap;
+  }
+
+  // 撤销删除：放回原来的位置（连同密钥），原来是默认、备用、纠错用的就改回去
+  restoreProvider(snap) {
+    if (!snap || !snap.provider || typeof snap.provider.id !== 'string') return false;
+    const c = this.load();
+    const p = snap.provider;
+    if (c.providers.some((x) => x.id === p.id)) return false;
+    c.providers.splice(Math.min(Math.max(0, snap.index | 0), c.providers.length), 0, { ...p });
+    // 用途改回删除前的样子（删除时被挪走、清掉的默认、备用、纠错）
+    const has = (pid) => !!pid && !!this.provider(pid);
+    if (has(snap.primaryId)) c.primaryId = snap.primaryId;
+    else if (!has(c.primaryId)) c.primaryId = p.id;
+    if (has(snap.fallbackId)) c.fallbackId = snap.fallbackId;
+    if (c.fallbackId === c.primaryId || !has(c.fallbackId)) c.fallbackId = '';
+    if (has(snap.fixId)) c.fixId = snap.fixId;
+    this.save();
+    return true;
   }
 
   setRoles({ primaryId, fallbackId, fixId } = {}) {
@@ -627,7 +649,7 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403 · ${detail}` } : {}) };
+      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
     let out = '';

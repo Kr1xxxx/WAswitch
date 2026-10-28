@@ -9,6 +9,7 @@ body { font: var(--fs-m)/1.45 var(--font-ui); color: #16181d; }
 button, select, textarea, input { font: inherit; color: inherit; }
 .head { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; background: #16181d; color: #fff; cursor: move; user-select: none; flex: none; }
 .head .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--fs-s); }
+.head .title .chat { margin-left: 8px; opacity: .7; }
 .icon { border: none; background: transparent; color: inherit; width: 24px; height: 22px; border-radius: 6px; cursor: pointer; opacity: .8; }
 .icon:hover { background: rgba(255,255,255,.15); opacity: 1; }
 .bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: var(--hair) solid #eceef1; flex: none; }

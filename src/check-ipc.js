@@ -46,7 +46,7 @@ function setupCheckIpc(ctx) {
       acc.exitLabel = regionName(res.country);
       byIp.set(res.ip, [...(byIp.get(res.ip) || []), acc.name]);
       const tz = fingerprint.resolve(acc.fingerprint).timezone;
-      const place = [acc.exitLabel, res.city].filter(Boolean).join(' · ');
+      const place = [acc.exitLabel, res.city].filter(Boolean).join(' ');
       // 轻量模式没有浏览器环境，不涉及时区
       if (isLite(acc)) { items.push({ level: 'ok', title: `${acc.name}（轻量模式）：IP ${res.ip}（${place}）` }); continue; }
       // 跟随本机时，实际时区就是本机时区

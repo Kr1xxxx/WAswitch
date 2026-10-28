@@ -76,11 +76,22 @@ class EventLog {
     this.write();
   }
 
+  // 清空；返回清掉的记录（撤销时传给 restore）
   clear() {
+    const old = this.load();
     clearTimeout(this.timer);
     this.timer = null;
     this.items = [];
     try { fs.rmSync(this.file, { force: true }); } catch {}
+    return old;
+  }
+
+  // 撤销清空：旧记录放回最前面，清空以后新记的接在后面
+  restore(old) {
+    if (!Array.isArray(old)) return;
+    this.items = [...old, ...this.load()];
+    this.trim();
+    this.write();
   }
 }
 
