@@ -541,7 +541,7 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | welcome
+let page = 'account'; // account | editor | settings | overview | translate | welcome
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;

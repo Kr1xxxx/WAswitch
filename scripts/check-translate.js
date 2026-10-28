@@ -534,6 +534,35 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
   t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
   fs.rmSync(d7,{recursive:true,force:true});
+  // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置和 DeepL 用量共用一份
+  const dLn=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const hangs=[];
+  const fakeLn={fetch:async(url,opt)=>{const body=JSON.parse(opt.body);const t=body.text?body.text[0]:body.messages[body.messages.length-1].content;
+    if(/慢/.test(t))return new Promise((res,rej)=>{hangs.push(()=>res({ok:true,status:200,body:null,text:async()=>JSON.stringify({choices:[{message:{content:'slow done'}}]})}));opt.signal.addEventListener('abort',()=>rej(new Error('ab')));});
+    return {ok:true,status:200,body:null,text:async()=>body.text?JSON.stringify({translations:[{text:'Hallo'}]}):JSON.stringify({choices:[{message:{content:'fast'}}]})};}};
+  const tLn=new T.Translator({seed:false,dir:dLn,safeStorage:ss,sessionFor:()=>fakeLn});
+  const zLn=tLn.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k1'}).id;
+  tLn.setRoles({primaryId:zLn});
+  const page=tLn.lane();
+  const work=tLn.translate({text:'慢一点',mode:{prompt:'p'},target:'英语'});
+  assert(tLn.busy,'工作台在翻');
+  q=await page.translate({text:'快',mode:{prompt:'p'},target:'英语',providerId:zLn});
+  assert.equal(q.text,'fast','工作台在翻时翻译页不用排队'); assert(tLn.busy && !page.busy);
+  const pageSlow=page.translate({text:'慢慢',mode:{prompt:'p'},target:'英语',providerId:zLn});
+  assert(page.busy && tLn.busy);
+  assert.equal(page.cancel(),true);
+  q=await pageSlow; assert.equal(q.kind,'cancel','翻译页取消只取消自己');
+  assert(tLn.busy,'工作台那条还在翻');
+  hangs[0](); q=await work; assert.equal(q.text,'slow done');
+  assert.equal(page.cancel(),false,'没在翻时取消什么也不做');
+  // 配置是同一份：本体加的服务商、通道里记的 DeepL 用量，两边都看得到，也写进同一个文件
+  const dlLn=tLn.saveProvider({preset:'deepl',baseUrl:'https://api-free.deepl.com',model:'',key:'k:fx'}).id;
+  assert(page.provider(dlLn),'通道看得到本体新加的服务商');
+  q=await page.translate({text:'你好',mode:{prompt:'p'},target:'德语',providerId:dlLn}); assert.equal(q.text,'Hallo',JSON.stringify(q));
+  assert.equal(tLn.deeplUsed(),2,'通道记的用量本体也看得到');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dLn,'translate.json'),'utf8')).deeplUsage.chars,2);
+  assert(!Object.prototype.hasOwnProperty.call(page,'cfg'),'通道不自己存配置');
+  fs.rmSync(dLn,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});

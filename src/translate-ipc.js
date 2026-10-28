@@ -131,6 +131,12 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:cancel', () => userCancel());
   // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
   // providerId = 这一栏选的模型（只用它，不换备用，纠错也用它）。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
+  // 用单独的翻译通道（translator.lane()）：不让工作台的自动翻译排队等，也不等它
+  let pageLane = null;
+  const pageTr = () => {
+    if (!pageLane || Object.getPrototypeOf(pageLane) !== ctx.translator) pageLane = ctx.translator.lane();
+    return pageLane;
+  };
   const PAGE_MODE = { prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。', temperature: 0.2 };
   handleShell('tr:page', async ({ text, source, target, providerId, fix, draft } = {}) => {
     if (typeof text !== 'string') return { error: '先放一段要翻译的文字', kind: 'input' };
@@ -138,10 +144,11 @@ function setupTranslateIpc(ctx) {
     const pid = typeof providerId === 'string' ? providerId : '';
     // 纠错也用这一栏选的模型（按钮就在模型旁边）
     const r = fix === true && typeof draft === 'string' && draft.trim()
-      ? await userTranslate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
-      : await userTranslate({ text, mode: PAGE_MODE, target, source, providerId: pid });
+      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
+      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, providerId: pid });
     return { ...r, detected };
   });
+  handleShell('tr:page:cancel', () => pageTr().cancel());
   // 聊天里选中文字后的悬浮译文窗（sel-translate.js、轻量号聊天页）：外文翻成中文，中文翻成客户的语言（和工作台“自动”一样）。
   // 忠实翻译、不带上下文；同一句翻过的直接用记下的译文
   async function selTranslate(text) {
