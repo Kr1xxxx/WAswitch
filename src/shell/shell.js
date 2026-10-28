@@ -337,7 +337,7 @@ function renderSide() {
     h('div', { class: 'list' },
       accountList(),
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '添加账号', onclick: () => window.wa.add() },
-        h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
+        h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: 'var(--fs-m)' } }, '添加账号'))),
     h('div', { class: 'grow' })));
   const upd = updateCard();
   if (upd) $side.append(upd);
@@ -1120,7 +1120,7 @@ function translatePage(page) {
     h('h2', { class: 'ov-h2' }, '角色设定'),
     h('div', { class: 'box tr-form' },
       trRoleBox(c, apply),
-      h('span', { class: 'desc', style: { fontSize: '13px', lineHeight: '1.6', color: 'var(--muted)', whiteSpace: 'pre-line' } },
+      h('span', { class: 'desc', style: { fontSize: 'var(--fs-s)', lineHeight: '1.6', color: 'var(--muted)', whiteSpace: 'pre-line' } },
         '告诉 AI 你是谁、哪些词怎么翻，可以不填。一行一个“中文 = 外语”就是固定译法。\n'
         + '混元翻译模型只认固定译法，其他文字不起作用。')),
     trWigBox(c, apply),
@@ -1204,7 +1204,7 @@ function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), h('small', null, text)));
   return h('div', { class: 'center', style: { background: '#fff' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
     h('div', { class: 'col', style: { gap: '10px' } },
-      h('h1', { style: { fontSize: '30px' } }, '一个窗口，同时登录多个 WhatsApp'),
+      h('h1', null, '一个窗口，同时登录多个 WhatsApp'),
       h('p', { class: 'lead' }, '每个账号独立隔离：登录和缓存分开存，可以走各自的代理线路，时区跟着线路走，WhatsApp 界面统一中文。')),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色', '比如“客服号”“店铺号”。颜色会铺满窗口背景，一眼认出在用哪个号。'),
@@ -1661,7 +1661,7 @@ function settingsPage() {
         h('p', { class: 'lead' }, '账号不会休眠，一直在线收消息。')),
       h('div', { class: 'box' },
         h('div', { class: 'hstack', style: { justifyContent: 'space-between' } }, h('b', null, '当前占用'),
-          h('b', { style: { fontSize: '22px' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: '13px', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
+          h('b', { style: { fontSize: 'var(--fs-xl)' } }, mb(s.totalMB || 0), autoOn && st.capMB > 0 ? h('span', { class: over ? 'bad-text' : 'hint', style: { fontSize: 'var(--fs-s)', fontWeight: 'normal' } }, ` / 上限 ${mb(st.capMB)}`) : null)),
         s.accounts.map((a) => h('div', { class: 'memrow' },
           h('span', { class: 'memname', title: a.name }, h('span', { class: 'sw', style: { background: a.color } }), a.name),
           h('span', { class: 'bar' }, h('span', { style: { width: `${((a.memMB || 0) / max) * 100}%`, background: a.color } })),
@@ -1769,13 +1769,13 @@ function settingsPage() {
     page.append(
       h('div', { class: 'hstack', style: { gap: '18px' } },
         h('img', { src: '../../assets/icon.png', alt: '', width: '64', height: '64', style: { borderRadius: '16px', boxShadow: '0 4px 12px rgba(0,0,0,.25)' } }),
-        h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: '14px' } }, `版本 ${a.version}`))),
+        h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: 'var(--fs-m)' } }, `版本 ${a.version}`))),
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
-        h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, a.dataDir),
+        h('span', null, '数据位置'), h('span', { class: 'mono', style: { fontSize: 'var(--fs-s)', wordBreak: 'break-all' } }, a.dataDir),
         h('span', null, '译文位置'), h('div', { class: 'col', style: { gap: '2px' } },
-          h('div', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, trDir ? trDir.dir : '正在读取…'),
-          trDir ? h('div', { class: 'hint', style: { fontSize: '12px' } }, `共 ${fmtBytes(trDir.bytes)}，${trDir.files} 个对话`) : null),
+          h('div', { class: 'mono', style: { fontSize: 'var(--fs-s)', wordBreak: 'break-all' } }, trDir ? trDir.dir : '正在读取…'),
+          trDir ? h('div', { class: 'hint', style: { fontSize: 'var(--fs-s)' } }, `共 ${fmtBytes(trDir.bytes)}，${trDir.files} 个对话`) : null),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
         ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
       updateBox(s.update),
@@ -1862,11 +1862,11 @@ function crmBox(accounts, upload) {
     : '还没有上传过';
   return h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '同步到 CRM'),
     h('p', { class: 'hint', style: { margin: '0' } }, '这些号的单聊文字消息每 10 分钟同步到公司 CRM。群聊不同步；网页版的号只同步你打开过的对话。'),
-    h('p', { class: 'hint', style: { margin: '0', fontSize: '12px' } }, last),
+    h('p', { class: 'hint', style: { margin: '0', fontSize: 'var(--fs-s)' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
       h('span', { class: `avatar${a.crm ? ' crm' : ''}`, style: { background: a.color } }, a.name.trim().charAt(0) || '?'),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
-      h('span', { class: 'hint crm-note', style: { fontSize: '12px' } }, a.crm
+      h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
         ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }
@@ -1875,7 +1875,7 @@ function teamPage(t, accounts = []) {
   const wrap = h('div', { class: 'col', style: { gap: '16px' } });
   if (!t) return wrap;
   const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
-  const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: '13px' } }, x))));
+  const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: 'var(--fs-s)' } }, x))));
   const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result, teamForm.result.startsWith('✓') ? null : rawDetail(teamForm.detail)) : null;
   wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '团队'),
     h('p', { class: 'lead' }, '登记后，管理员可以给你分配账号、查看每个号的状态。不登记不影响使用。')));
@@ -1884,7 +1884,7 @@ function teamPage(t, accounts = []) {
     const ok = !t.offline && !t.lastError;
     wrap.append(...kids(
       h('div', { class: 'kv' },
-        h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, t.server),
+        h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: 'var(--fs-s)', wordBreak: 'break-all' } }, t.server),
         h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
         h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
         h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
@@ -1900,7 +1900,7 @@ function teamPage(t, accounts = []) {
         } }, teamForm.busy ? '同步中…' : '立即同步'),
         h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
       result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: '11px', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
+      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
     if (t.privateAccounts.length && t.allowPrivate) {
       wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
         t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
