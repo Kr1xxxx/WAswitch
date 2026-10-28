@@ -23,7 +23,9 @@ const scenario = async () => {
   const out = {};
   // 1) 德语，还没翻：中文 → 德语，原文留在左边
   const de = 'Hallo, ich möchte eine Perücke kaufen. Wie viel kostet das?';
-  reset(de); swap.click(); await wait(50);
+  reset(de);
+  out.deLabel = src.options[0].textContent;
+  swap.click(); await wait(50);
   out.de = { src: src.value, tgt: tgt.value, text: input.value };
   // 再按一次：回到 德语 → 中文
   swap.click(); await wait(50);
@@ -48,6 +50,15 @@ const scenario = async () => {
   out.call = window.__trCalls[window.__trCalls.length - 1];
   swap.click(); await wait(50);
   out.after = { src: src.value, tgt: tgt.value, text: input.value };
+  // 6b) 翻完德语不清空，直接换成法语再按：按法语对调，不用上次认出的德语
+  window.__trPage = () => ({ text: '你好，我想买一顶假发。多少钱？', detected: '德语' });
+  tp.src = ''; tp.tgt = ''; input.value = de; input.dispatchEvent(new Event('input'));
+  document.querySelector('.tp-go').click();
+  await wait(400);
+  input.value = 'Bonjour, je voudrais savoir le prix avec livraison, merci'; input.dispatchEvent(new Event('input'));
+  out.frLabel = src.options[0].textContent;
+  swap.click(); await wait(50);
+  out.frAfterDe = { src: src.value, tgt: tgt.value };
   // 7) 德语按 ⇄ 后再翻：发给主进程的是 中文 → 德语，不是 中文 → 英语
   reset(de); swap.click(); await wait(50);
   input.value = '这顶假发多少钱？'; input.dispatchEvent(new Event('input'));
@@ -64,6 +75,7 @@ app.whenReady().then(async () => {
   await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
   const r = await w.webContents.executeJavaScript(`(${scenario})()`);
   assert(!r.error, r.error);
+  assert.strictEqual(r.deLabel, '自动检测（德语）', '没翻过时下拉显示认出的语言');
   assert.deepStrictEqual(r.de, { src: '中文', tgt: '德语', text: 'Hallo, ich möchte eine Perücke kaufen. Wie viel kostet das?' }, '德语没翻过就按 ⇄');
   assert.deepStrictEqual(r.deBack, { src: '德语', tgt: '中文' }, '再按一次 ⇄');
   assert.deepStrictEqual(r.fr, { src: '中文', tgt: '法语' }, '法语没翻过就按 ⇄');
@@ -72,6 +84,8 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r.notInList, { src: '中文', tgt: '英语' }, '下拉里没有的语言当认不出');
   assert.deepStrictEqual({ source: r.call.source, target: r.call.target }, { source: '', target: '中文' }, '德语自动翻成中文');
   assert.deepStrictEqual(r.after, { src: '中文', tgt: '德语', text: '你好，我想买一顶假发。多少钱？' }, '翻过以后按 ⇄');
+  assert.strictEqual(r.frLabel, '自动检测（法语）', '原文换了，下拉跟着换');
+  assert.deepStrictEqual(r.frAfterDe, { src: '中文', tgt: '法语' }, '翻完德语换成法语再按 ⇄');
   assert.deepStrictEqual({ source: r.call2.source, target: r.call2.target }, { source: '中文', target: '德语' }, '对调后再翻');
   assert.deepStrictEqual(errs, [], '页面没有报错');
   console.log('翻译页 ⇄ 自检通过（没翻过：德语 → 中文 ⇄ 中文 → 德语；翻过：译文换到左边）');
