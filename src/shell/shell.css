@@ -568,7 +568,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 
 /* ---------- 撤销提示：删除、清空、解散分组以后出现几秒 ---------- */
 /* 颜色用 Radix slate：底 1、边 7、字 12；细线用 --hair；按钮圆角和外框同心（10 - 4 = 6） */
-.undo { position: fixed; z-index: 60; display: flex; align-items: center; gap: 12px; height: 36px; padding: 4px 4px 4px 14px; border-radius: 10px; border: var(--hair) solid #cdced6; background: #fcfcfd; color: #1c2024; font-size: var(--fs-m); box-shadow: 0 4px 12px rgba(0,0,0,.06); white-space: nowrap; -webkit-app-region: no-drag; animation: fx-fade 250ms ease-out backwards; }
+.undo { position: fixed; z-index: 60; display: flex; align-items: center; gap: 12px; height: 36px; padding: 4px 4px 4px 14px; border-radius: 10px; border: var(--hair) solid #cdced6; background: #fcfcfd; color: #1c2024; font-size: var(--fs-m); box-shadow: 0 4px 12px rgba(0,0,0,.06); white-space: nowrap; -webkit-app-region: no-drag; animation: fx-fade var(--fx-state) ease-out backwards; }
 .undo-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .undo-btn { flex: none; height: 28px; padding: 0 10px; border: none; border-radius: 6px; background: transparent; color: #1c2024; font-size: var(--fs-m); font-weight: 600; cursor: pointer; }
 .undo-btn:hover { background: #f0f0f3; }
@@ -577,9 +577,10 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 /* 复制成功的小对勾：原位置弹出并描出对勾，1.5 秒后图标淡回 */
 .copy-ok, .copy-ok:hover { color: #15803D; opacity: 1; }
 .pn-btn.copy-ok { border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; justify-content: center; align-items: center; vertical-align: middle; }
-.copy-ok svg { animation: copy-pop .34s cubic-bezier(.2, .9, .3, 1.35); }
-.copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw .28s .06s ease-out forwards; }
-.copy-back > * { animation: copy-back .2s ease-out; }
+/* 复制对勾：弹出 --fx-state，描线 --fx-slow，两者同时收尾 */
+.copy-ok svg { animation: copy-pop var(--fx-state) cubic-bezier(.2, .9, .3, 1.35); }
+.copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw var(--fx-slow) calc(var(--fx-state) - var(--fx-slow)) ease-out forwards; }
+.copy-back > * { animation: copy-back var(--fx-slow) ease-out; }
 @keyframes copy-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes copy-draw { to { stroke-dashoffset: 0; } }
 @keyframes copy-back { from { transform: scale(.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
