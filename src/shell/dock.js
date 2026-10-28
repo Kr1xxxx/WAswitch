@@ -307,8 +307,8 @@ function dockIncoming() {
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
-  if (st.readable === 'qr') add(hint('扫码登录后可用。登录后点开一个聊天，这里就会显示客户的消息。'));
-  else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天，这里就会显示客户的消息。'));
+  if (st.readable === 'qr') add(hint('扫码登录后可用。'));
+  else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
@@ -439,7 +439,7 @@ function dockKeyBar() {
   const k = dk.st && dk.st.needKey;
   if (!k) return null;
   return h('div', { class: 'tr-warn dk-keybar', role: 'status' },
-    h('span', null, `默认翻译服务「${k.name}」还没填密钥，现在翻译不了。${k.others ? '也可以在 设置 › 翻译 里把有密钥的设为默认。' : ''}`),
+    h('span', null, `默认翻译服务「${k.name}」还没填密钥。`),
     h('button', { class: 'pn-btn primary', onclick: () => trOpenKey(k.id) }, '去填密钥'));
 }
 
@@ -454,7 +454,7 @@ function dockRender(force = false) {
   if (!st.accountId) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '先添加一个 WhatsApp 账号。')); return; }
   if (!st.hasProvider) {
     host.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
-      h('span', { class: 'hint' }, '还没设置翻译服务。支持腾讯混元、智谱、OpenRouter 和其他 OpenAI 兼容接口。'),
+      h('span', { class: 'hint' }, '还没设置翻译服务。'),
       h('button', { class: 'pn-btn primary', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); } }, '去设置')));
     return;
   }

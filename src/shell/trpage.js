@@ -77,16 +77,16 @@ function tpFillModels(sel, cur) {
   tpFitSelect(sel);
 }
 // 下拉框按选中的名字定宽（原生 select 会按最长的选项撑开，箭头离字很远）
-let tpCanvas = null;
+// 用一个看不见的同字号文字量宽度（字号写在 CSS 的 .tp-measure 里）
+let tpMeasure = null;
 function tpFitSelect(sel) {
   const opt = sel.options[sel.selectedIndex];
   if (!opt || !sel.isConnected) return;
+  if (!tpMeasure || !tpMeasure.isConnected) { tpMeasure = h('span', { class: 'tp-measure', 'aria-hidden': 'true' }); tp.el.append(tpMeasure); }
+  tpMeasure.textContent = opt.textContent;
   const cs = getComputedStyle(sel);
-  tpCanvas = tpCanvas || document.createElement('canvas');
-  const c = tpCanvas.getContext('2d');
-  c.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
   const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 2;
-  sel.style.width = `${Math.ceil(c.measureText(opt.textContent).width + pad)}px`;
+  sel.style.width = `${Math.ceil(tpMeasure.getBoundingClientRect().width + pad)}px`;
 }
 
 function tpOutPane(which) {
