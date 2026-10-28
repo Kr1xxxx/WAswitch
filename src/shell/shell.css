@@ -726,10 +726,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .tp-hout-text { flex: 1; color: var(--s11); }
 .tp-htime { flex: none; font-size: var(--fs-s); color: var(--s11); }
 /* 清空记录后的撤销条（样式同 #207 的撤销提示） */
-.tp-undo { flex: none; align-self: flex-start; display: flex; align-items: center; gap: 12px; height: 36px; padding: 4px 4px 4px 14px; border: var(--hair) solid var(--s7); border-radius: 10px; background: var(--s1); color: var(--s12); white-space: nowrap; animation: fx-fade 250ms ease-out backwards; }
-.tp-undo-btn { flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-weight: 600; color: var(--s12); }
-.tp-undo-btn:hover { background: var(--s3); }
-@media (prefers-reduced-motion: reduce) { .tp-undo { animation: none; } }
 /* ---------- 状态按钮（shell.js 的 morphBtn）：转圈 → ✓ / ✗，几种文字叠在同一格，宽度不跳 ---------- */
 .morph { display: inline-grid; place-items: center; }
 .morph > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 5px; visibility: hidden; }

@@ -677,6 +677,7 @@ const UNDO_MAX_MS = 14000; // 主进程 15 秒后就不认了：鼠标停在上�
 let undoBox = null;
 let undoTimer = null;
 let undoCap = null;
+let undoGone = null;
 function hideUndo() {
   clearTimeout(undoTimer);
   clearTimeout(undoCap);
@@ -684,12 +685,17 @@ function hideUndo() {
   undoCap = null;
   if (undoBox) undoBox.remove();
   undoBox = null;
+  const g = undoGone;
+  undoGone = null;
+  if (g) g();
 }
 function undoRect(where) {
   const visible = (el) => el && !el.hidden && el.getBoundingClientRect().width > 0;
   const panel = document.getElementById('panel');
   const list = panel && panel.querySelector('.pn-list');
   if (where === 'panel' && visible(panel)) return { r: (visible(list) ? list : panel).getBoundingClientRect(), at: 'bottom' };
+  const hist = document.querySelector('.tp-hist');
+  if (where === 'tp-hist' && s.page === 'translate' && visible(hist)) return { r: hist.getBoundingClientRect(), at: 'middle' };
   if (s.page === 'account' && visible($top)) return { r: $top.getBoundingClientRect(), at: 'middle' };
   return { r: document.getElementById('body').getBoundingClientRect(), at: 'bottom' };
 }
@@ -711,11 +717,12 @@ async function runUndo(o) {
   else if (o.kind === 'notif') loadNotifLog();
   else if (o.kind === 'netlog') loadNetLog();
 }
-window.wa.onUndoOffer((o) => {
-  if (!o || !Number.isInteger(o.token)) return;
+// 也给只存在界面里的东西用（翻译页的最近记录）：onUndo 自己放回去，onGone 在撤销条没点就消失时调用
+function showUndo(text, where, onUndo, onGone) {
   hideUndo();
-  const btn = h('button', { class: 'undo-btn', type: 'button', onclick: () => runUndo(o) }, '撤销');
-  undoBox = h('div', { class: 'undo', role: 'status', 'data-where': o.where || 'body' }, h('span', { class: 'undo-text' }, String(o.text || '')), btn);
+  undoGone = onGone || null;
+  const btn = h('button', { class: 'undo-btn', type: 'button', onclick: () => { undoGone = null; hideUndo(); onUndo(); } }, '撤销');
+  undoBox = h('div', { class: 'undo', role: 'status', 'data-where': where || 'body' }, h('span', { class: 'undo-text' }, String(text || '')), btn);
   // 鼠标停在上面时不消失
   const arm = () => { clearTimeout(undoTimer); undoTimer = setTimeout(hideUndo, UNDO_SHOW_MS); };
   undoBox.addEventListener('mouseenter', () => clearTimeout(undoTimer));
@@ -724,6 +731,10 @@ window.wa.onUndoOffer((o) => {
   placeUndo();
   arm();
   undoCap = setTimeout(hideUndo, UNDO_MAX_MS);
+}
+window.wa.onUndoOffer((o) => {
+  if (!o || !Number.isInteger(o.token)) return;
+  showUndo(o.text, o.where, () => runUndo(o));
 });
 window.addEventListener('resize', placeUndo);
 

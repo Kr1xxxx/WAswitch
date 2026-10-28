@@ -146,9 +146,7 @@ function tpBuild() {
     h('div', { class: 'tp-hist-head' }, h('span', null, '最近记录'),
       h('button', { class: 'tp-link', type: 'button', onclick: () => tpClearHist() }, '清空')),
     histList);
-  const undo = h('div', { class: 'tp-undo', role: 'status', hidden: true }, h('span', null, '已清空最近记录'),
-    h('button', { class: 'tp-undo-btn', type: 'button', onclick: () => tpUndoHist() }, '撤销'));
-  const ui = { input, clear, go, src, tgt, swap, o1, o2, open2, hist, histList, undo };
+  const ui = { input, clear, go, src, tgt, swap, o1, o2, open2, hist, histList };
   tp.ui = ui;
   tp.el = h('div', { class: 'tp' },
     h('div', { class: 'tp-head' }, h('h1', null, '翻译')),
@@ -157,7 +155,7 @@ function tpBuild() {
       h('div', { class: 'tp-grid' },
         h('div', { class: 'tp-pane tp-in' }, input, h('div', { class: 'tp-foot' }, h('span', { class: 'grow' }), clear, go)),
         h('div', { class: 'tp-outs' }, o1.pane, o2.pane, open2)),
-      hist, undo));
+      hist));
   tpHist();
   return tp.el;
 }
@@ -171,22 +169,25 @@ function tpIdle() {
   morphPaint(tp.ui.go);
 }
 
-// 清空最近记录：直接清，8 秒内可以撤销
-let tpUndoTimer = null;
+// 清空最近记录：直接清，撤销条在的时候可以撤销
 let tpUndoList = null;
 function tpClearHist() {
   if (!tp.hist.length) return;
+  // 记录区先占着原来的高度，撤销条就放在那块空白中间，不压住翻译框，也不跳版
+  tp.ui.histList.style.minHeight = `${tp.ui.histList.offsetHeight}px`;
   tpUndoList = tp.hist;
   tp.hist = [];
   tpSavePrefs();
   tpHist();
-  tp.ui.undo.hidden = false;
-  clearTimeout(tpUndoTimer);
-  tpUndoTimer = setTimeout(() => { tp.ui.undo.hidden = true; tpUndoList = null; }, 8000);
+  showUndo('已清空最近记录', 'tp-hist', tpUndoHist, tpUndoGone);
+}
+function tpUndoGone() {
+  tpUndoList = null;
+  tp.ui.histList.style.minHeight = '';
+  tpHist();
 }
 function tpUndoHist() {
-  clearTimeout(tpUndoTimer);
-  tp.ui.undo.hidden = true;
+  tp.ui.histList.style.minHeight = '';
   if (!tpUndoList) return;
   // 撤销期间又翻了新的：新的在前，旧的接在后面
   tp.hist = [...tp.hist, ...tpUndoList.filter((x) => !tp.hist.some((y) => y.src === x.src))].slice(0, TP_HIST_MAX);
@@ -271,7 +272,8 @@ function tpUpdate() {
 
 function tpHist() {
   const ui = tp.ui;
-  ui.hist.hidden = !tp.hist.length;
+  ui.hist.hidden = !tp.hist.length && !tpUndoList;
+  ui.hist.querySelector('.tp-hist-head .tp-link').style.visibility = tp.hist.length ? '' : 'hidden';
   ui.histList.replaceChildren(...tp.hist.map((x) => h('button', { class: 'tp-hrow', type: 'button', title: x.src, onclick: () => {
     ui.input.value = x.src;
     ui.o1.box.value = x.out;
