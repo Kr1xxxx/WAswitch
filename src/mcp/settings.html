@@ -11,6 +11,9 @@
     /* 细线：高分屏 0.5px，普通屏 1px */
     :root { --hair: 1px; }
     @media (min-resolution: 2dppx) { :root { --hair: .5px; } }
+    /* 动画时长：和 shell.css 的 --fx-slow / --fx-state 同值，减少动态效果时为 0 */
+    :root { --fx-slow: 200ms; --fx-state: 250ms; }
+    @media (prefers-reduced-motion: reduce) { :root { --fx-slow: 0ms; --fx-state: 0ms; } }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 28px 32px; font: var(--fs-m)/1.5 var(--font-ui); color: var(--text); background: #fff; }
     h1 { margin: 0 0 6px; font-size: var(--fs-xl); letter-spacing: -.01em; }
@@ -49,8 +52,8 @@
     #undoMsg.ok { color: var(--ok); }
     #undoMsg.bad { color: var(--danger); }
     button.copy-ok, button.copy-ok:hover { color: #15803D; border-color: #bbf7d0; background: #f0fdf4; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
-    .copy-ok svg { animation: copy-pop .34s cubic-bezier(.2, .9, .3, 1.35); }
-    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw .28s .06s ease-out forwards; }
+    .copy-ok svg { animation: copy-pop var(--fx-state) cubic-bezier(.2, .9, .3, 1.35); }
+    .copy-ok svg path { stroke-dasharray: 21; stroke-dashoffset: 21; animation: copy-draw var(--fx-slow) calc(var(--fx-state) - var(--fx-slow)) ease-out forwards; }
     @keyframes copy-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     @keyframes copy-draw { to { stroke-dashoffset: 0; } }
     @media (prefers-reduced-motion: reduce) { .copy-ok svg, .copy-ok svg path { animation: none; stroke-dashoffset: 0; } }
