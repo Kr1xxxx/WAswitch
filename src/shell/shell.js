@@ -928,7 +928,7 @@ function trProviderForm() {
     setRow('名称', '', name),
     deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '', base),
     deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', { hunyuan: '填腾讯云 TokenHub 的密钥。', deepl: '免费版（以 :fx 结尾）和付费版都能用。' }[preset.value] || '', key,
+    setRow('API 密钥', preset.value === 'hunyuan' ? '填腾讯云 TokenHub 的密钥。' : '', key,
       preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
     deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '', think),
     h('div', { class: 'hstack', style: { paddingTop: '12px' } },
@@ -1411,7 +1411,6 @@ function editorPage(id) {
           ? `\n注意：和「${res.sameAs}」上次测到（${new Date(res.sameAt).toLocaleString('zh-CN')}）的出口 IP 相同，两个号可能会被认为在同一个地方。`
           : `\n注意：和「${res.sameAs}」的出口 IP 相同，两个号会被认为在同一个地方。`;
       }
-      if (res.direct === 'system') text += '\nClash 开着系统代理时是当前节点的 IP，换节点就会变。';
       if (res.direct === 'real') text += '\n轻量号直连不经过系统代理；想让它走 Clash，要开 Clash 的 TUN 模式。';
       result.replaceChildren(h('div', { class: `note ${res.sameAs ? 'bad' : 'ok'}`, style: { whiteSpace: 'pre-line' } }, text));
       drawTags();
