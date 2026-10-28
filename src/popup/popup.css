@@ -1,6 +1,9 @@
 /* 通知弹窗：B 样式（WhatsApp 头像卡），跟系统深浅色走。
    窗口是透明的，卡片四周留透明边给阴影（和 src/popup.js 里的 PAD 一致）。
    透明窗口里 backdrop-filter 模糊不到桌面，所以底色几乎不透明。 */
+/* 细线：边框、分割线、描边统一用 --hair。高分屏 0.5px；普通屏（如 Windows 100% 缩放）用 1px，避免线变淡或消失 */
+:root { --hair: 1px; }
+@media (min-resolution: 2dppx) { :root { --hair: .5px; } }
 :root {
   --nt-bg: rgba(248, 248, 250, .97);
   --nt-solid: #F6F6F8;
@@ -40,7 +43,7 @@ body { font: var(--fs-m)/1.4 var(--font-ui); color: var(--nt-ink); user-select: 
 
 .nt {
   width: 344px; background: var(--nt-bg); color: var(--nt-ink);
-  border-radius: 16px; box-shadow: var(--nt-shadow); border: .5px solid var(--nt-line);
+  border-radius: 16px; box-shadow: var(--nt-shadow); border: var(--hair) solid var(--nt-line);
   padding: 12px; display: grid; gap: 10px; position: relative; cursor: pointer;
 }
 .win .nt { border-radius: 8px; }
@@ -79,7 +82,7 @@ time { margin-left: auto; color: var(--nt-sub); font-size: var(--fs-s); white-sp
 /* 关闭：Mac 在左上角（和系统通知一样），Windows 在右上角；鼠标停在卡片上才出现 */
 .x {
   position: absolute; top: -7px; left: -7px; width: 20px; height: 20px; border-radius: 50%;
-  border: .5px solid var(--nt-line); background: var(--nt-solid); color: var(--nt-sub);
+  border: var(--hair) solid var(--nt-line); background: var(--nt-solid); color: var(--nt-sub);
   font-size: var(--fs-s); line-height: 18px; text-align: center; padding: 0; opacity: 0; transition: opacity 120ms;
   cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
 }
@@ -88,7 +91,7 @@ time { margin-left: auto; color: var(--nt-sub); font-size: var(--fs-s); white-sp
 .win .nt:hover time { visibility: hidden; }
 
 .more {
-  font-size: var(--fs-s); color: var(--nt-ink); background: var(--nt-bg); border: .5px solid var(--nt-line);
+  font-size: var(--fs-s); color: var(--nt-ink); background: var(--nt-bg); border: var(--hair) solid var(--nt-line);
   border-radius: 999px; padding: 4px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, .14);
   display: flex; gap: 8px; align-items: center;
 }
