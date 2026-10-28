@@ -1,5 +1,10 @@
 // 撤销（src/undo.js）：删除、清空以后能放回去。话术 / 客户 / 翻译模式、翻译服务商（连同密钥和用途）、连接记录。
 const assert = require('assert');
+const Module = require('module');
+// 第 5 部分要加载真的 translate-ipc.js：换成假的 electron 模块
+const fakeElectron = { app: { getPath: () => require('os').tmpdir() }, session: { fromPartition: () => ({ setProxy: async () => {} }) }, ipcMain: { handle() {}, on() {} }, clipboard: {}, shell: {}, WebContentsView: function () {} };
+const origLoad = Module._load;
+Module._load = function (request, ...rest) { return request === 'electron' ? fakeElectron : origLoad.call(this, request, ...rest); };
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -30,7 +35,9 @@ const cs = new R.Records(dir, 'customers');
 const c = cs.upsert({ accountId: 'a1', name: 'Maria Lopez', phone: '+34 612 345 678', tags: ['VIP'], note: 'size 16"', followUpAt: 5, lang: 'es' });
 cs.patch(c.id, { reminded: true });
 const snap = { ...cs.get(c.id), tags: [...c.tags] };
-assert(cs.remove(c.id));
+const removed = cs.remove(c.id);
+assert.equal(removed.name, 'Maria Lopez', 'remove 返回删除前的内容（不是清空后的）');
+assert.deepEqual(removed.tags, ['VIP']);
 assert.equal(cs.list().length, 0);
 assert(cs.restore(snap));
 const back = new R.Records(dir, 'customers').get(c.id); // 从文件重新读
@@ -79,5 +86,24 @@ assert.equal(cfg.fixId, a);
 assert.equal(tr.publicConfig().providers[0].hasKey, true, '密钥一起回来');
 assert.equal(tr.restoreProvider(psnap), false, '已经有了不重复放');
 assert.equal(tr.deleteProvider('nope'), null);
+assert.equal(cs.restore({ id: 'empty', name: '', phone: '' }), false, '空记录不放回');
+
+// 5. 经过真的 translate-ipc 接口：删翻译模式、删服务商，再撤销，内容一样
+const { setupTranslateIpc } = require('../src/translate-ipc');
+const handlers = {};
+const offers = [];
+const modes = new R.Records(dir, 'tmodes');
+const real = { handleShell: (n, f) => { handlers[n] = f; }, onShell: () => {}, modeStore: modes, translator: tr, offerUndo: (o, fn) => offers.push({ ...o, fn }) };
+setupTranslateIpc(new Proxy(real, { get: (t, k) => (k in t ? t[k] : () => {}) }));
+const m = modes.upsert({ name: 'Formal German', direction: 'out', prompt: 'Translate into formal German (Sie).' });
+handlers['tmode:delete'](m.id);
+assert.equal(modes.get(m.id), null);
+assert.equal(offers.at(-1).text, '已删除「Formal German」', '撤销条显示名字');
+offers.at(-1).fn();
+assert.equal(modes.get(m.id).prompt, 'Translate into formal German (Sie).', '撤销后提示词还在');
+handlers['tr:provider:delete'](b);
+assert.equal(offers.at(-1).text, '已删除「DeepL」');
+offers.at(-1).fn();
+assert.equal(tr.provider(b).keyTail, '5678');
 
 console.log('check-undo: ok');

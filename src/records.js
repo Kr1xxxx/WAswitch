@@ -177,14 +177,16 @@ class Records {
     return { added, dup, bad };
   }
 
+  // 返回删除前的副本（撤销时传给 restore），没有这条返回 false
   remove(id) {
     const r = this.load().find((x) => x.id === id && !x.deleted);
     if (!r) return false;
+    const before = { ...r, ...(Array.isArray(r.tags) ? { tags: [...r.tags] } : {}) };
     // 只留 id、时间和删除标记，内容清掉
     for (const k of Object.keys(r)) if (!['id', 'updatedAt', 'deleted'].includes(k)) delete r[k];
     Object.assign(r, this.def.clean({}), { updatedAt: Date.now(), deleted: true });
     this.save();
-    return true;
+    return before;
   }
 
   // 撤销删除：snap 是删除前的记录（含 id）。删除标记还在就原地放回，被清掉了就重新加
@@ -193,6 +195,7 @@ class Records {
     this.load();
     if (this.items.some((r) => r.id === snap.id && !r.deleted)) return false;
     const rec = { id: snap.id, ...this.def.clean(snap), updatedAt: Date.now(), deleted: false };
+    if (!this.def.valid(rec)) return false; // 内容是空的不放回
     const i = this.items.findIndex((r) => r.id === snap.id);
     if (i >= 0) this.items[i] = rec; else this.items.push(rec);
     this.save();

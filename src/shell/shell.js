@@ -607,11 +607,15 @@ function renderAi() {
 // 放在用户刚才操作的地方，而且不能被 WhatsApp 页面盖住：panel 右侧面板列表底部；
 // 账号页的其他操作（侧栏解散分组）放顶栏；其他页面（设置、未读总览）放内容区底部。再删别的，换成新的这一条
 const UNDO_SHOW_MS = 8000;
+const UNDO_MAX_MS = 14000; // 主进程 15 秒后就不认了：鼠标停在上面也最多留这么久
 let undoBox = null;
 let undoTimer = null;
+let undoCap = null;
 function hideUndo() {
   clearTimeout(undoTimer);
+  clearTimeout(undoCap);
   undoTimer = null;
+  undoCap = null;
   if (undoBox) undoBox.remove();
   undoBox = null;
 }
@@ -653,6 +657,7 @@ window.wa.onUndoOffer((o) => {
   document.body.append(undoBox);
   placeUndo();
   arm();
+  undoCap = setTimeout(hideUndo, UNDO_MAX_MS);
 });
 window.addEventListener('resize', placeUndo);
 

@@ -2773,9 +2773,8 @@ onShell('panel:tab', (tab) => {
 handleShell('panel:data', () => panelData());
 handleShell('reply:save', (data) => (data && typeof data === 'object' && replyStore.upsert({ id: data.id, title: data.title, text: data.text }) ? panelData() : null));
 handleShell('reply:delete', (id) => {
-  const snap = typeof id === 'string' ? replyStore.get(id) : null;
-  if (snap && replyStore.remove(id)) {
-    const old = { ...snap };
+  const old = typeof id === 'string' ? replyStore.remove(id) : false;
+  if (old) {
     offerUndo({ kind: 'panel', where: 'panel', text: `已删除「${shortName(old.title || old.text)}」` }, () => replyStore.restore(old));
   }
   return panelData();
@@ -2791,9 +2790,8 @@ handleShell('cust:save', (data) => {
 });
 handleShell('cust:delete', (id) => {
   const snap = typeof id === 'string' ? customerStore.get(id) : null;
-  if (snap && !parkedCustomer(snap)) {
-    const old = { ...snap, tags: [...(snap.tags || [])] };
-    customerStore.remove(id);
+  const old = snap && !parkedCustomer(snap) ? customerStore.remove(id) : false;
+  if (old) {
     offerUndo({ kind: 'panel', where: 'panel', text: `已删除「${shortName(old.name || old.phone)}」` }, () => { customerStore.restore(old); trIpc.pushFloat(); });
   }
   return panelData();

@@ -146,9 +146,8 @@ function setupTranslateIpc(ctx) {
     return rec ? { ok: true, id: rec.id, ...trState() } : { error: ctx.modeStore.list().length >= 200 ? '最多 200 个模式' : '名字和提示词都要填', ...trState() };
   });
   handleShell('tmode:delete', (id) => {
-    const snap = typeof id === 'string' ? ctx.modeStore.get(id) : null;
-    if (snap && ctx.modeStore.remove(id)) {
-      const old = { ...snap };
+    const old = typeof id === 'string' ? ctx.modeStore.remove(id) : false;
+    if (old) {
       ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(old.name)}」` }, () => { ctx.modeStore.restore(old); pushFloat(); });
     }
     return trState();
