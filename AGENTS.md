@@ -52,7 +52,7 @@
 
 ## 5. 动效：只有一种
 
-- 时长只用 `var(--fx)`（250ms），曲线只用 `var(--fx-ease)`（ease-out），只动 `opacity` 和 `transform`。
+- 时长只用 `var(--fx)`（250ms），曲线只用 `var(--fx-ease)`（ease-out）。动哪个属性不限。
 - 系统开了「减少动态效果」时 `--fx` 自动变 0ms。
 - 唯一例外是加载转圈 `spin .9s linear infinite`。
 - 能不动就不动：不做弹簧、过冲、扫光、交错入场这类装饰动效。

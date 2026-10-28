@@ -28,7 +28,8 @@ const doc = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const defined = new Set();
 for (const f of files) {
   if (!/\.(css|html)$/.test(f)) continue;
-  for (const m of fs.readFileSync(f, 'utf8').matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)) defined.add(m[1]);
+  const text = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''); // 注释里的不算定义
+  for (const m of text.matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)) defined.add(m[1]);
 }
 // 只认紧跟在反引号或 var( 后面的，命令行参数（--no-sandbox）不算；`--fs-*` 这种通配不算
 const named = new Set([...doc.matchAll(/(?<=`|var\()(--[a-z][a-z0-9-]*)(?![a-z0-9*-])/g)].map((m) => m[1]));
@@ -46,7 +47,7 @@ const LEGACY = new Set([
   'server/public/admin/admin.css', 'server/public/admin/index.html',
   'src/colors/radix-dark.css', 'server/public/admin/radix-dark.css',
 ]);
-const DARK = [/prefers-color-scheme\s*:\s*dark/i, /color-scheme\s*:\s*(?:light\s+)?dark/i, /data-theme/i, /themeSource/, /shouldUseDarkColors/, /radix-dark\.css/];
+const DARK = [/prefers-color-scheme\s*:\s*dark/i, /color-scheme\s*:\s*(?:light\s+)?dark/i, /data-theme/i, /themeSource\s*=\s*['"`](?:dark|system)/, /shouldUseDarkColors/, /radix-dark\.css/];
 for (const f of files) {
   if (LEGACY.has(rel(f))) continue;
   fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
