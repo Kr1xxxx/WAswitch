@@ -138,28 +138,31 @@ function glossaryPairs(role, toChinese) {
 }
 const MAX_ROLE = 4000;
 // 内置“假发词汇”（shen 2026-10-28）：设置 › 翻译 里打开才用，默认关。左边中文，右边英文，两个方向都照这个翻。
-// 长的放前面（全蕾丝头套在头套前面），混元按顺序参考时先对上长的。
+// 顺序：头套放第一行、全蕾丝头套紧跟其后（2026-10-28 Fable 用 glm-4-flash 实测：头套排在全蕾丝头套后面时，
+// “普通头套”会被翻成 frontal、wig 会被翻成假发；头套放最前面两处都对了。混元 hy-mt2-plus 两种顺序都全对）。
 const WIG_TERMS = [
-  ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'], ['全蕾丝头套', 'Full lace wig'], ['头套', 'Wig'],
+  ['头套', 'Wig'], ['全蕾丝头套', 'Full lace wig'], ['配件', 'Closure'], ['前头', 'Frontal'], ['发帘', 'Bundle'],
   ['胶片发', 'Tape hair'], ['辫发', 'Raw hair'], ['处女发', 'Virgin hair'],
 ];
 // 真正带去翻译的角色设定：用户自己写的在前；打开假发词汇时后面接上词表。
-// 用户自己写了同一个中文词或同一个英文词的固定译法，就用用户的，词表里那一行不加。
+// 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
 function roleWithWig(role, wig) {
   const own = String(role || '');
   if (!wig) return own;
-  const zh = new Set(); const en = new Set();
+  const taken = new Set();
   for (const raw of own.split(/\r?\n/)) {
     const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
-    if (m) { zh.add(m[1].toLowerCase()); en.add(m[2].toLowerCase()); }
+    if (m) { taken.add(m[1].toLowerCase()); taken.add(m[2].toLowerCase()); }
   }
-  const lines = WIG_TERMS.filter(([a, b]) => !zh.has(a.toLowerCase()) && !en.has(b.toLowerCase())).map(([a, b]) => `${a} = ${b}`);
-  if (!lines.length) return own;
-  const keep = WIG_TERMS.filter(([a, b]) => lines.includes(`${a} = ${b}`));
+  const keep = WIG_TERMS.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
+  if (!keep.length) return own;
+  const lines = keep.map(([a, b]) => `${a} = ${b}`);
   // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
   const back = keep.map(([a, b]) => `${b} → ${a}`);
   const head = '假发行业固定译法，必须照用（左边中文，右边英文）：';
-  const tail = '英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词）：';
+  // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
+  const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
+  const tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：`;
   return `${own.trim() ? `${own.trim()}\n\n` : ''}${head}\n${lines.join('\n')}\n${tail}\n${back.join('\n')}`;
 }
 function buildMtMessages(text, langs, context, role) {
