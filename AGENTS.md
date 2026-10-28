@@ -85,6 +85,8 @@
 if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
 ```
 
+`npm run check:ime-enter` 会查：判断回车的 keydown/keyup/keypress 处理里没有这两个判断就报错。
+
 ## 10. 公开仓库
 
 仓库是公开的。代码、注释、测试数据、截图里不放密钥、令牌、真实客户的名字、号码和聊天内容。
@@ -96,6 +98,7 @@ if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
 ```sh
 npm run check:agents        # 本页提到的变量都存在；没有新的深色模式写法
 npm run check:middot        # 没有中点「·」
+npm run check:ime-enter     # 回车处理带输入法守卫
 npm run check:font-sizes    # 只有四种字号
 npm run check:radius-motion # 圆角四档、动效 250ms ease-out
 npm run check:colors        # 只用 Radix 颜色

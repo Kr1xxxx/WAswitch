@@ -132,7 +132,7 @@ function makeLitePage(id) {
   }
   sendBtn.onclick = send;
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
   });
   input.addEventListener('input', () => { rememberDraft(); input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
