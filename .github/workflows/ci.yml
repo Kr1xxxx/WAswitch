@@ -36,6 +36,8 @@ jobs:
         run: npm run check:customer-time
       - name: 字号自检（最多四种，最小 12px）
         run: npm run check:font-sizes
+      - name: 圆角和动效检查（6 / 10 / 14 / 圆形，250ms ease-out）
+        run: npm run check:radius-motion
       - name: 账号图标 emoji 自检
         run: npm run check:emoji
       - name: 悬浮翻译自检
