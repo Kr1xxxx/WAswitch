@@ -43,6 +43,7 @@
     "check:sel-translate": "electron scripts/check-sel-translate.js",
     "check:tp-swap": "electron scripts/check-tp-swap.js",
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
+    "check:tr-keys": "electron scripts/check-tr-keys.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"
   },

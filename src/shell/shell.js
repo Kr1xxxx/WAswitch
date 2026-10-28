@@ -986,10 +986,12 @@ let trAdvanced = LS('trAdvanced') === '1';
 let trKeyFocus = ''; // 简单版里“去填密钥”：光标放进这个服务商的密钥框
 const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
 // 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
-async function trOpenKey(pid) {
+// preset：列表里还没有这个服务商时（翻译页右上角点「未启用」的混元等），直接给它开一个填密钥的地方
+async function trOpenKey(pid, preset) {
   if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
   const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
-  if (trAdvanced) { trEdit = p ? { ...p } : trEdit; trFocusKey = !!p; } else trKeyFocus = p ? p.id : '';
+  const add = !p && TR_KEY_PRESETS.includes(preset) ? preset : '';
+  if (trAdvanced) { trEdit = p ? { ...p } : add ? { preset: add } : trEdit; trFocusKey = !!(p || add); } else trKeyFocus = p ? p.id : add ? `new:${add}` : '';
   trSay = '';
   settingsTab = 'translate';
   window.wa.showPage('settings');
@@ -1106,30 +1108,45 @@ function trWigBox(c, apply) {
     h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。DeepL 不用词表。'));
 }
 // 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
-function trKeysBox(c, apply) {
-  if (!c.providers.length) return h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有服务商。'));
+// 简单设置里总有这三个服务商的密钥框（和翻译页右上角一致）。列表里没有的（0.5.4 起新装的没有混元，或被删了）先占个位，填了密钥才真的加上
+const TR_KEY_PRESETS = ['zhipu', 'hunyuan', 'deepl'];
+const TR_KEY_NAMES = { zhipu: '智谱', hunyuan: '腾讯混元', deepl: 'DeepL' };
+const TR_KEY_MODELS = { zhipu: 'glm-4-flash', hunyuan: 'hy-mt2-plus', deepl: '' };
+function trKeyRows(c) {
   const order = (p) => (p.id === c.primaryId ? 0 : p.id === c.fallbackId ? 1 : p.id === c.fixId ? 2 : 3);
+  const rows = [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => ({ ...p, rowId: p.id }));
+  const presets = c.presets || [];
+  for (const id of TR_KEY_PRESETS) {
+    if (c.providers.some((p) => p.preset === id)) continue;
+    const pr = presets.find((x) => x.id === id) || {};
+    rows.push({ id: '', rowId: `new:${id}`, preset: id, name: pr.name || TR_KEY_NAMES[id], baseUrl: pr.baseUrl || '', model: id === 'deepl' ? '' : pr.model || TR_KEY_MODELS[id], hasKey: false, keyTail: '' });
+  }
+  return rows;
+}
+function trKeysBox(c, apply) {
   const tag = (t) => h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, t);
-  return h('div', { class: 'box tr-keys' }, [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => {
+  return h('div', { class: 'box tr-keys' }, trKeyRows(c).map((p) => {
     const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
       placeholder: p.hasKey ? `已保存 ••${p.keyTail}` : '粘贴 API 密钥' });
     const save = async () => {
       if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return null; }
-      const r = await window.wa.trProviderSave({ id: p.id, preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, thinking: p.thinking });
+      // 占位的行：不带 id，保存时新加这个服务商（不改默认、备用、纠错）
+      const r = await window.wa.trProviderSave({ ...(p.id ? { id: p.id } : {}), preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, ...(p.thinking !== undefined ? { thinking: p.thinking } : {}) });
       if (r.error) { apply(r); return { ok: false }; }
-      trSay = ''; trTestRes[p.id] = ''; trTestRaw[p.id] = '';
+      const pid = p.id || r.id;
+      trSay = ''; trTestRes[pid] = ''; trTestRaw[pid] = '';
       apply(r);
       // 保存后自动测一次（每行只留「保存」一个按钮）；没通过的原因写在服务商下面
       let t;
-      try { t = await window.wa.trTest(p.id); } catch { t = { ok: false, error: '测试失败' }; }
-      if (!t.ok) { trTestRes[p.id] = t.error || '测试没通过'; trTestRaw[p.id] = t.detail || ''; render(true); }
+      try { t = await window.wa.trTest(pid); } catch { t = { ok: false, error: '测试失败' }; }
+      if (!t.ok) { trTestRes[pid] = t.error || '测试没通过'; trTestRaw[pid] = t.detail || ''; render(true); }
       return { ok: !!t.ok };
     };
-    const saveBtn = morphBtn(`trKeySave:${p.id}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
+    const saveBtn = morphBtn(`trKeySave:${p.rowId}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
     key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') saveBtn.click(); });
-    if (trKeyFocus === p.id) requestAnimationFrame(() => { if (trKeyFocus !== p.id || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
+    if (trKeyFocus === p.rowId) requestAnimationFrame(() => { if (trKeyFocus !== p.rowId || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
     const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
-    const roles = [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null];
+    const roles = p.id ? [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null] : [];
     const cap = p.preset === 'deepl' ? trCapBox(c, apply) : null;
     return h('div', { class: 'tr-krow' },
       h('div', { class: 'meta' },
