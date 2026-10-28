@@ -18,14 +18,18 @@
   ].map(([id, char, name]) => ({ id, char, name }));
   const IDS = LIST.map((e) => e.id);
   const byId = new Map(LIST.map((e) => [e.id, e]));
-  // 随机挑一个别的号还没用的；全用过了就在全部里随机
+  // 默认先给的：第 1 个号四叶草，第 2 个号皇冠（都被用了才往下随机）
+  const FIRST = ['clover', 'crown'];
+  // 先按 FIRST 顺序给还没被用的；之后随机挑一个别的号还没用的；全用过了就在全部里随机
   function pick(used = [], rand = Math.random) {
     const taken = new Set(used);
+    const first = FIRST.find((id) => !taken.has(id));
+    if (first) return first;
     const free = IDS.filter((id) => !taken.has(id));
     const pool = free.length ? free : IDS;
     return pool[Math.floor(rand() * pool.length)];
   }
-  const api = { LIST, IDS, get: (id) => byId.get(id) || null, valid: (id) => byId.has(id), pick };
+  const api = { LIST, IDS, FIRST, get: (id) => byId.get(id) || null, valid: (id) => byId.has(id), pick };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.EMOJI = api;
 })(typeof window !== 'undefined' ? window : this);
