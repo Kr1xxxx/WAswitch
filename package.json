@@ -68,6 +68,14 @@
   "build": {
     "appId": "com.waswitch.app",
     "productName": "WAswitch",
+    "electronLanguages": [
+      "zh-CN",
+      "zh_CN",
+      "zh-TW",
+      "zh_TW",
+      "en-US",
+      "en"
+    ],
     "files": [
       "src/**/*",
       "!src/fonts/misans{,/**/*}",
@@ -75,7 +83,9 @@
       "src/mcp/settings.html",
       "src/mcp/settings.js",
       "src/mcp/preload.js",
-      "assets/**/*"
+      "assets/**/*",
+      "!**/node_modules/**/*.{map,md,markdown,d.ts,d.mts,d.cts}",
+      "**/node_modules/**/{LICENSE,LICENCE,license,licence}.{md,markdown}"
     ],
     "icon": "assets/icon.png",
     "win": {
