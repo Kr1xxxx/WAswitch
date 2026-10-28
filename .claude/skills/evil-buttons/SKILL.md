@@ -13,7 +13,7 @@ This folder holds an unchanged copy of every component (`components/*.tsx`) and 
 1. Pick the closest component from the list below.
 2. Read its `docs/<slug>.mdx` for props, variants and usage, then its `components/<file>.tsx` for the exact timing, easing, colors and DOM structure.
 3. Build it in the target stack. In a shadcn/React project install it from the shadcn registry `@evilbuttons/<name>` (see the Install section on evilbuttons.com). In WAswitch (Electron, plain HTML/CSS/JS in `src/shell`, `src/float`, `src/popup`, no React or Tailwind) rebuild the idea in vanilla JS and CSS, do not add React, Tailwind or motion as dependencies.
-4. In WAswitch the project UI design rules win over the upstream look (memory `waswitch-ui-design-rules`): Radix UI Colors only, 0.5px borders, minimal motion (ease-out 250ms), no flashy effects, min 12px text. Take the interaction pattern and state handling, drop glow, shaders, confetti and physics.
+4. In WAswitch the project UI design rules win over the upstream look (memory `waswitch-ui-design-rules`): Radix UI Colors only, 0.5px borders, minimal motion (ease-out 250ms), no flashy effects, min 12px text. Take the interaction pattern and state handling, drop glow, shaders, confetti and physics. Write the labels yourself in Chinese for the audience under the same rules; do not reuse upstream copy (Detonate, guilt-trip prompts and so on).
 
 If the copy here looks stale, check upstream for new components: `git clone --depth 1 https://github.com/radiumcoders/evil-buttons` and read `registry.components.json`.
 
@@ -30,7 +30,6 @@ If the copy here looks stale, check upstream for new components: `git clone --de
 | CommandButton | `components/command-button.tsx` | `docs/command-button.mdx` | Global keyboard shortcut shown as keycaps that sink as keys are held. |
 | RealisticSwitch | `components/realistic-switch.tsx` | `docs/realistic-switch.mdx` | Latching push switch that stays down while on. |
 | ClickPowerUp | `components/click-powerup.tsx` | `docs/click-power-up.mdx` | Bracketed button that arms on hover and flashes on click. |
-| DoubtButton | `components/doubt-button.tsx` | `docs/doubt-button.mdx` | Escalating confirmations before the real action fires (joke version of a confirm dialog). |
 
 ## Styles
 
@@ -64,6 +63,7 @@ If the copy here looks stale, check upstream for new components: `git clone --de
 | TrollButton | `components/troll-button.tsx` | `docs/troll-button.mdx` | Dodges the cursor until it runs out of stamina. |
 | StickyButton | `components/sticky.tsx` | `docs/sticky-button.mdx` | Magnetic pull toward the cursor with parallax tilt. |
 | ThrusterButton | `components/thruster-button.tsx` | `docs/thruster-button.mdx` | Flies to the cursor on air jets with WebGL smoke. |
+| DoubtButton | `components/doubt-button.tsx` | `docs/doubt-button.mdx` | Escalating confirmations before the real action fires. |
 | DemonicButton | `components/demonic-button.tsx` | `docs/demonic-button.mdx` | Hold to raise devil horns and canvas fire. |
 
 ## Updating this copy
