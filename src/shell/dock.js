@@ -222,9 +222,10 @@ function dockSuggestBox(text, take, drop) {
     h('span', { class: 'dk-tr' }, text),
     h('span', { class: 'dk-row' }, h('button', { class: 'pn-btn primary', onclick: take }, '采用'), h('button', { class: 'pn-btn', onclick: drop }, '不用')));
 }
+// 重新打开对话时补回来的旧译文没有原文（磁盘上只存译文）：不能纠错，也没有原文可展开
 function dockItemActs(it) {
   return h('span', { class: 'dk-acts-mini' },
-    h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: () => window.wa.dockItem(it.h, true) }, '纠错'),
+    it.text ? h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: () => window.wa.dockItem(it.h, true) }, '纠错') : null,
     h('button', { class: 'dk-link', title: '直接改译文，改过的不会被自动覆盖', onclick: () => { dk.editing = it.h; dk.editText = it.tr; dockRender(true); } }, '编辑'));
 }
 
@@ -272,14 +273,14 @@ function dockHoldScroll(el) {
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
-    return h('div', { class: `${cls} wide foot`, 'data-h': it.h }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
+    return h('div', { class: `${cls} wide foot`, 'data-h': it.h }, it.text ? h('span', { class: 'dk-orig' }, it.text) : null, fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
   }
   const warn = it.warn && it.warn.length ? h('span', { class: 'tr-warn' }, `注意：译文里有原文没有的内容：${it.warn.slice(0, 3).join('、')}`) : null;
   const foot = !!(warn || (it.state === 'done' && it.suggest));
   const sp = foot ? null : dockSpacer();
   // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
   const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
-  const orig = dockOrig(it.h, it.text, it.state === 'done' && !!it.tr);
+  const orig = it.text ? dockOrig(it.h, it.text, it.state === 'done' && !!it.tr) : { box: null, btn: null };
   const trText = trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp);
   const tr = it.state === 'done' ? [orig.btn ? h('span', { class: 'dk-trline' }, orig.btn, trText) : trText, dockItemActs(it),
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]

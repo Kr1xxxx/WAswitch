@@ -2,7 +2,9 @@
 // 记下读到的“收到的消息”，决定哪些自动翻、哪些等用户点，排队调用翻译，控制每分钟和每天的上限。
 // 消息的 data-id 里有对方号码，只留在主进程：对外（悬浮窗、大模型）只用 hash。
 // 译文另外永久存到磁盘（deps.store，见 trstore.js）：切回对话、重启都直接显示，不再调模型。
+// 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（只有译文，没有原文）。
 const crypto = require('crypto');
+const { textKey, VIEW_MAX } = require('./trstore');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，只补翻最近 5 条
@@ -10,7 +12,7 @@ const PER_MINUTE = 20;
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
-const KEEP_VIEW = 40; // 读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
+const KEEP_VIEW = VIEW_MAX; // 40（和 trstore.js 存的条数一样）。读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
 // 从最近消息里截上下文：这条消息之前的几条；这条不在里面就不给（别的对话的内容不能串进来）
 function contextFrom(list, h) {
@@ -189,6 +191,8 @@ class FloatCore {
       const room = Math.max(0, Math.max(KEEP_VIEW, st.view.length) - view.length);
       if (room && kept.length) view = [...kept.slice(-room), ...view];
     }
+    // 刚打开（切回、重启后）这个对话：读页面只读得到最后 20 条，以前翻译栏上更早的译文按存的记录补在上面
+    if (newChat && chat) view = [...this.restore(accId, st, chat, view, msgs), ...view];
     const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
@@ -196,8 +200,45 @@ class FloatCore {
     st.view = view;
     st.seen = hs;
     st.newest = newChat ? newest : Math.max(st.newest, newest);
+    if (chat) this.keepView(accId, st, chat);
     this.pump();
     return changed;
+  }
+
+  // 存的记录里，比这次读到的都早的、有译文的消息：放回 st.items，返回它们的 hash（按原来的顺序）
+  restore(accId, st, chat, view, msgs) {
+    const store = this.deps.store;
+    if (!store || !store.getView) return [];
+    const ck = hashOf(accId, `chat|${chat}`);
+    const saved = store.getView(accId, ck);
+    if (!saved.length) return [];
+    // 和这次读到的接上：记录里这次读到的第一条之前的那些；接不上（不在的时候又来了 20 多条）就整张单子都比这次早
+    const inRead = new Set(view);
+    const readKeys = new Set(msgs.filter((m) => !m.out).map((m) => textKey(String(m.text || ''))));
+    const at = view.length ? saved.findIndex((x) => x.h === view[0]) : -1;
+    const older = (at >= 0 ? saved.slice(0, at) : saved).filter((x) => !inRead.has(x.h) && (at >= 0 || !readKeys.has(x.k)));
+    const out = [];
+    for (const x of older) {
+      if (out.includes(x.h)) continue;
+      let item = st.items.get(x.h);
+      if (!item) {
+        const rec = store.getKey(accId, ck, x.k);
+        if (!rec) continue; // 没翻过的不补（没存原文，补回来也显示不出来）
+        item = { h: x.h, ck, k: x.k, text: '', t: x.t, state: 'done', tr: rec.edited || this.keepGist('') ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '' };
+        st.items.set(x.h, item);
+      }
+      out.push(x.h);
+    }
+    return out.slice(-Math.max(0, KEEP_VIEW - view.length));
+  }
+
+  // 翻译栏现在显示的消息记到磁盘上（只有 hash 和时间）
+  keepView(accId, st, chat) {
+    const store = this.deps.store;
+    if (!store || !store.putView) return;
+    const list = st.view.map((h) => st.items.get(h)).filter(Boolean)
+      .map((it) => ({ h: it.h, k: it.k || textKey(it.text), t: it.t || '' }));
+    store.putView(accId, hashOf(accId, `chat|${chat}`), list);
   }
 
   // 用户往上翻聊天记录：WhatsApp 把最下面的新消息从页面上拿掉了，读到的最后 20 条是更早的。
@@ -226,7 +267,7 @@ class FloatCore {
   manual(accId, h, fix = false) {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
-    if (!item || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false;
+    if (!item || !item.text || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文没有原文，不能重翻
     item.state = 'queued';
     item.err = '';
     item.errKind = '';
@@ -288,7 +329,7 @@ class FloatCore {
 
   // 译文写到磁盘（手动改的、纠错采用的也存）
   save(accId, item) {
-    if (this.deps.store && item.ck) this.deps.store.put(accId, item.ck, item.text, { tr: item.tr, edited: item.edited, fixed: item.fixed });
+    if (this.deps.store && item.ck) this.deps.store.putKey(accId, item.ck, item.k || textKey(item.text), { tr: item.tr, edited: item.edited, fixed: item.fixed });
   }
 
   // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）

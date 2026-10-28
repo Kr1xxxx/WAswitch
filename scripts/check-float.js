@@ -94,6 +94,91 @@ async function core() {
   await noWordsGist();
   await sendNoJump();
   scrollNoBottom();
+  await reopenKeepsAll();
+}
+
+// 重新打开对话、重启软件后，翻译栏上以前的译文一条不少（shen 2026-10-28「后续打开页面，翻译的文本都一直在这」）：
+// 页面只读最后 20 条（双方），聊着聊着翻译栏攒到 20 条译文；切走再切回、重启后，读不到的更早的译文按存的记录补回来，
+// 不调模型；补回来的只有译文（磁盘上不存原文），不能纠错；客户再发来照常接在后面
+async function reopenKeepsAll() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-reopen-'));
+  const sent = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  const chat = '123456789012345@lid';
+  const conv = [];
+  for (let i = 0; i < 46; i += 1) conv.push({ id: `${i % 2 === 1}_${chat}_3EB${i}`, out: i % 2 === 1, text: `Message ${i}`, t: { h: 9, mi: i, at: 1700000000000 + i * 60000 } });
+  const read = (n) => ({ title: 'Emma', bottom: true, msgs: conv.slice(0, n).slice(-20) });
+  const opts = { auto: true, dailyCap: 500 };
+  let { store, fc } = make();
+  for (let n = 1; n <= 40; n += 1) { fc.ingest('R', read(n), opts); await sleep(2); }
+  await sleep(20);
+  const live = fc.viewOf('R').items.map((x) => [x.state, x.tr]);
+  assert.strictEqual(live.length, 20, '聊着聊着翻译栏攒到 20 条');
+  assert(live.every(([st]) => st === 'done'));
+  // 切到别的对话再切回：20 条都在，不调模型
+  fc.ingest('R', { title: 'Megan', bottom: true, msgs: [msg(1, false, '999@lid', 'Hi there')] }, opts);
+  await sleep(20);
+  sent.length = 0;
+  fc.ingest('R', read(40), opts);
+  await sleep(20);
+  assert.deepStrictEqual(fc.viewOf('R').items.map((x) => [x.state, x.tr]), live, '切回对话：以前的译文一条不少');
+  assert.deepStrictEqual(sent, [], '切回对话不调模型');
+  // 重启：同样 20 条，按原来的顺序，不调模型
+  store.flush();
+  ({ store, fc } = make());
+  fc.ingest('R', read(40), opts);
+  await sleep(20);
+  let items = fc.viewOf('R').items;
+  assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), live, '重启后：以前的译文一条不少、顺序不变');
+  assert.deepStrictEqual(sent, [], '重启后不调模型');
+  assert.deepStrictEqual(items.slice(0, 10).map((x) => x.text), Array(10).fill(''), '补回来的只有译文');
+  assert.strictEqual(items[0].t, '09:00', '补回来的带着时间');
+  assert.strictEqual(fc.manual('R', items[0].h, true), false, '补回来的没有原文，不能纠错');
+  // 补回来的也能手动改，改了存住，再重启还在
+  assert(fc.edit('R', items[0].h, '我改的'));
+  store.flush();
+  const raw = fs.readFileSync(path.join(dir, 'R', fs.readdirSync(path.join(dir, 'R'))[0]), 'utf8');
+  assert(!raw.includes('"Message ') && !raw.includes('123456789012345'), '磁盘上不存原文和号码');
+  ({ store, fc } = make());
+  fc.ingest('R', read(40), opts);
+  assert.deepStrictEqual(fc.viewOf('R').items[0].tr, '我改的');
+  // 客户接着发：接在后面，补回来的留在上面，最多 40 条
+  for (let n = 41; n <= 46; n += 1) { fc.ingest('R', read(n), opts); await sleep(2); }
+  await sleep(20);
+  items = fc.viewOf('R').items;
+  assert.strictEqual(items.length, 23);
+  assert.deepStrictEqual(items.slice(-3).map((x) => x.tr), ['译:Message 40', '译:Message 42', '译:Message 44']);
+  assert.strictEqual(new Set(items.map((x) => x.h)).size, items.length, '没有重复');
+  assert.deepStrictEqual(sent, ['Message 40', 'Message 42', 'Message 44']);
+  // 以前存的译文带【要点】那行（#240 之前的默认模式）：补回来时也去掉
+  {
+    const e = store.load('R', items[1].h && fc.viewOf('R').chatKey);
+    const k = store.getView('R', fc.viewOf('R').chatKey)[1].k;
+    e.data[k].tr = '译:Message 2\n【要点】客户问货';
+    e.dirty = true;
+    store.flush();
+    const again = make();
+    again.fc.ingest('R', read(46), opts);
+    assert.strictEqual(again.fc.viewOf('R').items[1].tr, '译:Message 2', '补回来的译文也去掉【要点】');
+  }
+  // 不在的时候来了很多（接不上）：存的整张单子都比这次读到的早，照样补在上面
+  store.flush();
+  const more = [];
+  for (let i = 46; i < 70; i += 1) more.push({ id: `false_${chat}_3EB${i}`, out: false, text: `Late ${i}`, t: { h: 10, mi: i - 10, at: 1700000000000 + i * 60000 } });
+  ({ store, fc } = make());
+  fc.ingest('R', { title: 'Emma', bottom: true, msgs: more.slice(-20) }, { auto: false, dailyCap: 500 });
+  items = fc.viewOf('R').items;
+  assert.strictEqual(items.length, 40);
+  assert.deepStrictEqual(items.slice(19, 21).map((x) => [x.tr, x.text]), [['译:Message 44', ''], ['', 'Late 50']]);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('重新打开对话、重启后译文一条不少自检通过');
 }
 
 // 自己发消息时翻译栏不动（shen 2026-10-28）：页面只读最后 20 条，自己每发一条，最老的客户消息就被挤出读的范围。
@@ -301,7 +386,7 @@ async function noWordsGist() {
   keep = false;
   const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
   fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
-  assert.strictEqual(fc3.viewOf('G').items[0].tr, '客户\n【要点】原文就有');
+  assert.strictEqual(fc3.viewOf('G').items.at(-1).tr, '客户\n【要点】原文就有');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
