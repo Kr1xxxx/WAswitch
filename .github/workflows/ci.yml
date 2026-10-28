@@ -23,6 +23,8 @@ jobs:
       - run: npm ci
       - name: 界面文字不用中点「·」分隔
         run: npm run check:middot
+      - name: 回车处理先判断输入法选字
+        run: npm run check:ime-enter
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: MCP 自检
         run: npm run check:mcp

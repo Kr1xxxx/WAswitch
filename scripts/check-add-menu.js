@@ -2,6 +2,7 @@
 // 真的 shell 页面 + 假的主进程。检查：1) 侧栏里没有「添加账号」行，展开和收起侧栏都有 + 号；
 // 2) 点 + 号把按钮下方的坐标交给主进程弹菜单，菜单是「添加账号」「添加分组」，选了分别打开编辑页、新建分组；
 // 另外：没放进分组的号上面没有「未分组」组头，拖到「账号」那一行就移出分组（shen 2026-10-28）。
+// 7) 分组改名框：输入法选字时的回车不提交（第 7 步）。
 // 3) 有分组时添加账号页有「分组」，默认是正在看的那个号所在的组，保存时带上；另外编辑页开多次，morphState 不留旧的测试按钮状态（正文第 6 步）。SHOT_DIR 设了就存截图（菜单用 import 截整屏）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
 const path = require('path');
@@ -135,5 +136,26 @@ app.whenReady().then(async () => {
   }
   const keys = await js(() => Object.keys(morphState).filter((k) => k.startsWith('editorTest:')));
   assert.deepStrictEqual(keys, ['editorTest:new:8'], `旧的编辑页测试状态没清掉：${keys}`);
+  // 7) 分组改名：输入法还在选字时按回车（isComposing 或 keyCode 229）是上屏，不能提交；选完再按回车才改名
+  await js(() => { window.__calls = []; });
+  await js((s) => window.__cbs.state({ ...s, page: 'account', editGroupId: 'g1' }), base);
+  await wait(300);
+  const renames = () => js(() => window.__calls.filter((c) => c[0] === 'groupRename'));
+  await js(() => {
+    const el = document.querySelector('#side input.group-name');
+    el.value = '欧洲';
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+    const win = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+    Object.defineProperty(win, 'keyCode', { get: () => 229 }); // Windows 输入法选字时回车的 keyCode
+    el.dispatchEvent(win);
+  });
+  assert.deepStrictEqual(await renames(), [], '输入法选字时的回车不该提交改名');
+  assert.strictEqual(await js(() => document.activeElement && document.activeElement.className), 'group-name', '选字时回车后还在改名框里');
+  await js(() => {
+    const el = document.querySelector('#side input.group-name');
+    el.value += '客户';
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
+  assert.deepStrictEqual(await renames(), [['groupRename', 'g1', '欧洲客户']], '选完字再按回车才改名');
   done(0, 'check-add-menu: ok');
 }).catch((e) => done(1, `check-add-menu FAILED: ${e.stack || e.message}`));
