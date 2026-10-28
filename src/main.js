@@ -973,7 +973,8 @@ function checkIdleLock() {
 // 所有账号视图大小相同，只显示当前账号。其他账号设为隐藏，
 // Chromium 会把它们当作后台页面处理（降低优先级、节流、释放画面缓存），但消息照常接收。
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
-let panelOpen = false;
+// 一打开软件就展开（shen 2026-10-28：右侧翻译栏每个客户都默认打开）；用户点顶栏按钮或 Ctrl/Cmd+Shift+K 收起后，这次运行内保持收起
+let panelOpen = true;
 let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
 let replyStore = null;
 let customerStore = null;
