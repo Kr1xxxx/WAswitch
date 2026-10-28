@@ -1108,7 +1108,9 @@ function trWigBox(c, apply) {
     h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。DeepL 不用词表。'));
 }
 // 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
-// 简单设置里总有这三个服务商的密钥框（和翻译页右上角一致）。列表里没有的（0.5.4 起新装的没有混元，或被删了）先占个位，填了密钥才真的加上
+// 简单设置里总有这三个服务商的密钥框（翻译页右上角也是这三个）。列表里没有的（0.5.4 起新装的没有混元，或被删了）先占个位，填了密钥才真的加上
+// trKeyMorph：占位行保存后变成真的服务商（新 id），按钮还用原来的 key，「保存中 / 已保存 / 未通过」才接得上
+const trKeyMorph = {};
 const TR_KEY_PRESETS = ['zhipu', 'hunyuan', 'deepl'];
 const TR_KEY_NAMES = { zhipu: '智谱', hunyuan: '腾讯混元', deepl: 'DeepL' };
 const TR_KEY_MODELS = { zhipu: 'glm-4-flash', hunyuan: 'hy-mt2-plus', deepl: '' };
@@ -1134,6 +1136,7 @@ function trKeysBox(c, apply) {
       const r = await window.wa.trProviderSave({ ...(p.id ? { id: p.id } : {}), preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, ...(p.thinking !== undefined ? { thinking: p.thinking } : {}) });
       if (r.error) { apply(r); return { ok: false }; }
       const pid = p.id || r.id;
+      if (!p.id) trKeyMorph[pid] = p.rowId;
       trSay = ''; trTestRes[pid] = ''; trTestRaw[pid] = '';
       apply(r);
       // 保存后自动测一次（每行只留「保存」一个按钮）；没通过的原因写在服务商下面
@@ -1142,7 +1145,7 @@ function trKeysBox(c, apply) {
       if (!t.ok) { trTestRes[pid] = t.error || '测试没通过'; trTestRaw[pid] = t.detail || ''; render(true); }
       return { ok: !!t.ok };
     };
-    const saveBtn = morphBtn(`trKeySave:${p.rowId}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
+    const saveBtn = morphBtn(`trKeySave:${trKeyMorph[p.id] || p.rowId}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
     key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') saveBtn.click(); });
     if (trKeyFocus === p.rowId) requestAnimationFrame(() => { if (trKeyFocus !== p.rowId || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
     const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;

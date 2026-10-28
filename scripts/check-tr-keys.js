@@ -69,6 +69,9 @@ app.whenReady().then(async () => {
     assert.strictEqual(r.filter((x) => x.name === '腾讯混元').length, 1, `保存后混元只剩一行 ${JSON.stringify(r)}`);
     const ph = await js(() => [...document.querySelectorAll('.tr-krow')].find((x) => x.querySelector('.title b').textContent === '腾讯混元').querySelector('input').placeholder);
     assert.strictEqual(ph, '已保存 ••hyk1');
+    // 保存后这一行换成了新 id：按钮还要接着显示「已保存」（Fable 审计 #238 必修 1）
+    const btnSt = await js(() => [...document.querySelectorAll('.tr-krow')].find((x) => x.querySelector('.title b').textContent === '腾讯混元').querySelector('button').dataset.st);
+    assert.strictEqual(btnSt, 'ok', `保存并测试通过后混元的按钮应是「已保存」 ${btnSt}`);
 
     // 3) 智谱、DeepL 原来的行不变：智谱带默认、纠错，DeepL 带备用
     assert.deepStrictEqual(r.find((x) => x.name === '智谱').tags, ['默认', '纠错']);
