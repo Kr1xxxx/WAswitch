@@ -699,12 +699,15 @@ class Translator {
 
   // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind }
   // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
-  async translate({ text, mode, target, source, context, draft, fix } = {}) {
+  // providerId：指定用哪个服务商（翻译页上用户自己选的），只用它，不换备用
+  async translate({ text, mode, target, source, context, draft, fix, providerId } = {}) {
     const c = this.load();
     if (typeof text !== 'string' || !text.trim()) return { error: '先放一段要翻译的文字', kind: 'input' };
     if (text.length > MAX_INPUT) return { error: `一次最多 ${MAX_INPUT} 个字`, kind: 'input' };
     if (!mode || typeof mode.prompt !== 'string') return { error: '先选一个翻译模式', kind: 'input' };
-    const primary = this.firstFor(fix === true);
+    const pinned = typeof providerId === 'string' && providerId ? this.provider(providerId) : null;
+    if (providerId && !pinned) return { error: '找不到这个服务商，请重新选一个', kind: 'config' };
+    const primary = pinned || this.firstFor(fix === true);
     if (!primary) return { error: '还没设置翻译服务', kind: 'config' };
     if (this.busy) return { error: '上一段还在翻译', kind: 'busy' };
     const langs = { target: LANGS.includes(target) ? target : '', source: LANGS.includes(source) ? source : '' };
@@ -718,7 +721,7 @@ class Translator {
     this.busy = { controller };
     const started = Date.now();
     const fb = this.provider(c.fallbackId);
-    const chain = [primary, fb && fb.id !== primary.id ? fb : null].filter(Boolean);
+    const chain = [primary, !pinned && fb && fb.id !== primary.id ? fb : null].filter(Boolean);
     try {
       let lastErr = null;
       for (let i = 0; i < chain.length; i += 1) {
@@ -753,7 +756,7 @@ class Translator {
         // 只有网络、超时、服务商太忙和 5xx 才换备用；密钥、额度、模型名错了或用户取消都不换
         if (controller.signal.aborted || !['network', 'timeout', 'server', 'overload'].includes(lastErr.kind)) break;
       }
-      if (lastErr.kind === 'overload' && chain.length < 2) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
+      if (lastErr.kind === 'overload' && chain.length < 2 && !pinned) lastErr = { ...lastErr, text: `${lastErr.text}。在 设置 › 翻译 里设个备用服务商，忙的时候会自动换` };
       this.stats.fail += 1;
       this.stats.lastError = lastErr.kind;
       // 密钥问题带上是哪个服务商，界面上的“去填密钥”直接打开它的表单；英文原话放 detail

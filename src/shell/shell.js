@@ -42,6 +42,8 @@ const ICONS = {
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   next: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="m6 15 6-6 6 6"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
   right: '<path d="m9 6 6 6-6 6"/>',
   warn: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   update: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
@@ -338,6 +340,9 @@ function renderSide() {
       accountList(),
       h('button', { class: `row${s.page === 'editor' && !s.editorId ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '添加账号', onclick: () => window.wa.add() },
         h('span', { class: 'avatar add' }, icon('plus', 14)), h('span', { class: 'text', style: { fontSize: '13px' } }, '添加账号'))),
+    s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
+    h('button', { class: `row tool-row${s.page === 'translate' ? ` on${sideFx ? ' fx-on' : ''}` : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
+      h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
     h('div', { class: 'grow' })));
   const upd = updateCard();
   if (upd) $side.append(upd);
@@ -2066,6 +2071,10 @@ function render(forceContent = false) {
     // 有新的未读时顺便刷新记录
     else if (s.accounts.reduce((n, a) => n + (a.unread || 0), 0) !== overviewTotal) loadNotifLog();
     overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
+  } else if (s.page === 'translate') {
+    // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
+    const el = trPage(key !== shown);
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
   } else if (acc && !acc.problem && acc.mode === 'lite') {
