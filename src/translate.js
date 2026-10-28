@@ -246,7 +246,7 @@ function statusError(status, name = '') {
 function withDetail(err, status, detail, p) {
   const pid = err.kind === 'auth' && p ? { pid: p.id } : {};
   if (detail && /[\u4e00-\u9fff]/.test(detail)) return { kind: err.kind, text: `${err.text}：${detail}`, status, ...pid };
-  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status} · ${detail}` : `HTTP ${status}` };
+  return { kind: err.kind, text: err.text, status, ...pid, detail: detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}` };
 }
 // 服务商自己的错误说明：最多 200 字，去掉看起来像密钥的东西
 function providerDetail(body, key = '') {
@@ -649,7 +649,7 @@ class Translator {
       const detail = providerDetail(raw, key);
       if (res.status === 456) throw { kind: 'quota', text: 'DeepL 这个月的额度用完了', status: 456 };
       if (res.status === 429) throw { kind: 'overload', text: 'DeepL 现在太忙（服务商限流），稍后再试', status: 429 };
-      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403 · ${detail}` } : {}) };
+      if (res.status === 403) throw { kind: 'auth', text: `${provName(p)}的密钥不对（DeepL 免费版密钥以 :fx 结尾）`, status: 403, pid: p.id, ...(detail ? { detail: `HTTP 403: ${detail}` } : {}) };
       throw withDetail(statusError(res.status, provName(p)), res.status, detail, p);
     }
     let out = '';

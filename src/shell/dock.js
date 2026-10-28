@@ -189,7 +189,7 @@ function dockModelSel(cls, short = false) {
   const provs = st.providers || [];
   if (!provs.length) return null;
   const sel = h('select', { class: `${cls} dk-model`, 'aria-label': '翻译模型', title: '换翻译模型（和 设置 › 翻译 的默认服务商同步）', disabled: dk.busy || provs.length < 2,
-    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? (short ? p.model : `${p.name} · ${p.model}`) : p.name)));
+    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? (short ? p.model : `${p.name} ${p.model}`) : p.name)));
   sel.value = st.primaryId;
   return sel;
 }
@@ -396,8 +396,8 @@ function dockField(box, getText, hint) {
 function dockCompose() {
   const st = dk.st;
   // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
-  const keyHint = '回车翻译 · Shift + 回车换行';
-  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', 'aria-label': '要回的话（中文翻成客户的语言，英文翻成中文）', 'aria-description': keyHint }, dk.text);
+  const keyHint = h('span', { class: 'dk-keyhint' }, ...segs('回车翻译', 'Shift + 回车换行'));
+  const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', 'aria-label': '要回的话（中文翻成客户的语言，英文翻成中文）', 'aria-description': '回车翻译，Shift + 回车换行' }, dk.text);
   input.addEventListener('input', () => { dk.text = input.value; });
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算

@@ -956,7 +956,7 @@ function proxyLabel(acc) {
   const p = proxy.parse(acc.proxy);
   if (!p) return '直连';
   if (p.error) return '代理设置有误';
-  return acc.exitLabel ? `${acc.exitLabel} · ${p.port}` : `${p.scheme} · ${p.port}`;
+  return `${acc.exitLabel || p.scheme} ${p.port}`;
 }
 
 function sideWidth() {
@@ -1559,7 +1559,7 @@ const PROXY_ERRORS = new Set([-111, -115, -120, -122, -125, -130, -336]);
 // 页面打不开时给用户看的提示：按错误码说人话，Chromium 的原话（ERR_XXX）收进“详细信息”
 // port：出错后探一下本机端口的结果 { open, socks }（见 portProbeFor）。端口通着还连不上，就是 Clash 当前节点挂了
 function loadProblem(acc, code, desc, port) {
-  const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? ` · ${acc.proxy}` : ''}`;
+  const raw = `${desc || 'ERR_UNKNOWN'} (${code})${acc.proxy ? `; ${acc.proxy}` : ''}`;
   const kind = errtext.netKind(desc);
   const p = acc.proxy ? proxy.parse(acc.proxy) : null;
   if (PROXY_ERRORS.has(code) || (p && !p.error && ['proxyDown', 'proxyNode', 'proxyAuth', 'refused'].includes(kind))) {
@@ -1945,7 +1945,7 @@ const LITE_PROBLEMS = {
   }),
   // 代理端口通，但 30 秒还没连上 WhatsApp（或连续失败 3 次）：多半是 Clash 当前节点挂了
   unreachable: (acc, { detail } = {}) => {
-    const raw = detail ? `${detail}${acc.proxy ? ` · ${acc.proxy}` : ''}` : '';
+    const raw = detail ? `${detail}${acc.proxy ? `; ${acc.proxy}` : ''}` : '';
     if (!acc.proxy) {
       return {
         kind: 'network', // 直连号没有代理可改，用“连不上”的代码 N1
