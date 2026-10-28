@@ -15,6 +15,7 @@ app.whenReady().then(async () => {
   for (const item of await clipboard.read()) {
     const formats = {};
     for (const type of item.types) formats[type] = await item.getType(type);
+    if (!Object.keys(formats).length) continue; // Linux/xvfb 空剪贴板会给一个没有类型的条目，ClipboardItem 不接受
     saved.push(new ClipboardItem(formats));
   }
   app.exit = code => {

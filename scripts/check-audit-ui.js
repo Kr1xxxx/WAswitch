@@ -44,6 +44,12 @@ app.whenReady().then(async () => {
     assert.ok(await page("document.querySelector('.lite-err').textContent"));
     await page("sendDraft(); finishSend({}); true");
     assert.equal(await page('box().value'), '');
+    await page("typeDraft('tail'); sendDraft(); box().value += 'x'; box().dispatchEvent(new Event('input')); finishSend({}); true");
+    assert.equal(await page('box().value'), 'x', 'sent text must not stay in the box when typing appends during send');
+    await page("typeDraft('lost'); sendDraft(); typeDraft('newer'); failSend(new Error('synthetic')); true");
+    assert.equal(await page('box().value'), 'newer', 'failed send must not overwrite newer input');
+    await page("typeDraft(''); openChat('B'); openChat('A'); true");
+    assert.equal(await page('box().value'), '');
     assert.ok((await page('window.__sent')).every(x => x.jid === 'A'));
     console.log('PASS 1/5: actual lite composer, chat click, drafts, pending sends and failed retry');
     await page("openChat('B'); true");

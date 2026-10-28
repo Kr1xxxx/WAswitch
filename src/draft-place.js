@@ -75,6 +75,7 @@ const WHY = {
   not_empty: '输入框里已经有文字',
   focus: '光标不在聊天输入框里',
   changed: '放的时候页面状态变了',
+  no_history: '这个对话还没有聊天记录',
 };
 
 // 用户点了“放进输入框”但没放成：横幅上告诉用户下一步
@@ -85,6 +86,7 @@ const NOTE = {
   not_found: (c) => `轻量模式里没找到「${c}」这个对话（或有重名的），没有放`,
   not_empty: () => '输入框里已经有文字，没有放',
   changed: () => '页面还没准备好，稍后再点“放进输入框”',
+  no_history: (c) => `和「${c}」的对话还没有聊天记录，先手动发一条再点“放进输入框”`,
 };
 
 // deps（main.js 提供）：
@@ -128,7 +130,7 @@ function createDraftPlacer(deps) {
       if (!valid()) return 'changed';
       if (!peer || (!peer.title && !peer.chat)) return 'no_chat';
       if (!chatMatches(chat, { title: peer.title, number: jidNumber(peer.chat) })) return 'other_chat';
-      if (!peer.chat) return 'changed';
+      if (!peer.chat) return 'no_history'; // 还没有消息的对话拿不到对话编号，没法确认贴对了地方
       const probe = probeOf(text);
       const stateError = (st) => {
         if (!valid() || !st || st.chat !== peer.chat) return 'changed';

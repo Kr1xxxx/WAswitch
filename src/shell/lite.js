@@ -101,26 +101,29 @@ function makeLitePage(id) {
     const text = input.value;
     if (sending || !text.trim() || !openJid) return;
     const jid = openJid;
-    rememberDraft();
-    const submitted = drafts.get(jid);
+    // 提交就清空输入框（和 WhatsApp 一样），发送期间接着打的字不会和已发出的话混在一起
+    drafts.delete(jid);
+    input.value = '';
+    input.style.height = '';
     sending = true;
     sendBtn.disabled = true;
     err.textContent = '';
+    // 没发出去：原文放回去。用户这期间在这个对话里又写了别的就不覆盖
+    const restore = () => {
+      if (drafts.get(jid)?.text) return;
+      drafts.set(jid, { text });
+      if (openJid === jid) { input.value = text; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; }
+    };
     try {
       const res = await window.wa.liteSend(id, jid, text);
       if (res && res.error) {
+        restore();
         if (openJid === jid) err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : []));
         return;
       }
-      if (drafts.get(jid) === submitted) {
-        drafts.delete(jid);
-        if (openJid === jid) {
-          input.value = '';
-          input.style.height = '';
-          input.focus();
-        }
-      }
+      if (openJid === jid) input.focus();
     } catch {
+      restore();
       if (openJid === jid) err.textContent = '发送失败，请重试';
     } finally {
       sending = false;

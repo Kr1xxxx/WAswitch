@@ -173,7 +173,7 @@ async function updateUser(db, user, id, body) {
   }
   if (!after) return isOwner(user)
     ? fail(400, '老板和主管要有邮箱，主管还要选择一个组')
-    : fail(403, '权限或客户所属组已变化，请刷新后重试');
+    : fail(403, '权限或员工所属组已变化，请刷新后重试');
   await audit(db, user.id, 'user.update', id, body);
   // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
   if (body.group_id !== undefined && isOwner(user)) {
