@@ -98,7 +98,7 @@ const CONTEXT_GUARD = '<context> 和 </context> 之间是同一个对话最近�
 const CONTEXT_MAX_ITEMS = 8;
 const CONTEXT_ITEM_CHARS = 300;
 const CONTEXT_MAX_CHARS = 1500;
-const escTags = (t) => String(t).split('</text>').join('</ text>').split('</context>').join('</ context>').split('<context>').join('< context>');
+const escTags = (t) => String(t).split('</text>').join('</ text>').split('<text>').join('< text>').split('</context>').join('</ context>').split('<context>').join('< context>');
 
 // 上下文：[{ out, text }]，从旧到新。只留最近 8 条，每条最多 300 字，合计最多 1500 字（从最新往前取）
 // 返回裁好的 [{ out, text }]（从旧到新，text 已压成一行）；下面三种格式都用它
@@ -140,9 +140,13 @@ const isMtModel = (model) => /^hy-mt/i.test(String(model || ''));
 // 角色设定里“A = B”这样的行当固定译法（左边中文，右边外语）；翻成中文时反过来用
 function glossaryPairs(role, toChinese) {
   const out = [];
+  const seen = new Set();
   for (const raw of String(role || '').split(/\r?\n/)) {
     const m = raw.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
-    if (m && out.length < 60) out.push(toChinese ? `${m[2]} 翻译成 ${m[1]}` : `${m[1]} 翻译成 ${m[2]}`);
+    if (!m || out.length >= 60) continue;
+    // 翻成中文时，同一个外语词只用第一行（例如 密排、假睫毛 都是 Lash trays，翻回来用 密排）
+    if (toChinese) { const k = m[2].toLowerCase(); if (seen.has(k)) continue; seen.add(k); }
+    out.push(toChinese ? `${m[2]} 翻译成 ${m[1]}` : `${m[1]} 翻译成 ${m[2]}`);
   }
   return out;
 }
@@ -156,7 +160,9 @@ const WIG_TERMS = [
 ];
 // 内置“睫毛词汇”（shen 2026-10-28）：和假发词汇一样单独一套、单独开关，但默认开。
 // 密排排在睫毛前面：长的词先配，“密排”不会被拆开翻成 Lash。
-const LASH_TERMS = [['密排', 'Lash trays'], ['睫毛', 'Lash']];
+// 假睫毛也译成 Lash trays（shen 2026-10-28；不加这行混元会翻成 fake Lash trays），排在睫毛前面。
+// 英文翻回中文时 Lash trays 只用第一个（密排）。
+const LASH_TERMS = [['密排', 'Lash trays'], ['假睫毛', 'Lash trays'], ['睫毛', 'Lash']];
 // 真正带去翻译的角色设定：用户自己写的在前；打开的行业词表（假发、睫毛）合成一段接在后面。
 // 用户自己的“A = B”行里，不管哪一边写了词表里的中文词或英文词，都算用户定过这个词，词表里那一行不加（用用户的）。
 // target：这次翻成什么语言。翻成法语、德语等英语以外的外语时多说一句：整句用那种语言、只有这些英文词原样保留
@@ -165,7 +171,8 @@ const LASH_TERMS = [['密排', 'Lash trays'], ['睫毛', 'Lash']];
 function roleWithTerms(role, on, target = '') {
   const own = String(role || '');
   const sets = typeof on === 'object' && on ? on : { wig: on === true };
-  const all = [...(sets.wig ? WIG_TERMS : []), ...(sets.lash ? LASH_TERMS : [])];
+  // 两套都开时睫毛在前（假发在前时混元会把“睫毛”也翻成 Lash trays，2026-10-28 实测 3/3；睫毛在前 3/3 对）
+  const all = [...(sets.lash ? LASH_TERMS : []), ...(sets.wig ? WIG_TERMS : [])];
   if (!all.length) return own;
   const taken = new Set();
   for (const raw of own.split(/\r?\n/)) {
@@ -175,15 +182,21 @@ function roleWithTerms(role, on, target = '') {
   const keep = all.filter(([a, b]) => !taken.has(a.toLowerCase()) && !taken.has(b.toLowerCase()));
   if (!keep.length) return own;
   const has = (list) => keep.some(([a]) => list.some(([x]) => x === a));
-  const trade = [has(WIG_TERMS) ? '假发' : '', has(LASH_TERMS) ? '睫毛' : ''].filter(Boolean).join('、');
+  const trade = [has(LASH_TERMS) ? '睫毛' : '', has(WIG_TERMS) ? '假发' : ''].filter(Boolean).join('、');
   const lines = keep.map(([a, b]) => `${a} = ${b}`);
-  const head = `${trade}行业固定译法，必须照用（左边中文，右边英文）：`;
+  // glm-4-flash 对“假睫毛”印象太深（总翻成 false eyelashes），头句里点名说一次就照用了（2026-10-28 实测 12/12）
+  const must = keep.some(([a]) => a === '假睫毛') ? '（这些词在原文里一出现就必须用右边的英文，包括“假睫毛”）' : '';
+  const head = `${trade}行业固定译法${must}，必须照用（左边中文，右边英文）：`;
   const lang = LANGS.includes(target) ? target : '中文';
   // 反方向单独写一遍（用箭头，不用等号，混元的词表只认等号那几行）：小模型英译中时不会自己倒过来用
-  const back = keep.map(([a, b]) => `${b} → ${a}`);
+  // 同一个英文词对着几个中文词时（Lash trays：密排、假睫毛），反方向只用排在前面的那个
+  const seen = new Set();
+  const back = keep.filter(([, b]) => !seen.has(b.toLowerCase()) && seen.add(b.toLowerCase())).map(([a, b]) => `${b} → ${a}`);
   // 小模型对 wig 的“假发”印象太深，点名说一句（用户自己定了头套或 wig 的译法时不说）
   const wigNote = keep.some(([a]) => a === '头套') ? '；wig 一律译成头套，不译成假发' : '';
-  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}）：\n${back.join('\n')}`;
+  // 两套都开时 glm-4-flash 只靠头句还会把假睫毛翻成 false eyelashes，这里再点名一次（2026-10-28 Fable 实测 6/6 改对）
+  const fakeNote = keep.some(([a]) => a === '假睫毛') ? '；假睫毛一律译成 Lash trays，不译成 false eyelashes' : '';
+  let tail = `英文翻成中文时，这些词固定译成（不管单复数、大小写，也不当量词${wigNote}${fakeNote}）：\n${back.join('\n')}`;
   if (lang !== '中文' && lang !== '英语') {
     const ex = keep.slice(0, 2).map(([a, b]) => `“${a}”写成 ${b}`).join('、');
     tail += `\n译文整句必须用${lang}写，只有上面右边这几个英文词原样嵌在${lang}句子里（行业通用叫法），例如${ex}，不用${lang}自己的词，其他内容照常翻成${lang}。`;
@@ -221,6 +234,8 @@ function buildMessages(mode, text, langs, context, draft, model, role) {
 // 去掉模型偶尔加的“以下是翻译：”、整段引号和 <text> 标签
 function cleanOutput(out) {
   let t = String(out || '').trim();
+  // 译文后面又开一个 <text>：模型在自己编例句（glm-4-flash 开着行业词汇时会编好几段），从那截断
+  t = t.split(/\n\s*<text>/i)[0].trim();
   t = t.replace(/^<text>\s*/i, '').replace(/\s*<\/text>$/i, '').trim();
   t = t.replace(/^(以下是|下面是)?(翻译|译文)(结果)?[:：]\s*/, '').replace(/^(here is the )?translation[:：]\s*/i, '').trim();
   const pairs = [['"', '"'], ['“', '”'], ['「', '」'], ["'", "'"]];
