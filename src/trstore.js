@@ -59,6 +59,17 @@ class TrStore {
     if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, 1000);
   }
 
+  // 一个文件最多留 max 条：超了就删最早存的（发出的译文用，见 outcache.js）
+  cap(acc, chat, max) {
+    const e = this.load(acc, chat);
+    if (!e) return;
+    const keys = Object.keys(e.data);
+    if (keys.length <= max) return;
+    keys.sort((a, b) => (e.data[a].at || 0) - (e.data[b].at || 0));
+    for (const k of keys.slice(0, keys.length - max)) delete e.data[k];
+    e.dirty = true;
+  }
+
   write(k, e) {
     const [acc, chat] = k.split('/');
     try {

@@ -75,13 +75,14 @@ function dockFix() {
   return dockRun({ req: { text: dk.text, fix: true, draft: dk.out, target: dk.st.target, ctxAccount: dk.st.accountId }, insert: false, acc: dk.st.accountId, title: dk.st.title });
 }
 // insert=true：翻译完直接放进输入框（不发送）。对话在翻译期间换了就不放
-async function dockTranslate(insert = false) {
+// 同一句中文、同一种语言、同一个模式翻过的，主进程直接给记下的译文，不调模型；fresh=true（点“重新翻译”）才重新翻
+async function dockTranslate(insert = false, fresh = false) {
   if (dk.busy || !dk.st) return;
   const text = dk.text.trim();
   if (!text) return dockSay('先写要发的话', true);
   const modeId = outModeId();
   if (!modeId) return dockSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
-  const req = { text: dk.text, modeId, target: dk.st.target, ctxAccount: dk.st.accountId };
+  const req = { text: dk.text, modeId, target: dk.st.target, ctxAccount: dk.st.accountId, fresh };
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
@@ -93,7 +94,7 @@ async function dockRun(p) {
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
-  if (!p.insert) return dockSay(r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
+  if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点“重新翻译”' : r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
   if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   return dockInsert();
 }
@@ -392,7 +393,7 @@ function dockCompose() {
       dk.busy ? h('button', { class: 'dk-link', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-link', title: 'AI 对照中文原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
-          h('button', { class: 'dk-link', title: '按现在的中文和语气重新翻，会替换下面的译文', onclick: () => dockTranslate(false) }, dk.out ? '重新翻译' : '翻译'))),
+          h('button', { class: 'dk-link', title: dk.out ? '按现在的中文和语气重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
     dockField(out, () => out.value, status),
     dk.suggest ? dockSuggestBox(dk.suggest, () => { dk.out = dk.suggest; dk.suggest = ''; dk.edited = false; dk.fixed = true; dockRender(true); }, () => { dk.suggest = ''; dockRender(true); }) : null,
     dk.warn.length ? h('div', { class: 'tr-warn' }, `注意：译文里有原文没有的内容，可能是模型编的：${dk.warn.slice(0, 3).join('、')}`) : null,
