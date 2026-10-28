@@ -21,6 +21,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: 界面文字不用中点「·」分隔
+        run: npm run check:middot
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: MCP 自检
         run: npm run check:mcp

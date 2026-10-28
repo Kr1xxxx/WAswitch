@@ -87,6 +87,11 @@ function copyFlash(btn) {
 }
 
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
+// 几段并排的短文字，用间距隔开，不用中点（shen 2026-10-28）。样式 .seg 在 shell.css
+function segs(...xs) {
+  return xs.filter((x) => x !== null && x !== undefined && x !== false && x !== '').map((x) => h('span', { class: 'seg' }, x));
+}
+
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -246,7 +251,7 @@ function accountRow(acc) {
   avatar,
   h('span', { class: 'meta' },
     h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
-    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? `轻量 · ${acc.proxyLabel}` : acc.proxyLabel)),
+    h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.exitChange ? ' warn' : ''}` }, acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.exitChange ? '出口 IP 变了' : acc.mode === 'lite' ? segs('轻量', acc.proxyLabel) : acc.proxyLabel)),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: '#4A505A' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
   draggable(row, acc.id);
@@ -275,13 +280,13 @@ function groupHead(g) {
   if (chev) { chev.classList.add('gchev'); fx(`grp:${g.id}`, !!g.collapsed, chev, g.collapsed ? 'fx-rot-close' : 'fx-rot-open', false); }
   const head = h('button', {
     class: `group-head${g && g.collapsed ? ' closed' : ''}`,
-    title: g ? `${name} · ${g.count} 个号${g.muted ? ' · 整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
+    title: g ? `${name}：${g.count} 个号${g.muted ? '，整组不弹通知' : ''}${g.collapsed ? '（已折叠，点开）' : ''}\n右键：改名、整组不弹通知、解散` : '没有放进分组的号',
     'aria-expanded': g ? String(!g.collapsed) : null,
     onclick: () => { if (g) window.wa.groupToggle(g.id); },
     oncontextmenu: (e) => { e.preventDefault(); if (g) window.wa.groupContext(g.id); },
   },
   chev,
-  h('span', { class: 'gname' }, g && g.collapsed ? `${name} · ${g.count}` : name),
+  h('span', { class: 'gname' }, g && g.collapsed ? segs(name, h('span', { class: 'count' }, g.count)) : name),
   quiet ? h('span', { class: 'mute', title: '整组不弹通知' }, icon('mute', 12)) : null,
   g && g.collapsed && g.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, g.unread) : null);
   dropOn(head, gid, null);
@@ -332,7 +337,7 @@ function renderSide() {
     h('div', { class: 'head' },
       s.collapsed ? null : h('span', { class: 'brand' }, 'WAswitch'),
       h('button', { class: 'icon-btn', title: label, 'aria-label': label, onclick: () => window.wa.toggleCollapse() }, icon('panel'))),
-    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, `账号 · ${s.accounts.length}`),
+    s.collapsed ? null : h('div', { class: 'label side-label' }, h('span', null, ...segs('账号', h('span', { class: 'count' }, s.accounts.length))),
       s.accounts.length > 1 || (s.groups || []).length ? h('button', { class: 'link-btn', title: '新建一个分组，再把号拖进去（或右键号 › 移到分组）', onclick: () => window.wa.groupCreate() }, '+ 分组') : null),
     h('div', { class: 'list' },
       accountList(),
@@ -349,10 +354,10 @@ function renderSide() {
       h('small', null, '后台账号已降速，消息照常收')));
   }
   const totalUnread = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
-  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? ` · 共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
+  const bell = h('button', { class: `icon-btn bell${s.page === 'overview' ? ' on' : ''}`, title: `未读总览和通知记录${totalUnread ? `\n共 ${totalUnread} 个未读对话` : ''}`, 'aria-label': '未读总览', onclick: () => window.wa.showPage('overview') }, icon('bell', 17));
   if (totalUnread) bell.append(h('span', { class: 'dot' }, totalUnread > 99 ? '99+' : totalUnread));
   $side.append(h('div', { class: 'foot' },
-    h('button', { class: 'icon-btn', title: updateReady() ? `设置 · 新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => { settingsTab = 'quick'; window.wa.showPage('settings'); render(true); } }, icon('gear', 17),
+    h('button', { class: 'icon-btn', title: updateReady() ? `设置\n新版本 ${s.update.version} 已就绪` : '设置', 'aria-label': '设置', onclick: () => { settingsTab = 'quick'; window.wa.showPage('settings'); render(true); } }, icon('gear', 17),
       updateReady() ? h('span', { class: 'dot new', 'aria-hidden': 'true' }) : null),
     s.settings?.showUpdateButton ? checkUpdateBtn() : null,
     bell));
@@ -365,13 +370,13 @@ function checkUpdateBtn() {
   const st = u ? u.status : 'dev';
   const busy = st === 'checking' || st === 'downloading';
   const title = {
-    dev: '检查更新 · 开发版不检查更新',
-    off: '检查更新 · 这种安装方式不能自动更新',
+    dev: '检查更新\n开发版不检查更新',
+    off: '检查更新\n这种安装方式不能自动更新',
     checking: '正在检查更新…',
     downloading: `正在下载 ${u && u.version}`,
     downloaded: `新版本 ${u && u.version} 已就绪`,
-    none: '检查更新 · 已是最新版本',
-    error: '检查更新 · 上次没检查成功',
+    none: '检查更新\n已是最新版本',
+    error: '检查更新\n上次没检查成功',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
     onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheckOnly(); } }, icon('sync', 16));
@@ -420,7 +425,7 @@ function exitTitle(acc) {
   if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
   const lat = acc.latency ? `\n最近一次检测用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
-  return `网络线路 · 出口 IP ${acc.exitIp}${at}${lat}`;
+  return `网络线路：出口 IP ${acc.exitIp}${at}${lat}`;
 }
 
 // 线路：出口 IP 直接显示；巡检发现 IP 变了就标黄，点一下表示知道了
@@ -434,9 +439,9 @@ function exitChip(acc) {
       class: 'chip exit night', type: 'button',
       title: `${when} 巡检发现出口 IP 变了：${ch.from} → ${ch.to}${moved ? `（${ch.fromLabel} → ${ch.toLabel}，国家也变了，时区可能对不上，建议跑一次隔离自检）` : ''}。机场节点常会自动换 IP，频繁变化容易被 WhatsApp 当成异常。点一下表示知道了。`,
       onclick: () => window.wa.exitAck(acc.id),
-    }, icon('globe', 12), h('span', null, `出口 IP 变了${moved ? `（${ch.toLabel}）` : ''} · ${ch.to}`));
+    }, icon('globe', 12), h('span', null, ...segs(`出口 IP 变了${moved ? `（${ch.toLabel}）` : ''}`, ch.to)));
   }
-  return h('span', { class: 'chip exit', title: exitTitle(acc) }, icon('globe', 12), h('span', null, acc.exitIp && !acc.direct ? `${acc.proxyLabel} · ${acc.exitIp}` : acc.proxyLabel));
+  return h('span', { class: 'chip exit', title: exitTitle(acc) }, icon('globe', 12), h('span', null, ...(acc.exitIp && !acc.direct ? segs(acc.proxyLabel, acc.exitIp) : [acc.proxyLabel])));
 }
 
 // 当地时间：按账号的时区显示，22:00–8:00 变黄，提醒这时候发消息不像真人。5:00 前写“深夜”，5:00–8:00 写“清晨”
@@ -462,16 +467,16 @@ function clockChip(acc) {
     const z = peer && peer.accountId === acc.id ? peer.zone : null;
     if (z) {
       const c = clockParts(z.tz);
-      chip.lastChild.textContent = `客户 ${z.approx ? '约 ' : ''}${z.place} ${c.text}${c.night ? ` · ${c.when}` : ''}`;
+      chip.lastChild.replaceChildren(...segs(`客户 ${z.approx ? '约 ' : ''}${z.place} ${c.text}`, c.night ? c.when : null));
       chip.classList.toggle('night', c.night);
       chip.classList.add('peer');
       chip.title = `客户当地时间（按客户号码的国家码和区号推算：${z.tz}）${z.approx ? '。这个国家有好几个时区，号码看不出具体在哪，按主要时区显示，仅供参考' : ''}${c.night ? `。客户那边现在是${c.when}，这时候发消息容易打扰客户` : ''}`;
       return;
     }
     const zones = DEFAULT_ZONES.map((d) => ({ ...d, ...clockParts(d.tz) }));
-    // 星期只在第一个写：“伦敦 周二 16:44 · 纽约 11:44 · 加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
+    // 星期只在第一个写：“伦敦 周二 16:44  纽约 11:44  加州 08:44”；哪个跨了零点、星期不一样，才给它也写星期
     const day = (x) => x.text.split(' ')[0];
-    chip.lastChild.textContent = zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`).join(' · ');
+    chip.lastChild.replaceChildren(...segs(...zones.map((x, i) => `${x.place} ${i && day(x) === day(zones[0]) ? x.text.split(' ')[1] : x.text}`)));
     const night = zones.every((x) => x.night); // 几个地方都是深夜 / 清晨才标黄
     chip.classList.toggle('night', night);
     chip.classList.remove('peer');
@@ -534,7 +539,7 @@ function renderTop() {
   if (s.locked) { $top.replaceChildren(icon('lock', 14), h('span', null, '聊天已锁定')); return; }
   const lite = acc.mode === 'lite';
   $top.replaceChildren(...kids(
-    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, acc.note ? `· ${acc.name} · ${acc.note}` : `· ${acc.name}`),
+    icon('lock', 14), h('span', null, lite ? '轻量模式' : 'web.whatsapp.com'), h('span', { class: 'who', title: acc.note || null }, ...segs(acc.name, acc.note)),
     h('span', { class: 'grow' }),
     exitChip(acc),
     !lite ? zoomChip(acc) : null,
@@ -680,7 +685,7 @@ function problemDetails(acc) {
   const key = `${acc.id}|${acc.problemKind}`;
   const logs = h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openLogs(); } }, '打开日志文件夹');
   return h('details', { class: 'pdetails', open: detailsOpenKey === key, ontoggle: (e) => { if (e.currentTarget.open) detailsOpenKey = key; else if (detailsOpenKey === key) detailsOpenKey = ''; } },
-    h('summary', null, `详细信息 · ${acc.problemCode}`),
+    h('summary', null, ...segs('详细信息', acc.problemCode)),
     // 系统的原话（英文错误码），排查时看
     acc.problemDetail ? h('code', null, acc.problemDetail) : null,
     h('p', null, `问题代码 ${acc.problemCode}，日志里也记着这个代码。`, ' ', logs));
@@ -711,7 +716,7 @@ function overviewPage() {
       h('p', { class: 'lead' }, total ? `${unread.length} 个号共有 ${total} 个未读对话。点一下切过去。` : '所有号都没有未读对话。')),
     unread.length ? h('div', { class: 'box ov-list' }, unread.map((a) => h('button', { class: 'ov-row', onclick: () => window.wa.switchTo(a.id) },
       h('span', { class: 'sw', style: { background: a.color } }),
-      h('span', { class: 'ov-name' }, a.name, groupName(a) ? h('span', { class: 'hint' }, ` · ${groupName(a)}`) : null),
+      h('span', { class: 'ov-name' }, ...segs(a.name, groupName(a) ? h('span', { class: 'hint' }, groupName(a)) : null)),
       a.muted || a.groupMuted ? h('span', { class: 'hint' }, '不弹通知') : null,
       h('span', { class: `pill${a.muted || a.groupMuted ? ' quiet' : ''}` }, a.unread)))) : null,
     h('div', { class: 'hstack', style: { justifyContent: 'space-between', marginTop: '8px' } },
@@ -727,7 +732,7 @@ function overviewPage() {
           h('span', { class: 'hint ov-time' }, t.toLocaleString('zh-CN', today ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
           h('span', { class: 'sw', style: { background: a ? a.color : '#c4c8ce' } }),
           h('span', { class: 'ov-name' }, a ? a.name : '已删除的号'),
-          h('span', { class: 'hint' }, `${e.count} 个未读${e.popped ? '' : ' · 没弹'}`));
+          h('span', { class: 'hint' }, ...segs(`${e.count} 个未读`, e.popped ? null : '没弹')));
       }))
       : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。'))));
   return page;
@@ -1005,7 +1010,7 @@ function trKeysBox(c, apply) {
     return h('div', { class: 'tr-krow' },
       h('div', { class: 'meta' },
         h('span', { class: 'title' }, h('b', null, p.name), ...roles),
-        h('span', { class: 'desc' }, p.hasKey ? `已填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}` : `还没填密钥 · ${p.preset === 'deepl' ? '机器翻译' : p.model}`),
+        h('span', { class: 'desc' }, ...segs(p.preset === 'deepl' ? '机器翻译' : p.model, p.hasKey ? '已填密钥' : '还没填密钥')),
         trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
         link),
       h('span', { class: 'hstack', style: { gap: '6px' } }, key,
@@ -1093,7 +1098,7 @@ function translatePage(page) {
     h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
       h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
         p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
-      h('span', { class: 'hint' }, `${p.preset === 'deepl' ? '机器翻译' : p.model} · ${p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥'}`),
+      h('span', { class: 'hint' }, ...segs(p.preset === 'deepl' ? '机器翻译' : p.model, p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥')),
       h('span', { class: 'hint' }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
       h('span', { class: 'hstack', style: { gap: '4px' } },
         h('button', { class: 'pn-btn', onclick: async () => { trTestRes[p.id] = '测试中…'; render(true); const r = await window.wa.trTest(p.id); trTestRes[p.id] = r.ok ? `通了，${r.ms} ms` : r.error; trTestRaw[p.id] = r.ok ? '' : r.detail || ''; render(true); } }, '测试'),
@@ -1248,7 +1253,7 @@ function editorPage(id) {
         !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
-    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：德国客户 · 小王负责' });
+    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：德国客户，小王负责' });
     const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24', placeholder: '登录后自动填写，也可以自己填' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
@@ -1337,7 +1342,7 @@ function editorPage(id) {
       tags.replaceChildren(
         h('span', { class: 'tag' }, auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
-        h('span', { class: 'tag' }, 'Chrome · 跟随本机系统'),
+        h('span', { class: 'tag' }, '浏览器：Chrome，系统跟随本机'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
     };
     // 选直连时提醒一句，不拦。网页号直连跟随系统代理，轻量号直连用这台电脑的真实 IP，
@@ -1411,10 +1416,11 @@ function editorPage(id) {
       if (localProxyPort(proxyInput.value)) probePorts();
       if (res.error) { result.replaceChildren(h('div', { class: 'note bad' }, res.error, rawDetail(res.detail))); return; }
       tested = res;
-      const place = [res.country, res.city].filter(Boolean).join(' · ');
-      let text = `连接成功 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
-      if (res.direct === 'system') text = `直连 · 跟随系统代理 · 出口 IP ${res.ip} · ${place} · ${res.ms} ms。`;
-      if (res.direct === 'real') text = `直连 · 这台电脑的真实 IP ${res.ip} · ${place} · ${res.ms} ms。`;
+      const where = [res.country, res.city].filter(Boolean).join(' ');
+      const tail = `${where ? `，${where}` : ''}，用时 ${res.ms} ms。`;
+      let text = `连接成功。出口 IP ${res.ip}${tail}`;
+      if (res.direct === 'system') text = `直连，跟随系统代理。出口 IP ${res.ip}${tail}`;
+      if (res.direct === 'real') text = `直连，用这台电脑的真实 IP ${res.ip}${tail}`;
       // 轻量号没有时区设置，不提时区
       if (mode !== 'lite' && res.region) { addTzOption(res.region, res.regionLabel); region.value = res.region; text += ' 已按出口所在地选好时区。'; } else if (mode !== 'lite') text += ' 出口时区无法识别，请手动选最接近的。';
       if (res.sameAs) {
@@ -1530,7 +1536,7 @@ function netPage(page) {
       const drops = netLogCache.filter((e) => e.id === a.id && e.at >= dayAgo && (e.kind === 'down' || e.kind === 'qr')).length;
       return h('div', { class: 'tr-prow' },
         h('span', null, h('span', { class: 'sw', style: { background: a.color } }), a.name),
-        h('span', { class: 'hint' }, a.direct ? '直连 · 不检测' : a.latency ? `最近用时 ${a.latency.ms} ms` : '还没测过'),
+        h('span', { class: 'hint' }, a.direct ? '直连不检测' : a.latency ? `最近用时 ${a.latency.ms} ms` : '还没测过'),
         h('b', { style: { textAlign: 'right', color: drops ? 'var(--danger)' : null } }, `24 小时掉线 ${drops} 次`),
         h('span', { class: 'hint' }, a.problem ? a.problemShort : '正常'));
     })),
@@ -1979,7 +1985,7 @@ function updateBox(u) {
       h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
       h('span', { class: 'pct' }, `${u.percent}%`)) : null,
     u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。可以去下载页手动下载。`) : null,
-    h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? ` · ${u.lastResult}` : ''}`),
+    h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? `，${u.lastResult}` : ''}`),
     u.status === 'error' ? rawDetail(u.lastDetail) : null);
 }
 

@@ -90,7 +90,7 @@ function exitError(e, p) {
   if (e && e.status) return { error: errtext.ipinfoStatus(e.status), detail: raw };
   if (e && e.bad) return { error: '查 IP 的网站返回的内容不对，过一会儿再测', detail: raw };
   if (errtext.hasChinese(raw)) return { error: p ? `代理连不上：${raw}` : raw };
-  return { error: errtext.netReason(raw, { proxy: p }), detail: p ? `${raw} · ${p.rules}` : raw };
+  return { error: errtext.netReason(raw, { proxy: p }), detail: p ? `${raw}; ${p.rules}` : raw };
 }
 
 // 测试代理：通过它访问一个查询出口 IP 的网址，返回出口 IP、国家、时区。

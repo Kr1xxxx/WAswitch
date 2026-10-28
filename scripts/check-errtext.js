@@ -12,7 +12,7 @@ assert.equal(E.netKind('ERR_SOCKS_CONNECTION_FAILED'), 'proxyDown');
 assert.equal(E.netKind('ERR_TUNNEL_CONNECTION_FAILED'), 'proxyNode');
 assert.equal(E.netKind('ERR_INTERNET_DISCONNECTED'), 'offline');
 assert.equal(E.netKind('ERR_NAME_NOT_RESOLVED'), 'dns');
-assert.equal(E.netKind('fetch failed · ENOTFOUND · getaddrinfo ENOTFOUND team.example.com'), 'dns');
+assert.equal(E.netKind('fetch failed; ENOTFOUND; getaddrinfo ENOTFOUND team.example.com'), 'dns');
 assert.equal(E.netKind('ERR_CONNECTION_TIMED_OUT'), 'timeout');
 assert.equal(E.netKind('Timed Out'), 'timeout');
 assert.equal(E.netKind('Connection Closed'), 'reset');
