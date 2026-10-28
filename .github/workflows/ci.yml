@@ -58,6 +58,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-tp-swap.js
       - name: 翻译页重翻、补翻、纠错时转圈可取消
         run: xvfb-run -a npx electron --no-sandbox scripts/check-trpage-busy.js
+      - name: 翻译密钥：智谱、混元、DeepL 总有密钥框
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-tr-keys.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归

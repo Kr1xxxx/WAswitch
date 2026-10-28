@@ -361,11 +361,8 @@ function tpQuota() {
           h('span', { class: 'tp-meter-fill', style: { width: `${pct}%` } })),
         h('span', null, `${tpWan(used)} / ${tpWan(cap)}`));
     } else quota = h('span', { class: 'tp-prov-quota' }, '无限免费');
-    // 点一下去填（或改）这个服务商的密钥；列表里没有这个服务商就打开翻译设置
-    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => {
-      if (id) trOpenKey(id);
-      else { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); }
-    } },
+    // 点一下去填（或改）这个服务商的密钥；列表里还没有这个服务商，就打开它的空密钥框
+    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => trOpenKey(id, preset) },
     h('span', { class: 'tp-prov-top' }, h('span', { class: 'tp-prov-name' }, name), h('span', { class: `tp-prov-on${on ? ' on' : ''}` }, on ? '已启用' : '未启用')),
     quota);
   }));
