@@ -1,0 +1,74 @@
+---
+title: DitherButton
+description: A button with an animated 4x4 ordered-dither wave background and a knockout label.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="DitherButton" note="Interactive">
+  <DitherButton>Deploy Doom</DitherButton>
+</PreviewCard>
+
+## Variants
+
+### Rounded pill
+
+<PreviewCard title="Pill" note="Rounded full + extra padding">
+  <DitherButton className="rounded-full px-10 py-3 tracking-widest border-emerald-500 text-emerald-500" ditherColor="#10b981" ditherOpacity={0.5}>Press Start</DitherButton>
+</PreviewCard>
+
+### Hot pink
+
+<PreviewCard title="Hot pink" note="Magenta dither on deep navy">
+  <DitherButton className="border-pink-400 bg-indigo-950 text-pink-400 rounded-none" ditherColor="#f472b6" ditherOpacity={0.5}>Synthwave</DitherButton>
+</PreviewCard>
+
+### Tiny chip
+
+<PreviewCard title="Chip" note="Compact size with thin border">
+  <DitherButton className="border px-3 py-1 text-xs">v0.1.0</DitherButton>
+</PreviewCard>
+
+### Chunky dither
+
+<PreviewCard title="Chunky" note="Big particles via ditherSize={10}">
+  <DitherButton ditherSize={10}>Boss Mode</DitherButton>
+</PreviewCard>
+
+### Fine dither
+
+<PreviewCard title="Fine" note="Tight particles via ditherSize={2}">
+  <DitherButton ditherSize={2} ditherOpacity={0.7}>Hi-Res</DitherButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/dither-button</Cmd>
+
+## Usage
+
+```tsx
+import DitherButton from "@/components/evil-buttons/dither-button";
+
+export function ButtonDemo() {
+  return <DitherButton>Launch</DitherButton>;
+}
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes.
+
+| Prop            | Type              | Default | Description                                                              |
+| --------------- | ----------------- | ------- | ------------------------------------------------------------------------ |
+| `children`      | `React.ReactNode` | -       | The visible button label or content.                                     |
+| `className`     | `string`          | -       | Extra classes passed to the button.                                      |
+| `ditherColor`   | `string` (hex)    | -       | Override the dither "on" pixel color (e.g. `#ff0066`). Falls back to the resolved `color`. |
+| `ditherOpacity` | `number` (0–1)    | `1`     | CSS opacity applied to the dither canvas.                                |
+| `ditherSize`    | `number` (1–32)   | `4`     | Pixel scale of the dither particles. Higher = chunkier blocks.           |
+
+## Good to know
+
+- Dither colors follow the canvas's CSS `color` and `background-color`, so it themes itself.
+- Draws one still frame under `prefers-reduced-motion`.

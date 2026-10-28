@@ -1,0 +1,48 @@
+---
+title: MinimalButton
+description: A quiet dark button with a hairline ring, inner highlight, soft drop shadow, and a chevron that nudges on hover.
+category: Styles
+---
+
+## Preview
+
+<PreviewCard live>
+  <MinimalButton>Browse components</MinimalButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/minimal</Cmd>
+
+## Usage
+
+```tsx
+import MinimalButton from "@/components/evil-buttons/minimal";
+
+export function ButtonDemo() {
+  return <MinimalButton>Browse components</MinimalButton>;
+}
+```
+
+## Variants
+
+### No arrow
+
+<PreviewCard>
+  <MinimalButton arrow={false}>Save draft</MinimalButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props and forwards its ref to the button.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | The button label. |
+| `arrow` | `boolean` | `true` | Show a trailing chevron that nudges forward on hover. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- One layered `box-shadow`, no wrapper elements.
+- Stays dark in both themes.

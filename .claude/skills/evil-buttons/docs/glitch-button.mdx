@@ -1,0 +1,87 @@
+---
+title: GlitchButton
+description: A button with randomized RGB-split glitch bursts, a scanline overlay, and a flickering label.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="GlitchButton" note="Hover to trigger">
+  <GlitchButton>DEPLOY DOOM</GlitchButton>
+</PreviewCard>
+
+## Variants
+
+### Toxic
+
+Swap the two channel colors with `colors`.
+
+<PreviewCard title="Toxic" note="Green / magenta split">
+  <GlitchButton colors={["#a3e635", "#f472b6"]}>BIOHAZARD</GlitchButton>
+</PreviewCard>
+
+### Overload
+
+Crank `intensity` and lengthen the burst for a more violent glitch on hover.
+
+<PreviewCard title="Overload" note="High intensity on hover">
+  <GlitchButton intensity={2.5} glitchDuration={600}>OVERLOAD</GlitchButton>
+</PreviewCard>
+
+### Auto
+
+Set `trigger="auto"` to fire timed bursts on a random interval without needing a hover.
+
+<PreviewCard title="Auto" note="Fires on its own">
+  <GlitchButton trigger="auto" glitchInterval={1400}>SIGNAL DRIFT</GlitchButton>
+</PreviewCard>
+
+### Always on
+
+Set `trigger="always"` for a permanently corrupted signal.
+
+<PreviewCard title="Always on" note="Never stops">
+  <GlitchButton trigger="always">SIGNAL LOST</GlitchButton>
+</PreviewCard>
+
+### Clean pill
+
+Drop the scanlines with `scanlines={false}` and round it off via `className`.
+
+<PreviewCard title="Clean pill" note="No scanlines, rounded">
+  <GlitchButton scanlines={false} className="rounded-full border-cyan-500/40">SMOOTH</GlitchButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/glitch-button</Cmd>
+
+## Usage
+
+```tsx
+import GlitchButton from "@/components/evil-buttons/glitch-button";
+
+export function ButtonDemo() {
+  return <GlitchButton>DEPLOY DOOM</GlitchButton>;
+}
+```
+
+## Props
+
+The component spreads any `<button>` HTML attributes.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `glitchInterval` | `number` | `3500` | Base milliseconds between automatic bursts (±20% random jitter). Used when `trigger` is `"auto"`. |
+| `glitchDuration` | `number` | `450` | Duration in milliseconds of a single glitch burst. |
+| `colors` | `[string, string]` | `["#ef4444", "#22d3ee"]` | The two RGB-split channel colors. |
+| `intensity` | `number` | `1` | Multiplier on the channel and shake displacement. Higher is more violent. |
+| `trigger` | `"auto" \| "hover" \| "always"` | `"hover"` | When the glitch fires: only on hover, timed bursts, or continuously. |
+| `scanlines` | `boolean` | `true` | Toggle the scanline overlay. |
+| `className` | `string` | - | Extra classes passed to the button. |
+| `children` | `React.ReactNode` | - | The visible button label or content. |
+
+## Good to know
+
+- Stays a dark screen in both themes.
+- All motion stops under `prefers-reduced-motion`.

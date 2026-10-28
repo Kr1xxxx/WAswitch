@@ -1,0 +1,54 @@
+---
+title: AshBurstButton
+description: A ringed dark button that glows like an ember on click and erupts ash that collides with it via Matter.js physics, piling onto its surface.
+category: Effects
+---
+
+## Preview
+
+<PreviewCard live title="AshBurstButton" note="Click — ash piles on the button">
+  <AshBurstButton />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/ash-burst-button</Cmd>
+
+## Usage
+
+```tsx
+import { AshBurstButton } from "@/components/evil-buttons/ash-burst-button";
+
+export function ButtonDemo() {
+  return (
+    <AshBurstButton
+      colors={["#171717", "#404040", "#737373", "#f97316"]}
+      particleCount={120}
+      onDestroy={() => console.log("Burned.")}
+    >
+      Incinerate
+    </AshBurstButton>
+  );
+}
+```
+
+## Props
+
+The component spreads native `button` props. `onClick` still fires before the burst; call `event.preventDefault()` to skip it.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Button label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Delete"` | Label used when no children are provided. |
+| `particleCount` | `number` | `80` | Physics particles per burst. |
+| `spread` | `number` | `110` | Explosion spread in degrees. |
+| `startVelocity` | `number` | `42` | Launch velocity (mapped into Matter). |
+| `colors` | `string[]` | charcoal/ember palette | Custom particle colors. Warm reds and oranges get a soft glow. |
+| `icon` | `boolean` | `true` | Show the leading flame icon. |
+| `onDestroy` | `() => void` | - | Fired after each ash burst. |
+| `className` | `string` | - | Extra classes merged onto the button. |
+
+## Good to know
+
+- Embers are real Matter.js bodies on a full-page canvas.
+- Physics is skipped under `prefers-reduced-motion`.

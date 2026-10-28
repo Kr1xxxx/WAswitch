@@ -1,0 +1,56 @@
+---
+title: DemonicButton
+description: A hold-to-summon button that raises ridged devil horns from behind it while a canvas fire builds into a roar.
+category: Mischief
+---
+
+## Preview
+
+<PreviewCard live>
+  <DemonicButton label="Corrupt the World" />
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/demonic-button</Cmd>
+
+## Usage
+
+```tsx
+import { DemonicButton } from "@/components/evil-buttons/demonic-button";
+
+export function ButtonDemo() {
+  return (
+    <DemonicButton holdDuration={1800} onSummon={() => console.log("Summoned")}>
+      Corrupt the World
+    </DemonicButton>
+  );
+}
+```
+
+## Variants
+
+### Quick summon
+
+Shorten `holdDuration` for a faster ritual.
+
+<PreviewCard>
+  <DemonicButton holdDuration={900} label="Sell Soul" />
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props except `onClick`.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Button label. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Summon"` | Label used when no children are provided. |
+| `holdDuration` | `number` | `2200` | Milliseconds of holding needed to fully summon. |
+| `onSummon` | `() => void` | - | Fired once each time the charge reaches 100%. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Fire is a canvas particle system; horns are inline SVG.
+- Animates without React re-renders.

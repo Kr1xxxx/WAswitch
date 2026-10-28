@@ -1,0 +1,73 @@
+---
+title: MoviePass Button
+description: A cinema ticket button that tears along its perforation on click, hinging open or snapping apart.
+category: Styles
+---
+
+## Preview
+
+<PreviewCard live>
+  <MoviePassButton>Admit One</MoviePassButton>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/movie-pass</Cmd>
+
+## Usage
+
+```tsx
+import MoviePassButton from "@/components/evil-buttons/movie-pass";
+
+export function ButtonDemo() {
+  return (
+    <MoviePassButton variant="snap" onTear={() => console.log("Ripped!")}>
+      Admit One
+    </MoviePassButton>
+  );
+}
+```
+
+## Variants
+
+### Tilt
+
+Both halves pivot on their shared bottom corners, opening a V along the tear.
+
+<PreviewCard>
+  <MoviePassButton variant="tilt">Book Seat</MoviePassButton>
+</PreviewCard>
+
+### Snap
+
+The stub breaks off in a straight line and leaves a small gap.
+
+<PreviewCard>
+  <MoviePassButton variant="snap">Book Seat</MoviePassButton>
+</PreviewCard>
+
+### Keep it torn
+
+Pass `resetDelay={null}` to leave the ticket torn until it is clicked again, and swap the stub content with `stub`.
+
+<PreviewCard>
+  <MoviePassButton variant="tilt" resetDelay={null} stub="VIP">{"Backstage"}</MoviePassButton>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Label printed on the main part of the ticket. |
+| `variant` | `"tilt" \| "snap"` | `"tilt"` | How the ticket tears on click. |
+| `stub` | `React.ReactNode` | `NO. 01` | Content of the tear-off stub. |
+| `resetDelay` | `number \| null` | `1800` | Milliseconds before the ticket mends. `null` keeps it torn until the next click. |
+| `onTear` | `() => void` | - | Fired each time the ticket tears. |
+| `onClick` | `React.MouseEventHandler` | - | Native click handler. Call `preventDefault()` to skip the tear. |
+| `className` | `string` | - | Extra classes passed to the button. |
+
+## Good to know
+
+- Notches are a CSS mask, so it works on any background.

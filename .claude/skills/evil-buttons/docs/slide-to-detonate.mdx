@@ -1,0 +1,85 @@
+---
+title: SlideToDetonate
+description: A slide-to-confirm safety gate that makes you drag a handle across a fuse before the real action detonates.
+category: Interactive
+---
+
+## Preview
+
+<PreviewCard live title="SlideToDetonate" note="Drag the handle all the way">
+  <SlideToDetonate>Slide to detonate</SlideToDetonate>
+</PreviewCard>
+
+## Install
+
+<Cmd>@evilbuttons/slide-to-detonate</Cmd>
+
+## Usage
+
+```tsx
+import { SlideToDetonate } from "@/components/evil-buttons/slide-to-detonate";
+
+export function ButtonDemo() {
+  return (
+    <SlideToDetonate onConfirm={() => launchTheMissiles()}>
+      Slide to detonate
+    </SlideToDetonate>
+  );
+}
+```
+
+## Variants
+
+### Light
+
+`variant="light"` swaps the dark groove for a light one with a white handle.
+
+<PreviewCard>
+  <SlideToDetonate variant="light">Slide to detonate</SlideToDetonate>
+</PreviewCard>
+
+### Heavy fuse
+
+High `resistance` makes the handle lag further behind the pointer the closer it gets to the end.
+
+<PreviewCard>
+  <SlideToDetonate resistance={0.85}>Push through</SlideToDetonate>
+</PreviewCard>
+
+### Locked to the pointer
+
+`smoothness={0}` and `resistance={0}` give a direct, one-to-one drag with no spring.
+
+<PreviewCard>
+  <SlideToDetonate smoothness={0} resistance={0}>Slide to detonate</SlideToDetonate>
+</PreviewCard>
+
+### Floaty
+
+High `smoothness` lets the handle glide behind the pointer on a loose spring.
+
+<PreviewCard>
+  <SlideToDetonate smoothness={0.9}>Slide to detonate</SlideToDetonate>
+</PreviewCard>
+
+## Props
+
+The component spreads native `button` props onto the handle, except `onClick` and `style`.
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `children` | `React.ReactNode` | - | Track label shown while idle. Falls back to `label`. |
+| `label` | `React.ReactNode` | `"Slide to detonate"` | Idle label used when no children are provided. |
+| `onConfirm` | `() => void` | - | Fired once the handle is released past the threshold. |
+| `threshold` | `number` | `0.9` | Fraction of the track (0-1) the handle must cross to arm the action. |
+| `resistance` | `number` | `0.35` | How hard the fuse pushes back (0-1). `0` tracks the pointer one to one; higher values make the handle lag further behind toward the end. |
+| `smoothness` | `number` | `0.4` | How softly the handle follows the pointer (0-1). `0` locks it to the pointer; higher values glide behind on a looser spring. |
+| `variant` | `"dark" \| "light"` | `"dark"` | Surface style: a recessed dark groove or a light one. |
+| `resetAfter` | `number` | `1600` | Milliseconds to stay in the success state before resetting. Set to `0` to stay. |
+| `disabled` | `boolean` | `false` | Locks the handle and dims the track. |
+| `className` | `string` | - | Extra classes passed to the track. |
+
+## Good to know
+
+- A heavy `resistance` slows the handle but never blocks it.
+- `smoothness={0}` makes the handle track the pointer exactly.
