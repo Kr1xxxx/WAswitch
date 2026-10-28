@@ -141,6 +141,10 @@ function morphBtn(key, labels, run, attrs = {}) {
   morphPaint(b);
   return b;
 }
+// key 里带一次性部分（比如编辑页每开一次换一个 editorNonce）时，开新的之前把同前缀的旧状态删掉，morphState 不会越攒越多
+function morphDrop(prefix, keep) {
+  for (const k of Object.keys(morphState)) if (k.startsWith(prefix) && k !== keep) { clearTimeout(morphState[k].timer); delete morphState[k]; }
+}
 
 // 小工具：h('div', { class: 'x', onclick() {} }, '文字', 子元素...)
 // 几段并排的短文字，用间距隔开，不用中点（shen 2026-10-28）。样式 .seg 在 shell.css
@@ -889,7 +893,7 @@ function replyForm() {
 function customerForm() {
   const c = pn.edit;
   const name = h('input', { value: c.name || '', maxlength: '60', placeholder: '名字', 'aria-label': '名字' });
-  const phone = h('input', { value: c.phone || '', maxlength: '40', placeholder: '电话（例如 +81 90 1234 5678）', 'aria-label': '电话' });
+  const phone = h('input', { value: c.phone || '', maxlength: '40', placeholder: '电话（例如 +49 151 2345678）', 'aria-label': '电话' });
   const tags = h('input', { value: (c.tags || []).join('，'), maxlength: '220', placeholder: '标签，用逗号隔开', 'aria-label': '标签' });
   const note = h('textarea', { maxlength: '500', placeholder: '备注', 'aria-label': '备注' }, c.note || '');
   const due = h('input', { type: 'datetime-local', value: toLocalInput(c.followUpAt), 'aria-label': '下次跟进时间' });
@@ -1401,7 +1405,9 @@ function editorPage(id) {
     const error = h('div', { class: 'hint', role: 'alert', style: { color: '#B42318', minHeight: '18px' } });
     const swatches = h('div', { class: 'swatches' });
     const presets = h('div', { class: 'presets' });
-    const testBtn = morphBtn(`editorTest:${d.id || 'new'}:${s.editorNonce}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
+    const testKey = `editorTest:${d.id || 'new'}:${s.editorNonce}`;
+    morphDrop('editorTest:', testKey);
+    const testBtn = morphBtn(testKey, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
     const saveBtn = h('button', { class: 'btn primary', type: 'button' }, d.isNew ? '保存并扫码登录' : '保存');
 
     // 图标：名称输入框左边的方块，点开下面展开一整套 emoji，点一个就换上并收起
