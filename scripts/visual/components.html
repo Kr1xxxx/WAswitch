@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>组件总览</title>
+  <!-- 和 src/shell/index.html 同样的样式表、同样的顺序。这一页不进安装包，只给 CI 截图比对（npm run check:visual） -->
+  <link rel="stylesheet" href="../../src/colors/radix.css">
+  <link rel="stylesheet" href="../../src/fonts/fonts.css">
+  <link rel="stylesheet" href="../../src/tokens.css">
+  <link rel="stylesheet" href="../../src/seltr/card.css">
+  <link rel="stylesheet" href="../../src/shell/shell.css">
+  <link rel="stylesheet" href="components.css">
+</head>
+<body>
+  <!-- 每个 section 截一张图（data-shot 是基准图的文件名）。加新控件：放进最合适的一块，再跑 npm run check:visual -- --update -->
+  <!-- data-force="hover" / "focus-visible"：截图前用 CDP 强制这个状态，不用真的移鼠标 -->
+
+  <section data-shot="buttons">
+    <h2>按钮</h2>
+    <div class="line">
+      <button class="btn">取消</button>
+      <button class="btn" data-force="hover">悬停</button>
+      <button class="btn primary">保存</button>
+      <button class="btn danger">删除账号</button>
+      <button class="btn" disabled>不可用</button>
+      <button class="btn primary" disabled>不可用</button>
+      <button class="btn" data-force="focus-visible">焦点</button>
+    </div>
+    <div class="line">
+      <button class="btn morph" data-st="idle"><span class="mb-idle">测试</span><span class="mb-busy"><span class="mb-spin"></span>测试中</span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>能用</span><span class="mb-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>不通</span></button>
+      <button class="btn morph" data-st="busy"><span class="mb-idle">测试</span><span class="mb-busy"><span class="mb-spin"></span>测试中</span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>能用</span><span class="mb-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>不通</span></button>
+      <button class="btn morph" data-st="ok"><span class="mb-idle">测试</span><span class="mb-busy"><span class="mb-spin"></span>测试中</span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>能用</span><span class="mb-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>不通</span></button>
+      <button class="btn morph" data-st="err"><span class="mb-idle">测试</span><span class="mb-busy"><span class="mb-spin"></span>测试中</span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>能用</span><span class="mb-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>不通</span></button>
+      <button class="btn primary morph" data-st="ok"><span class="mb-idle">保存</span><span class="mb-busy"><span class="mb-spin"></span>保存中</span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已保存</span><span class="mb-err"></span></button>
+    </div>
+    <div class="line">
+      <button class="icon-btn" aria-label="设置"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      <button class="icon-btn" data-force="hover" aria-label="添加"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+      <span class="gap"></span>
+      <button class="link-btn">重新检测</button>
+      <button class="link-btn" data-force="hover">悬停</button>
+      <button class="link-btn" disabled>不可用</button>
+      <span class="gap"></span>
+      <button class="pn-btn">复制</button>
+      <button class="pn-btn" data-force="hover">悬停</button>
+      <button class="pn-btn primary">发送</button>
+      <button class="pn-btn" disabled>不可用</button>
+    </div>
+    <div class="line">
+      <button class="dk-btn">翻译</button>
+      <button class="dk-btn" data-force="hover">纠错</button>
+      <button class="dk-btn" disabled>取消</button>
+      <button class="dk-swap" aria-label="对调"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></button>
+      <button class="dk-swap" data-force="hover" aria-label="对调"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></button>
+      <span class="gap"></span>
+      <div class="undo" role="status"><span class="undo-text">已删除 Lukas</span><button class="undo-btn" type="button">撤销</button></div>
+    </div>
+  </section>
+
+  <section data-shot="fields">
+    <h2>输入</h2>
+    <div class="cols">
+      <label class="field">账号名称<input placeholder="例如 Lukas"></label>
+      <label class="field">代理端口<input class="mono" value="127.0.0.1:7891"></label>
+      <label class="field">焦点<input value="Emma Schneider" data-force="focus-visible"></label>
+    </div>
+    <div class="line">
+      <select><option>英语</option></select>
+      <select data-force="hover"><option>德语</option></select>
+      <select disabled><option>法语</option></select>
+      <select class="dk-lang"><option>西班牙语</option></select>
+      <select class="dk-mini" disabled><option>glm-4-flash</option></select>
+    </div>
+    <div class="line">
+      <input type="checkbox" aria-label="没勾">
+      <input type="checkbox" checked aria-label="勾上">
+      <input type="checkbox" disabled aria-label="没勾，不可用">
+      <input type="checkbox" checked disabled aria-label="勾上，不可用">
+      <span class="gap"></span>
+      <button class="switch" role="switch" aria-checked="false" aria-label="关"></button>
+      <button class="switch" role="switch" aria-checked="true" aria-label="开"></button>
+      <span class="gap"></span>
+      <input type="checkbox" class="dk-switch" role="switch" aria-label="关">
+      <input type="checkbox" class="dk-switch" role="switch" checked aria-label="开">
+      <input type="checkbox" class="dk-switch" role="switch" checked disabled aria-label="开，不可用">
+    </div>
+    <div class="pn-tools line"><input type="search" placeholder="搜索客户"><button class="pn-btn">新建</button></div>
+  </section>
+
+  <section data-shot="tags">
+    <h2>标签和角标</h2>
+    <div class="line">
+      <span class="chip">伦敦 09:30</span>
+      <span class="chip bad">代理断开</span>
+      <span class="chip night">纽约 03:30</span>
+      <span class="badge-warn">需要测试</span>
+      <span class="pn-tag">默认</span>
+      <span class="dk-fixed">已纠错</span>
+    </div>
+    <div class="line">
+      <span class="pill">3</span>
+      <span class="pill">12</span>
+      <span class="pill quiet">5</span>
+      <span class="gap"></span>
+      <span class="avatar" style="background: var(--green-9)">L<span class="dot">2</span></span>
+      <span class="avatar" style="background: var(--violet-9)">E<span class="dot bad">!</span></span>
+      <span class="avatar" style="background: var(--orange-9)">S<span class="dot quiet">9+</span></span>
+      <span class="avatar crm" style="background: var(--blue-9)">M</span>
+      <span class="avatar emoji"><img src="../../src/emoji/svg/avocado.svg" width="24" height="24" alt=""></span>
+    </div>
+    <div class="presets">
+      <button class="preset">7890</button>
+      <button class="preset on">7891</button>
+      <button class="preset st-ok">7892 <span class="pst">能用</span></button>
+      <button class="preset">7893 <span class="pst">没开</span></button>
+    </div>
+  </section>
+
+  <section data-shot="sidebar" class="tinted">
+    <div class="side-col">
+      <div class="head"><span class="brand">WAswitch</span></div>
+      <div class="label side-label"><span>账号</span><button class="icon-btn add-btn" aria-label="添加"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      <div class="list">
+        <button class="row on"><span class="avatar" style="background: var(--green-9)">L</span><span class="meta"><span class="name">Lukas</span><span class="sub">+49 151 2345 6789</span></span><span class="pill">3</span></button>
+        <button class="row" data-force="hover"><span class="avatar" style="background: var(--violet-9)">E</span><span class="meta"><span class="name">Emma</span><span class="sub">+44 7700 900123</span></span></button>
+        <button class="row"><span class="avatar" style="background: var(--orange-9)">S<span class="dot bad">!</span></span><span class="meta"><span class="name">Sophie</span><span class="sub bad">代理断开</span></span></button>
+        <button class="row"><span class="avatar" style="background: var(--blue-9)">M</span><span class="meta"><span class="name">Marco</span><span class="sub warn">出口 IP 变了</span></span><span class="pill quiet">1</span></button>
+        <button class="group-head"><span class="gname">欧洲客户</span><span class="pill">4</span></button>
+      </div>
+      <div class="membox"><div class="top"><span>内存</span><b>1.2 GB</b></div><div class="bars"><span style="width: 60%; background: var(--green-9)"></span><span style="width: 40%; background: var(--violet-9)"></span></div></div>
+      <div class="membox warn"><div class="top"><span>内存</span><b>3.4 GB</b></div><div class="bars"><span style="width: 100%; background: var(--amber-9)"></span></div></div>
+      <div class="membox bad"><div class="top"><span>内存</span><b>4.1 GB</b></div><div class="bars"><span style="width: 100%; background: var(--red-9)"></span></div></div>
+    </div>
+    <div class="side-col">
+      <button class="back"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>返回</button>
+      <button class="tab on">快捷设置</button>
+      <button class="tab">翻译</button>
+      <button class="tab">通知</button>
+    </div>
+  </section>
+
+  <section data-shot="translate">
+    <div class="tp">
+      <div class="line">
+        <button class="tp-prov" type="button"><span class="tp-prov-top"><span class="tp-prov-name">智谱</span><span class="tp-prov-on on">已启用</span></span></button>
+        <button class="tp-prov" type="button"><span class="tp-prov-top"><span class="tp-prov-name">DeepL</span><span class="tp-prov-on on">已启用</span></span><span class="tp-prov-quota"><span class="tp-meter near"><span class="tp-meter-fill" style="width: 92%"></span></span>9.2 万</span></button>
+        <button class="tp-prov" type="button" data-force="hover"><span class="tp-prov-top"><span class="tp-prov-name">腾讯混元</span><span class="tp-prov-on">未启用</span></span></button>
+      </div>
+      <div class="line">
+        <button class="tp-btn tp-go primary morph" data-st="idle"><span class="mb-idle">翻译</span><span class="mb-busy"><span class="mb-spin"></span>翻译中</span><span class="mb-ok"></span><span class="mb-err"></span></button>
+        <button class="tp-btn tp-go primary morph" data-st="idle" disabled><span class="mb-idle">翻译</span><span class="mb-busy"></span><span class="mb-ok"></span><span class="mb-err"></span></button>
+        <button class="tp-btn tp-go primary morph" data-st="ok"><span class="mb-idle">翻译</span><span class="mb-busy"></span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已翻译</span><span class="mb-err"></span></button>
+        <button class="tp-btn tp-go primary morph" data-st="err"><span class="mb-idle">翻译</span><span class="mb-busy"></span><span class="mb-ok"></span><span class="mb-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>重试</span></button>
+        <button class="tp-btn tp-copy primary morph" data-st="idle"><span class="mb-idle">复制</span><span class="mb-busy"></span><span class="mb-ok"></span><span class="mb-err"></span></button>
+        <button class="tp-btn tp-copy primary morph" data-st="ok"><span class="mb-idle">复制</span><span class="mb-busy"></span><span class="mb-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已复制</span><span class="mb-err"></span></button>
+      </div>
+      <div class="line">
+        <select class="tp-lang"><option>中文</option></select>
+        <select class="tp-model"><option>glm-4-flash</option></select>
+        <button class="tp-open2" type="button">对比第二个模型<span class="tp-open2-model">DeepL</span></button>
+      </div>
+    </div>
+  </section>
+  <section data-shot="workbench">
+    <h2>工作台</h2>
+    <div class="wb-tabs" role="tablist">
+      <button class="tb-tab on" role="tab">客户资料</button>
+      <button class="tb-tab" role="tab" data-force="hover">话术</button>
+      <button class="tb-tab" role="tab">翻译<span class="tb-badge">3</span></button>
+    </div>
+    <div class="pn-tabs"><button class="pn-tab on">全部</button><button class="pn-tab">常用</button><button class="pn-tab">报价</button></div>
+    <div class="dk-card"><div class="dk-field"><textarea class="dk-in" rows="3" aria-label="要回的话" placeholder="要回的话"></textarea><div class="dk-tools"><button class="dk-tool" aria-label="复制"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button><span class="dk-keyhint">回车翻译</span></div></div></div>
+    <div class="dk-card"><div class="dk-field"><textarea class="dk-out" rows="3" aria-label="译文">Hi Emma, the 13x4 lace front in natural black is back in stock. Shall I send you the price list?</textarea><div class="dk-tools"><button class="dk-tool" aria-label="复制"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div></div>
+    <div class="line"><textarea class="dk-in" rows="2" aria-label="改译文">Thanks Lukas, I will check with our warehouse today.</textarea></div>
+    <div class="pill-host">
+    <div class="lite-msgs">
+      <div class="lite-msg"><span class="from">Emma Schneider</span><span class="text">Do you have the 24 inch body wave in stock?</span><span class="time">09:12</span></div>
+      <div class="lite-msg me"><span class="text">Yes, we ship from our EU warehouse.</span><span class="time">09:14</span></div>
+    </div>
+    <button class="dk-newpill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>新消息</button>
+    </div>
+  </section>
+
+  <section data-shot="settings">
+    <h2>设置</h2>
+    <div class="qk-tiles">
+      <div class="qk-tile"><span class="qk-k">内存</span><b class="qk-v">1.2 GB</b><span class="qk-s">5 个账号</span></div>
+      <div class="qk-tile"><span class="qk-k">翻译</span><b class="qk-v ok">智谱</b><span class="qk-s">glm-4-flash</span></div>
+      <div class="qk-tile"><span class="qk-k">自检</span><b class="qk-v warn">1 个提醒</b><span class="qk-s">Marco 出口 IP 变了</span></div>
+      <div class="qk-tile"><span class="qk-k">版本</span><b class="qk-v bad">更新失败</b><button class="link-btn qk-act">重试</button></div>
+    </div>
+    <div>
+      <div class="setrow"><div class="meta"><span class="title">自动翻译收到的消息</span><span class="desc">只翻客户发来的</span></div><button class="switch" role="switch" aria-checked="true" aria-label="开"></button></div>
+      <div class="setrow solo"><div class="meta"><span class="title">界面语言</span></div><select><option>中文</option></select></div>
+    </div>
+    <div class="line">
+      <span class="tag">网页版</span>
+      <span class="tag">时区：伦敦</span>
+      <span class="sub"><span class="seg">Lukas</span><span class="seg">+49 151 2345 6789</span></span>
+    </div>
+    <div class="line progress-line">
+      <div class="progress"><span style="width: 40%"></span></div>
+      <div class="progress thin"><span style="width: 75%"></span></div>
+      <span class="spinner" aria-label="加载中"></span>
+    </div>
+  </section>
+</body>
+</html>

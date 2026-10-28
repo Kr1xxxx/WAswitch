@@ -1,0 +1,24 @@
+/* 只给组件总览页摆放用：不改任何控件本身的样子 */
+html, body { height: auto; }
+body { display: block; overflow: visible; width: 720px; padding: 16px; background: var(--slate-2); }
+section { margin-bottom: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--white); border-radius: var(--r-l); }
+section h2 { margin: 0; font-size: var(--fs-s); font-weight: 600; color: var(--slate-11); }
+.line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.gap { width: 12px; }
+.cols input { width: 100%; min-width: 0; }
+/* 撤销条平时 fixed 贴在窗口底部，这里放回文档流 */
+.undo { position: static; }
+/* 侧栏那块：窗口底色（slate 3）上摆两列 */
+section.tinted { flex-direction: row; align-items: flex-start; background: var(--tint); }
+.side-col { width: 200px; display: flex; flex-direction: column; gap: 10px; }
+/* 翻译页的块自己带底色和高度，这里收成内容高 */
+.progress-line .progress { width: 160px; }
+/* 轻量版消息列表平时撑满剩余高度，这里收成内容高 */
+.lite-msgs { flex: none; overflow: visible; padding-bottom: 48px; }
+/* 「新消息」小标贴在列表底部正中 */
+.pill-host { position: relative; }
+.tp { height: auto; display: flex; flex-direction: column; gap: 12px; padding: 0; background: transparent; }
+
+/* 截图要稳：动画、过渡、光标闪烁都停掉，转圈停在起点 */
+*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }
