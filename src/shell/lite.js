@@ -252,7 +252,7 @@ document.addEventListener('keydown', (e) => {
   liteSelHide();
 }, true);
 window.addEventListener('resize', () => { if (liteSel) liteSelHide(); });
-window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
+if (window.wa.onState) window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
 document.addEventListener('selectionchange', () => {
   if (!liteSel || liteSel.mode !== 'button') return;
   const sel = document.getSelection();
