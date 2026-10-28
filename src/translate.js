@@ -722,6 +722,15 @@ class Translator {
     return false;
   }
 
+  // 另开一条翻译通道：配置、密钥、DeepL 用量都和本体共用，只有“正在翻的那一条”分开。
+  // 翻译页用它，不和工作台的自动翻译、回复翻译互相排队，取消也只取消自己
+  lane() {
+    const l = Object.create(this);
+    l.busy = null;
+    l.load = () => this.load(); // 配置只放在本体上，两条通道看到的永远是同一份
+    return l;
+  }
+
   // DeepL 一次调用：{ text, target, source, context } -> 译文；失败时抛出 { kind, text }
   async callDeepl(p, { text, target, source, context }, signal) {
     const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
