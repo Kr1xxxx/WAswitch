@@ -23,6 +23,10 @@ jobs:
       - run: npm ci
       - name: 界面文字不用中点「·」分隔
         run: npm run check:middot
+      - name: AGENTS.md 界面规则：提到的变量都存在、不做深色模式
+        run: npm run check:agents
+      - name: 回车处理先判断输入法选字
+        run: npm run check:ime-enter
       - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core
       - name: MCP 自检
         run: npm run check:mcp
