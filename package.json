@@ -8,6 +8,7 @@
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
     "check:middot": "node scripts/check-no-middot.js",
+    "check:ime-enter": "node scripts/check-ime-enter.js",
     "check:emoji": "node scripts/check-emoji.js",
     "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-search.js && node scripts/check-mcp-customer-search.js && node scripts/check-mcp-helpers.js && node scripts/check-mcp-customers.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
@@ -67,6 +68,14 @@
   "build": {
     "appId": "com.waswitch.app",
     "productName": "WAswitch",
+    "electronLanguages": [
+      "zh-CN",
+      "zh_CN",
+      "zh-TW",
+      "zh_TW",
+      "en-US",
+      "en"
+    ],
     "files": [
       "src/**/*",
       "!src/fonts/misans{,/**/*}",
@@ -74,7 +83,9 @@
       "src/mcp/settings.html",
       "src/mcp/settings.js",
       "src/mcp/preload.js",
-      "assets/**/*"
+      "assets/**/*",
+      "!**/node_modules/**/*.{map,md,markdown,d.ts,d.mts,d.cts}",
+      "**/node_modules/**/{LICENSE,LICENCE,license,licence}.{md,markdown}"
     ],
     "icon": "assets/icon.png",
     "win": {
