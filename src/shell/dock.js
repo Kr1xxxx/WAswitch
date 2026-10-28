@@ -8,7 +8,9 @@ const dk = {
   stick: true, // 消息列表是不是停在最底下（用户自己滚动时更新）；在底下就跟着新消息滚
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的回复（中文或外文）
-  srcLang: null, // 回复的原文语言，'' = 自动检测（记在本机，第一次用时读）
+  // 语言条的临时选择，只管当前这个对话（换对话、换号回到自动）：src 原文语言（'' = 自动检测），
+  // tgt 按 ⇄ 对调出来的目标语言（'' = 用记下的/自动），swapped = 现在是对调过的状态（再按一次回到原样）
+  lt: { title: null, src: '', tgt: '', swapped: false },
   out: '', // 译文（可以手动改）
   src: '', // 译文是从哪段中文翻的
   edited: false, // 译文手动改过
@@ -67,17 +69,21 @@ async function dockFetch() {
 // ---- 发出 ----
 // 语气按钮去掉了（shen 2026-10-28），固定用第一个“发出”模式（默认是“标准”：忠实翻译）
 const outModeId = () => (((dk.st && dk.st.modes.out) || [])[0] || {}).id || '';
-// 原文语言：自动检测或手动选的（存在本机）
-function dockSrc() {
-  if (dk.srcLang === null) { const v = LS('tr.outSrc') || ''; dk.srcLang = dk.st && dk.st.langs.includes(v) ? v : ''; }
-  return dk.srcLang;
+// 语言条的临时选择：换了对话就清掉（不带到别的客户那里，Fable 审计 2026-10-28）
+function dockLt() {
+  const title = dk.st ? dk.st.title : null;
+  if (dk.lt.title !== title || dk.lt.acc !== dk.acc) dk.lt = { title, acc: dk.acc, src: '', tgt: '', swapped: false };
+  return dk.lt;
 }
 // 目标语言是不是手动选的（读不到对话的号，手动选的记在号上）
 const dockManual = (st) => st.targetSrc === 'manual' || (!st.canRemember && !!st.accountLang);
 // 这一句实际翻成什么：{ source, target }
+// source 只在手动选了原文语言时才发给模型（自动认出来的中文不发，记下的译文还能对上）
 function dockLangs(text = dk.text) {
   const st = dk.st;
-  return ReplyLang.pick({ text, src: dockSrc(), manual: dockManual(st) ? st.target : '', autoTarget: st.autoTarget || st.target });
+  const lt = dockLt();
+  const r = ReplyLang.pick({ text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target });
+  return { source: lt.src, target: r.target };
 }
 // 纠错：AI 对照中文原文和上下文校对现在的译文
 function dockFix() {
@@ -138,35 +144,42 @@ async function dockModel(id) {
 // ---- 界面 ----
 // 语言条（照 shen 2026-10-28 的参考图）：左边原文语言「自动检测」，中间 ⇄ 对调，右边目标语言「自动选择」。
 // 自动选择：中文翻成客户的语言（客户资料 > 从客户消息认出来的 > 英语），英文等别的语言翻成中文。
-// 手动选的目标语言记在这个对话上（读不到对话时记在号上），原文语言记在本机
+// 手动选的目标语言记在这个对话上（读不到对话时记在号上）；原文语言和 ⇄ 只管当前对话，不记
 function dockLangBar() {
   const st = dk.st;
   const manual = dockManual(st);
+  const lt = dockLt();
   const toCustomer = ReplyLang.pick({ text: '中', autoTarget: st.autoTarget || st.target }).target;
   const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的`, default: '认不出客户的语言，先用英语' };
   const srcLangs = ['中文', ...st.langs.filter((l) => l !== '中文')];
-  const src = h('select', { class: 'dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认', onchange: (e) => {
-    dk.srcLang = e.target.value === '__auto' ? '' : e.target.value;
-    LS('tr.outSrc', dk.srcLang);
+  const src = h('select', { class: 'dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认（只管这个对话）', onchange: (e) => {
+    lt.src = e.target.value === '__auto' ? '' : e.target.value;
+    lt.swapped = false;
     dockRender(true);
   } }, h('option', { value: '__auto' }, '自动检测'), srcLangs.map((l) => h('option', { value: l }, l)));
-  src.value = dockSrc() || '__auto';
+  src.value = lt.src || '__auto';
   const setTarget = async (lang) => {
+    lt.tgt = ''; lt.swapped = false;
     dk.st = await window.wa.dockLang(st.accountId, st.title, lang);
     dockRender(true);
   };
   const tgt = h('select', { class: 'dk-bar-sel', 'aria-label': '翻成哪种语言',
-    title: manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
+    title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
       : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
     onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
   h('option', { value: '__auto' }, '自动选择'), st.langs.map((l) => h('option', { value: l }, l)));
-  tgt.value = manual ? st.target : '__auto';
+  tgt.value = lt.tgt || (manual ? st.target : '__auto');
   const swapBtn = h('button', { class: 'dk-swap', title: '原文语言和目标语言对调（有译文就把译文换到上面）', 'aria-label': '对调语言', disabled: dk.busy, onclick: async () => {
-    const next = ReplyLang.swap({ text: dk.text, src: dockSrc(), manual: manual ? st.target : '', autoTarget: st.autoTarget || st.target });
-    dk.srcLang = next.src; LS('tr.outSrc', next.src);
+    // 只改当前对话的临时选择，不写进对话/号的记录；对调过再按一次就回到原样
+    if (lt.swapped) Object.assign(lt, { src: '', tgt: '', swapped: false });
+    else {
+      const next = ReplyLang.swap({ text: dk.text, src: lt.src, manual: lt.tgt || (manual ? st.target : ''), autoTarget: st.autoTarget || st.target });
+      Object.assign(lt, { src: next.src, tgt: next.manual, swapped: true });
+    }
     if (dk.out.trim()) Object.assign(dk, { text: dk.out, out: '', src: '', edited: false, fixed: false, suggest: '', warn: [], forTitle: null });
-    await setTarget(next.manual);
+    dockRender(true);
   } }, icon('swap', 18));
+  swapBtn.setAttribute('aria-pressed', String(lt.swapped));
   return h('div', { class: 'dk-bar' }, src, swapBtn, tgt);
 }
 

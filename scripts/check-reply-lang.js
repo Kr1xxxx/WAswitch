@@ -9,6 +9,12 @@ assert.deepStrictEqual(R.pick({ text: 'Wie viel kostet die Perücke?', src: '', 
 // 中文夹英文行业词还是中文；英文夹一个中文词还是英文
 assert.deepStrictEqual(R.pick({ text: '这个 lace front 头套明天发', src: '', manual: '', autoTarget: '英语' }).target, '英语');
 assert.deepStrictEqual(R.pick({ text: 'Please send the 头套 tomorrow morning', src: '', manual: '', autoTarget: '英语' }).target, '中文');
+// 链接、邮箱、@账号里的英文单词不算外文（Fable 审计 2026-10-28）
+assert.strictEqual(R.isChinese('看这个 https://example.com/lace-front-wig-bob-13x4'), true);
+assert.strictEqual(R.isChinese('看这个https://example.com/lace-front-wig-bob-13x4谢谢'), true);
+assert.strictEqual(R.isChinese('发到 order.team@example.com 或者 www.example.com/hd-lace-wig'), true);
+assert.strictEqual(R.isChinese('@emma_schneider 明天发货'), true);
+assert.strictEqual(R.isChinese('Please check https://example.com/wig'), false);
 // 中文翻成客户的语言（客户资料 / 认出来的）
 assert.deepStrictEqual(R.pick({ text: '谢谢', src: '', manual: '', autoTarget: '德语' }), { source: '中文', target: '德语' });
 // 客户语言是中文或没有：中文翻成英语

@@ -485,9 +485,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 .dk-msg { padding: 6px 12px 0; }
 .dk-compose { border-top: 1px solid var(--line); padding: 0 10px 10px; display: flex; flex-direction: column; gap: 5px; background: #fbfbfc; }
 .dk-compose .dk-head { padding: 6px 0 0; flex-wrap: wrap; row-gap: 6px; }
-.dk-chip { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--field); background: #fff; font: inherit; font-size: 12px; color: var(--soft); cursor: pointer; }
-.dk-chip:hover { color: var(--text); }
-.dk-chip.on { background: var(--text); border-color: var(--text); color: #fff; }
 .dk-in, .dk-out { width: 100%; resize: vertical; border: 1px solid var(--field); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; background: #fff; user-select: text; min-height: 58px; }
 .dk-out { background: #f6f9f6; }
 .dk-in:focus, .dk-out:focus { outline: 2px solid #15803D; outline-offset: -1px; border-color: transparent; }
@@ -562,7 +559,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: #eceef1; }
 /* ---------- 过渡动画（时长看 :root 的 --fx-*） ---------- */
 /* 悬停、按下：颜色渐变，按钮按下轻轻缩一下 */
 button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease-out, border-color var(--fx-fast) ease-out, color var(--fx-fast) ease-out, box-shadow var(--fx-fast) ease-out, opacity var(--fx-fast) ease-out, transform var(--fx-fast) ease-out; }
-.btn:active:not(:disabled), .pn-btn:active, .dk-chip:active, .preset:active, .icon-btn:active, .updbtns button:active, .tb-tab:active { transform: scale(.97); }
+.btn:active:not(:disabled), .pn-btn:active, .preset:active, .icon-btn:active, .updbtns button:active, .tb-tab:active { transform: scale(.97); }
 @keyframes fx-rise { from { opacity: 0; transform: translateY(4px); } }
 @keyframes fx-fade { from { opacity: 0; } }
 @keyframes fx-down { from { opacity: 0; transform: translateY(-6px); } }
