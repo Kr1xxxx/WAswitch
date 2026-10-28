@@ -36,6 +36,8 @@ jobs:
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
+      - name: 删除不弹确认、撤销提示自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归

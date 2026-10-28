@@ -187,6 +187,18 @@ class Records {
     return true;
   }
 
+  // 撤销删除：snap 是删除前的记录（含 id）。删除标记还在就原地放回，被清掉了就重新加
+  restore(snap) {
+    if (!snap || typeof snap.id !== 'string') return false;
+    this.load();
+    if (this.items.some((r) => r.id === snap.id && !r.deleted)) return false;
+    const rec = { id: snap.id, ...this.def.clean(snap), updatedAt: Date.now(), deleted: false };
+    const i = this.items.findIndex((r) => r.id === snap.id);
+    if (i >= 0) this.items[i] = rec; else this.items.push(rec);
+    this.save();
+    return true;
+  }
+
   patch(id, fields, { save = true } = {}) {
     const r = this.get(id);
     if (!r) return;

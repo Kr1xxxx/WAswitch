@@ -1,6 +1,6 @@
 // 编辑账号页（新建和修改共用）的接口：读表单、查本机代理端口、测试代理、保存。
 // 从 main.js 拆出来。会变的界面状态（accounts、page、activeId 等）通过 ctx 读写，见 main.js 里的 ctx。
-const { dialog, safeStorage } = require('electron');
+const { safeStorage } = require('electron');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const ports = require('./ports');
@@ -186,6 +186,8 @@ function setupEditorIpc(ctx) {
       ctx.page = 'account';
       ctx.activeId = acc.id;
       if (changed || teamFirstSave) { problems.delete(acc.id); startLite(acc); }
+      // 换了代理：上面已经和主号比过；改成直连的没比过，后台再比一次
+      if (changed) { ctx.primaryClash.delete(acc.id); if (!parsed) ctx.comparePrimary(); }
       refresh();
     } else {
       acc.primary = wantPrimary;
@@ -212,14 +214,8 @@ function setupEditorIpc(ctx) {
       refresh();
     }
     notifier.refresh();
-    if (remindCheck) {
-      dialog.showMessageBox(ctx.win, {
-        type: 'info',
-        title: '请跑一次隔离自检',
-        message: primaryMoved ? '主号已更换' : '主号的代理已修改',
-        detail: '轻量小号只在保存时和主号比较过出口 IP。请到 设置 › 隔离自检 跑一次，确认小号和主号不在同一个 IP。',
-      }).catch(() => {});
-    }
+    // 不弹窗提醒去自检：后台自动和主号比一次出口，撞了在侧栏和顶栏标出来
+    if (remindCheck) ctx.comparePrimary();
     return { ok: true };
   });
 
