@@ -38,7 +38,11 @@ async function cdp(wsUrl) {
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'SG', seed: 1 },
   }]));
   const port = await freePort();
-  const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, root], { env: { ...process.env, XDG_CONFIG_HOME: home, HOME: home }, stdio: 'ignore' });
+  // HOME/XDG_CONFIG_HOME alone do not isolate Electron's userData on macOS.
+  const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, path.join(__dirname, 'fixtures', 'view-race-main.js')],
+    { env: { ...process.env, WASWITCH_TEST_PROFILE: path.join(home, 'waswitch') }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let startupError = '';
+  child.stderr.on('data', (chunk) => { startupError = (startupError + chunk).slice(-6000); });
   const list = async () => (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   let failures = 0;
   const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -47,6 +51,7 @@ async function cdp(wsUrl) {
     for (let i = 0; i < 60; i++) {
       try { targets = await list(); } catch { targets = []; }
       if (targets.some((t) => t.url.includes('index.html')) && targets.some((t) => t.type === 'page' && !t.url.includes('index.html'))) break;
+      if (child.exitCode !== null) throw new Error(`Test app exited (${child.exitCode}): ${startupError}`);
       await sleep(500);
     }
     const shellT = targets.find((t) => t.url.includes('index.html'));

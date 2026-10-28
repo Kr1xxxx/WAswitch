@@ -216,7 +216,7 @@ async function persisted() {
   fs.writeFileSync(path.join(oldDir, 'A', 'c2.json'), '{"k":"old"}');
   fs.mkdirSync(path.join(dDir, 'A'), { recursive: true });
   fs.writeFileSync(path.join(dDir, 'A', 'c2.json'), '{"k":"new"}');
-  assert.strictEqual(migrate(oldDir, dDir), 1);
+  assert.strictEqual(migrate(oldDir, dDir), 2);
   assert.strictEqual(fs.readFileSync(path.join(dDir, 'A', 'c1.json'), 'utf8'), '{"k":1}');
   assert.strictEqual(fs.readFileSync(path.join(dDir, 'A', 'c2.json'), 'utf8'), '{"k":"new"}');
   assert(!fs.existsSync(oldDir), '搬完删掉旧的');

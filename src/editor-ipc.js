@@ -1,6 +1,7 @@
 // 编辑账号页（新建和修改共用）的接口：读表单、查本机代理端口、测试代理、保存。
 // 从 main.js 拆出来。会变的界面状态（accounts、page、activeId 等）通过 ctx 读写，见 main.js 里的 ctx。
 const { safeStorage } = require('electron');
+const crypto = require('crypto');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const ports = require('./ports');
@@ -18,9 +19,19 @@ function setupEditorIpc(ctx) {
   // 新号的图标：随机挑一个别的号没用的
   const nextEmoji = () => EMOJI.pick(ctx.accounts.map((a) => a.emoji));
   let lastTest = null; // 编辑页最近一次测试的结果，保存时记下出口所在地
+  let testGeneration = 0;
+  const resetTest = () => { lastTest = null; testGeneration += 1; };
+  const testIdentity = (acc, text, password, mode) => {
+    const parsed = proxy.parse(String(text || ''));
+    return crypto.createHash('sha256').update(JSON.stringify([
+      acc?.id || null, mode, parsed?.display || '', parsed?.error || '',
+      proxy.passwordFor(acc?.proxy || '', acc?.proxyPassword || '', String(text || ''), password),
+    ])).digest('hex');
+  };
   const groupIdOf = (acc) => (acc && acc.groupId && ctx.groups.some((g) => g.id === acc.groupId) ? acc.groupId : '');
 
   handleShell('editor:load', (id) => {
+    resetTest();
     const acc = findAcc(id);
     return {
       id: acc ? acc.id : null,
@@ -73,9 +84,12 @@ function setupEditorIpc(ctx) {
   // 测试代理：返回出口 IP、所在地、时区，给出匹配的地区，并提示和别的账号出口相同。
   // 不填代理也能测：网页号按系统代理查（它就是这么上网的），轻量号查这台电脑的真实 IP
   handleShell('editor:test', async ({ id, proxy: proxyText, password, mode } = {}) => {
+    resetTest();
+    const generation = testGeneration;
     const acc = findAcc(id);
     const direct = !String(proxyText || '').trim();
     const lite = acc ? isLite(acc) : mode === 'lite';
+    const identity = testIdentity(acc, proxyText, password, lite ? 'lite' : 'web');
     let res;
     if (direct) res = lite ? await proxy.testDirect() : await proxy.testSystem();
     else res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
@@ -88,8 +102,8 @@ function setupEditorIpc(ctx) {
     if (same) res.sameAs = same.name;
     else if (before) { res.sameAs = before.name; res.sameAt = before.lastExit.at; }
     if (direct) res.direct = lite ? 'real' : 'system';
-    // 直连的测试结果用两个记号区分：系统代理（网页号）和真实 IP（轻量号），保存时只认网页号那种
-    lastTest = { proxy: direct ? (lite ? '(real)' : '(system)') : proxy.parse(proxyText)?.rules, ip: res.ip, label: res.country, region: res.region };
+    // 包含模式、账号和实际凭据；旧测试晚返回也不能覆盖新的测试结果。
+    if (generation === testGeneration) lastTest = { identity, ip: res.ip, label: res.country, region: res.region };
     return res;
   });
 
@@ -111,16 +125,19 @@ function setupEditorIpc(ctx) {
     mode = acc ? acc.mode : (mode === 'lite' ? 'lite' : 'web');
     // 主号只能在别的账号里勾选来更换，不能直接取消
     const wantPrimary = mode === 'web' && (primary === true || !!(acc && acc.primary) || !ctx.accounts.some((a) => a.primary && a.id !== id));
-    const testedNow = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
+    const identity = testIdentity(acc, proxyText, password, mode);
+    const testedNow = lastTest && parsed && lastTest.identity === identity ? lastTest : null;
     if (mode === 'lite') {
       if (primary === true) return { error: '主号只能用网页版，不能用轻量模式' };
       if (!acc && liteConfirm !== true) return { error: '请先勾选下面的风险确认' };
       // 直连可以（用户自己选，编辑页有风险提示）；设了代理就要测试通过、出口不能和主号相同
       if (parsed && !LITE_SCHEMES.includes(parsed.scheme)) return { error: '轻量模式只支持 socks5 和 http 代理' };
-      const proxyChanged = !acc || acc.proxy !== proxyStored || !!String(password || '');
+      const proxyChanged = !acc || acc.proxy !== proxyStored
+        || proxy.passwordFor(acc.proxy, acc.proxyPassword, String(proxyText || ''), password) !== proxy.decryptPassword(acc.proxyPassword);
       if (parsed && proxyChanged) {
         if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
         const pe = await primaryExit(id);
+        if (lastTest !== testedNow) return { error: '测试结果已变化，请重新测试后保存' };
         if (pe.error) return { error: pe.error };
         if (pe.ip && pe.ip === testedNow.ip) return { error: `这个代理的出口 IP（${testedNow.ip}）和主号「${pe.name}」相同。轻量小号必须和主号用不同的 IP，请换一个代理端口或节点。` };
       }
@@ -140,13 +157,13 @@ function setupEditorIpc(ctx) {
       return { error: e.message };
     }
     // 测试过的出口所在地显示在侧栏
-    let tested = lastTest && parsed && lastTest.proxy === parsed.rules ? lastTest : null;
+    let tested = testedNow;
     // 网页版时区还没定（“跟随本机”）：没测过就先测一次，按出口所在地填好时区。
     // 直连号按系统代理测（它就是这么上网的）。测不通也照样保存；用户自己选了地区的不改。
     // 代理号只改名字、备注、颜色时不测（不然每次保存都要等几秒）：只有新号、代理或密码变了、
     // 还不知道出口所在地、或刚从别的地区改回“跟随本机”时才测
     const exitUnknown = !acc || acc.proxy !== proxyStored || (plan.kind === 'new' && !keepOld) || !acc.exitLabel || acc.fingerprint.region !== 'auto';
-    let directTested = !parsed && lastTest && lastTest.proxy === '(system)' ? lastTest : null;
+    let directTested = !parsed && lastTest && lastTest.identity === identity ? lastTest : null;
     if (mode === 'web' && region === 'auto') {
       if (parsed && !tested && exitUnknown) {
         const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));
@@ -233,7 +250,7 @@ function setupEditorIpc(ctx) {
   });
 
   return {
-    resetTest() { lastTest = null; }, // 打开编辑页时清掉上一次的测试结果
+    resetTest, // 打开编辑页时清掉上一次的测试结果，并作废尚未返回的测试
   };
 }
 

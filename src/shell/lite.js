@@ -50,6 +50,19 @@ function makeLitePage(id) {
   let lastMsgKey = '';
   let statusKey = '';
   let sending = false;
+  const drafts = new Map();
+
+  function rememberDraft() {
+    if (openJid) drafts.set(openJid, { text: input.value });
+  }
+
+  function switchChat(jid) {
+    if (jid === openJid) return;
+    openJid = jid;
+    input.value = drafts.get(jid)?.text || '';
+    input.style.height = '';
+    err.textContent = '';
+  }
 
   function drawList() {
     const q = search.value.trim().toLowerCase();
@@ -57,7 +70,7 @@ function makeLitePage(id) {
     const top = list.scrollTop;
     list.replaceChildren(...shown.map((c) => h('button', {
       class: `lite-chat${c.jid === openJid ? ' on' : ''}`, role: 'listitem', title: c.name,
-      onclick: () => { openJid = c.jid; drawList(); window.wa.liteOpen(id, c.jid); },
+      onclick: () => { switchChat(c.jid); drawList(); window.wa.liteOpen(id, c.jid); },
     },
     h('span', { class: 'lite-chat-top' }, h('b', null, c.name), h('small', null, liteTime(c.ts))),
     h('span', { class: 'lite-chat-bottom' }, h('span', { class: 'lite-preview' }, c.preview || ''), c.unread ? h('span', { class: 'pill' }, c.unread > 99 ? '99+' : c.unread) : null))));
@@ -87,22 +100,38 @@ function makeLitePage(id) {
   async function send() {
     const text = input.value;
     if (sending || !text.trim() || !openJid) return;
+    const jid = openJid;
+    rememberDraft();
+    const submitted = drafts.get(jid);
     sending = true;
     sendBtn.disabled = true;
     err.textContent = '';
-    const res = await window.wa.liteSend(id, openJid, text);
-    sending = false;
-    sendBtn.disabled = false;
-    if (res && res.error) { err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : [])); return; }
-    input.value = '';
-    input.style.height = '';
-    input.focus();
+    try {
+      const res = await window.wa.liteSend(id, jid, text);
+      if (res && res.error) {
+        if (openJid === jid) err.replaceChildren(res.error, ...(res.detail ? [rawDetail(res.detail)] : []));
+        return;
+      }
+      if (drafts.get(jid) === submitted) {
+        drafts.delete(jid);
+        if (openJid === jid) {
+          input.value = '';
+          input.style.height = '';
+          input.focus();
+        }
+      }
+    } catch {
+      if (openJid === jid) err.textContent = '发送失败，请重试';
+    } finally {
+      sending = false;
+      sendBtn.disabled = false;
+    }
   }
   sendBtn.onclick = send;
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
-  input.addEventListener('input', () => { input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
+  input.addEventListener('input', () => { rememberDraft(); input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
   // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
   msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
@@ -145,7 +174,7 @@ function makeLitePage(id) {
     if (!open) { drawStatus(acc, lite); return; }
     statusKey = '';
     const openChanged = lite.openJid !== openJid;
-    openJid = lite.openJid;
+    switchChat(lite.openJid);
     const view = lite.view;
     if (view && view.rev !== lastRev) {
       lastRev = view.rev;

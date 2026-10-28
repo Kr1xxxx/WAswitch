@@ -18,13 +18,14 @@ const LOG_MAX = 100;
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_MAX = 20; // 同一个连接每分钟最多改 20 次，防止 AI 跑飞了一下子改一大片
 const FIELDS = ['name', 'phone', 'tags', 'note', 'followUpAt'];
+const CREATE_FIELDS = [...FIELDS, 'lang', 'accountId', 'reminded', 'updatedAt'];
 const LABEL = { name: '名字', phone: '电话', tags: '标签', note: '备注', followUpAt: '下次跟进' };
 const MAX_FOLLOW_UP_MS = 5 * 366 * 24 * 3600 * 1000; // 跟进时间最多设到 5 年后
 
 const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
 const phoneDigits = (p) => String(p || '').replace(/\D/g, '');
 const EMPTY = { name: '', phone: '', tags: [], note: '', followUpAt: 0, reminded: false };
-const pick = (c) => ({ name: c.name || '', phone: c.phone || '', tags: [...(c.tags || [])], note: c.note || '', followUpAt: c.followUpAt || 0, reminded: c.reminded === true });
+const pick = (c) => ({ name: c.name || '', phone: c.phone || '', tags: [...(c.tags || [])], note: c.note || '', followUpAt: c.followUpAt || 0, reminded: c.reminded === true, lang: c.lang || '', accountId: c.accountId || '', updatedAt: c.updatedAt || 0 });
 
 // 「AI 操作记录」：增加、读取、撤销。hooks 见 registerCustomerEditTools 上面的说明
 class AiLog {
@@ -102,11 +103,15 @@ class AiLog {
     if (!cur) return done('这个客户已经不在客户名单里了（被删除，或者它的账号停用了），没有可撤销的', false);
 
     if (e.op === 'create') {
-      const changedSince = FIELDS.filter((f) => !same(cur[f], e.after[f]));
-      if (changedSince.length) {
-        return done(`新建之后「${changedSince.map((f) => LABEL[f]).join('、')}」又被改过，没有删除。确实不要的话，请在客户名单里删除`, false);
+      if (!e.after || CREATE_FIELDS.some((f) => !Object.hasOwn(e.after, f))) {
+        return done('这条旧记录缺少完整的新建快照，没有删除。请在客户名单里核对', false);
       }
-      this.hooks.customerRemove(e.customerId);
+      const current = pick(cur);
+      const changedSince = CREATE_FIELDS.filter((f) => !same(current[f], e.after[f]));
+      if (changedSince.length) {
+        return done('新建之后客户资料又被改过，没有删除。确实不要的话，请在客户名单里删除', false);
+      }
+      if (!this.hooks.customerRemove(e.customerId)) return done('没能删除（客户资料保存失败）', false);
       return done('已撤销：删除了这个新建的客户');
     }
 

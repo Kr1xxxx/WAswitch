@@ -158,6 +158,10 @@ async function updateUser(db, user, id, body) {
   const guards = [];
   if (touched('role', 'email')) guards.push(`(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)`);
   if (touched('role', 'group_id')) guards.push(`(${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`);
+  if (!isOwner(user)) {
+    guards.push("role = 'agent' AND group_id = ? AND EXISTS (SELECT 1 FROM users actor WHERE actor.id = ? AND actor.role = 'supervisor' AND actor.disabled_at IS NULL AND actor.group_id = ?)");
+    guardVals.push(user.group_id, user.id, user.group_id);
+  }
   const valid = guards.length ? guards.join(' AND ') : '1';
   let after;
   try {
@@ -167,7 +171,9 @@ async function updateUser(db, user, id, body) {
     if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
     throw e;
   }
-  if (!after) return fail(400, '老板和主管要有邮箱，主管还要选择一个组');
+  if (!after) return isOwner(user)
+    ? fail(400, '老板和主管要有邮箱，主管还要选择一个组')
+    : fail(403, '权限或客户所属组已变化，请刷新后重试');
   await audit(db, user.id, 'user.update', id, body);
   // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
   if (body.group_id !== undefined && isOwner(user)) {

@@ -93,7 +93,7 @@ class FloatCore {
     if (!this.canAuto(st, opts.dailyCap)) return;
     this.takeAuto(st);
     item.state = 'queued';
-    this.queue.push({ accId, h: item.h });
+    this.queue.push({ accId, h: item.h, context: this.contextOf(accId, item.h) });
   }
 
   // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
@@ -125,6 +125,8 @@ class FloatCore {
     const chat = msgs.length ? chatOf(msgs[msgs.length - 1].id) : '';
     const newChat = chat !== st.chat;
     const fresh = [];
+    // 当前对话最近的消息（双方都有），入队时截取上下文；只在内存里，不含 data-id。
+    st.recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
     for (const m of msgs) {
       if (m.out) { this.dropOwn(accId, st, m.id); continue; }
       if (!String(m.text || '').trim()) continue;
@@ -146,8 +148,6 @@ class FloatCore {
     const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
-    // 当前对话最近的消息（双方都有，给翻译当上下文参考），只在内存里，不含 data-id
-    st.recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
     st.view = view;
     this.pump();
     return changed;
@@ -169,7 +169,7 @@ class FloatCore {
     item.state = 'queued';
     item.err = '';
     item.errKind = '';
-    this.queue.unshift({ accId, h, manual: true, fix: fix === true });
+    this.queue.unshift({ accId, h, manual: true, fix: fix === true, context: this.contextOf(accId, h) });
     this.pump();
     return true;
   }
@@ -193,7 +193,7 @@ class FloatCore {
         if (this.canAuto(st, opts.dailyCap ?? Infinity)) {
           this.takeAuto(st);
           item.state = 'queued';
-          this.queue.push({ accId, h });
+          this.queue.push({ accId, h, context: this.contextOf(accId, h) });
         } else item.state = 'manual';
       }
       if (hit) touched.push(accId);
@@ -237,7 +237,7 @@ class FloatCore {
     let list = st.recent;
     if (h) {
       const i = list.findIndex((m) => m.h === h);
-      list = i >= 0 ? list.slice(0, i) : list;
+      list = i >= 0 ? list.slice(0, i) : [];
     }
     return list.slice(-CONTEXT_N).map(({ out, text }) => ({ out, text }));
   }
@@ -254,15 +254,16 @@ class FloatCore {
         item.state = 'running';
         this.onChange(job.accId);
         let r;
-        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: this.contextOf(job.accId, job.h) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context }); } catch { r = { error: '翻译失败', kind: 'other' }; }
         if (r && r.kind === 'busy') {
           // 面板正在翻：等一下再来（之前翻好的译文还在，状态先回到排队）
           item.state = 'queued';
           await new Promise((res) => setTimeout(res, 700));
           continue;
         }
-        this.queue.shift();
-        if (!this.accs.get(job.accId)) continue; // 号被删了
+        const index = this.queue.indexOf(job);
+        if (index >= 0) this.queue.splice(index, 1);
+        if (this.accs.get(job.accId) !== st) continue; // 号被删了或重建了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }

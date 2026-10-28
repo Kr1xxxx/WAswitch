@@ -80,6 +80,8 @@ jobs:
         run: npm run check:atomic
       - name: 编辑页保存自检
         run: npm run check:editor
+      - name: 审计修复回归（竞态、存储、权限和真实编辑界面）
+        run: xvfb-run -a npm run check:audit
       - name: 导出导入去重自检
         run: npm run check:records
       - name: 导入文件编码自检
