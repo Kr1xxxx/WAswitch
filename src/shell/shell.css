@@ -622,3 +622,19 @@ button, select, a, .row, .tab { transition: background-color var(--fx-fast) ease
 .memrow > .memname { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lite-head b { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+
+/* 设置 › 快捷设置 */
+.qk-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.qk-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 12px 14px; border-radius: 12px; background: #f7f8fa; }
+.qk-k { font-size: 12px; color: var(--muted); }
+.qk-v { font-size: 17px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qk-v.ok { color: var(--ok); }
+.qk-v.bad { color: var(--danger); }
+.qk-v.warn { color: #92400e; }
+.qk-s { font-size: 12px; line-height: 1.5; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-btn.qk-act { align-self: flex-start; margin-top: 4px; padding: 0; font-size: 12px; color: #1d4ed8; }
+.link-btn.qk-act:hover { text-decoration: underline; color: #1d4ed8; }
+.link-btn.qk-act:disabled { color: var(--muted); opacity: .6; cursor: default; text-decoration: none; }
+.qk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.qk-head .ov-h2 { margin: 0; padding-bottom: 8px; }
+.link-btn.qk-more { font-size: 12px; }
