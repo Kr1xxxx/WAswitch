@@ -101,13 +101,15 @@ function morphPaint(b) {
   if (b._st && b._st !== st) { b.classList.remove('mb-anim'); void b.offsetWidth; b.classList.add('mb-anim'); }
   b._st = st;
   b.dataset.st = st;
-  b.disabled = b._off || st === 'busy';
+  // 转圈时不用 disabled：disabled 会把键盘焦点丢掉。点击由下面的判断挡住
+  b.disabled = b._off;
+  b.setAttribute('aria-disabled', String(b._off || st === 'busy'));
   b.setAttribute('aria-busy', String(st === 'busy'));
 }
 function morphBtn(key, labels, run, attrs = {}) {
   const { disabled, busy, ...rest } = attrs;
   const part = (st, mark, text) => (text ? h('span', { class: `mb-${st}` }, mark, text) : null);
-  const b = h('button', { type: 'button', ...rest, class: `${rest.class || 'btn'} morph`, 'data-morph': key },
+  const b = h('button', { type: 'button', ...rest, class: `${rest.class || 'btn'} morph`, 'data-morph': key, 'aria-live': 'polite' },
     part('idle', null, labels.idle),
     part('busy', h('span', { class: 'mb-spin', 'aria-hidden': 'true' }), labels.busy),
     part('ok', icon('check', 14), labels.ok),
@@ -129,7 +131,7 @@ function morphBtn(key, labels, run, attrs = {}) {
     };
     set('busy');
     let r;
-    try { r = await run(); } catch { r = { ok: false }; }
+    try { r = await run(); } catch (e) { console.error('[morphBtn]', key, e); r = { ok: false }; }
     const st = r && r.ok === true && labels.ok ? 'ok' : r && r.ok === false && labels.err ? 'err' : 'idle';
     set(st);
     if (st !== 'idle') morphState[key].timer = setTimeout(() => set('idle'), MORPH_HOLD);
@@ -1337,7 +1339,7 @@ function editorPage(id) {
     const error = h('div', { class: 'hint', role: 'alert', style: { color: '#B42318', minHeight: '18px' } });
     const swatches = h('div', { class: 'swatches' });
     const presets = h('div', { class: 'presets' });
-    const testBtn = morphBtn(`editorTest:${d.id || 'new'}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
+    const testBtn = morphBtn(`editorTest:${d.id || 'new'}:${s.editorNonce}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, () => runTest());
     const saveBtn = h('button', { class: 'btn primary', type: 'button' }, d.isNew ? '保存并扫码登录' : '保存');
 
     const drawSwatches = () => swatches.replaceChildren(...COLORS.map((c, i) => h('button', {
