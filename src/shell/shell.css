@@ -116,7 +116,8 @@ body.collapsed .group-head { justify-content: center; padding: 0; height: 14px; 
 body.collapsed .group-head .gname, body.collapsed .group-head .mute { display: none; }
 .row.dragging { opacity: .4; }
 .row.drop { box-shadow: inset 0 2px 0 var(--text); }
-.group-head.drop { background: var(--white-a9); color: var(--text); }
+.group-head.drop, .side-label.drop { background: var(--white-a9); color: var(--text); }
+.side-label.drop { border-radius: var(--r-s); }
 body.collapsed .meta, body.collapsed .pill, body.collapsed .mute, body.collapsed .text { display: none; }
 .grow { flex: 1; }
 .membox { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-l); background: var(--white-a6); font-size: var(--fs-s); color: var(--soft); }
