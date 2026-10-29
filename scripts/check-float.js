@@ -98,6 +98,7 @@ async function core() {
   await reopenKeepsAll();
   await oldRecordsGetOriginals();
   await catchUpOlder();
+  await parallelAuto();
 }
 
 // 2026-10-29 之前存的译文记录没有原文（shen「英文的可以也存吗」）：重启后补回来的旧消息先只有译文；
@@ -229,6 +230,54 @@ async function oldRecordsGetOriginals() {
 // 切到一个对话时没翻的旧消息（shen 2026-10-29 截图：后面 4 条存着译文，前面 3 条只剩「翻译」按钮）：
 // 最后 5 条没翻的照常自动翻，存着的不占名额；更早的用免费的智谱或混元在后台慢慢补（slow），最新的先翻，不算额度；
 // 没有免费服务商就留着「翻译」按钮；同一次运行里切走再切回也补；补的时候来了新消息先翻新的；用户点了马上翻
+// 用免费服务商时收到的消息最多同时翻 3 条（shen 2026-10-29「提速做,同时做的仅限于免费 API」），付费的一次一条；
+// 每条只算一次额度；说忙的那条过一会儿再来，不卡住别的
+async function parallelAuto() {
+  let par = 3;
+  let now = 0;
+  let max = 0;
+  const order = [];
+  let busyOnce = new Set();
+  const fc = new FloatCore({ parallel: () => par, translate: async (text) => {
+    if (busyOnce.has(text)) { busyOnce.delete(text); return { error: '让用户先翻', kind: 'busy' }; }
+    now += 1; max = Math.max(max, now);
+    await sleep(30);
+    now -= 1;
+    order.push(text);
+    return { text: `译:${text}`, warn: [] };
+  } });
+  const idle = async () => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(10); assert(!fc.running && !fc.queue.length); };
+  const chat = '4915112345678@c.us';
+  const opts = { auto: true, dailyCap: 500 };
+  fc.ingest('P', { title: 'Lukas', bottom: true, msgs: [msg(0, false, chat)] }, opts);
+  await idle();
+  max = 0;
+  const burst = [1, 2, 3, 4].map((i) => msg(i, false, chat));
+  const t0 = Date.now();
+  fc.ingest('P', { title: 'Lukas', bottom: true, msgs: [msg(0, false, chat), ...burst] }, opts);
+  await idle();
+  assert.strictEqual(max, 3, '最多同时 3 条');
+  assert(Date.now() - t0 < 110, '4 条两轮翻完');
+  assert.strictEqual(fc.viewOf('P').today, 5, '每条只算一次');
+  // 付费的：一次一条
+  par = 1;
+  max = 0;
+  fc.ingest('P', { title: 'Lukas', bottom: true, msgs: [msg(0, false, chat), ...burst, ...[5, 6, 7].map((i) => msg(i, false, chat))] }, opts);
+  await idle();
+  assert.strictEqual(max, 1);
+  assert.deepStrictEqual(order.slice(-3), ['hola 5', 'hola 6', 'hola 7'], '按顺序');
+  // 说忙的那条：别的先翻，它过一会儿再来
+  par = 3;
+  busyOnce = new Set(['hola 8']);
+  const more = [8, 9].map((i) => msg(i, false, chat));
+  fc.ingest('P', { title: 'Lukas', bottom: true, msgs: [msg(0, false, chat), ...burst, ...[5, 6, 7].map((i) => msg(i, false, chat)), ...more] }, opts);
+  await idle();
+  assert.deepStrictEqual(order.slice(-2), ['hola 9', 'hola 8']);
+  assert(fc.viewOf('P').items.every((x) => x.state === 'done'));
+  assert.strictEqual(fc.viewOf('P').today, 10);
+  console.log('同时翻几条自检通过');
+}
+
 async function catchUpOlder() {
   const fs = require('fs');
   const os = require('os');
@@ -836,6 +885,33 @@ core().then(() => {
     assert(!JSON.stringify(r).includes('Carlos:'), '不带出发送人名字');
     assert(!JSON.stringify(r).includes('quoted text'), '不读引用');
     assert.strictEqual(after.split('|')[0], String(before), '页面没有被改');
+    // 等页面变化（MutationObserver，只在隔离环境里看着，不改页面）：来了新消息马上返回，没变化等到时间；输入框里打字不算
+    {
+      const wc = w.webContents;
+      const html0 = await wc.executeJavaScript('document.body.innerHTML');
+      await waPage.waitChatChange(wc, 50); // 第一次：开始看着
+      let t = Date.now();
+      assert.strictEqual(await waPage.waitChatChange(wc, 300), false, '没变化');
+      assert(Date.now() - t >= 250);
+      assert.strictEqual(await wc.executeJavaScript('document.body.innerHTML'), html0, '看着不改页面');
+      assert.strictEqual(await wc.executeJavaScript('Object.keys(window).filter((k) => k.startsWith("__ws")).length'), 0, '页面自己的环境里看不到');
+      t = Date.now();
+      setTimeout(() => wc.executeJavaScript(`document.querySelector('[role=application]').insertAdjacentHTML('beforeend', '<div role="row"><div data-id="false_111@c.us_W1" class="message-in"><span class="selectable-text"><span>Neu</span></span></div></div>'); 1`), 60);
+      assert.strictEqual(await waPage.waitChatChange(wc, 2000), true, '来了新消息');
+      assert(Date.now() - t < 400, `新消息要马上返回，用了 ${Date.now() - t} ms`);
+      await wc.executeJavaScript(`(() => { const m = document.querySelector('#main'); if (!m.querySelector('footer')) m.insertAdjacentHTML('beforeend', '<footer><div contenteditable="true"></div></footer>'); return 1; })()`);
+      await waPage.waitChatChange(wc, 50);
+      setTimeout(() => wc.executeJavaScript(`document.querySelector('#main footer [contenteditable]').textContent = 'Hallo'; 1`), 30);
+      assert.strictEqual(await waPage.waitChatChange(wc, 300), false, '输入框里打字不算');
+      // 两次等之间来的消息也算
+      await wc.executeJavaScript(`document.querySelector('[role=application]').insertAdjacentHTML('beforeend', '<div role="row"><div data-id="false_111@c.us_W2" class="message-in"><span class="selectable-text"><span>Neu 2</span></span></div></div>'); 1`);
+      await sleep(80);
+      assert.strictEqual(await waPage.waitChatChange(wc, 300), true, '两次等之间来的消息');
+      // 换了对话（#main 整个换掉）
+      setTimeout(() => wc.executeJavaScript(`(() => { const m = document.querySelector('#main'); const n = m.cloneNode(true); m.replaceWith(n); return 1; })()`), 30);
+      assert.strictEqual(await waPage.waitChatChange(wc, 1000), true, '换了对话');
+      await wc.executeJavaScript(`document.querySelectorAll('[data-id$="_W1"], [data-id$="_W2"]').forEach((n) => n.closest('[role=row]').remove()); document.querySelector('#main footer')?.remove(); 1`);
+    }
     // 字数超了要丢掉旧的长消息，留下最新的
     await w.webContents.executeJavaScript(`(() => {
       const app = document.querySelector('[role=application]');

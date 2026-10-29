@@ -11,6 +11,8 @@ const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
 const SLOW_GAP = 2000; // 更早没翻的用免费服务商在后台慢慢补：每条之间隔 2 秒
 const PER_MINUTE = 20;
+const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（只在用免费服务商时，见 maxParallel）
+const BUSY_RETRY = 700; // 对方说忙：700 毫秒后再来
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
@@ -84,7 +86,11 @@ class FloatCore {
     this.deps = deps;
     this.accs = new Map(); // accId -> state
     this.queue = []; // { accId, h, auto }
-    this.running = false;
+    this.running = false; // 有没有正在翻的
+    this.active = 0; // 正在翻几条
+    this.slowTimer = null;
+    this.slowReady = false;
+    this.retryTimer = null;
     this.onChange = () => {};
   }
 
@@ -419,72 +425,104 @@ class FloatCore {
     return st ? contextFrom(st.recent, h) : [];
   }
 
-  async pump() {
-    if (this.running) { if (this.wake && this.queue.some((q) => !q.slow)) this.wake(); return; } // 正在等着补翻下一条：别的先翻
+  // 同时最多翻几条：deps.parallel() 说了算（默认服务商是免费的智谱、混元时 3 条，付费的 1 条，见 translate-ipc.js）
+  maxParallel() {
+    const n = this.deps.parallel ? Number(this.deps.parallel()) : 1;
+    return Number.isFinite(n) ? Math.min(MAX_PARALLEL, Math.max(1, Math.floor(n))) : 1;
+  }
 
-    this.running = true;
-    try {
-      while (this.queue.length) {
-        // 后台慢慢补翻的排在最后：只剩它们时，每条之间隔一会儿，隔的时候来了别的先翻别的
-        let at = this.queue.findIndex((q) => !q.slow);
-        if (at < 0) {
-          await new Promise((res) => {
-            const t = setTimeout(() => this.wake(), this.deps.slowGap ?? SLOW_GAP);
-            this.wake = () => { clearTimeout(t); this.wake = null; res(); };
-          });
-          if (!this.queue.length) break;
-          at = Math.max(0, this.queue.findIndex((q) => !q.slow));
-        }
-        const job = this.queue[at];
-        const st = this.accs.get(job.accId);
-        const item = st && st.items.get(job.h);
-        if (!item || item.state !== 'queued') { this.queue.splice(at, 1); continue; }
-        item.state = 'running';
-        this.onChange(job.accId);
-        // 语音还没转文字：先转（转出来的文字就是原文），失败就报错，不翻
-        if (isVoice(item) && !item.text) {
-          let v;
-          try { v = await this.deps.transcribe(job.accId, item.src, item.voice); } catch { v = { error: '转文字失败', kind: 'other' }; }
-          const done = () => { const i = this.queue.indexOf(job); if (i >= 0) this.queue.splice(i, 1); };
-          if (this.accs.get(job.accId) !== st) { done(); continue; } // 号被删了或重建了
-          const heard = (t) => { if (this.deps.store && this.deps.store.putHeard && item.ck) this.deps.store.putHeard(job.accId, item.ck, item.k, t); };
-          if (!(v && typeof v.text === 'string' && v.text.trim())) {
-            done();
-            if (v && v.kind === 'empty') heard(''); // 没听出话也付了钱：记下来，重启后不再自动转
-            Object.assign(item, { state: 'error', err: (v && v.error) || '转文字失败', errKind: (v && v.kind) || 'other', errPid: (v && v.kind === 'auth' && v.providerId) || '' });
-            this.onChange(job.accId);
-            continue;
-          }
-          item.text = v.text.trim().slice(0, 4000);
-          heard(item.text); // 先存转出来的文字：翻译失败、重启后不再重转
-          if (noWords(item.text)) {
-            done();
-            item.state = 'skip';
-            this.onChange(job.accId);
-            continue;
-          }
-          this.onChange(job.accId);
-        }
-        let r;
-        try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow }); } catch { r = { error: '翻译失败', kind: 'other' }; }
-        if (r && r.kind === 'busy') {
-          // 面板正在翻：等一下再来（之前翻好的译文还在，状态先回到排队）
-          item.state = 'queued';
-          await new Promise((res) => setTimeout(res, 700));
-          continue;
-        }
-        const index = this.queue.indexOf(job);
-        if (index >= 0) this.queue.splice(index, 1);
-        if (this.accs.get(job.accId) !== st) continue; // 号被删了或重建了
-        if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
-        else if (job.slow && !(r && r.text)) this.slowFailed(item);
-        else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
-        else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
-        this.onChange(job.accId);
+  // 从队列里取下一条开始翻，直到占满能同时翻的条数。
+  // 后台慢慢补翻的排在最后，一次只翻一条：别的都翻完了、隔一会儿（SLOW_GAP）才翻下一条，隔的时候来了别的先翻别的
+  pump() {
+    const max = this.maxParallel();
+    while (this.active < max) {
+      const now = Date.now();
+      const next = this.queue.find((q) => !q.slow && !q.taken && !(q.after > now));
+      if (next) {
+        this.stopSlowGap();
+        this.start(next);
+        continue;
       }
-    } finally {
-      this.running = false;
+      // 刚才说忙的那条：到时间再来
+      const later = this.queue.filter((q) => !q.slow && !q.taken).map((q) => q.after);
+      if (later.length) {
+        if (!this.retryTimer) this.retryTimer = setTimeout(() => { this.retryTimer = null; this.pump(); }, Math.max(0, Math.min(...later) - now));
+        return;
+      }
+      if (this.active > 0) return;
+      const slow = this.queue.find((q) => q.slow && !q.taken);
+      if (!slow) return;
+      if (!this.slowReady) {
+        if (!this.slowTimer) this.slowTimer = setTimeout(() => { this.slowTimer = null; this.slowReady = true; this.pump(); }, this.deps.slowGap ?? SLOW_GAP);
+        return;
+      }
+      this.slowReady = false;
+      this.start(slow);
     }
+  }
+
+  stopSlowGap() {
+    if (this.slowTimer) { clearTimeout(this.slowTimer); this.slowTimer = null; }
+    this.slowReady = false;
+  }
+
+  start(job) {
+    job.taken = true;
+    this.active += 1;
+    this.running = true;
+    this.run(job).catch(() => {}).finally(() => {
+      job.taken = false;
+      this.active -= 1;
+      this.running = this.active > 0;
+      this.pump();
+    });
+  }
+
+  // 翻一条（job 在队列里，翻完才拿掉；对方说忙就放回去，700 毫秒后再来）
+  async run(job) {
+    const done = () => { const i = this.queue.indexOf(job); if (i >= 0) this.queue.splice(i, 1); };
+    const st = this.accs.get(job.accId);
+    const item = st && st.items.get(job.h);
+    if (!item || item.state !== 'queued') { done(); return; }
+    item.state = 'running';
+    this.onChange(job.accId);
+    // 语音还没转文字：先转（转出来的文字就是原文），失败就报错，不翻
+    if (isVoice(item) && !item.text) {
+      let v;
+      try { v = await this.deps.transcribe(job.accId, item.src, item.voice); } catch { v = { error: '转文字失败', kind: 'other' }; }
+      if (this.accs.get(job.accId) !== st) { done(); return; } // 号被删了或重建了
+      const heard = (t) => { if (this.deps.store && this.deps.store.putHeard && item.ck) this.deps.store.putHeard(job.accId, item.ck, item.k, t); };
+      if (!(v && typeof v.text === 'string' && v.text.trim())) {
+        done();
+        if (v && v.kind === 'empty') heard(''); // 没听出话也付了钱：记下来，重启后不再自动转
+        Object.assign(item, { state: 'error', err: (v && v.error) || '转文字失败', errKind: (v && v.kind) || 'other', errPid: (v && v.kind === 'auth' && v.providerId) || '' });
+        this.onChange(job.accId);
+        return;
+      }
+      item.text = v.text.trim().slice(0, 4000);
+      heard(item.text); // 先存转出来的文字：翻译失败、重启后不再重转
+      if (noWords(item.text)) {
+        done();
+        item.state = 'skip';
+        this.onChange(job.accId);
+        return;
+      }
+      this.onChange(job.accId);
+    }
+    let r;
+    try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+    if (r && r.kind === 'busy') {
+      // 用户自己在翻、或付费的那条通道正忙：等一下再来（之前翻好的译文还在，状态先回到排队）
+      if (this.queue.includes(job)) { item.state = 'queued'; job.after = Date.now() + BUSY_RETRY; }
+      return;
+    }
+    done();
+    if (this.accs.get(job.accId) !== st) return; // 号被删了或重建了
+    if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
+    else if (job.slow && !(r && r.text)) this.slowFailed(item);
+    else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
+    else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
+    this.onChange(job.accId);
   }
 
   // 后台补翻失败（没有免费服务商、网络不通、超时、密钥不对……）：不显示报错，这条和排着的都退回「翻译」按钮，

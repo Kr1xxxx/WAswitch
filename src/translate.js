@@ -293,6 +293,8 @@ function extraContacts(source, output) {
   return [...pick(output)].filter((x) => !src.has(x));
 }
 
+// 免费的服务商（智谱 glm-4-flash、腾讯混元），智谱优先
+const FREE_PRESETS = ['zhipu', 'hunyuan'];
 // 这个服务商能不能直接用：有密钥，或是不用密钥的本机接口（DeepL 一定要密钥）
 function needsKey(p) {
   if (!p || p.keyEnc) return false;
@@ -756,11 +758,58 @@ class Translator {
   // 在后台慢慢补翻更早的消息用免费的服务商（shen 2026-10-29）：智谱优先，没填密钥就用腾讯混元；都没有返回 null
   freeProvider() {
     const c = this.load();
-    for (const preset of ['zhipu', 'hunyuan']) {
+    for (const preset of FREE_PRESETS) {
       const p = c.providers.find((x) => x.preset === preset && !needsKey(x));
       if (p) return p;
     }
     return null;
+  }
+
+  // 收到的消息自动翻译时一起发的免费服务商（shen 2026-10-29「同时做的仅限于免费 API」「哪个翻出来用哪个」）：
+  // 默认服务商是智谱或混元时，有密钥的智谱、混元都算（默认的排第一）；默认是付费的（DeepL 等）返回空的，照旧一次一条
+  raceSet() {
+    const c = this.load();
+    const primary = this.provider(c.primaryId);
+    if (!primary || !FREE_PRESETS.includes(primary.preset)) return [];
+    const free = c.providers.filter((p) => FREE_PRESETS.includes(p.preset) && !needsKey(p));
+    return free.sort((a, b) => (b.id === primary.id) - (a.id === primary.id));
+  }
+
+  // 同一条同时发给 raceSet() 里的服务商，各走各的通道：先翻出来的就用，别的马上取消；先回来的是报错就等别的。
+  // 都失败了、报错是网络、超时、太忙、余额这类：用付费的备用再翻一次（paid(args)：调用方一次只放一条过去）。
+  // 返回和 translate() 一样；raceSet() 是空的返回 null（调用方照旧走 translate）
+  async raceFree(args, { paid } = {}) {
+    const list = this.raceSet();
+    if (!list.length) return null;
+    const lanes = list.map(() => this.lane());
+    const results = await new Promise((resolve) => {
+      const out = new Array(list.length);
+      let left = list.length;
+      let won = false;
+      lanes.forEach((l, i) => {
+        l.translate({ ...args, providerId: list[i].id, fix: false }).catch(() => ({ error: '翻译失败', kind: 'other' })).then((r) => {
+          out[i] = r;
+          left -= 1;
+          if (!won && r && r.text) {
+            won = true;
+            lanes.forEach((o, j) => { if (j !== i) o.cancel(); });
+            resolve({ win: r });
+          } else if (!won && left === 0) resolve({ errs: out });
+        });
+      });
+    });
+    if (results.win) return results.win;
+    // 报错用默认服务商的（排第一）；它是被取消的就用下一个
+    const errs = results.errs.filter((r) => r && r.kind !== 'cancel');
+    const err = errs[0] || results.errs[0] || { error: '翻译失败', kind: 'other' };
+    const c = this.load();
+    const fb = this.provider(c.fallbackId);
+    const retry = errs.some((r) => ['network', 'timeout', 'server', 'overload', 'quota'].includes(r.kind));
+    if (fb && !list.some((p) => p.id === fb.id) && !needsKey(fb) && retry && typeof paid === 'function') {
+      const r = await paid({ ...args, providerId: fb.id });
+      if (r && r.text) return { ...r, fallback: true };
+    }
+    return err;
   }
 
   // 这次翻译先用哪个服务商：纠错有专用的就用它，否则用默认的
