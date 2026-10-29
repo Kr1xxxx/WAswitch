@@ -50,7 +50,7 @@ class TrStore {
     const r = this.readDisk(acc, chat);
     e = { data: r.data || {}, dirty: false, ...(r.data ? {} : { unread: Date.now() }) };
     this.mem.set(k, e);
-    this.trim();
+    this.trim(k);
     return e;
   }
 
@@ -106,12 +106,15 @@ class TrStore {
     return true;
   }
 
-  // 内存里超过的对话：先写盘再丢
-  trim() {
-    while (this.mem.size > KEEP_IN_MEMORY) {
-      const [k, e] = this.mem.entries().next().value;
+  // 内存里超过的对话：先写盘再放掉；写不进去的（盘满、杀毒锁文件、盘拔了；或读不了的文件还不让写）留在内存里，下次 flush 再写，不能丢。
+  // keep 是 load() 刚读进来、马上要返回的那个，不能放掉：放掉了，往它里面写的东西永远不会写盘。
+  // 遍历一遍就停：写不进去的跳过，遍历完还超就先超着（盘坏的时候内存里多留几个对话没关系）
+  trim(keep) {
+    for (const [k, e] of this.mem) {
+      if (this.mem.size <= KEEP_IN_MEMORY) return;
+      if (k === keep) continue;
       if (e.dirty) this.write(k, e);
-      this.mem.delete(k);
+      if (!e.dirty) this.mem.delete(k);
     }
   }
 
@@ -353,19 +356,20 @@ class TrStore {
     return true;
   }
 
-  // 删号：磁盘上的译文保留，只把内存里的写盘后放掉
+  // 删号：磁盘上的译文保留，只把内存里的写盘后放掉；写不进去的留着等下次 flush（迟早写进去）
   forgetAccount(acc) {
     for (const [k, e] of [...this.mem]) {
       if (!k.startsWith(`${acc}/`)) continue;
       if (e.dirty) this.write(k, e);
-      this.mem.delete(k);
+      if (!e.dirty) this.mem.delete(k);
     }
   }
 }
 
 // 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；不放桌面。Mac 不变。
-// 2026-10-27：D 盘必须是本机固定硬盘才放（U 盘、SD 卡、移动硬盘、网络盘、光驱都不放），查不出来也不放，
-// 写不进去也不放，这些情况都放 C（userData 里）。查盘要调 PowerShell，所以是异步的。opts 只给自检用。
+// 2026-10-27：D 盘必须是本机固定硬盘才放（U 盘、SD 卡、移动硬盘、网络盘、光驱都不放），查不出盘的类型也不放，
+// 写不进去也不放，这些情况都放 C（userData 里）。类型是固定硬盘、只是查不出接口（动态磁盘、软件 RAID 这类 Get-Partition 不认的盘）时
+// 按本机硬盘算：USB 移动硬盘的接口一般查得出，改成放 C 会把已经在用 D 盘的电脑的译文全搬回去。查盘要调 PowerShell，所以是异步的。opts 只给自检用。
 async function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations', probe = probeDrive } = {}) {
   if (platform !== 'win32') return fallback;
   let info = null;
@@ -428,18 +432,22 @@ function migrate(from, to) {
   let accs;
   try { accs = fs.readdirSync(from, { withFileTypes: true }).filter((d) => d.isDirectory() && safe(d.name)); } catch { return 0; }
   let n = 0;
+  const read = (file) => {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('译文文件格式不对');
+    return data;
+  };
   for (const a of accs) {
+    let names;
     try {
       fs.mkdirSync(path.join(to, a.name), { recursive: true });
-      for (const f of fs.readdirSync(path.join(from, a.name))) {
-        if (!f.endsWith('.json')) continue;
+      names = fs.readdirSync(path.join(from, a.name));
+    } catch (err) { console.warn(`译文搬家失败（${a.name}）：${err.message}`); continue; }
+    for (const f of names) {
+      if (!f.endsWith('.json')) continue;
+      try {
         const src = path.join(from, a.name, f);
         const dst = path.join(to, a.name, f);
-        const read = (file) => {
-          const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-          if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('译文文件格式不对');
-          return data;
-        };
         const source = read(src);
         const merged = fs.existsSync(dst) ? read(dst) : {};
         for (const [key, rec] of Object.entries(source)) {
@@ -450,9 +458,9 @@ function migrate(from, to) {
         writeJsonAtomic(dst, merged);
         fs.unlinkSync(src);
         n++;
-      }
-      try { fs.rmdirSync(path.join(from, a.name)); } catch { /* 保留未处理的文件 */ }
-    } catch (err) { console.warn(`译文搬家失败：${err.message}`); return n; } // 出错就留着旧的，下次再搬
+      } catch (err) { console.warn(`译文搬家跳过 ${a.name}/${f}：${err.message}`); } // 只跳过这一个，留在旧位置，接着搬别的
+    }
+    try { fs.rmdirSync(path.join(from, a.name)); } catch { /* 保留未处理的文件 */ }
   }
   try { fs.rmdirSync(from); } catch { /* 保留未处理的文件 */ }
   return n;

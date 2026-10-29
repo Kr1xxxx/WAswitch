@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { FloatCore, msgHash } = require('../src/floatcore');
-const { migrate, TrStore } = require('../src/trstore');
+const { migrate, TrStore, textKey } = require('../src/trstore');
 const { McpModule } = require('../src/mcp-module');
 const { createDraftPlacer } = require('../src/draft-place');
 const { AiLog, registerCustomerEditTools } = require('../src/mcp/customer-edit');
@@ -89,6 +89,57 @@ const msg = (chat, n, text, out = false) => ({ id: String(out) + '_' + chat + '_
     fs.writeFileSync(path.join(to, 'a', 'chat.json'), '{}');
     fs.mkdirSync(path.join(to, 'a', 'chat.json.tmp')); // deterministic atomic-write failure, even as root
     assert.equal(migrate(from, to), 0); assert.ok(fs.existsSync(source));
+  });
+  await test('11b: store keeps unwritten translations when the disk write fails, and migration skips only the bad file', async () => {
+    const block = (s, acc, chat) => fs.mkdirSync(path.join(s.dir, acc, `${chat}.json.tmp`), { recursive: true }); // 写盘必定失败，root 下也一样
+    const unblock = (s, acc, chat) => fs.rmdirSync(path.join(s.dir, acc, `${chat}.json.tmp`));
+    const onDisk = (s, acc, chat, key) => { try { return JSON.parse(fs.readFileSync(path.join(s.dir, acc, `${chat}.json`), 'utf8'))[key]; } catch { return undefined; } };
+    const warn = console.warn; console.warn = () => {};
+    try {
+      // 1. trim：写不进去的对话挤出内存时不丢
+      const s1 = new TrStore(path.join(dir, 'trim1'));
+      s1.put('a', 'c00', 'hello', { tr: 'unsaved' });
+      block(s1, 'a', 'c00');
+      for (let i = 1; i <= 25; i++) s1.load('a', `c${String(i).padStart(2, '0')}`);
+      assert.equal(s1.get('a', 'c00', 'hello').tr, 'unsaved', 'c00 still in memory');
+      unblock(s1, 'a', 'c00');
+      assert.equal(s1.flush(), true);
+      assert.equal(onDisk(s1, 'a', 'c00', textKey('hello')).tr, 'unsaved');
+      // 2. trim 不放掉刚读进来的：全部写不进去时，第 22 个对话读进来后往里写的还能写盘
+      const s2 = new TrStore(path.join(dir, 'trim2'));
+      for (let i = 0; i < 21; i++) { const c = `c${String(i).padStart(2, '0')}`; s2.put('a', c, 'x', { tr: `t${i}` }); block(s2, 'a', c); }
+      const e = s2.load('a', 'c99');
+      assert.ok(s2.mem.get('a/c99') === e, 'just-loaded entry stays in mem');
+      s2.put('a', 'c99', 'fresh', { tr: 'new one' });
+      assert.equal(s2.flush(), false);
+      for (let i = 0; i < 21; i++) unblock(s2, 'a', `c${String(i).padStart(2, '0')}`);
+      assert.equal(s2.flush(), true);
+      assert.equal(onDisk(s2, 'a', 'c99', textKey('fresh')).tr, 'new one');
+      assert.equal(onDisk(s2, 'a', 'c20', textKey('x')).tr, 't20');
+      // 3. forgetAccount：写不进去的留着
+      const s3 = new TrStore(path.join(dir, 'forget'));
+      s3.put('a', 'c00', 'bye', { tr: 'unsaved' });
+      block(s3, 'a', 'c00');
+      s3.forgetAccount('a');
+      assert.equal(s3.get('a', 'c00', 'bye').tr, 'unsaved', 'entry kept');
+      unblock(s3, 'a', 'c00');
+      assert.equal(s3.flush(), true);
+      assert.equal(onDisk(s3, 'a', 'c00', textKey('bye')).tr, 'unsaved');
+      s3.forgetAccount('a');
+      assert.equal(s3.mem.size, 0, '写成功后才放掉');
+      // 4. migrate：一个坏文件只跳过它自己
+      const from = path.join(dir, 'mfrom'), to = path.join(dir, 'mto');
+      fs.mkdirSync(path.join(from, 'a1'), { recursive: true }); fs.mkdirSync(path.join(from, 'b2'), { recursive: true });
+      fs.writeFileSync(path.join(from, 'a1', '0bad.json'), '{not json');
+      fs.writeFileSync(path.join(from, 'a1', '1ok.json'), JSON.stringify({ k: { tr: 'A', at: 1 } }));
+      fs.writeFileSync(path.join(from, 'b2', 'ok.json'), JSON.stringify({ k: { tr: 'B', at: 1 } }));
+      assert.equal(migrate(from, to), 2);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(to, 'a1', '1ok.json'))).k.tr, 'A');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(to, 'b2', 'ok.json'))).k.tr, 'B');
+      assert.ok(fs.existsSync(path.join(from, 'a1', '0bad.json')), 'bad source stays');
+      assert.equal(migrate(from, to), 0);
+      assert.ok(fs.existsSync(path.join(from, 'a1', '0bad.json')), 'bad source still stays');
+    } finally { console.warn = warn; }
   });
   await test('12: customer creation undo protects language/account and old incomplete logs', async () => {
     const p = path.join(dir, 'customers'); fs.mkdirSync(p);
