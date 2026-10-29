@@ -52,3 +52,21 @@ assert.equal(T.statusError(429, '智谱').text, '智谱请求太频繁，请重�
 assert.equal(T.statusError(429, 'DeepL').text, 'DeepL 请求太频繁，请重试');
 
 console.log('check-errtext: ok');
+
+// 轻量号发消息：等 130 秒（Baileys 查设备、补会话各最多 60 秒），超时的错误带 code TIMEOUT，主进程据此提示“可能已经发出”
+(async () => {
+  const { LiteHost, SEND_TIMEOUT_MS } = require('../src/lite/host');
+  assert.equal(SEND_TIMEOUT_MS, 130000);
+  const host = new LiteHost({ dataDir: require('os').tmpdir() });
+  host.directProc.sessions.set('1', {});
+  host.directProc.send = () => {}; // 不启动后台进程，回复永远不来
+  const real = global.setTimeout;
+  const waits = [];
+  global.setTimeout = (fn, ms, ...a) => { waits.push(ms); return real(fn, 0, ...a); }; // 到点立刻触发，记下要等多少毫秒
+  let err;
+  try { await host.sendText('1', '4915112345678@s.whatsapp.net', 'Hallo'); } catch (e) { err = e; } finally { global.setTimeout = real; }
+  assert(err && err.code === 'TIMEOUT', '发送超时带 TIMEOUT');
+  assert.deepEqual(waits, [SEND_TIMEOUT_MS]);
+  assert.equal(host.directProc.pending.size, 0, '超时后不留在等待表里');
+  console.log('check-errtext: lite send timeout ok');
+})().catch((e) => { console.error(e); process.exit(1); });

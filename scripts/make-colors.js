@@ -1,5 +1,5 @@
 // 从 src/colors/radix.js 生成颜色变量文件：npm run make:colors
-// 生成 src/colors/radix.css（浅色）、radix-dark.css（跟系统深色走的页面才用），团队后台 server/public/admin/ 里同样一份。
+// 生成 src/colors/radix.css，团队后台 server/public/admin/ 里同样一份。
 // scripts/check-colors.js 会比对这些文件是不是最新的，改了 radix.js 记得重新生成。
 const fs = require('fs');
 const path = require('path');
@@ -36,15 +36,11 @@ function build() {
     ':root {\n' + vars(R.light, '  ') + '\n' +
     `  --white: ${R.WHITE};\n` +
     Object.entries(icons(R)).map(([k, v]) => `  --${k}: ${v};`).join('\n') + '\n}\n';
-  const dark = HEAD +
-    '@media (prefers-color-scheme: dark) {\n  :root {\n' + vars(R.dark, '    ') + '\n  }\n}\n';
   const radixJs = fs.readFileSync(RADIX_JS, 'utf8');
   const admin = path.join(ROOT, 'server', 'public', 'admin');
   return {
     [path.join(ROOT, 'src', 'colors', 'radix.css')]: light,
-    [path.join(ROOT, 'src', 'colors', 'radix-dark.css')]: dark,
     [path.join(admin, 'radix.css')]: light,
-    [path.join(admin, 'radix-dark.css')]: dark,
     [path.join(admin, 'radix.js')]: radixJs,
   };
 }
