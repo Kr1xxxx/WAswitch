@@ -50,7 +50,7 @@ const READ_CODE = (dataId) => `(async (ID, DB) => {
       const url = typeof rec.deprecatedMms3Url === 'string' ? rec.deprecatedMms3Url : '';
       out.info.mediaKey = rec.mediaKey == null ? 'none' : typeof rec.mediaKey === 'string' ? 'string' : mk ? 'bytes' : typeof rec.mediaKey;
       if (!mk || (!dp && !url)) { out.why = 'no_media_fields'; return out; }
-      out.key = { mediaKey: mk, directPath: dp, url };
+      out.key = { mediaKey: mk, directPath: dp, url, audio: out.info.type === 'audio' };
       return out;
     } finally { db.close(); }
   } catch (e) {
@@ -104,31 +104,36 @@ async function readCapped(res) {
       if (n > MAX_BYTES) { try { await reader.cancel(); } catch {} parts.forEach((p) => p.fill(0)); return null; }
       parts.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
     }
-    return Buffer.concat(parts, n);
+    const all = Buffer.concat(parts, n);
+    for (const p of parts) p.fill(0);
+    return all;
   }
   const b = Buffer.from(await res.arrayBuffer());
   return b.length > MAX_BYTES ? null : b;
 }
 
-// 下载、解密。fetch：这个号会话的 fetch（走它自己的代理）。返回 { ok, data } 或 { kind, why }
+// 下载、解密。fetch：这个号会话的 fetch（走它自己的代理）。返回 { ok, data } 或 { kind, why }。
+// kind：expired 链接过期；network 网络；badfile 这一条的文件不对（钥匙、格式、太大）；nomedia 下载信息本身不对
 async function download(fetch, key) {
   const url = mediaUrl(key);
-  if (!url) return { kind: 'nomedia', why: 'bad_host' };
+  if (!url) return { kind: 'badfile', why: 'bad_host' };
   const mediaKey = Buffer.from(String(key.mediaKey || ''), 'base64');
   try {
-    if (mediaKey.length !== 32) return { kind: 'nomedia', why: 'bad_key' };
+    if (mediaKey.length !== 32) return { kind: 'badfile', why: 'bad_key' };
     let res;
+    // 不带 Origin：Electron 的 ses.fetch 带了 Origin 就按跨域规则检查回应，服务器不回允许头时整个请求失败
     try { res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) }); } catch (e) { return { kind: 'network', why: 'network', error: e }; }
     // 链接过期：用户在 WhatsApp 里播放一次，WhatsApp 会重新要文件，再重试就能下
     if ([403, 404, 410].includes(res.status)) return { kind: 'expired', why: `http_${res.status}` };
     if (!res.ok) return { kind: 'network', why: `http_${res.status}`, error: new Error(`HTTP ${res.status}`) };
     let file;
     try { file = await readCapped(res); } catch (e) { return { kind: 'network', why: 'network', error: e }; }
-    if (!file) return { kind: 'nomedia', why: 'too_big' };
+    if (!file) return { kind: 'badfile', why: 'too_big' };
     const d = decryptMedia(file, mediaKey);
     file.fill(0);
-    if (!d.ok) return { kind: 'nomedia', why: d.why };
-    if (d.data.subarray(0, 4).toString('latin1') !== 'OggS') { d.data.fill(0); return { kind: 'nomedia', why: 'not_ogg' }; }
+    if (!d.ok) return { kind: 'badfile', why: d.why };
+    // 语音是 OGG；客户发的音频文件（mp3、m4a）不查，交给解码
+    if (!key.audio && d.data.subarray(0, 4).toString('latin1') !== 'OggS') { d.data.fill(0); return { kind: 'badfile', why: 'not_ogg' }; }
     return { ok: true, data: d.data };
   } finally { mediaKey.fill(0); }
 }
@@ -154,7 +159,8 @@ async function readMedia(wc, dataId) {
 }
 
 // 拿一条语音的音频。opts: { wait?: [ms…], sleep?, maxSeconds?: 超过就不下载（自动转时用）, accId }
-// 返回 { ok, data, seconds } 或 { kind: 'nomedia' | 'expired' | 'network' | 'long' | 'other', code, seconds, error? }
+// 返回 { ok, data, seconds } 或 { kind: 'nomedia' | 'badfile' | 'expired' | 'network' | 'long' | 'loading', code, seconds, error? }。
+// nomedia 是存储里读不出下载信息（存储改版等，连续几条就停自动读）；badfile 只是这一条不对
 async function fetchVoice(wc, fetch, dataId, opts = {}) {
   const wait = opts.wait || NOT_YET_WAIT;
   const nap = opts.sleep || sleep;
@@ -165,13 +171,13 @@ async function fetchVoice(wc, fetch, dataId, opts = {}) {
     await nap(ms);
     r = await readMedia(wc, dataId);
   }
-  if (r.why === 'loading') return { kind: 'other', code: 'W2 loading', seconds: 0 };
+  if (r.why === 'loading') return { kind: 'loading', code: 'W2 loading', seconds: 0 };
   if (r.why) { note(opts.accId || '', r.why, r.info); return { kind: 'nomedia', code: `W2 ${r.why}`, seconds: r.seconds }; }
   if (opts.maxSeconds && r.seconds > opts.maxSeconds) return { kind: 'long', code: '', seconds: r.seconds };
   const d = await download(fetch, r.key);
   r.key.mediaKey = '';
   if (d.ok) return { ok: true, data: d.data, seconds: r.seconds };
-  if (d.kind === 'nomedia') note(opts.accId || '', d.why, r.info);
+  if (d.kind === 'badfile') note(opts.accId || '', d.why, r.info);
   return { kind: d.kind, code: `W2 ${d.why}`, seconds: r.seconds, error: d.error };
 }
 

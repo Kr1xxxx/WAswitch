@@ -316,8 +316,10 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const text = r.text.slice(0, 4000);
     if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
     size += text.length;
-    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：没有文字，带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
-    const voice = !out && /^(true|false)_/.test(rawId) && !/\\p{L}/u.test(text) && [...n.querySelectorAll(S.voice)].some((x) => !x.closest(S.skip));
+    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），
+    // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
+    const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
+    const voice = !out && /^(true|false)_/.test(rawId) && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
     msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0 } : { id, out, text, t: r.t });
   }
   msgs.reverse();

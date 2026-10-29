@@ -18,6 +18,7 @@ const GROUP = 'false_120363000000000001@g.us_DDDD4444_4930111222@c.us';
 const LONG = 'false_271828182845@lid_LLLL7777';
 const BARE = 'false_271828182845@lid_NNNN8888';
 const LATE = 'false_271828182845@lid_GGGG9999';
+const MP3 = 'false_271828182845@lid_MMMM1212';
 
 // 按 WhatsApp 的办法加密一段假的 OGG
 const mediaKey = crypto.randomBytes(32);
@@ -31,7 +32,8 @@ function encrypt(data, key) {
 }
 const file = encrypt(ogg, mediaKey);
 const fetched = [];
-const okFetch = (body = file, status = 200) => async (url) => { fetched.push(url); return new Response(status === 200 ? new Uint8Array(body) : null, { status }); };
+let origin = '';
+const okFetch = (body = file, status = 200) => async (url, o) => { fetched.push(url); origin = (o && o.headers && o.headers.Origin) || ''; return new Response(status === 200 ? new Uint8Array(body) : null, { status }); };
 
 const mk = JSON.stringify([...mediaKey]);
 const rec = (id, x) => `s.put(Object.assign({ id: ${JSON.stringify(id)}, type: 'ptt', mimetype: 'audio/ogg; codecs=opus', mediaKey: new Uint8Array(${mk}), directPath: '/v/t62.7117-24/fake.enc', body: 'SECRETBODY' }, ${JSON.stringify(x || {})}));`;
@@ -47,6 +49,7 @@ const seed = `new Promise((ok, bad) => {
     ${rec(GROUP, { duration: 3 })}
     ${rec(LONG, { duration: 400 })}
     s.put({ id: ${JSON.stringify(BARE)}, type: 'ptt', duration: 5 });
+    ${rec(MP3, { type: 'audio', duration: 9, mimetype: 'audio/mpeg' })}
     tx.oncomplete = () => { r.result.close(); ok(true); };
     tx.onerror = () => bad(tx.error);
   };
@@ -73,6 +76,7 @@ app.whenReady().then(async () => {
   // 1. 读页面：客户的语音带 voice（时长认不准，给 0），自己的语音、引用里的语音不算，文字照旧
   const read = await waPage.readOpenChat(wc);
   const byId = Object.fromEntries(read.msgs.map((m) => [m.id.split('_').pop(), m]));
+  check(read.ok && byId.CCCC3333 && byId.CCCC3333.voice === 0 && byId.CCCC3333.text === '', '群里那样气泡顶上有发送人名字的语音也认得出');
   check(read.ok && byId.CCCC3333 && byId.CCCC3333.voice === 0 && byId.CCCC3333.text === '', `客户语音读成 voice: 0、没有文字（${JSON.stringify(byId.CCCC3333)}）`);
   check(byId.EEEE5555 && byId.EEEE5555.voice === undefined && byId.EEEE5555.out === true, '自己发的语音不算');
   check(byId.FFFF6666 && byId.FFFF6666.voice === undefined && byId.FFFF6666.text === 'Did you hear it?', '引用了语音的回复照常是文字');
@@ -92,6 +96,7 @@ app.whenReady().then(async () => {
   r = await wv.fetchVoice(wc, okFetch(), VOICE, { accId: 'a1' });
   check(r.ok && r.data.subarray(0, 4).toString('latin1') === 'OggS' && r.data.length === ogg.length && r.seconds === 7, `解密出 OGG、时长 7 秒（${r.seconds}）`);
   check(fetched[0] === 'https://mmg.whatsapp.net/v/t62.7117-24/fake.enc', `只去 WhatsApp 媒体服务器下载（${fetched[0]}）`);
+  check(origin === '', '下载不带 Origin（ses.fetch 带了会按跨域规则拦）');
   r = await wv.fetchVoice(wc, okFetch(), GROUP, { accId: 'a1' });
   check(r.ok && r.seconds === 3, '群里的语音也能拿到');
   const ev = await page('window.__events');
@@ -100,10 +105,14 @@ app.whenReady().then(async () => {
 
   // 4. 钥匙不对：校验不过，算读不到
   r = await wv.fetchVoice(wc, okFetch(encrypt(ogg, crypto.randomBytes(32))), VOICE, { accId: 'a1' });
-  check(r.kind === 'nomedia' && r.code === 'W2 bad_mac', `钥匙不对：读不到（${r.code}）`);
+  check(r.kind === 'badfile' && r.code === 'W2 bad_mac', `钥匙不对：这一条读不到，不算存储改版（${r.kind} ${r.code}）`);
   // 解出来不是 OGG
   r = await wv.fetchVoice(wc, okFetch(encrypt(Buffer.from('not an ogg file at all'), mediaKey)), VOICE, { accId: 'a1' });
-  check(r.kind === 'nomedia' && r.code === 'W2 not_ogg', `不是 OGG：读不到（${r.code}）`);
+  check(r.kind === 'badfile' && r.code === 'W2 not_ogg', `语音解出来不是 OGG：这一条读不到（${r.code}）`);
+  // 客户发的音频文件（mp3）：不查 OGG，交给解码
+  const mp3 = Buffer.concat([Buffer.from('ID3'), crypto.randomBytes(500)]);
+  r = await wv.fetchVoice(wc, okFetch(encrypt(mp3, mediaKey)), MP3, { accId: 'a1' });
+  check(r.ok && r.data.length === mp3.length && r.seconds === 9, '音频文件（mp3）照常拿到');
 
   // 5. 链接过期
   for (const st of [404, 410]) {
@@ -117,7 +126,7 @@ app.whenReady().then(async () => {
   check(r.kind === 'network', '500：network');
   // 太大
   r = await wv.fetchVoice(wc, async () => new Response(new Uint8Array(wv.MAX_BYTES + 10)), VOICE, { accId: 'a1' });
-  check(r.kind === 'nomedia' && r.code === 'W2 too_big', `超过 16 MB 不要（${r.code}）`);
+  check(r.kind === 'badfile' && r.code === 'W2 too_big', `超过 16 MB 不要（${r.code}）`);
 
   // 6. 还没写进存储：等一下再查，写进去了就拿到
   let naps = 0;

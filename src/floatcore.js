@@ -462,6 +462,8 @@ class FloatCore {
         // 语音还没转文字：交给转文字那条道（见 vpump），转好了再回来翻
         if (isVoice(item) && !item.text) {
           this.queue.splice(at, 1);
+          item.state = 'queued'; // 在转文字那条道里排队
+          this.onChange(job.accId);
           this.vq.push(job);
           this.vpump();
           continue;
@@ -497,19 +499,21 @@ class FloatCore {
         const job = this.vq.shift();
         const st = this.accs.get(job.accId);
         const item = st && st.items.get(job.h);
-        if (!item || item.state !== 'running' || item.text) continue;
+        if (!item || item.state !== 'queued' || item.text) continue;
+        item.state = 'running';
+        this.onChange(job.accId);
         let v;
         try { v = await this.deps.transcribe(job.accId, item.src, item.voice, { auto: !job.manual }); } catch { v = { error: '转文字失败', kind: 'other' }; }
         if (this.accs.get(job.accId) !== st || st.items.get(job.h) !== item) continue; // 号被删了或重建了
         if (v && Number.isFinite(v.seconds) && v.seconds > 0) item.voice = Math.round(v.seconds); // 网页号：WhatsApp 存的时长
         const kind = v && v.kind;
         if (item.src && item.src.dataId) {
-          if (kind === 'nomedia') st.voiceFails += 1;
-          else if (kind !== 'network' && kind !== 'other') st.voiceFails = 0; // 读到了下载信息
+          if (kind === 'nomedia') st.voiceFails += 1; // 只有存储里读不出下载信息才算（单条文件不对不算）
+          else if (kind !== 'network' && kind !== 'other' && kind !== 'later') st.voiceFails = 0; // 读到了下载信息
         }
-        if (kind === 'long') {
-          // 自动转时才发现超过 5 分钟：不下载，退回按钮，退回占用的自动翻译额度
-          Object.assign(item, { state: 'manual', note: 'long' });
+        if (kind === 'long' || kind === 'later') {
+          // 自动转时才发现超过 5 分钟（不下载），或页面正在加载：退回按钮，退回占用的自动翻译额度
+          Object.assign(item, { state: 'manual' }, kind === 'long' ? { note: 'long' } : {});
           if (st.day.n > 0) st.day.n -= 1;
           st.minute.pop();
           if (st.paused === 'day') st.paused = '';

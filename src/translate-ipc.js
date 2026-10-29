@@ -268,7 +268,9 @@ function setupTranslateIpc(ctx) {
     if (r.kind === 'long') return { kind: 'long', seconds };
     if (r.kind === 'expired') return { error: '语音已过期，在 WhatsApp 里播放一次后重试', kind: 'expired', code: r.code, seconds };
     if (r.kind === 'network') return { error: friendly(r.error, '下载语音失败，请重试').text, kind: 'network', code: r.code, seconds };
-    if (r.kind === 'nomedia') return { error: '读不到这条语音，请在 WhatsApp 里听', kind: 'nomedia', code: r.code, seconds };
+    if (r.kind === 'nomedia' || r.kind === 'badfile') return { error: '读不到这条语音，请在 WhatsApp 里听', kind: r.kind, code: r.code, seconds };
+    // 页面正在加载：自动转的退回按钮，下次再排（不报错）
+    if (opts && opts.auto) return { kind: 'later' };
     return { error: '页面还没准备好，请稍后重试', kind: 'other', code: r.code, seconds };
   }
   async function transcribeVoice(accId, src, opts = {}) {

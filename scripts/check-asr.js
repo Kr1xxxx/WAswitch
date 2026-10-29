@@ -342,6 +342,22 @@ async function webFlow() {
   core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
   await settle(core);
   assert.strictEqual(calls.length, before + 2, '恢复自动');
+  // 单条文件不对（钥匙、格式）不算存储改版：不熔断
+  answer = () => ({ error: '读不到这条语音，请在 WhatsApp 里听', kind: 'badfile', code: 'W2 not_ogg' });
+  for (let i = 0; i < VOICE_TRIP; i += 1) {
+    msgs.push(m(`V${30 + i}`));
+    core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+    await settle(core);
+  }
+  assert.strictEqual(core.accs.get('w').voiceFails, 0, '单条文件不对不计入熔断');
+  // 页面正在加载：退回按钮，不报错，退额度
+  answer = () => ({ kind: 'later' });
+  const n1 = core.accs.get('w').day.n;
+  msgs.push(m('V40'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  const v40 = core.viewOf('w').items.at(-1);
+  assert.deepStrictEqual([v40.state, v40.err, core.accs.get('w').day.n], ['manual', '', n1]);
   // 页面重新加载也恢复
   core.accs.get('w').voiceFails = VOICE_TRIP;
   core.voiceReset('w');
