@@ -42,6 +42,8 @@ const SELECTORS = {
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
   messageSkip: '[role="button"], .quoted-mention',
+  // 语音气泡（语音诊断只数个数）：播放按钮、语音图标或语音滑条
+  voiceMark: '[data-icon="audio-play"], [data-icon="audio-pause"], [data-icon*="ptt" i], [data-icon*="audio-download" i], [aria-label*="voice message" i], [aria-label*="语音"]',
 };
 
 // 返回 'logged_in' | 'needs_qr' | 'unknown'（页面还在加载或认不出来）

@@ -29,6 +29,7 @@ const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
 const waPage = require('./wa-page');
+const voiceProbe = require('./voice-probe');
 const { createDraftPlacer } = require('./draft-place');
 const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
@@ -3172,9 +3173,24 @@ onShell('context', (id, from) => {
       ],
     },
     { type: 'separator' },
+    // 按住 Shift 右键网页号才有：语音诊断（只读，见 voice-probe.js），平时看不到
+    ...(from === 'shift' && !isLite(acc) ? [{ label: '语音诊断', enabled: views.has(id), click: () => runVoiceProbe(id) }, { type: 'separator' }] : []),
     { label: isLite(acc) ? `删除「${acc.name}」并退出登录…` : `删除「${acc.name}」…`, click: () => removeAccount(id) },
   ]).popup({ window: win });
 });
+
+// 语音诊断：只读试 W2、W1，结果弹窗给看，能复制。音频不存盘、不发出去
+async function runVoiceProbe(id) {
+  const acc = findAcc(id);
+  const view = views.get(id);
+  if (!acc || !view) return;
+  const ses = session.fromPartition(`persist:wa-${acc.id}`);
+  const { report } = await voiceProbe.probe(view.webContents, (url, opts) => ses.fetch(url, opts));
+  const v = voiceProbe.verdict(report);
+  const text = JSON.stringify({ app: app.getVersion(), w2ok: v.w2, w1ok: v.w1, ...report }, null, 1);
+  const r = await dialog.showMessageBox(win, { type: 'info', message: '语音诊断', detail: v.text, buttons: ['复制结果', '关闭'], defaultId: 0, cancelId: 1, noLink: true });
+  if (r.response === 0) clipboard.writeText(text);
+}
 
 // ---------- 分组 ----------
 // 分组只影响侧栏怎么摆，不卸载页面、不停收消息。解散分组只是把号放回“未分组”，绝不删号

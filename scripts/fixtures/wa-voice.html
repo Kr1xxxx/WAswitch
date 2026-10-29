@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>wa voice fixture</title>
+<!-- 模仿 WhatsApp 网页版的对话：两条文字、一条客户发来的语音。号码和内容都是假的 -->
+<div id="main">
+  <header><span title="Emma Schmidt">Emma Schmidt</span></header>
+  <div data-id="false_4930111222@c.us_AAAA1111"><div class="copyable-text" data-pre-plain-text="[10:01, 29/10/2026] Emma: "><span class="selectable-text">Hello!</span></div></div>
+  <div data-id="true_4930111222@c.us_BBBB2222"><div class="copyable-text" data-pre-plain-text="[10:02, 29/10/2026] Me: "><span class="selectable-text">Hi Emma</span></div></div>
+  <div data-id="false_4930111222@c.us_CCCC3333"><span data-icon="audio-play"></span><div>0:07</div></div>
+</div>
+<script>
+  window.__events = { clicks: 0, scrolls: 0, mutations: 0, focus: 0 };
+  addEventListener('click', () => { __events.clicks += 1; }, true);
+  addEventListener('scroll', () => { __events.scrolls += 1; }, true);
+  addEventListener('focusin', () => { __events.focus += 1; }, true);
+  new MutationObserver((l) => { __events.mutations += l.length; }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+</script>

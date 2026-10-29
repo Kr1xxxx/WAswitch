@@ -324,7 +324,7 @@ function accountRow(acc) {
   const row = h('button', {
     class: `row${on ? ' on' : ''}`, title: tip, 'aria-current': on ? 'true' : null,
     onclick: () => window.wa.switchTo(acc.id),
-    oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id); },
+    oncontextmenu: (e) => { e.preventDefault(); window.wa.context(acc.id, e.shiftKey ? 'shift' : undefined); },
   },
   avatar,
   h('span', { class: 'meta' },
