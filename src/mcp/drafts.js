@@ -3,13 +3,22 @@
 // 只放进输入框，永远不发送：不按回车、不点发送、不模拟按键，发不发由人决定。
 // 一次只能起草一条，没有批量参数：上一条还在等用户处理时，新的直接拒绝。
 // 默认关，要在 MCP 接口设置里单独打开；关着时 AI 看不到这个工具。
-// 草稿内容不落盘；设置页只记录谁、什么时候、给哪个号的哪个对话起草了几个字（也只在内存里）。
+// 草稿内容不落盘；设置页只记录谁、什么时候、给哪个号的哪个对话起草了几个字，号码只记后 4 位（也只在内存里）。
 // 放进输入框的具体做法在主进程的 src/draft-place.js（不往 WhatsApp 页面注入脚本），这里只通过 hooks.placeDraft 调用。
 const { z } = require('zod');
+const { maskPhone } = require('./open-chat');
 
 const MAX_TEXT = 4000;
 const RATE_MS = 3 * 1000; // 同一个连接每 3 秒最多起草一次
 const LOG_MAX = 20;
+
+// 设置页记录里的对话：名字照记，像手机号的一段（至少 6 位数字，和 draft-place.js 的 looksLikePhone 一样）只留后 4 位
+function maskChat(chat) {
+  return String(chat || '').replace(/[+(]?\d[\d\s().-]*\d/g, (m) => {
+    const d = m.replace(/\D/g, '');
+    return d.length >= 6 ? maskPhone(d) : m;
+  });
+}
 
 // 去掉控制字符（换行、制表符保留）和改变文字方向的隐藏字符，统一换行符。AI 给的文字只当普通文字
 function cleanText(text) {
@@ -84,7 +93,7 @@ function registerDraftTools(server, hooks, { log, sessionInfo }) {
     if (limited) return fail(limited);
 
     const r = await hooks.placeDraft({ accountId: id, chat, text: body, client });
-    log.record({ client, account: account.name, chat, chars: body.length, result: r.result });
+    log.record({ client, account: account.name, chat: maskChat(chat), chars: body.length, result: r.result });
     if (r.result === 'gone') return fail(`没有 id 为 ${id} 的账号`);
     if (r.result === 'busy') return fail('上一条草稿还在 WAswitch 窗口顶部等用户处理，一次只能起草一条。请等用户处理完再试。');
     const out = { ok: true, account: { id: account.id, name: account.name }, chat, sent: false };
@@ -104,4 +113,4 @@ function registerDraftTools(server, hooks, { log, sessionInfo }) {
 const text_ = (data) => ({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] });
 function fail(message) { return { content: [{ type: 'text', text: message }], isError: true }; }
 
-module.exports = { registerDraftTools, DraftLog, cleanText, MAX_TEXT, RATE_MS };
+module.exports = { registerDraftTools, DraftLog, cleanText, maskChat, MAX_TEXT, RATE_MS };
