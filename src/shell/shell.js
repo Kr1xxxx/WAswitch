@@ -481,8 +481,7 @@ function checkUpdateBtn() {
 }
 
 // ---------- 侧栏里的更新提示 ----------
-// 下载中显示进度，下载好显示“立即更新”（默认下好就自动更新，这个卡片只在等手上的事做完时才会看到）。
-// 点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
+// 下载中显示进度，下载好显示“立即更新”。点“稍后”只在这次运行里藏起这个版本的提示（关于页和设置图标上的小点还在）
 let updateHidden = '';
 const updateReady = () => !!(s.update && s.update.status === 'downloaded');
 // 设置侧栏分组：最上面是快捷设置（不带分组标题），常用设置在前，诊断和其他在后。
@@ -497,9 +496,8 @@ function settingsGroups() {
   ];
 }
 
-// 下好后还没装时的说明：在等什么；马上就会更新的不写
+// 点过更新、下好后还没装时的说明：在等什么
 function updateWaitLine(u) {
-  if (u.later) return '缩到托盘后自动更新';
   return u.waitReason ? `${u.waitReason}，结束后自动更新` : '';
 }
 function openAbout() { settingsTab = 'about'; window.wa.showPage('settings'); render(true); }
@@ -508,7 +506,7 @@ function updateCard() {
   if (!u || s.collapsed || !['downloading', 'downloaded'].includes(u.status)) return null;
   if (u.status === 'downloaded' && updateHidden === u.version) return null;
   if (u.status === 'downloading') {
-    return h('button', { class: 'updcard busy', title: '下载完自动更新', onclick: openAbout },
+    return h('button', { class: 'updcard busy', title: u.userAsked ? '下载完自动更新' : '下载好后会提示你', onclick: openAbout },
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
@@ -517,7 +515,7 @@ function updateCard() {
     h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('b', { class: 'grow' }, `新版本 ${u.version} 已就绪`)),
     ready.line ? h('small', null, ready.line) : null,
     h('div', { class: 'updbtns' },
-      h('button', { class: 'later', onclick: () => { updateHidden = u.version; if (!u.manual) window.wa.updateLater(); render(); } }, '稍后'),
+      h('button', { class: 'later', onclick: () => { updateHidden = u.version; if (u.waitReason) window.wa.updateLater(); render(); } }, '稍后'),
       h('button', { class: 'go', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '立即更新')));
 }
 
@@ -2140,7 +2138,7 @@ function updateBox(u) {
     idle: ['自动更新已开启', '', 'idle'],
     checking: ['正在检查更新…', '', 'busy'],
     none: ['已是最新版本', '', 'ok'],
-    downloading: [`正在下载 ${u.version}`, u.manual ? (u.userAsked ? '下载完会自动打开安装包。' : '') : '下载完自动更新', 'busy'],
+    downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完自动更新') : '', 'busy'],
     downloaded: u.manual
       ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, updateWaitLine(u), 'new'],
@@ -2149,8 +2147,8 @@ function updateBox(u) {
   const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
   const mark = t === 'ok' ? icon('check', 18) : t === 'warn' ? icon('warn', 18) : t === 'busy' ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : icon('update', 18);
-  const action = u.status === 'dev' || u.status === 'off' || (u.status === 'downloading' && (!u.manual || u.userAsked)) ? null
-    : u.status === 'downloading' ? h('button', { class: 'btn', onclick: () => window.wa.updateCheck() }, '下好后打开安装包')
+  const action = u.status === 'dev' || u.status === 'off' || (u.status === 'downloading' && u.userAsked) ? null
+    : u.status === 'downloading' ? h('button', { class: 'btn', onclick: () => window.wa.updateCheck() }, u.manual ? '下好后打开安装包' : '立即更新')
     : u.status === 'downloaded'
       ? h('button', { class: 'btn primary', onclick: () => window.wa.updateInstall() }, u.manual ? '打开安装包' : '立即更新')
       : morphBtn('updateCheck', { idle: '检查并更新', busy: '检查中' }, () => window.wa.updateCheck(), { busy });
