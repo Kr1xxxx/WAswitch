@@ -25,7 +25,7 @@ body {
 }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
-button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 a { color: var(--blue-11); }
 /* 下拉框统一样式：不用系统原生外观，圆角浅边框 + 自画的箭头，和输入框、按钮一个风格 */
 select {
@@ -548,6 +548,8 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 /* 默认两行高，字多自动加高，最多四行，再多框内滚动；不能手动拖（shen 2026-10-26） */
 .dk-card .dk-in, .dk-card .dk-out { border: 0; background: transparent; padding: 0; border-radius: 0; resize: none; line-height: 1.5; color: var(--slate-12); field-sizing: content; min-height: calc(2em * 1.5); max-height: calc(4em * 1.5); overflow-y: auto; }
 .dk-card .dk-in:focus, .dk-card .dk-out:focus { outline: none; }
+/* 卡片里的框没有边：焦点环画在卡片上；焦点在卡片里的复制按钮时按钮自己有环，卡片不再套一圈 */
+.dk-card:has(textarea:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .dk-tools { display: flex; align-items: center; }
 .dk-keyhint { margin-left: auto; font-size: var(--fs-s); color: var(--slate-10); white-space: nowrap; user-select: none; }
 .dk-card .dk-in::placeholder, .dk-card .dk-out::placeholder { color: var(--slate-10); opacity: 1; }
@@ -712,7 +714,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-grid { flex: 1 1 auto; min-height: 240px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .tp-pane { position: relative; min-height: 0; display: flex; flex-direction: column; border: var(--hair) solid var(--s6); border-radius: var(--r-l); background: var(--s2); }
 .tp-in { border-color: var(--s6); background: var(--s1); }
-.tp-in:focus-within { border-color: var(--s7); }
+/* 文字区没有自己的边框：焦点环画在整栏上，跟着栏的圆角走 */
+.tp-pane:has(> .tp-text:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .tp-outs { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
 .tp-outs .tp-out { flex: 1; }
 .tp-text { flex: 1; min-height: 0; width: 100%; padding: 14px 16px 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; font-size: var(--fs-l); line-height: 1.6; color: var(--s12); user-select: text; }
