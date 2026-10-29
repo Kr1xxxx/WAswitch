@@ -31,6 +31,7 @@ const dk = {
   seenTitle: null,
   unread: 0,
   acc: null,
+  lastKey: '', // 这个号里最后一次认出的对话（换对话时工作台回到翻译页用）
   draftKey: '', // 回复框现在是哪个对话的草稿：`${号}|${chatKey}`，'' = 还没认出对话
   draftSent: '', // 上次存的草稿（JSON），没变就不再发
   draftTimer: null,
@@ -116,12 +117,24 @@ function dockCarry(d) {
   dockDraftQueue();
 }
 // 主进程推来新状态：换了对话（或换了号）就先把上一个对话的草稿写下来，再换成这个对话的
+// 工作台每次回到“翻译”：换号、换客户对话（认得出的对话换到另一个认得出的对话）；正在填话术或客户资料的表单时不跳，免得冲掉没保存的内容
+function dockBackToTranslate() {
+  if (s && s.panelTab !== 'translate' && !pn.edit) window.wa.panelTab('translate');
+}
 function dockAdopt(st) {
   const key = st.accountId && st.chatKey ? `${st.accountId}|${st.chatKey}` : '';
-  if (dk.acc !== st.accountId) { dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastInput = 0; }
+  if (dk.acc !== st.accountId) {
+    if (dk.acc) dockBackToTranslate();
+    dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastKey = ''; dk.lastInput = 0;
+  }
   dk.st = st;
   if (key === dk.draftKey) return;
   const old = dk.draftKey;
+  // 和“最后一次认出的对话”比：中间读不出对话的那一阵（刚点开、还没读到）不算没换
+  if (key) {
+    if (dk.lastKey && key !== dk.lastKey) dockBackToTranslate();
+    dk.lastKey = key;
+  }
   if (!key) {
     // 打开了还没有消息的对话（认不出是哪个）：上一个对话的写下来，回复框清空；这里写的等认出对话再存
     dockDraftFlush();
@@ -389,18 +402,20 @@ function dockMeta(it) {
 
 // 有译文时原文默认完全隐藏，折叠箭头放在中文译文左边：点箭头在译文上面展开原文，再点收起（shen 2026-10-27）。
 // 没译文就直接显示原文。原地切换 class，不重画列表：高度平滑过渡，被点的这条上沿不动，列表不跳
-// 返回 { box, btn }：box 是原文（放在译文上面），btn 是箭头（放在译文左边）
-function dockOrig(key, text, hasTr) {
+// 返回 { box, btn }：box 是原文（放在译文上面），btn 是箭头（放在译文左边）。
+// 语音：箭头换成语音图标，点它展开识别出的原文（shen 2026-10-29）；voice 是悬停提示「语音 0:23」
+function dockOrig(key, text, hasTr, voice = '') {
   if (!hasTr) return { box: h('span', { class: 'dk-orig' }, text), btn: null };
-  const btn = h('button', { class: 'dk-fold-btn' });
+  const btn = voice ? h('button', { class: 'dk-fold-btn dk-voice-btn' }, icon('voice', 14)) : h('button', { class: 'dk-fold-btn' });
   const body = h('span', { class: 'dk-orig dk-fold-text' }, text);
   const box = h('span', { class: 'dk-fold' }, body);
   const set = (o) => {
     box.classList.toggle('open', o);
     box.setAttribute('aria-hidden', String(!o));
     btn.setAttribute('aria-expanded', String(o));
-    btn.setAttribute('aria-label', o ? '收起原文' : '展开原文');
-    btn.title = o ? '收起原文' : '展开原文';
+    const what = voice ? '识别的原文' : '原文';
+    btn.setAttribute('aria-label', `${o ? '收起' : '展开'}${what}`);
+    btn.title = voice ? `${voice}，点击${o ? '收起' : '展开'}${what}` : `${o ? '收起' : '展开'}${what}`;
   };
   btn.addEventListener('click', () => {
     const o = !dk.openOrig.has(key);
@@ -425,10 +440,12 @@ function dockManualLabel(it) {
   if (typeof it.voice === 'number' && !it.text) return it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字';
   return it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译';
 }
-// 轻量号客户发来的语音：「语音 0:23」
+// 客户发来的语音：左边一个语音图标（悬停看「语音 0:23」，网页号还不知道时长时是「语音」），右边是译文或按钮
 const dockVoiceLen = (s) => { const n = Math.max(0, Math.round(Number(s) || 0)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`; };
+const dockVoiceName = (it) => (typeof it.voice !== 'number' ? '' : it.voice > 0 ? `语音 ${dockVoiceLen(it.voice)}` : '语音');
 function dockVoiceTag(it) {
-  return typeof it.voice === 'number' ? h('span', { class: 'dk-voice' }, `语音 ${dockVoiceLen(it.voice)}`) : null;
+  const name = dockVoiceName(it);
+  return name ? h('span', { class: 'dk-voice', title: name, role: 'img', 'aria-label': name }, icon('voice', 14)) : null;
 }
 
 function dockItemRow(it, last) {
@@ -441,20 +458,22 @@ function dockItemRow(it, last) {
   const sp = foot ? null : dockSpacer();
   // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
   const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
-  const orig = it.text ? dockOrig(it.h, it.text, it.state === 'done' && !!it.tr) : { box: null, btn: null };
+  const orig = it.text ? dockOrig(it.h, it.text, it.state === 'done' && !!it.tr, dockVoiceName(it)) : { box: null, btn: null };
   const trText = trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp);
   const tr = it.state === 'done' ? [orig.btn ? h('span', { class: 'dk-trline' }, orig.btn, trText) : trText, dockItemActs(it),
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'skip' ? h('span', { class: 'dk-tr' }, it.text, sp) // 时间、数字、表情这类不用翻：原文当译文显示
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, typeof it.voice === 'number' && !it.text ? '转文字中…' : '翻译中…', sp)
-      : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ',
+      : it.state === 'error' ? h('span', { class: 'dk-tr bad', title: it.code || null }, it.err, ' ',
         it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, dockManualLabel(it)), sp);
+  // 语音还没有译文（等着转、转文字中、报错、不用翻）：图标放在这一行左边
+  const voiceLine = typeof it.voice === 'number' && !orig.btn;
   return h('div', { class: `${cls}${foot ? ' foot' : ''}`, 'data-h': it.h },
-    dockVoiceTag(it),
     it.state === 'skip' ? null : orig.box,
-    tr,
+    // 译文一行（done 时 tr 是 [译文, 纠错/编辑, 建议]）：图标只放在第一项左边
+    !voiceLine ? tr : Array.isArray(tr) ? [h('span', { class: 'dk-trline' }, dockVoiceTag(it), tr[0]), ...tr.slice(1)] : h('span', { class: 'dk-trline' }, dockVoiceTag(it), tr),
     warn,
     dockMeta(it));
 }

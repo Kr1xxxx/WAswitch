@@ -42,6 +42,8 @@ const SELECTORS = {
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
   messageSkip: '[role="button"], .quoted-mention',
+  // 语音气泡：播放按钮、语音图标或语音滑条（引用块里的不算）
+  voiceMark: '[data-icon="audio-play"], [data-icon="audio-pause"], [data-icon*="ptt" i], [data-icon*="audio-download" i], [aria-label*="voice message" i], [aria-label*="语音"]',
 };
 
 // 返回 'logged_in' | 'needs_qr' | 'unknown'（页面还在加载或认不出来）
@@ -184,7 +186,7 @@ function chatIdentity(main) {
 }
 const readChatCode = (max = MAX_MSGS) => `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   const chat = (${chatIdentity.toString()})(main);
@@ -314,7 +316,11 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const text = r.text.slice(0, 4000);
     if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
     size += text.length;
-    msgs.push({ id, out, text, t: r.t });
+    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），
+    // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
+    const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
+    const voice = !out && /^(true|false)_/.test(rawId) && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
+    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0 } : { id, out, text, t: r.t });
   }
   msgs.reverse();
   // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
@@ -354,10 +360,70 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
+      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}) }));
     return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
   } catch {
     return { ok: false, why: 'error' };
+  }
+}
+
+// 等当前对话有变化（新消息、改了的消息、换了对话）：隔离环境里用 MutationObserver 只看着 #main，不改页面。
+// 有变化后再等 40 毫秒（一条消息常分几次加进页面），没变化最多等 ms 毫秒。返回 true = 有变化。
+// 看着的东西存在隔离环境里，每次等都接着用；两次等之间的变化也算（seq 记着）
+const WAIT_CHAT_CODE = (ms) => `(() => {
+  const SEL = ${JSON.stringify(SELECTORS.chatMain)};
+  let w = window.__wsChatWatch;
+  if (!w) {
+    w = window.__wsChatWatch = { seq: 0, seen: 0, main: null, waiters: [], t: 0 };
+    const fire = () => {
+      w.t = 0;
+      const list = w.waiters.splice(0);
+      for (const f of list) f(true);
+    };
+    w.hit = () => { w.seq += 1; if (!w.t && w.waiters.length) w.t = setTimeout(fire, 40); };
+    // 输入框（footer）和顶部（header，“正在输入…”“在线”）的变化不算：打字时不跟着一直读
+    const outside = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !el || !el.closest('header, footer'); };
+    w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target))) w.hit(); });
+    // #main 换了（切对话、关掉对话）：看它的父元素有没有增删子元素
+    w.outer = new MutationObserver(() => { if (document.querySelector(SEL) !== w.main) { w.bind(); w.hit(); } });
+    w.bind = () => {
+      w.inner.disconnect();
+      w.outer.disconnect();
+      w.main = document.querySelector(SEL);
+      if (!w.main) return;
+      w.inner.observe(w.main, { childList: true, subtree: true, characterData: true });
+      if (w.main.parentElement) w.outer.observe(w.main.parentElement, { childList: true });
+    };
+  }
+  if (document.querySelector(SEL) !== w.main) { w.bind(); w.seq += 1; }
+  if (w.seq !== w.seen) { w.seen = w.seq; return true; }
+  return new Promise((done) => {
+    const f = (v) => { clearTimeout(timer); w.seen = w.seq; done(v); };
+    const timer = setTimeout(() => { const i = w.waiters.indexOf(f); if (i >= 0) w.waiters.splice(i, 1); w.seen = w.seq; done(false); }, ${Math.max(0, Math.floor(ms))});
+    w.waiters.push(f);
+  });
+})()`;
+
+// 不用再等了（面板关了）：停止看着，下次等时再接上
+const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); w.main = null; } return 1; })()`;
+async function stopChatWatch(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  try { await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: STOP_WATCH_CODE }]); } catch {}
+}
+
+async function waitChatChange(wc, ms = 2000) {
+  if (wc.isDestroyed() || wc.isLoading()) return false;
+  let timer;
+  try {
+    // 页面在后台时计时器会被放慢：主进程这边也计时，最多多等 500 毫秒
+    return await Promise.race([
+      wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: WAIT_CHAT_CODE(ms) }]).then((v) => v === true),
+      new Promise((res) => { timer = setTimeout(() => res(false), ms + 500); }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -613,5 +679,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

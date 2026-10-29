@@ -8,7 +8,8 @@ const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { needsKey, extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
-const { FloatCore, fromLite } = require('./floatcore');
+const { FloatCore, fromLite, VOICE_MAX_S } = require('./floatcore');
+const webVoice = require('./web-voice');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
 const { DraftStore } = require('./drafts');
@@ -229,8 +230,9 @@ function setupTranslateIpc(ctx) {
       + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
     temperature: 0.2,
   };
-  // ---- 语音转文字（轻量号客户发来的语音） ----
-  // 后台进程下载语音（只走这个号自己的代理）→ 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
+  // ---- 语音转文字（客户发来的语音） ----
+  // 轻量号：后台进程下载语音；网页号：读 WhatsApp 本机存储里的下载信息，用这个号自己的会话下载解密（见 web-voice.js）。
+  // 都只走这个号自己的代理 → 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
   // 音频只在内存里，不写盘
   let decodeN = 0;
   const decodes = new Map(); // n -> { resolve, reject, timer }
@@ -252,16 +254,58 @@ function setupTranslateIpc(ctx) {
     clearTimeout(d.timer);
     if (r && r.pcm instanceof Int16Array && r.pcm.length) d.resolve(r.pcm); else d.reject(new Error('解不开'));
   });
-  async function transcribeVoice(accId, src) {
-    const host = ctx.liteHost;
-    if (!host || !src || typeof src.jid !== 'string' || typeof src.id !== 'string') return { error: '找不到这条语音，请在手机上听', kind: 'other' };
+  // 网页号页面重新加载后：之前连续读不到语音的记录清掉（见 FloatCore.voiceReset）
+  const hooked = new WeakSet();
+  async function webVoiceBytes(acc, src, opts) {
+    const view = views.get(acc.id);
+    const wc = view && view.webContents;
+    if (!wc || wc.isDestroyed()) return { error: '页面还没准备好，请稍后重试', kind: 'other' };
+    if (!hooked.has(wc)) { hooked.add(wc); wc.on('did-finish-load', () => { if (floatCore) floatCore.voiceReset(acc.id); }); }
+    const ses = session.fromPartition(`persist:wa-${acc.id}`);
+    const r = await webVoice.fetchVoice(wc, (url, o) => ses.fetch(url, o), src.dataId, { accId: acc.id, maxSeconds: opts && opts.auto ? VOICE_MAX_S : 0 });
+    if (r.ok) return r;
+    const seconds = r.seconds || 0;
+    if (r.kind === 'long') return { kind: 'long', seconds };
+    if (r.kind === 'expired') return { error: '语音已过期，在 WhatsApp 里播放一次后重试', kind: 'expired', code: r.code, seconds };
+    if (r.kind === 'network') return { error: friendly(r.error, '下载语音失败，请重试').text, kind: 'network', code: r.code, seconds };
+    if (r.kind === 'nomedia' || r.kind === 'badfile') return { error: '读不到这条语音，请在 WhatsApp 里听', kind: r.kind, code: r.code, seconds };
+    // 页面正在加载：自动转的退回按钮，下次再排（不报错）
+    if (opts && opts.auto) return { kind: 'later' };
+    return { error: '页面还没准备好，请稍后重试', kind: 'other', code: r.code, seconds };
+  }
+  async function transcribeVoice(accId, src, opts = {}) {
+    const acc = findAcc(accId);
     let bytes;
-    try { bytes = await host.voice(accId, src.jid, src.id); } catch (e) { return { error: friendly(e, '下载语音失败，请重试').text, kind: 'network' }; }
+    let seconds = 0;
+    if (acc && !isLite(acc) && src && typeof src.dataId === 'string') {
+      const r = await webVoiceBytes(acc, src, opts);
+      if (!r.ok) return r;
+      bytes = r.data;
+      seconds = r.seconds;
+    } else {
+      const host = ctx.liteHost;
+      if (!host || !src || typeof src.jid !== 'string' || typeof src.id !== 'string') return { error: '找不到这条语音，请在手机上听', kind: 'other' };
+      try { bytes = await host.voice(accId, src.jid, src.id); } catch (e) { return { error: friendly(e, '下载语音失败，请重试').text, kind: 'network' }; }
+    }
     let pcm;
-    try { pcm = await decodeVoice(bytes); } catch { return { error: '这条语音打不开，请在手机上听', kind: 'other' }; }
-    return ctx.translator.transcribe(pcm);
+    try { pcm = await decodeVoice(bytes); } catch { return { error: acc && !isLite(acc) ? '这条语音打不开，请在 WhatsApp 里听' : '这条语音打不开，请在手机上听', kind: 'other', seconds }; } finally { if (Buffer.isBuffer(bytes)) bytes.fill(0); }
+    const r = await ctx.translator.transcribe(pcm);
+    pcm.fill(0);
+    return seconds ? { ...r, seconds } : r;
   }
 
+  // 付费的备用一次只翻一条：等主通道空下来、用户自己的翻译先翻（最多等 60 秒）
+  async function onMainLane(args) {
+    const until = Date.now() + 60000;
+    for (;;) {
+      if (!ctx.translator.busy && !userTr.waiting && !userTr.running) {
+        const r = await ctx.translator.translate(args);
+        if (!(r && r.kind === 'busy')) return r;
+      }
+      if (Date.now() > until) return { error: '上一段还在翻译', kind: 'busy' };
+      await new Promise((res) => setTimeout(res, 250));
+    }
+  }
   function setupFloatCore() {
     // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
@@ -279,12 +323,17 @@ function setupTranslateIpc(ctx) {
     floatCore = new FloatCore({
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
-      transcribe: (accId, src) => transcribeVoice(accId, src),
+      transcribe: (accId, src, _seconds, opts) => transcribeVoice(accId, src, opts),
       translate: (text, { fix, context, prev, slow } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
         if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+        // 默认服务商是免费的（智谱、混元）：同时发给有密钥的免费服务商，用先翻出来的；各走各的通道，
+        // 不占用户翻译用的那条，可以同时翻好几条（见 parallel）。都失败了才用付费的备用，一次一条
+        if (!slow && !fix && ctx.translator.raceSet().length) {
+          return ctx.translator.raceFree({ text, mode, target: '中文', context }, { paid: onMainLane });
+        }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
         // 在后台慢慢补翻的更早的消息：只用免费的智谱或混元，都没填密钥就不翻（留着「翻译」按钮）
@@ -297,6 +346,8 @@ function setupTranslateIpc(ctx) {
           .finally(() => { userTr.slow = false; });
       },
     });
+    // 同时翻几条：用免费服务商时 3 条，付费的（DeepL 等）一次一条
+    floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) pushFloat(); };
   }
   // 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
@@ -315,8 +366,10 @@ function setupTranslateIpc(ctx) {
     if (!readerOn() || floatBusy) return;
     const target = floatCanRead();
     let delay = 2000;
+    let readAt = 0;
     if (target) {
       floatBusy = true;
+      readAt = Date.now();
       let r;
       try {
         if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc);
@@ -346,9 +399,29 @@ function setupTranslateIpc(ctx) {
         }
       }
     }
-    scheduleFloat(delay);
+    // 网页号读到了对话：不干等 2 秒，页面上对话一有变化（客户发来新消息）就再读；没变化最多等 2 秒再读一次
+    if (target && !target.lite && delay === 2000 && floatReadable === 'ok') waitFloat(target.wc, readAt);
+    else scheduleFloat(delay);
+  }
+  const READ_GAP = 150; // 两次读之间至少隔 150 毫秒（页面一直在变时也不会一直读）
+  let floatWaitGen = 0;
+  let floatWaiting = false; // 正在等页面变化（等完会自己安排下一次读）
+  let floatWatchWc = null; // 在看着哪个页面（面板关了就停）
+  function waitFloat(wc, readAt) {
+    if (floatTimer) clearTimeout(floatTimer);
+    floatTimer = null;
+    const gen = ++floatWaitGen;
+    floatWaiting = true;
+    floatWatchWc = wc;
+    waPage.waitChatChange(wc, 2000).then(() => {
+      if (gen !== floatWaitGen) return; // 等的时候已经另外安排了（换号、开关面板……）
+      floatWaiting = false;
+      scheduleFloat(Math.max(0, READ_GAP - (Date.now() - readAt)));
+    });
   }
   function scheduleFloat(ms) {
+    floatWaitGen += 1;
+    floatWaiting = false;
     if (floatTimer) clearTimeout(floatTimer);
     floatTimer = readerOn() ? setTimeout(floatTick, ms) : null;
   }
@@ -431,8 +504,11 @@ function setupTranslateIpc(ctx) {
       floatReadable = 'loading';
       pushFloat();
       scheduleFloat(200);
-    } else if (readerOn() && !floatTimer && !floatBusy) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
-    if (!readerOn()) floatLastAcc = null;
+    } else if (readerOn() && !floatTimer && !floatBusy && !floatWaiting) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
+    if (!readerOn()) { // 面板关了：不再等页面变化，页面里也停止看着
+      floatLastAcc = null; floatWaitGen += 1; floatWaiting = false;
+      if (floatWatchWc) { waPage.stopChatWatch(floatWatchWc); floatWatchWc = null; }
+    }
   }
   function readerItem(h, fix) {
     if (typeof h !== 'string' || !ctx.activeId) return null;

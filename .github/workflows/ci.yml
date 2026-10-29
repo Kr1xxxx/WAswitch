@@ -60,6 +60,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 侧栏 + 号（添加账号、添加分组）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+      - name: 更新卡片和关于页文案（立即更新）自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       - name: 卡片、翻译页按自己的大小排版（容器查询）
@@ -86,8 +88,12 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
       - name: 读取对话列表自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
+      - name: 网页号语音后台读取只读、解密、读不到时的原因
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-web-voice.js
       - name: 页面崩溃重建和保存设置同时发生
         run: xvfb-run -a node scripts/check-view-race.js
+      - name: 工作台每次打开、换号、换客户都在翻译页
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
       - name: 内存回收不会反复刷新

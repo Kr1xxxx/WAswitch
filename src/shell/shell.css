@@ -508,7 +508,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-item.foot { padding-bottom: 20px; }
 .dk-meta { position: absolute; right: 8px; bottom: 4px; display: flex; align-items: center; gap: 5px; line-height: 15px; pointer-events: none; }
 .dk-time { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.dk-voice { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dk-voice { flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin: 2px 0 0 -2px; color: var(--slate-11); }
 .dk-item.last .dk-time { color: var(--green-11); }
 .dk-spacer { display: inline-block; width: 52px; height: 1px; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: var(--fs-s); padding: 0 4px; line-height: 16px; }
@@ -528,6 +528,9 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-fold-btn[aria-expanded="true"]::before { left: 5.5px; top: 4px; transform: rotate(-45deg); }
 .dk-fold-btn:hover { color: var(--text); background: var(--slate-a3); }
 .dk-fold-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.dk-voice-btn { display: flex; align-items: center; justify-content: center; color: var(--slate-11); }
+.dk-voice-btn::before { display: none; }
+.dk-voice-btn[aria-expanded="true"] { color: var(--text); background: var(--slate-a3); }
 .dk-tr { font-size: var(--fs-m); color: var(--text); white-space: pre-wrap; word-break: break-word; user-select: text; line-height: 1.4; }
 .dk-tr.bad { color: var(--danger); font-size: var(--fs-s); }
 .dk-hint { padding: 6px 6px; margin: 0; }

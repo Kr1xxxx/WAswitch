@@ -11,11 +11,17 @@
     const pcm = new Int16Array(n);
     const chs = [];
     for (let c = 0; c < buf.numberOfChannels; c += 1) chs.push(buf.getChannelData(c));
-    for (let i = 0; i < n; i += 1) {
-      let v = 0;
-      for (const ch of chs) v += ch[i];
-      v /= chs.length || 1;
-      pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    // 5 分钟的语音一次转完要 80 毫秒左右：每 4 秒音频让出一下，界面不卡
+    const STEP = RATE * 4;
+    for (let at = 0; at < n; at += STEP) {
+      if (at) await new Promise((r) => setTimeout(r, 0));
+      const end = Math.min(n, at + STEP);
+      for (let i = at; i < end; i += 1) {
+        let v = 0;
+        for (const ch of chs) v += ch[i];
+        v /= chs.length || 1;
+        pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+      }
     }
     return pcm;
   }
