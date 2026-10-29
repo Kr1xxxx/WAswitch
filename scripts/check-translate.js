@@ -49,6 +49,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   // fallback
   r=tr.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k2'});
   tr.setRoles({primaryId:pid,fallbackId:r.id});
+  assert.equal(tr.freeProvider().id,r.id); // 后台补翻更早的消息用免费的：智谱优先
   behave=['net',null]; calls=[];
   let q=await tr.translate({text:'你好',mode});
   assert(q.fallback && q.text==='Hola', JSON.stringify(q));
@@ -245,6 +246,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(JSON.parse(fs.readFileSync(path.join(d2,'translate.json'),'utf8')).providers[0].model,'hy-mt2-plus');
   assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hunyuan-turbos-latest'}).error);
   assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hy-mt2-plus'}).ok);
+  assert.equal(th.freeProvider().id,'h2'); // 没有智谱就用有密钥的混元（h1 没密钥不算）
   assert(T.isMtModel('hy-mt2-lite')&&!T.isMtModel('glm-4-flash'));
   const mt=T.buildMessages({prompt:'p'},'Hallo',{target:'中文'},[{out:false,text:'Preis?'},{out:true,text:'10 Euro'}],'草稿','hy-mt2-plus');
   assert.equal(mt.length,1); assert.equal(mt[0].role,'user');

@@ -10,7 +10,8 @@ const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `$
 async function core() {
   let now = Date.parse('2026-10-24T10:00:00Z');
   const sent = [];
-  const fc = new FloatCore({ now: () => now, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  // 没有免费服务商（智谱、混元都没填密钥）：更早的消息不在后台补翻
+  const fc = new FloatCore({ now: () => now, slowGap: 0, translate: async (text, o = {}) => { if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' }; sent.push(text); return { text: `译:${text}`, warn: [] }; } });
   // 第一次看到一个对话：12 条收到的，只自动翻最后 5 条
   const first = Array.from({ length: 12 }, (_, i) => msg(i));
   first.push(msg(99, true)); // 自己发的不翻
@@ -95,41 +96,80 @@ async function core() {
   await sendNoJump();
   scrollNoBottom();
   await reopenKeepsAll();
-  await savedNotInBackfill();
+  await catchUpOlder();
 }
 
-// 切到一个对话补翻最近 5 条时，以前翻过、存着的不占名额（shen 2026-10-29 截图：后面 4 条存着译文，
-// 前面 3 条没翻、只剩「翻译」按钮）。打开自动翻译时的补翻也一样
-async function savedNotInBackfill() {
+// 切到一个对话时没翻的旧消息（shen 2026-10-29 截图：后面 4 条存着译文，前面 3 条只剩「翻译」按钮）：
+// 最后 5 条没翻的照常自动翻，存着的不占名额；更早的用免费的智谱或混元在后台慢慢补（slow），最新的先翻，不算额度；
+// 没有免费服务商就留着「翻译」按钮；同一次运行里切走再切回也补；补的时候来了新消息先翻新的；用户点了马上翻
+async function catchUpOlder() {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
   const { TrStore } = require('../src/trstore');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-backfill-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-catchup-'));
   const store = new TrStore(dir);
   const sent = [];
-  const fc = new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  let free = true;
+  const fc = new FloatCore({ store, slowGap: 100, translate: async (text, o = {}) => {
+    if (o.slow && !free) return { error: '没有免费的翻译服务', kind: 'nofree' };
+    sent.push(o.slow ? `慢:${text}` : text);
+    return { text: `译:${text}`, warn: [] };
+  } });
+  const idle = async () => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(10); assert(!fc.running && !fc.queue.length, '排着的都翻完了'); };
   const chat = '31612345678@c.us';
   const texts = ['Hi', 'Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oh, I see', 'OK, next order then', 'Can you send it to my husband?', 'Oohhh'];
   const msgs = texts.map((text, i) => ({ id: `false_${chat}_3EB${i}`, out: false, text }));
   const ck = hashOf('N', `chat|${chat}`);
   for (const t of texts.slice(5, 8)) store.put('N', ck, t, { tr: `存:${t}` });
-  fc.ingest('N', { title: 'Sanne', bottom: true, msgs }, { auto: true, dailyCap: 500 });
+  const opts = { auto: true, dailyCap: 500 };
+  fc.ingest('N', { title: 'Sanne', bottom: true, msgs }, opts);
+  await sleep(20); // 最近 5 条翻完，更早的那条还在等（隔 100ms）
+  assert.deepStrictEqual(sent, ['Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oohhh'], '存着的不占最近 5 条');
+  assert.strictEqual(fc.viewOf('N').today, 5);
+  // 补翻的时候客户又发来一条：先翻新的，不等
+  const late = { id: `false_${chat}_3EB9`, out: false, text: 'Are you there?' };
+  fc.ingest('N', { title: 'Sanne', bottom: true, msgs: [...msgs, late] }, opts);
   await sleep(20);
-  assert.deepStrictEqual(sent, ['Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oohhh'], '存着的不占补翻的 5 条');
-  assert.deepStrictEqual(fc.viewOf('N').items.map((x) => x.state), ['manual', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']);
-  // 自动关着打开对话，再打开自动：补翻的 5 条也不算存着的
+  assert.strictEqual(sent[5], 'Are you there?');
+  await idle();
+  assert.deepStrictEqual(sent.slice(6), ['慢:Hi'], '更早的用免费服务商在后台补');
+  assert(fc.viewOf('N').items.every((x) => x.state === 'done'));
+  assert.strictEqual(fc.viewOf('N').today, 6, '后台补翻不算额度');
+  // 没有免费服务商：留着「翻译」按钮，不报错；之后填了密钥，切走再切回就补上
+  free = false;
   sent.length = 0;
-  const msgs2 = texts.map((text, i) => ({ id: `false_${chat}_3EC${i}`, out: false, text: i < 5 ? `Old ${i}` : text }));
-  fc.ingest('M', { title: 'Sanne', bottom: true, msgs: msgs2.map((m) => ({ ...m })) }, { auto: false, dailyCap: 500 });
-  for (const t of texts.slice(5)) store.put('M', hashOf('M', `chat|${chat}`), t, { tr: `存:${t}` });
-  fc.forget('M');
-  fc.ingest('M', { title: 'Sanne', bottom: true, msgs: msgs2 }, { auto: false, dailyCap: 500 });
+  const chat2 = '4915112345678@c.us';
+  const m2 = Array.from({ length: 8 }, (_, i) => ({ id: `false_${chat2}_3EC${i}`, out: false, text: `Hallo ${i}` }));
+  fc.ingest('N', { title: 'Lukas', bottom: true, msgs: m2 }, opts);
+  await idle();
+  assert.deepStrictEqual(fc.viewOf('N').items.map((x) => [x.state, x.err]).slice(0, 4), [['manual', ''], ['manual', ''], ['manual', ''], ['done', '']]);
+  free = true;
+  sent.length = 0;
+  fc.ingest('N', { title: 'Sanne', bottom: true, msgs: [...msgs, late] }, opts);
+  fc.ingest('N', { title: 'Lukas', bottom: true, msgs: m2 }, opts);
+  await idle();
+  assert.deepStrictEqual(sent, ['Hallo 0', 'Hallo 1', 'Hallo 2'], '切回对话也补（没翻的不到 5 条，照常自动翻）');
+  // 用户等不及点了排着的那条：马上翻
+  sent.length = 0;
+  const chat3 = '447700900123@c.us';
+  const m3 = Array.from({ length: 9 }, (_, i) => ({ id: `false_${chat3}_3ED${i}`, out: false, text: `Hey ${i}` }));
+  fc.ingest('N', { title: 'Oliver', bottom: true, msgs: m3 }, opts);
+  assert(fc.manual('N', hashOf('N', m3[0].id)));
+  await idle();
+  assert.deepStrictEqual(sent.slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
+  assert.deepStrictEqual(sent.slice(-3), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1']);
+  // 自动关着打开对话，再打开自动：一样，存着的不占名额，更早的后台补
+  sent.length = 0;
+  const chat4 = '33612345678@c.us';
+  const m4 = Array.from({ length: 8 }, (_, i) => ({ id: `false_${chat4}_3EE${i}`, out: false, text: `Bonjour ${i}` }));
+  store.put('M', hashOf('M', `chat|${chat4}`), 'Bonjour 7', { tr: '存' });
+  fc.ingest('M', { title: 'Camille', bottom: true, msgs: m4 }, { auto: false, dailyCap: 500 });
   fc.backfill('M', { dailyCap: 500 });
-  await sleep(20);
-  assert.deepStrictEqual(sent, ['Old 0', 'Old 1', 'Old 2', 'Old 3', 'Old 4']);
+  await idle();
+  assert.deepStrictEqual(sent, ['Bonjour 2', 'Bonjour 3', 'Bonjour 4', 'Bonjour 5', 'Bonjour 6', '慢:Bonjour 1', '慢:Bonjour 0']);
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log('补翻不算存着的译文自检通过');
+  console.log('切到对话补翻更早的消息自检通过');
 }
 
 // 重新打开对话、重启软件后，翻译栏上以前的译文一条不少（shen 2026-10-28「后续打开页面，翻译的文本都一直在这」）：

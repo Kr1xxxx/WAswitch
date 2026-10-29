@@ -752,6 +752,16 @@ class Translator {
     this.save();
   }
 
+  // 在后台慢慢补翻更早的消息用免费的服务商（shen 2026-10-29）：智谱优先，没填密钥就用腾讯混元；都没有返回 null
+  freeProvider() {
+    const c = this.load();
+    for (const preset of ['zhipu', 'hunyuan']) {
+      const p = c.providers.find((x) => x.preset === preset && !needsKey(x));
+      if (p) return p;
+    }
+    return null;
+  }
+
   // 这次翻译先用哪个服务商：纠错有专用的就用它，否则用默认的
   firstFor(fix) {
     const c = this.load();

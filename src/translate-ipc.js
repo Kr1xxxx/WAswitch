@@ -244,14 +244,17 @@ function setupTranslateIpc(ctx) {
     floatCore = new FloatCore({
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
-      translate: (text, { fix, context, prev } = {}) => {
+      translate: (text, { fix, context, prev, slow } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
         if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
+        // 在后台慢慢补翻的更早的消息：只用免费的智谱或混元，都没填密钥就不翻（留着「翻译」按钮）
+        const free = slow ? ctx.translator.freeProvider() : null;
+        if (slow && !free) return Promise.resolve({ error: '没有免费的翻译服务', kind: 'nofree' });
+        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix, ...(free ? { providerId: free.id } : {}) });
       },
     });
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) pushFloat(); };
