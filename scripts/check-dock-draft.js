@@ -197,6 +197,13 @@ const part4 = async () => {
   window.__push({ title: 'Lukas Becker', chatKey: B });
   await window.__wait(50);
   out.chat = calls();
+  // 换对话中间有一阵读不出对话（刚点开、还没读到）：B → 读不出 → A 照样算换了对话
+  state('customers');
+  window.__push({ chatKey: '', title: '', items: [] });
+  await window.__wait(50);
+  window.__push({ chatKey: A });
+  await window.__wait(50);
+  out.viaUnknown = calls();
   state('translate');
   window.__push({ chatKey: A });
   await window.__wait(50);
@@ -283,6 +290,7 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r4.unknown, [], '还没认出对话不切页');
   assert.deepStrictEqual(r4.recognized, [], '认出来还是刚才那个对话不切页');
   assert.deepStrictEqual(r4.chat, ['translate'], `换了客户对话，客户资料页回到翻译 ${JSON.stringify(r4.chat)}`);
+  assert.deepStrictEqual(r4.viaUnknown, ['translate'], `换对话中间读不出对话也要回到翻译 ${JSON.stringify(r4.viaUnknown)}`);
   assert.deepStrictEqual(r4.alreadyTr, [], '已经在翻译页不用再切');
   assert.deepStrictEqual(r4.acc, ['translate'], `换号，话术页回到翻译 ${JSON.stringify(r4.acc)}`);
   assert.deepStrictEqual(r4.editing, [], `填着表单时换对话、换号都不切 ${JSON.stringify(r4.editing)}`);
