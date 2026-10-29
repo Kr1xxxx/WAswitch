@@ -2,7 +2,7 @@
 // 记下读到的“收到的消息”，决定哪些自动翻、哪些等用户点，排队调用翻译，控制每分钟和每天的上限。
 // 消息的 data-id 里有对方号码，只留在主进程：对外（悬浮窗、大模型）只用 hash。
 // 译文另外永久存到磁盘（deps.store，见 trstore.js）：切回对话、重启都直接显示，不再调模型。
-// 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（只有译文，没有原文）。
+// 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（记录里有原文的连原文一起）。
 const crypto = require('crypto');
 const { textKey, VIEW_MAX } = require('./trstore');
 
@@ -43,6 +43,7 @@ function dropGist(tr) {
 
 // 轻量号的消息里图片、语音等是一个类型标签（见 lite/store.mjs 的 LABELS），本身不用翻；带说明文字的只翻说明
 const LITE_LABEL = /^\[(?:图片|视频|语音|文件|贴纸|名片|位置|实时位置|投票|活动|暂不支持的消息，请在手机上查看)\]\s*/;
+const liteText = (raw) => String(raw || '').replace(LITE_LABEL, '');
 
 // 轻量号不用读网页：后台进程推来的当前对话（view）本来就有消息文字，换成和 readOpenChat 一样的格式。
 // jid：用户在轻量聊天页点开的对话。view 还没跟上（刚点开）时返回 why: 'wait'
@@ -53,7 +54,7 @@ function fromLite(view, jid) {
   const msgs = [];
   for (const m of Array.isArray(view.messages) ? view.messages : []) {
     if (!m || !m.id) continue;
-    const text = String(m.text || '').replace(LITE_LABEL, '');
+    const text = liteText(m.text);
     if (!text.trim()) continue;
     const d = m.ts ? new Date(m.ts * 1000) : null;
     msgs.push({ id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes(), at: d.getTime() } : null });
@@ -155,6 +156,7 @@ class FloatCore {
     const newest = Math.max(0, ...msgs.map((m) => (m.t && Number.isFinite(m.t.at) ? m.t.at : 0)));
     if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
+    let filled = false;
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
     const recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
@@ -162,13 +164,17 @@ class FloatCore {
       if (m.out) { this.dropOwn(accId, st, m.id); continue; }
       if (!String(m.text || '').trim()) continue;
       const h = hashOf(accId, m.id);
-      if (st.items.has(h)) continue;
+      const had = st.items.get(h);
+      if (had) { if (!had.text && this.fillItem(accId, had, String(m.text), true)) filled = true; continue; } // 补回来时没有原文的旧消息又读到了：补上原文
       const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
       const skip = noWords(item.text);
       const saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
       if (skip) item.state = 'skip';
-      else if (saved) { item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; }
+      else if (saved) {
+        item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed;
+        if (!saved.text) this.deps.store.fillText(accId, item.ck, textKey(item.text), item.text); // 以前存的没有原文：这次读到了，补上
+      }
       st.items.set(h, item);
       fresh.push(item);
     }
@@ -195,7 +201,7 @@ class FloatCore {
     }
     // 刚打开（切回、重启后）这个对话：读页面只读得到最后 20 条，以前翻译栏上更早的译文按存的记录补在上面
     if (newChat && chat) view = [...this.restore(accId, st, chat, view, msgs), ...view];
-    const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
+    const changed = newChat || filled || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
     st.recent = recent;
@@ -225,8 +231,10 @@ class FloatCore {
       let item = st.items.get(x.h);
       if (!item) {
         const rec = store.getKey(accId, ck, x.k);
-        if (!rec) continue; // 没翻过的不补（没存原文，补回来也显示不出来）
-        item = { h: x.h, ck, k: x.k, text: '', t: x.t, state: 'done', tr: rec.edited || this.keepGist('') ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '' };
+        if (!rec) continue; // 没翻过的不补
+        // 原文：记录里有就带上（能展开、能纠错）；以前存的没有原文，等读到那条消息或轻量号后台补（fillItem / fillText）
+        const text = typeof rec.text === 'string' && textKey(rec.text) === x.k ? rec.text : '';
+        item = { h: x.h, ck, k: x.k, text, t: x.t, state: 'done', tr: rec.edited || this.keepGist(text) ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '' };
         st.items.set(x.h, item);
       }
       out.push(x.h);
@@ -284,7 +292,7 @@ class FloatCore {
   manual(accId, h, fix = false) {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
-    if (!item || !item.text || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文没有原文，不能重翻
+    if (!item || !item.text || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文还没补上原文的，不能重翻
     if (item.state === 'queued') {
       // 在后台慢慢补的那条用户等不及点了：插到最前面马上翻
       const i = this.queue.findIndex((q) => q.accId === accId && q.h === h && q.slow);
@@ -350,9 +358,26 @@ class FloatCore {
     return true;
   }
 
-  // 译文写到磁盘（手动改的、纠错采用的也存）
+  // 译文和原文写到磁盘（手动改的、纠错采用的也存）
   save(accId, item) {
-    if (this.deps.store && item.ck) this.deps.store.putKey(accId, item.ck, item.k || textKey(item.text), { tr: item.tr, edited: item.edited, fixed: item.fixed });
+    if (this.deps.store && item.ck) this.deps.store.putKey(accId, item.ck, item.k || textKey(item.text), { tr: item.tr, text: item.text, edited: item.edited, fixed: item.fixed });
+  }
+
+  // 补回来时没有原文的旧消息：原文对得上（hash 一样）就补到这条上，也补进磁盘的记录
+  // quiet：读页面时一次补好几条，由 ingest 的返回值统一刷新
+  fillItem(accId, item, text, quiet = false) {
+    if (item.text || !item.k || !text.trim() || textKey(text) !== item.k) return false;
+    item.text = text;
+    if (this.deps.store && item.ck) this.deps.store.fillText(accId, item.ck, item.k, text);
+    if (!quiet) this.onChange(accId);
+    return true;
+  }
+
+  // 轻量号后台补原文（见 trfill.js）补进了磁盘：正显示着的同一条也补上，不用重开对话
+  fillText(accId, ck, k, text) {
+    const st = this.accs.get(accId);
+    if (!st) return;
+    for (const item of st.items.values()) if (item.ck === ck && item.k === k && !item.text) this.fillItem(accId, item, text);
   }
 
   // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）
@@ -433,4 +458,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, fromLite, hashOf, chatOf, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };
+module.exports = { FloatCore, fromLite, liteText, hashOf, chatOf, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS };

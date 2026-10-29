@@ -1,7 +1,10 @@
 // 收到的消息的译文永久存在本机磁盘上（shen 2026-10-26：切回对话、重启软件都直接显示，不再调模型、不耗额度）。
-// 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, edited, fixed, at } }。
-// 不存原文和号码，只存原文的 hash 和译文。按原文认（同一对话里同样的话只翻一次），消息编号变了也认得出。
+// 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, text, edited, fixed, at } }。
+// 按原文的 hash 认（同一对话里同样的话只翻一次），消息编号变了也认得出。
+// 原文也存（text，shen 2026-10-29「英文的可以也存吗」「都是自己的电脑」）：补回来的旧消息能展开原文、能纠错。
+// 以前存的记录没有原文：网页号等那条消息又读到时补上，轻量号按本机聊天缓存在后台慢慢补（见 trfill.js）。号码不存。
 // 另外记着翻译栏显示过哪些消息（_view，只有 hash 和时间），重新打开对话时更早的译文也补回来。
+// 轻量号补原文时还记着当时缓存有几条（_fill），缓存没变就不再去要。
 // 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时不删（shen 2026-10-26）。
 const fs = require('fs');
 const path = require('path');
@@ -10,6 +13,8 @@ const { writeJsonAtomic } = require('./atomic');
 
 const KEEP_IN_MEMORY = 20; // 内存里最多留 20 个对话的译文
 const TR_MAX = 4000; // 一条译文最多存多少字（再长截断）
+const TEXT_MAX = 65536; // 原文不截断（截了 hash 就对不上，补回来时认不出）；比 WhatsApp 一条消息还长的不存
+const FILL_KEY = '_fill'; // 轻量号上次补原文时这个对话缓存里有几条（见 trfill.js），条数没变就不再补
 const VIEW_KEY = '_view'; // 译文文件里放“翻译栏显示过哪些消息”的那一项（别的键都是原文 hash）
 const VIEW_MAX = 40; // 和 floatcore.js 的 KEEP_VIEW 一样：翻译栏最多 40 条
 const HEX_KEY = /^[0-9a-f]{24}$/;
@@ -52,7 +57,7 @@ class TrStore {
 
   get(acc, chat, text) { return this.getKey(acc, chat, textKey(text)); }
 
-  // 按原文的 hash 取（翻译栏补回来的旧消息手里只有 hash，没有原文）
+  // 按原文的 hash 取（翻译栏补回来的旧消息手里只有 hash，原文从记录里拿）
   getKey(acc, chat, key) {
     const e = this.load(acc, chat);
     const r = e && HEX_KEY.test(String(key)) && Object.hasOwn(e.data, key) ? e.data[key] : null;
@@ -64,13 +69,53 @@ class TrStore {
   putKey(acc, chat, key, rec) {
     const e = this.load(acc, chat);
     if (!e || !HEX_KEY.test(String(key)) || !rec || typeof rec.tr !== 'string' || !rec.tr.trim()) return;
-    e.data[key] = { tr: rec.tr.slice(0, TR_MAX), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
+    const old = Object.hasOwn(e.data, key) ? e.data[key] : null;
+    const text = typeof rec.text === 'string' && rec.text.trim() && rec.text.length <= TEXT_MAX ? rec.text : (old && typeof old.text === 'string' ? old.text : '');
+    e.data[key] = { tr: rec.tr.slice(0, TR_MAX), ...(text ? { text } : {}), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
     this.touch(e);
+  }
+
+  // 以前存的记录没有原文：读到那条消息时补上（原文的 hash 对得上才补，不改译文和时间）。补上了返回 true
+  fillText(acc, chat, key, text) {
+    const t = String(text || '');
+    if (!t.trim() || t.length > TEXT_MAX || textKey(t) !== key) return false;
+    const e = this.load(acc, chat);
+    const r = e && Object.hasOwn(e.data, key) ? e.data[key] : null;
+    if (!r || typeof r.tr !== 'string' || !r.tr || (typeof r.text === 'string' && r.text)) return false;
+    r.text = t;
+    this.touch(e);
+    return true;
+  }
+
+  // 轻量号上次补原文时这个对话缓存里有几条（没补过是 -1）
+  fillMark(acc, chat) {
+    const e = this.load(acc, chat);
+    const v = e && e.data[FILL_KEY];
+    return v && Number.isInteger(v.n) ? v.n : -1;
+  }
+
+  setFillMark(acc, chat, n) {
+    const e = this.load(acc, chat);
+    if (!e || !Number.isInteger(n) || this.fillMark(acc, chat) === n) return;
+    e.data[FILL_KEY] = { at: Date.now(), n };
+    this.touch(e);
+  }
+
+  // 这个对话里有译文、没有原文的记录（原文 hash 的集合）。没有文件的对话不读盘、不建文件
+  missingText(acc, chat) {
+    if (!safe(acc) || !safe(chat)) return new Set();
+    if (!this.mem.has(`${acc}/${chat}`) && !fs.existsSync(this.file(acc, chat))) return new Set();
+    const e = this.load(acc, chat);
+    const out = new Set();
+    for (const [k, r] of Object.entries(e ? e.data : {})) {
+      if (HEX_KEY.test(k) && r && typeof r.tr === 'string' && r.tr && !(typeof r.text === 'string' && r.text)) out.add(k);
+    }
+    return out;
   }
 
   // 翻译栏上这个对话显示过哪些消息（按顺序，最多 VIEW_MAX 条）：重新打开对话、重启软件时，
   // 读页面只读得到最后 20 条，更早的译文按这张单子补回来（shen 2026-10-28：「后续打开页面，翻译的文本都一直在这」）。
-  // 每条只有 { h: 消息编号的 hash, k: 原文的 hash, t: 几点几分 }，不存原文和号码
+  // 每条只有 { h: 消息编号的 hash, k: 原文的 hash, t: 几点几分 }，原文在 k 对应的记录里，不存号码
   getView(acc, chat) {
     const e = this.load(acc, chat);
     const v = e && e.data[VIEW_KEY];
