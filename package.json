@@ -19,6 +19,7 @@
     "check:draft": "electron scripts/check-draft.js",
     "check:read-messages": "electron scripts/check-read-messages.js",
     "check:view-race": "node scripts/check-view-race.js",
+    "check:panel-tab": "node scripts/check-panel-tab.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
