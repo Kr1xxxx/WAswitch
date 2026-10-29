@@ -216,6 +216,12 @@ async function lidSwitch() {
     const raw = fs.readFileSync(path.join(dir, acc, '_chats.json'), 'utf8');
     assert(!/@|Customer|Bonjour|Voice|\d{9}/.test(raw), '别名表里没有号码和原文');
   }
+  // 先见到的那边还没有译文文件、另一边有：正式的用有文件的（草稿、记住的客户语言在它下面）
+  const cOld = hashOf('Y', 'chat|4477@c.us');
+  const cNew = hashOf('Y', 'chat|4477@lid');
+  store.put('Y', cOld, 'Hi', { tr: '你好' });
+  assert(store.link('Y', cNew, cOld));
+  assert.strictEqual(store.canon('Y', cNew), cOld);
   for (let i = 0; i < 2100; i += 1) store.markSeen('Z', hashOf('Z', `m${i}`), hashOf('Z', 'chat|x'));
   assert.strictEqual(Object.keys(store.meta('Z').data.seen).length, 2000);
   assert.strictEqual(store.seenChat('Z', hashOf('Z', 'm0')), null, '最旧的先删');

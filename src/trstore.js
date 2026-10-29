@@ -7,7 +7,7 @@
 // 轻量号补原文时还记着当时缓存有几条（_fill），缓存没变就不再去要。
 // 同一个对话 WhatsApp 可能给两个编号（手机号 @c.us 和隐私编号 @lid，2026 年 WhatsApp 在把私聊换成后者）：
 // 每个号记一张别名表（_chats.json，只有 hash）：认出来是同一个对话后，读写都归到最早的那个（老记录都在它下面），
-// 别名认出来之前存在别的编号下的也找得到。同一个文件里还记着最近见过的客户消息在哪个对话（最多 SEEN_MAX 条），
+// 别名认出来之前存在别的编号下的也找得到。同一个文件里还记着见过的客户消息在哪个对话（最多 SEEN_MAX 条，先记的先删），
 // 重启后换了编号也认得出。
 // 不设条数上限、不自动清理；只在用到某个对话时读它的文件，内存里只留最近用过的几个对话。删号时不删（shen 2026-10-26）。
 const fs = require('fs');
@@ -24,7 +24,7 @@ const VIEW_MAX = 40; // 和 floatcore.js 的 KEEP_VIEW 一样：翻译栏最多 
 const HEX_KEY = /^[0-9a-f]{24}$/;
 const CHAT_KEY = /^[0-9a-f]{16}$/; // floatcore.js hashOf 算出来的对话 hash（别的文件名不走别名）
 const META = '_chats'; // 每个号的别名表和最近消息索引
-const SEEN_MAX = 2000; // 最近见过的客户消息最多记 2000 条，旧的先删
+const SEEN_MAX = 2000; // 见过的客户消息最多记 2000 条，先记的先删
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
 
@@ -104,17 +104,24 @@ class TrStore {
   }
 
   // 认出 other 和 keep 是同一个对话：other 那一组都归到 keep 的正式 hash 下。以前不知道是一个对话时返回 true
+  // keep 那边还没有译文文件、other 那边有：用 other 的（老记录、草稿、记住的客户语言都在它下面）
   link(acc, keep, other) {
     if (!CHAT_KEY.test(String(keep)) || !CHAT_KEY.test(String(other))) return false;
-    const a = this.canon(acc, keep);
-    const b = this.canon(acc, other);
+    let a = this.canon(acc, keep);
+    let b = this.canon(acc, other);
     if (a === b) return false;
+    if (!this.hasFile(acc, a) && this.hasFile(acc, b)) [a, b] = [b, a];
     const e = this.meta(acc);
     if (!e) return false;
     for (const [k, to] of Object.entries(e.data.alias)) if (to === b) e.data.alias[k] = a;
     e.data.alias[b] = a;
     this.touch(e);
     return true;
+  }
+
+  hasFile(acc, chat) {
+    const e = this.mem.get(`${acc}/${chat}`);
+    return (e ? Object.keys(e.data).length > 0 : false) || fs.existsSync(this.file(acc, chat));
   }
 
   // 一条客户消息（按 floatcore.js 的消息 hash）以前在哪个对话里见过
@@ -128,7 +135,7 @@ class TrStore {
     if (!/^[0-9a-f]{16}$/.test(String(h)) || !CHAT_KEY.test(String(chat))) return;
     const e = this.meta(acc);
     if (!e || e.data.seen[h] === chat) return;
-    delete e.data.seen[h]; // 重新放到最后（最近见过）
+    delete e.data.seen[h]; // 新记的放到最后；满了先删最早记下的（记过的不再挪，免得每次读页面都写盘）
     e.data.seen[h] = chat;
     const keys = Object.keys(e.data.seen);
     for (const k of keys.slice(0, Math.max(0, keys.length - SEEN_MAX))) delete e.data.seen[k];
