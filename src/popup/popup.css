@@ -31,7 +31,7 @@
 html, body { margin: 0; background: transparent; overflow: hidden; }
 body { font: var(--fs-m)/1.4 var(--font-ui); color: var(--nt-ink); user-select: none; cursor: default; }
 
-#zone { padding: 4px 8px 24px 24px; width: 376px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+#zone { padding: 10px 8px 24px 24px; width: 376px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 
 .nt {
   width: 344px; background: var(--nt-bg); color: var(--nt-ink);
