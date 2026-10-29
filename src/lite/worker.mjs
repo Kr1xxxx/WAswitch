@@ -70,6 +70,10 @@ async function handle(m) {
       return undefined;
     case 'chats':
       return s ? s.chatList() : null;
+    // 转文字：下载客户发来的一条语音，只给主进程（不写盘）
+    case 'voice':
+      if (!s) throw new Error('这个号没有在运行');
+      return s.voice(m.jid, m.msgId);
     case 'peer':
       return s ? s.peerNumber(m.jid) : '';
     case 'shutdown':

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { writeJsonAtomic } = require('./atomic');
+const asr = require('./asr');
 
 const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
@@ -820,7 +821,7 @@ class Translator {
     const stopped = () => ({ kind: signal.reason === 'timeout' ? 'timeout' : 'cancel', text: signal.reason === 'timeout' ? '超过 30 秒没有回应' : '已取消' });
     let res;
     try {
-      res = await ses.fetch(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal });
+      res = await ses.fetch(url, { method: 'POST', headers, body: body instanceof Uint8Array ? body : JSON.stringify(body), redirect: 'error', signal }); // 语音转文字传的是现成的 multipart
     } catch (e) {
       if (signal.aborted) throw stopped();
       throw { kind: 'network', text: '连不上服务商（检查网络或翻译代理）', detail: String((e && e.message) || e || '').slice(0, 200) };
@@ -960,6 +961,50 @@ class Translator {
       return { error: lastErr.text, kind: lastErr.kind, ...(lastErr.kind === 'auth' && lastErr.pid ? { providerId: lastErr.pid } : {}), ...(lastErr.detail ? { detail: lastErr.detail } : {}) };
     } finally {
       this.busy = null;
+    }
+  }
+
+  // 语音转文字用智谱（GLM-ASR）：有密钥的那个智谱服务商优先；没有智谱返回 null
+  asrProvider() {
+    const zs = this.load().providers.filter((p) => p.preset === 'zhipu');
+    return zs.find((p) => !needsKey(p)) || zs[0] || null;
+  }
+
+  // 语音转文字：pcm 是 16 kHz 单声道 16 位（Int16Array）。超过 28 秒切段，一段段转完拼起来（见 asr.js）。
+  // 返回 { text, seconds } 或 { error, kind, providerId? }。不占翻译的通道（this.busy），翻译照常
+  async transcribe(pcm) {
+    const p = this.asrProvider();
+    if (!p) return { error: '语音转文字要用智谱，请先在翻译设置里添加智谱', kind: 'config' };
+    const key = p.keyEnc ? this.deps.safeStorage.decryptString(Buffer.from(p.keyEnc, 'base64')) : '';
+    if (!key) return { error: `${provName(p)}还没填密钥`, kind: 'auth', providerId: p.id };
+    const chk = checkBaseUrl(p.baseUrl);
+    if (chk.error) return { error: chk.error, kind: 'config' };
+    if (!(pcm instanceof Int16Array) || !pcm.length) return { error: '语音是空的', kind: 'input' };
+    const url = `${chk.url}/audio/transcriptions`;
+    const rand = this.deps.random || Math.random;
+    const base = this.deps.retryMs ?? RETRY_MS;
+    const once = async (wav) => {
+      const { body, type } = asr.formOf(wav);
+      for (let n = 0; ; n += 1) {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort('timeout'), TIMEOUT_MS);
+        let res;
+        try { res = await this.post(url, { 'Content-Type': type, Authorization: `Bearer ${key}` }, body, chk.local, ac.signal); } finally { clearTimeout(timer); }
+        if (res.ok) return asr.textOf(res.text);
+        // 智谱余额不足（1113）也是 429：不重试
+        if (res.status === 429 && asr.broke(res.text)) throw { kind: 'quota', text: `${provName(p)}余额不足，语音转文字要先充值` };
+        if (res.status === 429 && n < 2) { await new Promise((ok) => setTimeout(ok, Math.min(backoffMs(n, res.retryAfter, base, rand), RETRY_WAIT_MAX))); continue; }
+        if (res.status === 429) throw { kind: 'overload', text: tooFastText(provName(p)) };
+        throw withDetail(statusError(res.status, provName(p)), res.status, providerDetail(res.text, key), p);
+      }
+    };
+    try {
+      const text = await asr.transcribeChunks(asr.splitPcm(pcm), once);
+      if (!text) return { error: '没听出说的话', kind: 'empty' };
+      return { text, seconds: Math.round(pcm.length / asr.RATE) };
+    } catch (e) {
+      const err = e && e.kind ? e : { kind: 'other', text: '转文字失败' };
+      return { error: err.text, kind: err.kind, ...(err.kind === 'auth' ? { providerId: p.id } : {}), ...(err.detail ? { detail: err.detail } : {}) };
     }
   }
 

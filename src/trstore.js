@@ -121,13 +121,14 @@ class TrStore {
     const v = e && e.data[VIEW_KEY];
     if (!v || !Array.isArray(v.list)) return [];
     return v.list.filter((x) => x && typeof x.h === 'string' && HEX_KEY.test(String(x.k)))
-      .map((x) => ({ h: x.h.slice(0, 64), k: x.k, t: typeof x.t === 'string' ? x.t.slice(0, 5) : '' }));
+      .map((x) => ({ h: x.h.slice(0, 64), k: x.k, t: typeof x.t === 'string' ? x.t.slice(0, 5) : '', ...(Number.isFinite(x.v) ? { v: x.v } : {}) }));
   }
 
   putView(acc, chat, list) {
     const e = this.load(acc, chat);
     if (!e || !Array.isArray(list)) return;
-    const next = list.slice(-VIEW_MAX).map(({ h, k, t }) => ({ h, k, t: t || '' }));
+    // v：语音的时长（秒），只有语音有
+    const next = list.slice(-VIEW_MAX).map(({ h, k, t, v }) => ({ h, k, t: t || '', ...(Number.isFinite(v) ? { v } : {}) }));
     const prev = e.data[VIEW_KEY];
     if (!prev && !next.length) return; // 打开过、没有收到消息的对话：不为它建文件
     if (prev && JSON.stringify(prev.list) === JSON.stringify(next)) return;
