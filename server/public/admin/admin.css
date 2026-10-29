@@ -1,6 +1,5 @@
-/* 颜色用 Radix 变量（radix.css / radix-dark.css，由 scripts/make-colors.js 生成）；深色时色阶自动换，这里只改底色 */
+/* 颜色用 Radix 变量（radix.css，由 scripts/make-colors.js 生成） */
 :root { --bg: var(--slate-2); --card: var(--white); --ink: var(--slate-12); --muted: var(--slate-11); --line: var(--slate-6); --accent: var(--green-9); --warn: var(--amber-11); --bad: var(--red-11); --good: var(--green-11); }
-@media (prefers-color-scheme: dark) { :root { --bg: var(--slate-1); --card: var(--slate-2); } }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
 header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; }

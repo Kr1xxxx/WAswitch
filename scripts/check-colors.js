@@ -1,6 +1,6 @@
 // 颜色规则检查：全 app 只用 Radix UI Colors。
 // 1. src/colors/radix.js 里的每个值都和 @radix-ui/colors 包里的一样（不许自己调色）；
-// 2. radix.css / radix-dark.css 和团队后台那份是从 radix.js 生成的最新版（npm run make:colors）；
+// 2. radix.css 和团队后台那份是从 radix.js 生成的最新版（npm run make:colors）；
 // 3. 除了 src/colors/ 和后台的 radix.*，界面代码里不许直接写颜色：#十六进制、rgb()/hsl() 这类、CSS 里的颜色名。
 //    CSS 用 var(--slate-11) 这种变量，JS 用 RADIX.hex('slate', 11) / RADIX.WHITE。
 const fs = require('fs');
@@ -23,10 +23,10 @@ function pkgScale(file, name) {
 }
 if (!fs.existsSync(PKG)) bad.push('找不到 node_modules/@radix-ui/colors，先 npm ci');
 else {
-  for (const [theme, scales] of [['light', R.light], ['dark', R.dark]]) {
+  for (const [theme, scales] of [['light', R.light]]) {
     for (const [name, steps] of Object.entries(scales)) {
       const base = name.endsWith('-a') ? name.slice(0, -2) : name;
-      const file = `${base}${theme === 'dark' ? '-dark' : ''}${name.endsWith('-a') ? '-alpha' : ''}.css`;
+      const file = `${base}${name.endsWith('-a') ? '-alpha' : ''}.css`;
       const want = pkgScale(file, name);
       if (!want) { bad.push(`@radix-ui/colors 里没有 ${file}`); continue; }
       steps.forEach((v, i) => { if (String(v).toLowerCase() !== want[i]) bad.push(`radix.js ${theme} ${name} ${i + 1} 是 ${v}，Radix 是 ${want[i]}`); });
@@ -114,10 +114,8 @@ for (const [kind, list] of Object.entries(SAMPLES_OK)) for (const t of list) { c
 const SKIP = new Set([
   path.join(ROOT, 'src', 'colors', 'radix.js'),
   path.join(ROOT, 'src', 'colors', 'radix.css'),
-  path.join(ROOT, 'src', 'colors', 'radix-dark.css'),
   path.join(ROOT, 'server', 'public', 'admin', 'radix.js'),
   path.join(ROOT, 'server', 'public', 'admin', 'radix.css'),
-  path.join(ROOT, 'server', 'public', 'admin', 'radix-dark.css'),
 ]);
 const SKIP_DIRS = [path.join(ROOT, 'src', 'emoji')];
 function walk(dir, out = []) {
