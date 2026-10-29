@@ -138,7 +138,8 @@ body.collapsed .foot .upd-check { display: none; }
 .back { display: flex; align-items: center; gap: 6px; height: 28px; padding-left: 6px; border: none; background: transparent; font-size: var(--fs-m); color: var(--soft); }
 
 /* ---------- 右侧卡片 ---------- */
-#card { flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: var(--white); border-radius: var(--r-l); box-shadow: 0 1px 2px var(--slate-a3), 0 8px 24px var(--slate-a4); overflow: hidden; display: flex; flex-direction: column; }
+/* 卡片里的页面按卡片自己的宽高排版（容器查询），样式里不再看窗口大小；窗口窄时收侧栏、收工作台还是主进程管 */
+#card { container: card / size; flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: var(--white); border-radius: var(--r-l); box-shadow: 0 1px 2px var(--slate-a3), 0 8px 24px var(--slate-a4); overflow: hidden; display: flex; flex-direction: column; }
 #topbar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: var(--hair) solid var(--line); font-size: var(--fs-m); color: var(--soft); }
 #topbar[hidden] { display: none; }
 /* 顶栏空白处可以拖动窗口；按钮、标签、输入框不拖，照常点 */
@@ -152,7 +153,7 @@ body.collapsed .foot .upd-check { display: none; }
 #aibar .grow.bad { color: var(--danger); }
 #topbar .who { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #topbar .who-note { color: var(--muted); font-size: var(--fs-s); white-space: nowrap; }
-/* 窗口窄时整块藏起放不下的（shell.js fitTop），不缩成省略号；右边三个按钮永远留在顶栏里 */
+/* 顶栏放不下时整块藏起放不下的（shell.js fitTop，顶栏自己宽度一变就重排），不缩成省略号；右边三个按钮永远留在顶栏里 */
 #topbar > * { flex-shrink: 0; }
 #topbar > .who { flex-shrink: 1; min-width: 0; }
 #topbar.fitting > .who { flex-shrink: 0; }
@@ -199,7 +200,8 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .name-row > .name-field { flex: 1 1 180px; }
 .name-input { gap: 8px; }
 .name-input input { flex: 1; width: 0; min-width: 0; }
-@media (max-width: 1060px) { .page:not(.narrow) { gap: 24px; padding: 32px 24px; } .side-panel { width: 210px; padding: 18px; } }
+/* 卡片窄时（852 = 原来窗口 1060 减侧栏 200、右边距 8）两栏挨近一点、右边说明卡片变窄；侧栏收起时卡片更宽，就不用挤 */
+@container card (max-width: 852px) { .page:not(.narrow) { gap: 24px; padding: 32px 24px; } .side-panel { width: 210px; padding: 18px; } }
 /* 编辑页的图标：名称左边一个方块，点开下面一整套 emoji（Radix slate 3/5 做悬停和选中） */
 .emoji-btn { width: 40px; height: 40px; padding: 0; border: var(--hair) solid var(--field); border-radius: var(--r-m); background: var(--white); display: flex; align-items: center; justify-content: center; }
 .emoji-btn:hover, .emoji-btn.on { background: var(--slate-3); }
@@ -467,13 +469,13 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: var(--hair) solid var(--line); background: var(--white); }
 .wb-tools { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 6px; }
 .wb-tools .dk-mini { min-width: 0; max-width: 84px; }
-.tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: var(--fs-m); color: var(--muted); cursor: pointer; }
+.tb-tab { position: relative; display: flex; align-items: center; gap: 6px; padding: 0 10px; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-size: var(--fs-m); color: var(--muted); cursor: pointer; }
 .tb-tab:hover { color: var(--text); background: var(--slate-a2); }
 .tb-tab.on { color: var(--text); font-weight: 600; }
 /* 选中下划线单独画一层，切页时能从中间展开 */
 .tb-tab::after { content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px; background: var(--green-9); opacity: 0; transform: scaleX(.4); pointer-events: none; }
 .tb-tab.on::after { opacity: 1; transform: none; }
-.tb-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--green-9); color: var(--white); font-size: var(--fs-s); font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.tb-badge { flex: none; white-space: nowrap; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full); background: var(--green-9); color: var(--white); font-size: var(--fs-s); font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* 右侧面板的“翻译”页：上面状态条，中间收到的消息，下面写回复 */
 #panel.dock { background: var(--white); }
@@ -770,8 +772,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-count { flex: none; padding: 0 8px; font-size: var(--fs-s); color: var(--s11); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tp-count:empty { display: none; }
 /* 栏太窄（小窗口）时字符数让位给按钮，不把底栏挤出框 */
-.tp-pane { container-type: inline-size; }
-@container (max-width: 400px) {
+.tp-pane { container: tp-pane / inline-size; }
+@container tp-pane (max-width: 400px) {
   .tp-count { display: none; }
   /* 再窄（最小窗口 + 纠错）：模型名先让，超出的用省略号，按钮不出框 */
   .tp select.tp-model { flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
@@ -782,8 +784,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-pop-no { width: 64px; background: transparent; color: var(--s12); font-weight: 400; }
 .tp-pop-no:hover { background: var(--s3); }
 .tp-pop-yes { width: 64px; background: var(--s12); color: var(--white); }
-/* 矮窗口（笔记本小屏）：记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
-@media (max-height: 760px) { .tp-hist-list { height: 120px; } }
+/* 卡片矮（笔记本小屏，744 = 原来窗口 760 减卡片上下边距 16）：翻译页记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
+@container card (max-height: 744px) { .tp-hist-list { height: 120px; } }
 /* 翻译页动效：译文 / 报错 / 新记录淡入，⇄ 转半圈（--fx 250ms ease-out，减少动态效果时为 0） */
 @keyframes tp-fade { from { opacity: 0; } }
 @keyframes tp-turn { from { transform: rotate(-180deg); } }

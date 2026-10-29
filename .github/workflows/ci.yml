@@ -60,6 +60,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
+      - name: 卡片、翻译页按自己的大小排版（容器查询）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-container-layout.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
       - name: 翻译页 ⇄（没翻过先认原文语言）
