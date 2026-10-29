@@ -408,7 +408,7 @@ class Translator {
           base.primaryId = typeof raw.primaryId === 'string' ? raw.primaryId : '';
           base.fallbackId = typeof raw.fallbackId === 'string' ? raw.fallbackId : '';
           base.fixId = typeof raw.fixId === 'string' && base.providers.some((p) => p.id === raw.fixId) ? raw.fixId : '';
-          if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200) };
+          if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200).replace(/^socks:/i, 'socks5:') }; // 老配置里的 socks:// 在 Chromium 按 SOCKS4 走，改成 socks5://
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
           if (raw.accountAuto && typeof raw.accountAuto === 'object') for (const [k, v] of Object.entries(raw.accountAuto)) if (v === false) base.accountAuto[k] = false;
           base.autoDefaultOn = raw.autoDefaultOn === true;
@@ -693,7 +693,7 @@ class Translator {
         const u = new URL(String(proxyUrl || '').trim());
         if (!['http:', 'socks5:', 'socks:'].includes(u.protocol) || !u.hostname || !u.port) throw new Error();
         if (u.username || u.password) return { error: '翻译代理暂不支持用户名密码，请填本机 Clash 端口' };
-        url = `${u.protocol}//${u.hostname}:${u.port}`;
+        url = `${u.protocol === 'socks:' ? 'socks5:' : u.protocol}//${u.hostname}:${u.port}`; // socks:// 在 Chromium 按 SOCKS4 走，域名在本机解析
       } catch { return { error: '代理地址格式：http://127.0.0.1:7890 或 socks5://127.0.0.1:7891' }; }
     }
     c.network = { mode, proxyUrl: url };
