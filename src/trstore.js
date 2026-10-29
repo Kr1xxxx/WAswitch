@@ -83,12 +83,23 @@ class TrStore {
     const r = this.readDisk(acc, chat, true); // 第一次已经记过日志，重试失败不再刷屏
     if (!r.data) { e.unread = Date.now(); return false; }
     const merged = { ...e.data, ...r.data };
+    // 这期间用户手改的译文不能被盘上的自动译文盖掉：同一个键两边都有，内存里手改过、盘上没有的，留内存的
+    for (const [k, m] of Object.entries(e.data)) {
+      if (HEX_KEY.test(k) && m && m.edited && Object.hasOwn(r.data, k) && !(r.data[k] && r.data[k].edited)) merged[k] = m;
+    }
     if (chat === META) { // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
-      for (const t of ['alias', 'seen']) {
-        const a = e.data[t];
-        const b = r.data[t];
-        if (a && typeof a === 'object' && b && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) merged[t] = { ...a, ...b };
+      const [a, b] = [e.data, r.data];
+      const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+      if (obj(a.alias) && obj(b.alias)) {
+        const alias = { ...a.alias, ...b.alias };
+        for (const k of Object.keys(alias)) { // 读不了期间 link 可能留下两跳链：压平成一跳
+          let to = alias[k];
+          for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
+          alias[k] = to;
+        }
+        merged.alias = alias;
       }
+      if (obj(a.seen) && obj(b.seen)) merged.seen = { ...b.seen, ...a.seen, ...b.seen }; // 盘上的在前，新记的排后面；同一条以盘上的为准
     }
     e.data = merged;
     delete e.unread;

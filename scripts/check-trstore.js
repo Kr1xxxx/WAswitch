@@ -153,6 +153,25 @@ for (const blank of ['', '  \n\t ']) {
   }
 }
 
+// 6b. 反向：读不了期间用户手改了盘上的自动译文，恢复后手改的赢
+{
+  const dir = fresh();
+  const d0 = seed();
+  const auto = textKey(SAMPLES[0][0]);
+  put(dir, d0);
+  locked = { file: fileOf(dir), code: 'EBUSY' };
+  const s = new TrStore(dir);
+  s.get(ACC, CHAT, SAMPLES[0][0]);
+  s.putKey(ACC, CHAT, auto, { tr: '你好，22 英寸蕾丝头套还有现货吗？（手改）', text: SAMPLES[0][0], edited: true });
+  assert.strictEqual(s.flush(), false);
+  locked = null;
+  assert.strictEqual(s.flush(), true);
+  const d = JSON.parse(readFile(fileOf(dir)));
+  assert.strictEqual(d[auto].edited, true, '读不了期间手改的不能被盘上的自动译文盖掉');
+  assert.strictEqual(d[auto].tr, '你好，22 英寸蕾丝头套还有现货吗？（手改）');
+  assert.strictEqual(Object.keys(d).length, 30);
+}
+
 // 7. 再读的节奏：读不了之后马上 get 不重读；过了 5 秒才再读
 {
   const dir = fresh();
@@ -221,6 +240,7 @@ for (const blank of ['', '  \n\t ']) {
   assert.strictEqual(d.seen['1111111111111111'], CHAT);
   assert.strictEqual(d.seen['2222222222222222'], OTHER, '新的见过补进去');
   assert.strictEqual(s.canon(ACC, OTHER), CHAT);
+  assert.deepStrictEqual(Object.keys(d.seen), ['1111111111111111', '2222222222222222'], '盘上的在前，新记的排后面');
 
   const dir2 = fresh();
   const meta2 = path.join(dir2, ACC, '_chats.json');
