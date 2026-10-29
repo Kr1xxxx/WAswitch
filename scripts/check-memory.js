@@ -10,14 +10,21 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-mem-'));
 let fakeNow = Date.now();
 Date.now = () => fakeNow;
 const usage = new Map(); // pid -> MB
+const switches = new Map(); // 假的 app.commandLine
+let hwAccelOff = 0;
 const realLoad = Module._load;
 Module._load = function load(req, ...rest) {
   if (req === 'electron') {
-    return { app: { getPath: () => userData, getAppMetrics: () => [...usage].map(([pid, mb]) => ({ pid, memory: { workingSetSize: mb * 1024 } })) } };
+    return { app: {
+      getPath: () => userData,
+      disableHardwareAcceleration: () => { hwAccelOff += 1; },
+      commandLine: { getSwitchValue: (k) => switches.get(k) || '', appendSwitch: (k, v) => switches.set(k, v) }, // 和真的一样：同名开关后写的换掉先写的
+      getAppMetrics: () => [...usage].map(([pid, mb]) => ({ pid, memory: { workingSetSize: mb * 1024 } })),
+    } };
   }
   return realLoad.call(this, req, ...rest);
 };
-const { MemoryManager, loadSettings, saveSettings } = require('../src/memory');
+const { MemoryManager, loadSettings, saveSettings, applyStartupSwitches } = require('../src/memory');
 
 // 0. 工作台每次打开都在“翻译”，不记上次的页：老设置文件里留着的 panelTab 读的时候就丢掉，下次保存后文件里也没有
 assert.strictEqual(loadSettings().panelTab, undefined, '设置里不再有 panelTab');
@@ -28,6 +35,22 @@ for (const old of ['customers', 'replies', 'bogus']) {
 saveSettings(loadSettings());
 assert.ok(!('panelTab' in JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'))), '保存后设置文件里不应有 panelTab');
 console.log('✓ 设置里不再记工作台停在哪一页');
+
+// 0b. Windows 启动时关掉窗口遮挡检测（从任务栏缩略图切回白屏），保留别人传的 disable-features，只在 Windows
+applyStartupSwitches({}, 'win32');
+assert.strictEqual(switches.get('disable-features'), 'CalculateNativeWinOcclusion', 'win32 要关掉 CalculateNativeWinOcclusion');
+applyStartupSwitches({}, 'win32');
+assert.strictEqual(switches.get('disable-features'), 'CalculateNativeWinOcclusion', '调两次不重复');
+switches.set('disable-features', 'Foo');
+applyStartupSwitches({}, 'win32');
+assert.strictEqual(switches.get('disable-features'), 'Foo,CalculateNativeWinOcclusion', '已有的 disable-features 不能丢');
+switches.clear();
+applyStartupSwitches({}, 'darwin');
+assert.ok(!switches.has('disable-features'), 'Mac 不设 disable-features');
+assert.strictEqual(hwAccelOff, 0);
+applyStartupSwitches({ lowMemoryMode: true }, 'darwin');
+assert.strictEqual(hwAccelOff, 1, '低内存模式仍然关硬件加速');
+console.log('✓ Windows 启动时关掉窗口遮挡检测');
 
 function setup(n, mb, settings) {
   const views = new Map();

@@ -107,9 +107,20 @@ function saveSettings(settings) {
   writeJsonAtomic(file, settings, 2);
 }
 
+// Windows：窗口被别的软件整个盖住时，Chromium 会当成看不见、停止绘制；从任务栏缩略图点回来时它判断错，
+// 窗口要空白一阵才画出来（客户反馈 2026-10-29）。关掉这个判断：被盖住时照常绘制，
+// 最小化和缩到托盘还是照样停止绘制，其他账号也照样在后台，收消息和通知不受影响。
+const WIN_DISABLED_FEATURES = ['CalculateNativeWinOcclusion'];
+
 // 必须在 app ready 之前调用
-function applyStartupSwitches(settings) {
+function applyStartupSwitches(settings, platform = process.platform) {
   if (settings.lowMemoryMode) app.disableHardwareAcceleration();
+  if (platform === 'win32') {
+    // 同名开关再 append 一次会把原来的值换掉，所以要合并已有的
+    const cur = app.commandLine.getSwitchValue('disable-features');
+    const list = [...new Set([...cur.split(',').filter(Boolean), ...WIN_DISABLED_FEATURES])];
+    app.commandLine.appendSwitch('disable-features', list.join(','));
+  }
 }
 
 class MemoryManager {
