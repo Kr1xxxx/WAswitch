@@ -50,6 +50,8 @@ jobs:
         run: npm run check:emoji
       - name: 悬浮翻译自检
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
+      - name: 语音转文字自检（切段、智谱请求、轻量号下载、转写后翻译；解码和语音行）
+        run: npm run check:asr && xvfb-run -a npx electron --no-sandbox scripts/check-voice.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
       - name: 回复草稿自检（换对话、重启后回复框的字还在）
