@@ -37,6 +37,7 @@
     "check:downloads": "node scripts/check-downloads.js",
     "check:translate": "node scripts/check-drafts.js && node scripts/check-translate.js && node scripts/check-race.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js && node scripts/check-trstore.js",
     "check:customer-time": "node scripts/check-customer-time.js",
+    "check:datadir": "node scripts/check-datadir.js && node scripts/check-datadir-electron.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:asr": "node scripts/check-asr.js && node scripts/check-lite-voice.mjs",
     "check:font-sizes": "node scripts/check-font-sizes.js",

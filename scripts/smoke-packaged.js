@@ -28,6 +28,8 @@ setTimeout(() => {
   walk(home);
   // Windows 的数据目录不跟 HOME 走，在 %APPDATA%\\waswitch（CI 机器是全新的，里面只有这次的日志）
   if (process.platform === 'win32' && process.env.APPDATA && fs.existsSync(path.join(process.env.APPDATA, 'waswitch'))) walk(path.join(process.env.APPDATA, 'waswitch'));
+  // D:\WAswitch 存在时账号数据（含日志）在 D:\WAswitch\data（src/datadir.js）
+  if (process.platform === 'win32' && fs.existsSync('D:\\WAswitch\\data')) walk('D:\\WAswitch\\data');
   const text = logs.map((f) => fs.readFileSync(f, 'utf8')).join('');
   const errors = text.split('\n').filter((l) => l.includes('[error]'));
   console.log(`\n日志文件 ${logs.length} 个；${running ? '10 秒后仍在运行' : `提前退出：${JSON.stringify(exited)}`}`);

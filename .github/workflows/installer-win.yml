@@ -1,5 +1,5 @@
 # Windows 安装包实测：打真安装包，在 windows-latest 上装、更新、卸载，确认默认装到 D:\WAswitch\app、
-# 自动更新原地装且不动 D:\WAswitch 里的译文、老电脑的程序不挪。没有这个实测，改 NSIS 脚本是否正确没人知道。
+# 自动更新原地装且不动 D:\WAswitch 里的译文、老电脑的程序不挪；账号数据放 D 盘、老电脑搬家、D 盘打不开时用 C。没有这个实测，改 NSIS 脚本是否正确没人知道。
 # 只在改了安装包相关的文件时跑，不拖慢平时的 CI。所有 action 按 commit 固定版本；只读权限。
 name: installer-win
 
@@ -9,6 +9,9 @@ on:
       - 'build/**'
       - 'package.json'
       - 'scripts/win-installer-test.ps1'
+      - 'scripts/win-datadir-test.ps1'
+      - 'scripts/check-datadir*.js'
+      - 'src/datadir.js'
       - '.github/workflows/installer-win.yml'
   push:
     branches: [main]
@@ -16,6 +19,9 @@ on:
       - 'build/**'
       - 'package.json'
       - 'scripts/win-installer-test.ps1'
+      - 'scripts/win-datadir-test.ps1'
+      - 'scripts/check-datadir*.js'
+      - 'src/datadir.js'
       - '.github/workflows/installer-win.yml'
 
 permissions:
@@ -44,3 +50,31 @@ jobs:
         run: |
           $setup = (Get-ChildItem dist\WAswitch-Setup-*.exe | Select-Object -First 1).FullName
           pwsh -File scripts/win-installer-test.ps1 $setup
+
+  # 账号数据放哪（src/datadir.js）。单独一个 job：上面的卸载步骤偶尔在 runner 上卡住，不连累这里
+  datadir:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 先跑不用打包的两项（含一个不存在的盘符当作「没有 D 盘」、真的 DPAPI 加解密），再用打包好的软件实测
+      - name: 账号数据放哪（自检）
+        run: node scripts/check-datadir.js
+      - name: 搬到 D 盘后号还登录着（Electron 整机）
+        run: node scripts/check-datadir-electron.js
+      - name: 打包 MCP 模块
+        run: npm run build:mcp
+      - name: 打包（Windows 安装包）
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: 账号数据放 D 盘实测（打包好的软件）
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist\WAswitch-Setup-*.exe | Select-Object -First 1).FullName
+          pwsh -File scripts/win-datadir-test.ps1 $setup

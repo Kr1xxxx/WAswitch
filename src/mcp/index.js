@@ -8,10 +8,11 @@ const { McpController } = require('./server');
 
 // bridgeArgs：Claude Desktop 配置里用 WAswitch 自带的 Electron 运行 stdio 桥接时的参数
 // onStatus：状态变了（开关、运行、出错）时通知主程序刷新设置页
-function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatus = () => {} }) {
+// dataDir：mcp.json、mcp-token.json 放哪（主程序传 %APPDATA%\WAswitch，账号数据搬到 D 盘也不动）
+function setupMcp({ hooks, lockLocalPage, uiDir = __dirname, bridgeArgs, onStatus = () => {}, dataDir = app.getPath('userData') }) {
   let win = null;
   const controller = new McpController({
-    dataDir: app.getPath('userData'),
+    dataDir,
     version: app.getVersion(),
     hooks,
     onChange: () => {
