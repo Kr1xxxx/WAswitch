@@ -367,44 +367,19 @@ class TrStore {
 }
 
 // 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；不放桌面。Mac 不变。
-// 2026-10-27：D 盘必须是本机固定硬盘才放（U 盘、SD 卡、移动硬盘、网络盘、光驱都不放），查不出盘的类型也不放，
-// 写不进去也不放，这些情况都放 C（userData 里）。类型是固定硬盘、只是查不出接口（动态磁盘、软件 RAID 这类 Get-Partition 不认的盘）时
-// 按本机硬盘算：USB 移动硬盘的接口一般查得出，改成放 C 会把已经在用 D 盘的电脑的译文全搬回去。查盘要调 PowerShell，所以是异步的。opts 只给自检用。
-async function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations', probe = probeDrive } = {}) {
+// 同步判断，不调 PowerShell：D:\WAswitch 已经存在（安装包确认 D 盘是本机硬盘后建的）、能建 translations、能写文件才放 D 盘，否则放 C（userData 里）。
+// 软件自己不建 D:\WAswitch：只有 U 盘的笔记本，U 盘会被分成 D 盘，客户聊天的译文不能写到会被带走的盘上。opts 只给自检用。
+function pickDir(fallback, { platform = process.platform, root = 'D:\\WAswitch' } = {}) {
   if (platform !== 'win32') return fallback;
-  let info = null;
-  try { info = await probe(path.parse(preferred).root); } catch { /* 查不出来 */ }
-  if (!isLocalFixed(info)) return fallback;
+  const preferred = path.join(root, 'translations');
   try {
+    if (!fs.statSync(root).isDirectory()) return fallback;
     fs.mkdirSync(preferred, { recursive: true });
     const probeFile = path.join(preferred, `.probe-${process.pid}`);
     fs.writeFileSync(probeFile, '');
     fs.rmSync(probeFile, { force: true });
     return preferred;
   } catch { return fallback; }
-}
-
-// 盘的类型（.NET DriveInfo）和接口（Get-Disk 的 BusType，认出插在 USB 上的移动硬盘）。输出像 "Fixed|NVMe"。
-const REMOVABLE_BUS = new Set(['usb', 'sd', 'mmc', '7', '12', '13']);
-function parseDriveProbe(out) {
-  const [type = '', bus = ''] = String(out || '').trim().split(/\r?\n/).pop().split('|').map((x) => x.trim());
-  return type ? { type, bus } : null;
-}
-function isLocalFixed(info) {
-  return !!info && info.type.toLowerCase() === 'fixed' && !REMOVABLE_BUS.has(info.bus.toLowerCase());
-}
-function probeDrive(root) {
-  const letter = String(root || '').charAt(0).toUpperCase();
-  if (!/^[A-Z]$/.test(letter)) return Promise.resolve(null);
-  const ps = "$ErrorActionPreference='SilentlyContinue';"
-    + `$t=(New-Object System.IO.DriveInfo '${letter}').DriveType;`
-    + `$b=(Get-Partition -DriveLetter ${letter} | Get-Disk | Select-Object -First 1).BusType;`
-    + "Write-Output ([string]$t+'|'+[string]$b)"; // 不用双引号：Windows 传参时双引号要转义，容易出错
-  const { execFile } = require('child_process');
-  return new Promise((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-      { timeout: 15000, windowsHide: true }, (e, out) => resolve(e ? null : parseDriveProbe(out)));
-  });
 }
 
 // 关于页用：文件夹里存了多少（每个号一个文件夹，每个对话一个 .json）
@@ -466,4 +441,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
+module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, dirInfo };
