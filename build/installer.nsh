@@ -11,7 +11,9 @@
 ; 只在第一次安装时选：注册表里已经有安装位置（更新、重装、老电脑）或命令行给了 /D= 就不动，更新原地装，老电脑程序不挪。
 ; D 盘要是本机硬盘（GetDriveType = 3，U 盘 2、网络盘 4、光驱 5 都不用），并且能建文件夹、能写文件，否则用默认位置。
 ; 判断 D 盘可用的同时建好 D:\WAswitch：软件靠这个文件夹存在才把译文放 D 盘，自己不建。
+; 打包卸载程序的那一遍也会展开这个宏，那一遍没有用到这些函数，NSIS 的「函数没用到」警告会被当成错误，所以只在安装程序里定义
 !macro customHeader
+!ifndef BUILD_UNINSTALLER
   Function WASwitchDFixed
     Push $1
     StrCpy $1 "0"
@@ -55,6 +57,7 @@
     Call WASwitchPickDir
     Abort
   FunctionEnd
+!endif
 !macroend
 
 ; 静默安装（/S，包括自动更新）没有页面，在这里选。initMultiUser 已经跑过。
