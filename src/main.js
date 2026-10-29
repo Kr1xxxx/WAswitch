@@ -34,6 +34,7 @@ const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
+const { fillLite } = require('./trfill');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
@@ -2071,6 +2072,27 @@ function userIsReading(id, jid) {
   return !locked && !!win && id === activeId && page === 'account' && win.isVisible() && win.isFocused() && liteOpen.get(id) === jid && !problems.has(id);
 }
 
+// 轻量号连上后：以前存的译文记录里没有原文的，按本机聊天缓存在后台慢慢补（见 trfill.js）。每次运行每个号补一次
+const liteFilled = new Set();
+function fillOriginalsSoon(id) {
+  if (liteFilled.has(id)) return;
+  liteFilled.add(id);
+  setTimeout(() => {
+    const store = trIpc.trStore;
+    const alive = () => !quitting && isLite(findAcc(id)) && liteStates.get(id)?.status === 'open';
+    if (!store || !alive()) { liteFilled.delete(id); return; }
+    fillLite({
+      store,
+      accId: id,
+      jids: () => liteHost.chatJids(id),
+      incoming: (jid) => liteHost.incomingTexts(id, jid),
+      alive,
+      onFill: (ck, k, text) => { if (trIpc.floatCore) trIpc.floatCore.fillText(id, ck, k, text); },
+    }).then((n) => { if (n) console.log(`轻量号补上了 ${n} 条译文的原文`); }, (e) => console.warn(`补原文失败：${e.message}`))
+      .finally(() => { if (!alive()) liteFilled.delete(id); }); // 补到一半断线了：下次连上再补
+  }, 30000);
+}
+
 function bindLiteEvents() {
   liteHost.on('state', ({ id, status, qr, me, detail, fresh }) => {
     const acc = findAcc(id);
@@ -2079,6 +2101,7 @@ function bindLiteEvents() {
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
     // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
     if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
+    if (status === 'open') fillOriginalsSoon(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);

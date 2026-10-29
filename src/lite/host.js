@@ -275,6 +275,17 @@ class LiteHost extends EventEmitter {
     return p ? p.ask({ type: 'history', id, jid, limit }) : Promise.resolve({ ok: false, reason: 'notrunning' });
   }
 
+  // 后台补译文记录里的原文（见 trfill.js）。号没在运行时返回 null
+  chatJids(id) {
+    const p = this.procOf(id);
+    return p && p.running() ? p.request({ type: 'jids', id }, 10000) : Promise.resolve(null);
+  }
+
+  incomingTexts(id, jid) {
+    const p = this.procOf(id);
+    return p && p.running() ? p.request({ type: 'incoming', id, jid }, 10000) : Promise.resolve(null);
+  }
+
   // 两个后台进程的 pid（内存统计用）
   pids() { return this.procs().map((p) => p.pid()).filter(Boolean); }
 

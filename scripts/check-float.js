@@ -96,7 +96,116 @@ async function core() {
   await sendNoJump();
   scrollNoBottom();
   await reopenKeepsAll();
+  await oldRecordsGetOriginals();
   await catchUpOlder();
+}
+
+// 2026-10-29 之前存的译文记录没有原文（shen「英文的可以也存吗」）：重启后补回来的旧消息先只有译文；
+// 网页号那条消息又读到时补上原文；轻量号按本机聊天缓存在后台补（trfill.js）。只补进已有的记录，翻译栏不多出一条
+async function oldRecordsGetOriginals() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const { fillLite } = require('../src/trfill');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-orig-'));
+  const sent = [];
+  let clock = Date.parse('2026-10-29T09:00:00Z');
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, now: () => clock, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  // 把记录改成旧格式：去掉原文
+  const strip = (acc) => {
+    for (const f of fs.readdirSync(path.join(dir, acc))) {
+      const file = path.join(dir, acc, f);
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const r of Object.values(data)) if (r && r.tr) delete r.text;
+      fs.writeFileSync(file, JSON.stringify(data));
+    }
+  };
+  const opts = { auto: true, dailyCap: 500 };
+  const unique = (items) => {
+    assert.strictEqual(new Set(items.map((x) => x.h)).size, items.length, '没有重复的消息');
+    const texts = items.map((x) => x.text).filter(Boolean);
+    assert.strictEqual(new Set(texts).size, texts.length, '同一条原文只出现一次');
+  };
+
+  // 网页号：30 条客户消息，读页面只读最后 20 条
+  const chat = '447700900456@c.us';
+  const conv = Array.from({ length: 30 }, (_, i) => ({ id: `false_${chat}_3EA${i}`, out: false, text: `Hello ${i}`, t: { h: 11, mi: i, at: 1700000000000 + i * 60000 } }));
+  const read = (from, to) => ({ title: 'Olivia', bottom: true, msgs: conv.slice(from, to) });
+  let { store, fc } = make();
+  for (let n = 1; n <= 30; n += 1) { clock += 10000; fc.ingest('W', read(Math.max(0, n - 20), n), opts); await sleep(2); }
+  await sleep(30);
+  store.flush();
+  strip('W');
+  sent.length = 0;
+  ({ store, fc } = make());
+  fc.ingest('W', read(10, 30), opts);
+  let items = fc.viewOf('W').items;
+  assert.strictEqual(items.length, 30);
+  assert.deepStrictEqual(items.slice(0, 10).map((x) => x.text), Array(10).fill(''), '旧记录补回来时只有译文');
+  assert.strictEqual(fc.manual('W', items[0].h, true), false, '没有原文的不能纠错');
+  assert.deepStrictEqual(sent, [], '旧记录不重翻');
+  // 读到的 20 条在磁盘上有译文没原文：读到时就补进记录
+  const ck = fc.viewOf('W').chatKey;
+  assert.strictEqual(store.missingText('W', ck).size, 10, '读到的 20 条已经补上，更早的 10 条还缺');
+  // 用户往下滚回去（或客户的旧消息又出现在最后 20 条里）：补回来的那条补上原文，还是同一条
+  fc.ingest('W', { title: 'Olivia', bottom: true, msgs: [...conv.slice(2, 10), ...conv.slice(18, 30)] }, opts);
+  items = fc.viewOf('W').items;
+  unique(items);
+  assert.deepStrictEqual(items.slice(0, 2).map((x) => x.text), ['', ''], '没读到的还缺');
+  assert.deepStrictEqual(items.slice(2, 10).map((x) => x.text), conv.slice(2, 10).map((m) => m.text), '读到的补上了原文');
+  assert(fc.manual('W', items[2].h, true), '补上原文后能纠错');
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['Hello 2']);
+  assert.strictEqual(store.missingText('W', ck).size, 2);
+  assert.strictEqual(store.getKey('W', ck, require('../src/trstore').textKey('Hello 2')).text, 'Hello 2');
+
+  // 轻量号：记录里缺原文的，按聊天缓存（带 [图片] 这种标签的去掉标签再认）在后台补
+  const jid = '4915123456789@s.whatsapp.net';
+  const lite = [...Array.from({ length: 30 }, (_, i) => (i === 3 ? `[图片] Look at this ${i}` : `Guten Tag ${i}`))];
+  const liteView = (n) => ({ jid, title: 'Lukas', messages: lite.slice(0, n).slice(-20).map((text, i, a) => ({ id: `3EB0L${n - a.length + i}`, me: false, ts: 1700000000 + (n - a.length + i) * 60, text })) });
+  for (let n = 1; n <= 30; n += 1) { clock += 10000; fc.ingest('L', fromLite(liteView(n), jid), opts); await sleep(2); }
+  await sleep(30);
+  store.flush();
+  strip('L');
+  ({ store, fc } = make());
+  fc.ingest('L', fromLite(liteView(30), jid), { auto: false, dailyCap: 500 });
+  const lck = fc.viewOf('L').chatKey;
+  assert.strictEqual(fc.viewOf('L').items.length, 30);
+  assert.strictEqual(store.missingText('L', lck).size, 10, '轻量号旧记录：更早的 10 条缺原文');
+  const before = fc.viewOf('L').items.map((x) => x.h);
+  const filled = [];
+  const n = await fillLite({
+    store, accId: 'L', gap: 0, alive: () => true,
+    jids: async () => ['111111111@s.whatsapp.net', jid],
+    incoming: async (j) => (j === jid ? ['Guten Tag 0', ...lite] : ['Hi']), // 同一句出现两次也只补一次
+    onFill: (c, k, text) => { filled.push(text); fc.fillText('L', c, k, text); },
+  });
+  assert.strictEqual(n, 10);
+  assert.strictEqual(filled.length, 10);
+  assert(filled.includes('Look at this 3'), '去掉 [图片] 标签再认');
+  assert.strictEqual(store.missingText('L', lck).size, 0);
+  items = fc.viewOf('L').items;
+  assert.deepStrictEqual(items.map((x) => x.h), before, '补原文不多出、不挪动翻译栏上的消息');
+  assert(items.every((x) => x.text), '翻译栏上的也补上了原文');
+  unique(items);
+  assert.strictEqual(fs.existsSync(path.join(dir, 'L')) && fs.readdirSync(path.join(dir, 'L')).length, 1, '没有译文的对话不建文件');
+  assert.strictEqual(await fillLite({ store, accId: 'L', gap: 0, alive: () => true, jids: async () => [jid], incoming: async () => lite }), 0, '再跑一次没有要补的');
+  // 重启后：补回来的直接带原文
+  store.flush();
+  ({ store, fc } = make());
+  fc.ingest('L', fromLite(liteView(30), jid), { auto: false, dailyCap: 500 });
+  items = fc.viewOf('L').items;
+  assert.strictEqual(items.length, 30);
+  assert(items.every((x) => x.text));
+  unique(items);
+  // 原文对不上（hash 不一样）的不补
+  assert.strictEqual(store.fillText('L', lck, require('../src/trstore').textKey('x'), 'y'), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('旧译文记录补原文自检通过');
 }
 
 // 切到一个对话时没翻的旧消息（shen 2026-10-29 截图：后面 4 条存着译文，前面 3 条只剩「翻译」按钮）：
@@ -186,7 +295,7 @@ async function catchUpOlder() {
 
 // 重新打开对话、重启软件后，翻译栏上以前的译文一条不少（shen 2026-10-28「后续打开页面，翻译的文本都一直在这」）：
 // 页面只读最后 20 条（双方），聊着聊着翻译栏攒到 20 条译文；切走再切回、重启后，读不到的更早的译文按存的记录补回来，
-// 不调模型；补回来的只有译文（磁盘上不存原文），不能纠错；客户再发来照常接在后面
+// 不调模型；补回来的带着原文，能展开、能纠错；客户再发来照常接在后面
 async function reopenKeepsAll() {
   const fs = require('fs');
   const os = require('os');
@@ -225,14 +334,20 @@ async function reopenKeepsAll() {
   let items = fc.viewOf('R').items;
   assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), live, '重启后：以前的译文一条不少、顺序不变');
   assert.deepStrictEqual(sent, [], '重启后不调模型');
-  assert.deepStrictEqual(items.slice(0, 10).map((x) => x.text), Array(10).fill(''), '补回来的只有译文');
+  assert.deepStrictEqual(items.slice(0, 10).map((x) => x.text), Array.from({ length: 10 }, (_, i) => `Message ${i * 2}`), '补回来的带着原文（能展开）');
+  assert.strictEqual(new Set(items.map((x) => x.h)).size, items.length, '重启后没有重复');
+  assert.strictEqual(new Set(items.map((x) => x.text)).size, items.length, '读到的 20 条里的和记录里的同一条只出现一次');
   assert.strictEqual(items[0].t, '09:00', '补回来的带着时间');
-  assert.strictEqual(fc.manual('R', items[0].h, true), false, '补回来的没有原文，不能纠错');
+  assert(fc.manual('R', items[0].h, true), '补回来的有原文，能纠错');
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['Message 0'], '纠错按原文重翻');
+  sent.length = 0;
   // 补回来的也能手动改，改了存住，再重启还在
   assert(fc.edit('R', items[0].h, '我改的'));
   store.flush();
   const raw = fs.readFileSync(path.join(dir, 'R', fs.readdirSync(path.join(dir, 'R'))[0]), 'utf8');
-  assert(!raw.includes('"Message ') && !raw.includes('123456789012345'), '磁盘上不存原文和号码');
+  assert(raw.includes('"text":"Message 0"'), '磁盘上存着原文');
+  assert(!raw.includes('123456789012345'), '磁盘上不存号码');
   ({ store, fc } = make());
   fc.ingest('R', read(40), opts);
   assert.deepStrictEqual(fc.viewOf('R').items[0].tr, '我改的');
@@ -263,7 +378,8 @@ async function reopenKeepsAll() {
   fc.ingest('R', { title: 'Emma', bottom: true, msgs: more.slice(-20) }, { auto: false, dailyCap: 500 });
   items = fc.viewOf('R').items;
   assert.strictEqual(items.length, 40);
-  assert.deepStrictEqual(items.slice(19, 21).map((x) => [x.tr, x.text]), [['译:Message 44', ''], ['', 'Late 50']]);
+  assert.deepStrictEqual(items.slice(19, 21).map((x) => [x.tr, x.text]), [['译:Message 44', 'Message 44'], ['', 'Late 50']]);
+  assert.strictEqual(new Set(items.map((x) => x.h)).size, items.length, '接不上时也没有重复');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('重新打开对话、重启后译文一条不少自检通过');
 }
@@ -499,7 +615,7 @@ async function persisted() {
   assert.strictEqual(files.length, 1);
   const raw = fs.readFileSync(path.join(dir, 'P', files[0]), 'utf8');
   // 只查号码本身（555@），时间戳里碰巧有 555 不算
-  assert(!raw.includes('"hello"') && !raw.includes('555@'), '磁盘上不存原文和号码');
+  assert(raw.includes('"text":"hello"') && !raw.includes('555@'), '磁盘上存原文，不存号码');
   // 重启：同样的消息（编号变了也认得出）直接显示，不调模型
   ({ store, fc } = make());
   sent.length = 0;

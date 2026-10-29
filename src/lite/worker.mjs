@@ -14,6 +14,7 @@ if (DIRECT) setAllowAll(true);
 const { Session } = await import('./session.mjs');
 const { proxyHost } = await import('./transport.mjs');
 const { findChat, readHistory } = await import('./history.mjs');
+const { MAX_PER_CHAT } = await import('./store.mjs');
 
 const sessions = new Map();
 
@@ -58,6 +59,11 @@ async function handle(m) {
     case 'history':
       if (!s || !s.store) return { ok: false, reason: 'notrunning' };
       return readHistory(s.store, m.jid, m.limit);
+    // 后台补译文记录里的原文（见 trfill.js）：有消息的对话、某个对话里对方发来的消息文字，只读本机缓存
+    case 'jids':
+      return s && s.store ? [...s.store.msgs.keys()] : null;
+    case 'incoming':
+      return s && s.store ? s.store.messages(m.jid, MAX_PER_CHAT).filter((x) => x && !x.me).map((x) => String(x.text || '')) : null;
     case 'send':
       if (!s) throw new Error('这个号没有在运行');
       await s.send(m.jid, m.text);
