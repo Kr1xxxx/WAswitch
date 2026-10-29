@@ -317,6 +317,11 @@ class Updater {
     if (s !== 'checking' && s !== 'downloading') this.check();
   }
 
+  // “稍后”只管点它的那个版本：同一个版本重新开始下载（比如安装没启动、6 小时后再查到）还算点过，换了新版本才清掉
+  laterFor(version) {
+    return this.state.later && this.state.version === version;
+  }
+
   // 用户点了“稍后”：不再等用户停手就装，改回空闲（缩到托盘）时再装
   userLater() {
     clearTimeout(this.waitTimer);
@@ -376,7 +381,7 @@ class Updater {
       if (!ok) console.warn(`[更新] 拦下了非 GitHub 地址：${safeHost(details.url)}`);
       callback({ cancel: !ok });
     });
-    autoUpdater.on('update-available', (info) => this.set({ status: 'downloading', version: info.version, percent: 0, later: false }));
+    autoUpdater.on('update-available', (info) => this.set({ status: 'downloading', version: info.version, percent: 0, later: this.laterFor(info.version) }));
     autoUpdater.on('update-not-available', () => this.succeed('none', '已是最新版本'));
     autoUpdater.on('download-progress', (p) => {
       const percent = Math.floor(p.percent || 0);
@@ -467,7 +472,7 @@ class Updater {
       await this.macDownloaded(info.version, dest);
       return;
     }
-    this.set({ status: 'downloading', version: info.version, percent: 0, later: false });
+    this.set({ status: 'downloading', version: info.version, percent: 0, later: this.laterFor(info.version) });
     const part = `${dest}.part`;
     const out = fs.createWriteStream(part);
     const hash = crypto.createHash('sha512');

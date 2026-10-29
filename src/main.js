@@ -2532,6 +2532,8 @@ function updateBusyReason() {
   if (!win || !win.isVisible() || win.isMinimized()) return null;
   if (page === 'editor') return '正在编辑账号';
   if (Date.now() - lastTypedAt < TYPING_MS) return '正在打字';
+  // 键盘之外的操作（鼠标点击、选图片、上传媒体）也算在用：系统空闲时间键盘鼠标都看
+  if (idleSeconds() < TYPING_MS / 1000) return '正在操作';
   return null;
 }
 

@@ -23,6 +23,11 @@ check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话�
 check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都只设直连，不设任何别的代理');
 check(/redirect:\s*'manual'/.test(code), 'Mac 下载手动跟重定向（每一跳都检查主机）');
 
+// 自动更新不经用户点击，所以主进程的 busyReason 要把键盘之外的操作（鼠标、选图片、上传媒体）也算在用
+const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+const busyFn = (mainSrc.match(/function updateBusyReason\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+check(/idleSeconds\(\) < TYPING_MS \/ 1000/.test(busyFn) && /lastTypedAt/.test(busyFn) && /liteHost\.busy\(\)/.test(busyFn), 'main.js：自动更新前除了打字，键盘鼠标的系统空闲时间、发消息、扫码、页面加载也要等');
+
 // ---------- 假的 electron ----------
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-upd-'));
 const routes = new Map(); // url -> { status, body, location }
@@ -287,14 +292,31 @@ const updatesDir = path.join(home, 'updates');
   quits = 0;
   idle = '窗口开着';
   u = make();
-  u.userLater(); // 上一个版本点过“稍后”
-  check(u.state.later, '点“稍后”后记下 later');
+
   u.setupMac();
   u.userUpdate();
   check(u.state.userAsked, '点“检查并更新”后记下用户要更新');
   for (let i = 0; i < 50 && !launched.length; i += 1) await new Promise((r) => setTimeout(r, 20));
   check(launched.length === 1 && quits === 1, `Mac：用户点了更新，下好后窗口开着也直接重启安装（${u.state.status} ${u.state.lastResult}）`);
-  check(!u.state.later, '新版本开始下载时清掉“稍后”');
+  check(!u.state.later, '点“立即更新”清掉“稍后”');
+  // “稍后”只管点它的那个版本：换了新版本清掉；同一个版本重新开始下载（比如安装没启动后再查到）不清
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+  u = make();
+  u.setupMac();
+  u.set({ version: '0.2.9' });
+  u.userLater();
+  check(u.state.later, '点“稍后”后记下 later');
+  await u.check();
+  check(u.state.status === 'downloaded' && u.state.version === '0.3.0' && !u.state.later, `新版本开始下载时清掉“稍后”（later=${u.state.later}）`);
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+  u = make();
+  u.setupMac();
+  u.set({ version: '0.3.0' });
+  u.userLater();
+  launched.length = 0;
+  await u.check();
+  check(u.state.status === 'downloaded' && u.state.later && launched.length === 0, `同一个版本重新下载，“稍后”还算数（later=${u.state.later}）`);
+  idle = null;
   idle = null;
   // 已是最新版：用户的“要更新”不留着
   serve({ tag: 'v0.2.0' });
