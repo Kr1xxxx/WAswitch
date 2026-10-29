@@ -12,7 +12,7 @@ const path = require('path');
 const assert = require('assert');
 const asr = require('../src/asr');
 const T = require('../src/translate');
-const { FloatCore, fromLite, VOICE_MAX_S, VOICE_TRIP } = require('../src/floatcore');
+const { FloatCore, fromLite, VOICE_MAX_S, VOICE_TRIP, msgKey } = require('../src/floatcore');
 const { TrStore, textKey } = require('../src/trstore');
 
 const R = asr.RATE;
@@ -161,9 +161,9 @@ async function floatFlow() {
   assert.deepStrictEqual([v.items[1].state, v.items[1].text, v.items[1].voice], ['done', 'Bonjour V1', 23]);
   assert.strictEqual(v.items[2].note, 'long', '超过 5 分钟不自动转');
   assert.strictEqual(v.items[2].state, 'manual');
-  // 存的键是 voice:+消息编号
+  // 存的键是 voice:+方向和消息编号（不带对话编号）
   const ck = core.accs.get('a1').items.get(hV1).ck;
-  assert(store.getKey('a1', ck, textKey(`voice:false_${jid.replace(/_/g, '')}_V1`)), '按 voice:+消息编号 存');
+  assert(store.getKey('a1', ck, textKey(`voice:${msgKey(`false_${jid.replace(/_/g, '')}_V1`)}`)), '按 voice:+消息编号 存');
   // 开着自动：新来的语音自动转、翻，算一条自动翻译额度
   const before = core.accs.get('a1').day.n;
   msgs.push({ id: 'V4', me: false, ts: now - 5, text: '[语音]', voice: 7 });
@@ -297,7 +297,7 @@ async function webFlow() {
   assert.deepStrictEqual([v.items[1].state, v.items[1].voice, v.items[1].text, v.items[1].tr], ['done', 23, 'Guten Tag, ist die Perücke noch da?', '中:Guten Tag, ist die Perücke noch da?'], '时长回填、转写后翻译');
   assert(!JSON.stringify(v).includes(chat), '界面拿不到 data-id 和号码');
   const ck = core.accs.get('w').items.get(v.items[1].h).ck;
-  assert(store.getKey('w', ck, textKey(`voice:${id('V2')}`)), '按 voice:+data-id 存');
+  assert(store.getKey('w', ck, textKey(`voice:${msgKey(id('V2'))}`)), '按 voice:+方向和消息编号 存');
   core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 }); // 再读一次：记下时长
   store.flush();
   // 重启再打开：不再转，时长用存下的
