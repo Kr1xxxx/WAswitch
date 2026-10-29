@@ -31,6 +31,7 @@ const dk = {
   seenTitle: null,
   unread: 0,
   acc: null,
+  lastKey: '', // 这个号里最后一次认出的对话（换对话时工作台回到翻译页用）
   draftKey: '', // 回复框现在是哪个对话的草稿：`${号}|${chatKey}`，'' = 还没认出对话
   draftSent: '', // 上次存的草稿（JSON），没变就不再发
   draftTimer: null,
@@ -116,12 +117,24 @@ function dockCarry(d) {
   dockDraftQueue();
 }
 // 主进程推来新状态：换了对话（或换了号）就先把上一个对话的草稿写下来，再换成这个对话的
+// 工作台每次回到“翻译”：换号、换客户对话（认得出的对话换到另一个认得出的对话）；正在填话术或客户资料的表单时不跳，免得冲掉没保存的内容
+function dockBackToTranslate() {
+  if (s && s.panelTab !== 'translate' && !pn.edit) window.wa.panelTab('translate');
+}
 function dockAdopt(st) {
   const key = st.accountId && st.chatKey ? `${st.accountId}|${st.chatKey}` : '';
-  if (dk.acc !== st.accountId) { dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastInput = 0; }
+  if (dk.acc !== st.accountId) {
+    if (dk.acc) dockBackToTranslate();
+    dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastKey = ''; dk.lastInput = 0;
+  }
   dk.st = st;
   if (key === dk.draftKey) return;
   const old = dk.draftKey;
+  // 和“最后一次认出的对话”比：中间读不出对话的那一阵（刚点开、还没读到）不算没换
+  if (key) {
+    if (dk.lastKey && key !== dk.lastKey) dockBackToTranslate();
+    dk.lastKey = key;
+  }
   if (!key) {
     // 打开了还没有消息的对话（认不出是哪个）：上一个对话的写下来，回复框清空；这里写的等认出对话再存
     dockDraftFlush();

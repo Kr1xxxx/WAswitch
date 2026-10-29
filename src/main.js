@@ -1058,7 +1058,7 @@ function checkIdleLock() {
 // ---------- 右侧面板：话术库和客户名单（只存本机，不同步、不上传） ----------
 // 一打开软件就展开（shen 2026-10-28：右侧翻译栏每个客户都默认打开）；用户点顶栏按钮或 Ctrl/Cmd+Shift+K 收起后，这次运行内保持收起
 let panelOpen = true;
-let panelTab = settings.panelTab; // replies | customers | translate，记在设置里，重启后还在这一页
+let panelTab = 'translate'; // replies | customers | translate；每次启动都是翻译，不记在设置里（换号、换客户对话时界面会切回翻译）
 let replyStore = null;
 let customerStore = null;
 let modeStore = null; // 翻译模式
@@ -2873,7 +2873,6 @@ onShell('panel:toggle', (on) => togglePanel(typeof on === 'boolean' ? on : !pane
 onShell('panel:tab', (tab) => {
   if (!memory.PANEL_TABS.includes(tab)) return;
   panelTab = tab;
-  if (settings.panelTab !== tab) { settings.panelTab = tab; memory.saveSettings(settings); }
   togglePanel(true);
 });
 handleShell('panel:data', () => panelData());
