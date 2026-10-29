@@ -31,6 +31,7 @@ function Uninstall($dir) {
   Start-Process -FilePath $u -ArgumentList '/S' # 卸载程序会复制自己再退出，所以不能 -Wait，轮询等程序文件夹消失
   WaitFor { -not (Test-Path (Join-Path $dir 'WAswitch.exe')) } 90 '卸载' | Out-Null
   WaitFor { -not (Test-Path $dir) } 30 '安装文件夹删除' | Out-Null
+  WaitFor { $null -eq (InstallLocation) } 30 '注册表位置清掉（卸载程序最后一步）' | Out-Null
 }
 function StopApp { Get-Process WAswitch -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
