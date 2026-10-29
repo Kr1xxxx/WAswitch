@@ -27,7 +27,7 @@ jobs:
         run: npm run check:agents
       - name: 回车处理先判断输入法选字
         run: npm run check:ime-enter
-      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
       - name: MCP 自检
         run: npm run check:mcp
       - name: MCP 起草回复自检（真粘贴，确认不发送）
@@ -44,12 +44,16 @@ jobs:
         run: npm run check:radius-motion
       - name: 颜色检查（只用 Radix UI Colors）
         run: npm run check:colors
+      - name: 组件总览页像素回归（1 倍、2 倍缩放截图，和基准图逐像素比）
+        run: xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual
       - name: 账号图标 emoji 自检
         run: npm run check:emoji
       - name: 悬浮翻译自检
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
+      - name: 回复草稿自检（换对话、重启后回复框的字还在）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-draft.js
       - name: 删除不弹确认、撤销提示自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 侧栏 + 号（添加账号、添加分组）自检
@@ -108,6 +112,15 @@ jobs:
         run: npm run check:import
       - name: 下载自检
         run: npm run check:downloads
+      # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
+      - name: 上传组件截图差异图
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-diff
+          path: visual-diff/
+          if-no-files-found: ignore
+          retention-days: 7
 
   package-win:
     runs-on: windows-latest
