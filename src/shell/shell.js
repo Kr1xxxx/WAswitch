@@ -1386,6 +1386,8 @@ function renderPanel(force = false) {
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), text ? h('small', null, text) : null));
   return h('div', { class: 'center', style: { background: 'var(--white)' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
+    // D 盘打不开、这次先用 C 盘：账号为什么不见了
+    s.dataNote ? h('div', { class: 'note bad' }, s.dataNote) : null,
     h('h1', null, '一个窗口，同时登录多个 WhatsApp'),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色'),
