@@ -3,6 +3,8 @@
 // 2) Translator.transcribe：用智谱密钥、分段请求拼起来；余额不足（1113）、没密钥、密钥错、太忙重试、没听出话
 // 3) FloatCore：轻量号语音行显示、自动转写后翻译、按「voice:+消息编号」存（重开不再转）、没开自动只给按钮、失败可重试、
 //    超过 5 分钟不自动转、更早的语音不在后台补、自己发的语音不显示
+// 4) FloatCore 网页号语音：按 data-id 去拿、时长回填、重开不再转、连续 3 条读不到就不再自动读（成功一次恢复）、
+//    超过 5 分钟退回按钮并退额度、一条慢语音不挡后面的文字翻译
 // 用法：node scripts/check-asr.js
 const fs = require('fs');
 const os = require('os');
@@ -10,7 +12,7 @@ const path = require('path');
 const assert = require('assert');
 const asr = require('../src/asr');
 const T = require('../src/translate');
-const { FloatCore, fromLite, VOICE_MAX_S } = require('../src/floatcore');
+const { FloatCore, fromLite, VOICE_MAX_S, VOICE_TRIP } = require('../src/floatcore');
 const { TrStore, textKey } = require('../src/trstore');
 
 const R = asr.RATE;
@@ -103,7 +105,7 @@ async function translator() {
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
-async function settle(core) { for (let i = 0; i < 50 && (core.running || core.queue.length); i += 1) await tick(); }
+async function settle(core) { for (let i = 0; i < 50 && (core.running || core.queue.length || core.vrunning || core.vq.length); i += 1) await tick(); }
 
 function liteView(jid, messages) {
   return { jid, title: 'Sophie Martin', chats: [{ jid, name: 'Sophie Martin' }], messages };
@@ -267,11 +269,116 @@ async function heardKept() {
   assert.strictEqual(heard.length, 3);
 }
 
+// 网页号：readOpenChat 读出来的样子（语音没有文字，voice 是 0）
+async function webFlow() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-web-'));
+  const chat = '4930111222@c.us';
+  const id = (k) => `false_${chat}_${k}`;
+  const at = Date.now();
+  const m = (k, x = {}) => ({ id: id(k), out: false, text: '', voice: 0, t: { h: 10, mi: 1, at: at + Number(String(k).replace(/\D/g, '')) }, ...x });
+  const text = (k, t) => ({ id: id(k), out: false, text: t, t: { h: 10, mi: 2, at: at + Number(String(k).replace(/\D/g, '')) } });
+  const calls = [];
+  const translated = [];
+  let answer = () => ({ text: 'Guten Tag, ist die Perücke noch da?', seconds: 23 });
+  let gate = null;
+  const mk = (store) => new FloatCore({
+    store,
+    slowGap: 1,
+    transcribe: async (acc, src, sec, opts) => { calls.push({ src, opts }); if (gate) await gate; return answer(src, opts); },
+    translate: async (t) => { translated.push(t); return { text: `中:${t}`, warn: [] }; },
+  });
+  let store = new TrStore(dir);
+  let core = mk(store);
+  const msgs = [text('T1', 'Hello'), m('V2')];
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  let v = core.viewOf('w');
+  assert.deepStrictEqual(calls.map((c) => [c.src.dataId, c.opts.auto]), [[id('V2'), true]], '按 data-id 自动去拿');
+  assert.deepStrictEqual([v.items[1].state, v.items[1].voice, v.items[1].text, v.items[1].tr], ['done', 23, 'Guten Tag, ist die Perücke noch da?', '中:Guten Tag, ist die Perücke noch da?'], '时长回填、转写后翻译');
+  assert(!JSON.stringify(v).includes(chat), '界面拿不到 data-id 和号码');
+  const ck = core.accs.get('w').items.get(v.items[1].h).ck;
+  assert(store.getKey('w', ck, textKey(`voice:${id('V2')}`)), '按 voice:+data-id 存');
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 }); // 再读一次：记下时长
+  store.flush();
+  // 重启再打开：不再转，时长用存下的
+  store = new TrStore(dir);
+  core = mk(store);
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  v = core.viewOf('w');
+  assert.strictEqual(calls.length, 1, '重开不再转');
+  assert.deepStrictEqual([v.items[1].state, v.items[1].voice], ['done', 23]);
+  // 自动翻译关着：只给「转文字」按钮
+  const off = mk(new TrStore(fs.mkdtempSync(path.join(os.tmpdir(), 'asr-web-off-'))));
+  off.ingest('w', { title: 'Emma Schmidt', msgs: [m('V3')] }, { auto: false, dailyCap: 100 });
+  await settle(off);
+  assert.deepStrictEqual([off.viewOf('w').items[0].state, off.viewOf('w').items[0].voice, calls.length], ['manual', 0, 1]);
+  // 连续 3 条读不到：报原因和代码，之后新来的不再自动读
+  answer = () => ({ error: '读不到这条语音，请在 WhatsApp 里听', kind: 'nomedia', code: 'W2 no_media_fields' });
+  for (let i = 0; i < VOICE_TRIP; i += 1) {
+    msgs.push(m(`V${10 + i}`));
+    core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+    await settle(core);
+  }
+  v = core.viewOf('w');
+  const bad = v.items.filter((it) => it.state === 'error');
+  assert.strictEqual(bad.length, VOICE_TRIP);
+  assert(bad.every((it) => it.err.includes('读不到') && it.code === 'W2 no_media_fields'), JSON.stringify(bad));
+  const before = calls.length;
+  msgs.push(m('V20'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  v = core.viewOf('w');
+  assert.strictEqual(calls.length, before, '熔断后不再自动去读');
+  const v20 = v.items[v.items.length - 1];
+  assert.strictEqual(v20.state, 'manual');
+  // 用户点「转文字」照常去读；读成功一次就恢复自动
+  answer = () => ({ text: 'Merci', seconds: 4 });
+  assert.strictEqual(core.manual('w', v20.h), true);
+  await settle(core);
+  assert.strictEqual(calls[calls.length - 1].opts.auto, false);
+  assert.strictEqual(core.viewOf('w').items.find((it) => it.h === v20.h).state, 'done');
+  msgs.push(m('V21'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  assert.strictEqual(calls.length, before + 2, '恢复自动');
+  // 页面重新加载也恢复
+  core.accs.get('w').voiceFails = VOICE_TRIP;
+  core.voiceReset('w');
+  assert.strictEqual(core.accs.get('w').voiceFails, 0);
+  // 自动转时才知道超过 5 分钟：不下载，退回按钮，退回额度
+  answer = () => ({ kind: 'long', seconds: VOICE_MAX_S + 100 });
+  const n0 = core.accs.get('w').day.n;
+  msgs.push(m('V22'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  const v22 = core.viewOf('w').items.at(-1);
+  assert.deepStrictEqual([v22.state, v22.note, v22.voice], ['manual', 'long', VOICE_MAX_S + 100]);
+  assert.strictEqual(core.accs.get('w').day.n, n0, '退回额度');
+  // 一条慢语音：转的时候新来的文字照常翻
+  answer = () => ({ text: 'Danke', seconds: 180 });
+  let open;
+  gate = new Promise((r) => { open = r; });
+  msgs.push(m('V23'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  for (let i = 0; i < 5; i += 1) await tick();
+  msgs.push(text('T24', 'Do you ship to Berlin?'));
+  core.ingest('w', { title: 'Emma Schmidt', msgs }, { auto: true, dailyCap: 100 });
+  for (let i = 0; i < 20 && !translated.includes('Do you ship to Berlin?'); i += 1) await tick();
+  assert(translated.includes('Do you ship to Berlin?'), '文字没被语音挡住');
+  assert.strictEqual(core.viewOf('w').items.find((it) => it.voice === 0 && it.state === 'running') !== undefined, true, '语音还在转');
+  gate = null;
+  open();
+  await settle(core);
+  assert(translated.includes('Danke'));
+}
+
 (async () => {
   splitting();
   await translator();
   const n = await floatFlow();
   await backfill();
   await heardKept();
-  console.log(`语音转文字自检通过（切段、wav、智谱请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻）`);
+  await webFlow();
+  console.log(`语音转文字自检通过（切段、wav、智谱请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻、网页号语音）`);
 })().catch((e) => { console.error(e); process.exit(1); });

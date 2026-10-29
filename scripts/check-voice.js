@@ -53,6 +53,10 @@ const scenario = async () => {
     it('v4', { state: 'error', err: '智谱余额不足，语音转文字要先充值' }),
     it('v5', { voice: 412, note: 'long' }),
     it('v6', { state: 'error', err: '智谱还没填密钥', errPid: 'z' }),
+    // 网页号：时长还不知道；读不到、过期
+    it('w1', { voice: 0 }),
+    it('w2', { voice: 0, state: 'error', err: '读不到这条语音，请在 WhatsApp 里听', code: 'W2 no_media_fields' }),
+    it('w3', { voice: 41, state: 'error', err: '语音已过期，在 WhatsApp 里播放一次后重试', code: 'W2 http_410' }),
   ];
   window.__dock = { ...base, items };
   window.__cbs.state({ accounts: [{ id: 'a1', name: 'Sophie', color: '#3b82f6', lite: true }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
@@ -68,7 +72,8 @@ const scenario = async () => {
     const btns = [...el.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean);
     const lineH = (n) => (n ? Math.round(n.getBoundingClientRect().height) : 0);
     const clipped = [...el.querySelectorAll('.dk-voice, .dk-link')].some((n) => n.scrollWidth > n.clientWidth + 1);
-    return { tag: tag ? tag.textContent : '', tagH: lineH(tag), text: el.textContent, btns, clipped, linkH: [...el.querySelectorAll('.dk-link')].map(lineH) };
+    const bad = el.querySelector('.dk-tr.bad');
+    return { code: bad ? bad.getAttribute('title') || '' : '', tag: tag ? tag.textContent : '', tagH: lineH(tag), text: el.textContent, btns, clipped, linkH: [...el.querySelectorAll('.dk-link')].map(lineH) };
   };
   const out = {};
   for (const x of items) out[x.h] = info(x.h);
@@ -98,7 +103,11 @@ async function rowsCheck() {
   assert.strictEqual(r.v5.tag, '语音 6:52');
   assert.deepStrictEqual(r.v5.btns, ['转文字（太长，只转前 5 分钟）']);
   assert(r.v6.btns.includes('去填密钥') && r.v6.btns.includes('重试'), JSON.stringify(r.v6));
-  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6']) {
+  assert.strictEqual(r.w1.tag, '语音');
+  assert.deepStrictEqual(r.w1.btns, ['转文字']);
+  assert(r.w2.text.includes('读不到这条语音') && r.w2.btns.includes('重试') && r.w2.code === 'W2 no_media_fields', JSON.stringify(r.w2));
+  assert(r.w3.text.includes('语音已过期') && r.w3.btns.includes('重试') && r.w3.tag === '语音 0:41', JSON.stringify(r.w3));
+  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'w1', 'w2', 'w3']) {
     assert(!r[h].clipped, `${h} 的文字被裁了`);
     assert.strictEqual(r[h].tagH, lineH, `${h} 的「语音」换行了`);
   }

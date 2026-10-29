@@ -425,10 +425,11 @@ function dockManualLabel(it) {
   if (typeof it.voice === 'number' && !it.text) return it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字';
   return it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译';
 }
-// 轻量号客户发来的语音：「语音 0:23」
+// 客户发来的语音：「语音 0:23」；网页号还不知道时长时只写「语音」
 const dockVoiceLen = (s) => { const n = Math.max(0, Math.round(Number(s) || 0)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`; };
 function dockVoiceTag(it) {
-  return typeof it.voice === 'number' ? h('span', { class: 'dk-voice' }, `语音 ${dockVoiceLen(it.voice)}`) : null;
+  if (typeof it.voice !== 'number') return null;
+  return h('span', { class: 'dk-voice' }, it.voice > 0 ? `语音 ${dockVoiceLen(it.voice)}` : '语音');
 }
 
 function dockItemRow(it, last) {
@@ -447,7 +448,7 @@ function dockItemRow(it, last) {
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
     : it.state === 'skip' ? h('span', { class: 'dk-tr' }, it.text, sp) // 时间、数字、表情这类不用翻：原文当译文显示
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, typeof it.voice === 'number' && !it.text ? '转文字中…' : '翻译中…', sp)
-      : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ',
+      : it.state === 'error' ? h('span', { class: 'dk-tr bad', title: it.code || null }, it.err, ' ',
         it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, dockManualLabel(it)), sp);

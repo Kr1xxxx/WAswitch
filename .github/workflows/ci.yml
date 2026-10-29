@@ -86,6 +86,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
       - name: 读取对话列表自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
+      - name: 网页号语音后台读取只读、解密、读不到时的原因
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-web-voice.js
       - name: 页面崩溃重建和保存设置同时发生
         run: xvfb-run -a node scripts/check-view-race.js
       - name: 扫码后侧栏几秒内变成已登录

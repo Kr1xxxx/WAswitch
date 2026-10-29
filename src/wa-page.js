@@ -42,6 +42,8 @@ const SELECTORS = {
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
   messageSkip: '[role="button"], .quoted-mention',
+  // 语音气泡：播放按钮、语音图标或语音滑条（引用块里的不算）
+  voiceMark: '[data-icon="audio-play"], [data-icon="audio-pause"], [data-icon*="ptt" i], [data-icon*="audio-download" i], [aria-label*="voice message" i], [aria-label*="语音"]',
 };
 
 // 返回 'logged_in' | 'needs_qr' | 'unknown'（页面还在加载或认不出来）
@@ -184,7 +186,7 @@ function chatIdentity(main) {
 }
 const readChatCode = (max = MAX_MSGS) => `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   const chat = (${chatIdentity.toString()})(main);
@@ -314,7 +316,9 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const text = r.text.slice(0, 4000);
     if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
     size += text.length;
-    msgs.push({ id, out, text, t: r.t });
+    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：没有文字，带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
+    const voice = !out && /^(true|false)_/.test(rawId) && !/\\p{L}/u.test(text) && [...n.querySelectorAll(S.voice)].some((x) => !x.closest(S.skip));
+    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0 } : { id, out, text, t: r.t });
   }
   msgs.reverse();
   // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
@@ -354,7 +358,7 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t) }));
+      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}) }));
     return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
   } catch {
     return { ok: false, why: 'error' };

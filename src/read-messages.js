@@ -64,7 +64,7 @@ function createMessageReader(deps) {
     const r = await deps.waPage.readOpenChat(wc, { max: limit });
     if (!r.ok) return { ok: false, reason: { loading: 'loading', qr: 'loading', nochat: 'nochat' }[r.why] || 'unrecognized' };
     if (!ref || r.chat !== ref || webTitle(r) !== title) return { ok: false, reason: 'changed' };
-    return { ok: true, title: webTitle(r), group: null, messages: r.msgs.map((m) => ({ from_me: m.out === true, time: when(m.t), text: m.text })) };
+    return { ok: true, title: webTitle(r), group: null, messages: r.msgs.map((m) => ({ from_me: m.out === true, time: when(m.t), text: m.voice === 0 ? '[语音]' : m.text })) };
   }
 
   return { locateChat, readMessages };
