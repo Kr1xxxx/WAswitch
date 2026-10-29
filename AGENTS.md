@@ -8,9 +8,8 @@
 
 只有浅色界面，现在不做，以后也不做。
 
-- 不写 `@media (prefers-color-scheme: dark)`、`color-scheme: dark`、`data-theme`、`nativeTheme.themeSource = 'dark'`，不引入 `src/colors/radix-dark.css`，不加「深色模式」开关。
+- 不写 `@media (prefers-color-scheme: dark)`、`color-scheme: dark`、`data-theme`、`nativeTheme.themeSource = 'dark'`，不生成深色色阶，不加「深色模式」开关。
 - 设计稿、截图、harness 只做浅色一套。
-- 老代码里还剩两处跟系统深色走的样式：新消息弹窗（`src/popup/popup.css`、`src/popup/index.html`）和团队后台（`server/public/admin/admin.css`、`index.html`）。不要扩展它们；`npm run check:agents` 不许别的文件再出现深色写法。
 
 ## 1. 颜色：只用 Radix UI Colors
 

@@ -13,7 +13,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const log = require('./log');
-const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
+const { writeJsonAtomic, writeJsonQuiet, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
@@ -222,9 +222,10 @@ function loadGroups() {
     return [];
   }
 }
+// 写不进去（盘满、文件被锁）不抛错，只记日志：内存里是整份数据，下一次保存会补上。
+// 抛错的话，启动、菜单点击、切号、页面事件都会中断，定时器里还会让软件退出
 function saveGroups() {
-  const file = groupsFile();
-  writeJsonAtomic(file, groups, 2);
+  writeJsonQuiet(groupsFile(), groups, 2);
 }
 const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
 // 是否不弹通知：账号自己关了，或者所在分组整组关了
@@ -288,9 +289,9 @@ function createGroup(moveId) {
   return g.id;
 }
 
+// 和 saveGroups 一样，写失败只记日志
 function saveAccounts() {
-  const file = storeFile();
-  writeJsonAtomic(file, accounts, 2);
+  writeJsonQuiet(storeFile(), accounts, 2);
 }
 
 function loadAccounts() {
@@ -1099,7 +1100,8 @@ function checkFollowUps() {
   const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now && !parkedCustomer(c));
   if (!due.length) return;
   for (const c of due) customerStore.patch(c.id, { reminded: true }, { save: false });
-  customerStore.save();
+  // 写不进去也照常提醒：内存里已经标了已提醒，这次运行不会重复弹。定时器里抛错会让软件退出
+  try { customerStore.save(); } catch (e) { console.warn(`跟进提醒保存失败：${e.code || e.message}`); }
   for (const c of due.slice(0, 3)) {
     const accId = c.accountId;
     notifier.notifyApp('跟进提醒', c.name || '一位客户', () => {
@@ -2519,7 +2521,7 @@ function updateIdleReason() {
   return null;
 }
 
-// 下好后默认直接自动更新（用户没点任何按钮），所以会打断手上操作的几项窗口开不开都要等；
+// 用户点了更新、已经下好：会打断手上操作的几项窗口开不开都要等；
 // 窗口开着时，30 秒内打过字、在编辑账号也先等
 function updateBusyReason() {
   if (liteHost && liteHost.busy()) return '有消息在发';
@@ -2532,8 +2534,6 @@ function updateBusyReason() {
   if (!win || !win.isVisible() || win.isMinimized()) return null;
   if (page === 'editor') return '正在编辑账号';
   if (Date.now() - lastTypedAt < TYPING_MS) return '正在打字';
-  // 键盘之外的操作（鼠标点击、选图片、上传媒体）也算在用：系统空闲时间键盘鼠标都看
-  if (idleSeconds() < TYPING_MS / 1000) return '正在操作';
   return null;
 }
 
@@ -2795,7 +2795,11 @@ app.whenReady().then(async () => {
 
 // 只接受本地界面发来的消息，WhatsApp 页面没有这些接口
 const fromShell = (e) => shellView && e.sender === shellView.webContents;
-const onShell = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromShell(e)) fn(...args); });
+// 处理里同步抛错只记日志：一次点击出错不能让整个软件弹窗重启、所有号断一下
+const onShell = (channel, fn) => ipcMain.on(channel, (e, ...args) => {
+  if (!fromShell(e)) return;
+  try { fn(...args); } catch (err) { console.error(`界面操作 ${channel} 出错：${err && err.stack ? err.stack : err}`); }
+});
 const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
   if (!fromShell(e)) throw new Error('not allowed');
   return fn(...args);
@@ -3074,6 +3078,8 @@ handleShell('lite:send', async ({ id, jid, text } = {}) => {
     await liteHost.sendText(id, jid, text);
     return { ok: true };
   } catch (e) {
+    // 等了很久没有回音：消息可能已经发出（回复晚到会被忽略），让用户先看聊天记录，免得重发成两条
+    if (e && e.code === 'TIMEOUT') return { error: '可能已经发出，先看一下聊天记录再重发（文字还在输入框里）' };
     // 自己写的提示是中文，原样给；底层库（Baileys）的英文换成人话，原话放“详细信息”
     const raw = errtext.rawOf(e);
     if (errtext.hasChinese(raw)) return { error: raw };
@@ -3275,9 +3281,9 @@ handleShell('exit:ack', ({ id } = {}) => {
 });
 
 // 关于页：检查更新、立即更新（Mac：打开安装包）
-onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后马上安装
-onShell('update:later', () => updater?.userLater()); // 点了“稍后”：改成缩到托盘空闲时再装
-onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后一样自动更新（等手上的事做完）
+onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动安装并重新打开
+onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动更新了，改成缩到托盘空闲时再装
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动更新
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）

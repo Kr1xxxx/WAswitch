@@ -90,10 +90,25 @@ async function translator() {
   r = await tr.transcribe(tone(2));
   assert.deepStrictEqual([r.kind, r.providerId], ['auth', zp.id]);
   assert(!JSON.stringify(r).includes('zp-key-123456'), '报错里不带密钥');
-  // 网络断了
-  behave = ['net'];
+  // 网络断了：这一段就地重试一次，还断才算失败
+  calls.length = 0;
+  behave = ['net', 'net'];
   r = await tr.transcribe(tone(2));
-  assert.strictEqual(r.kind, 'network');
+  assert.deepStrictEqual([r.kind, calls.length], ['network', 2]);
+  calls.length = 0;
+  behave = ['net', { body: '{"text":"Danke"}' }];
+  r = await tr.transcribe(tone(2));
+  assert.deepStrictEqual([r.text, calls.length], ['Danke', 2], '断一次重试一次就好');
+  // 长语音中间一段断了：只重发这一段，前面转好的不再付钱
+  calls.length = 0;
+  behave = [{ body: '{"text":"Hello, is the wig"}' }, 'net', { body: '{"text":" still available?"}' }];
+  r = await tr.transcribe(tone(40));
+  assert.deepStrictEqual([r.text, calls.length], ['Hello, is the wig still available?', 3]);
+  // 每一段各有一次重试机会，不是整条语音只有一次
+  calls.length = 0;
+  behave = ['net', { body: '{"text":"Hello"}' }, 'net', { body: '{"text":"again"}' }];
+  r = await tr.transcribe(tone(40));
+  assert.deepStrictEqual([r.text, calls.length], ['Hello again', 4]);
   // 没听出话
   behave = [{ body: '{"text":"  "}' }];
   r = await tr.transcribe(tone(2));

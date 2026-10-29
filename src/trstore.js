@@ -24,10 +24,29 @@ const VIEW_MAX = 40; // 和 floatcore.js 的 KEEP_VIEW 一样：翻译栏最多 
 const HEX_KEY = /^[0-9a-f]{24}$/;
 const CHAT_KEY = /^[0-9a-f]{16}$/; // floatcore.js hashOf 算出来的对话 hash（别的文件名不走别名）
 const META = '_chats'; // 每个号的别名表和最近消息索引
+const META_FILE = `${META}.json`;
 const SEEN_MAX = 2000; // 见过的客户消息最多记 2000 条，先记的先删
 const RETRY_MS = 5000; // 读不了的文件最多每 5 秒再读一次
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
+
+// 别名表（_chats.json）的 alias、seen 两张表各自合并，b 优先。返回要盖到合并结果上的键（两边不都是表就不返回）。
+// 读不了期间或搬家时 link 可能留下两跳链：压平成一跳
+function mergeMeta(a, b) {
+  const out = {};
+  const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if (obj(a.alias) && obj(b.alias)) {
+    const alias = { ...a.alias, ...b.alias };
+    for (const k of Object.keys(alias)) {
+      let to = alias[k];
+      for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
+      alias[k] = to;
+    }
+    out.alias = alias;
+  }
+  if (obj(a.seen) && obj(b.seen)) out.seen = { ...b.seen, ...a.seen, ...b.seen }; // b 的在前，a 新记的排后面；同一条以 b 为准
+  return out;
+}
 
 class TrStore {
   constructor(dir) {
@@ -87,20 +106,7 @@ class TrStore {
     for (const [k, m] of Object.entries(e.data)) {
       if (HEX_KEY.test(k) && m && m.edited && Object.hasOwn(r.data, k) && !(r.data[k] && r.data[k].edited)) merged[k] = m;
     }
-    if (chat === META) { // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
-      const [a, b] = [e.data, r.data];
-      const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
-      if (obj(a.alias) && obj(b.alias)) {
-        const alias = { ...a.alias, ...b.alias };
-        for (const k of Object.keys(alias)) { // 读不了期间 link 可能留下两跳链：压平成一跳
-          let to = alias[k];
-          for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
-          alias[k] = to;
-        }
-        merged.alias = alias;
-      }
-      if (obj(a.seen) && obj(b.seen)) merged.seen = { ...b.seen, ...a.seen, ...b.seen }; // 盘上的在前，新记的排后面；同一条以盘上的为准
-    }
+    if (chat === META) Object.assign(merged, mergeMeta(e.data, r.data)); // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
     e.data = merged;
     delete e.unread;
     return true;
@@ -430,6 +436,7 @@ function migrate(from, to) {
             Object.defineProperty(merged, key, { value: rec, enumerable: true, writable: true, configurable: true });
           }
         }
+        if (f === META_FILE) Object.assign(merged, mergeMeta(source, merged)); // 别名表和“见过”没有 at，按表合，目标那份为准
         writeJsonAtomic(dst, merged);
         fs.unlinkSync(src);
         n++;

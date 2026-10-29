@@ -16,7 +16,7 @@
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { writeJsonAtomic } = require('./atomic');
+const { writeJsonQuiet } = require('./atomic');
 
 // settings.json 里的所有设置（不只内存相关），缺失或写坏的字段用默认值
 const DEFAULTS = {
@@ -101,10 +101,10 @@ function loadSettings() {
   }
 }
 
-// 先写临时文件再改名，写到一半断电也不会把设置文件写坏
+// 先写临时文件再改名，写到一半断电也不会把设置文件写坏。
+// 写不进去（盘满、文件被锁）不抛错，只记日志：切号、改设置照常，下一次保存会整份补上
 function saveSettings(settings) {
-  const file = settingsFile();
-  writeJsonAtomic(file, settings, 2);
+  writeJsonQuiet(settingsFile(), settings, 2);
 }
 
 // Windows：窗口被别的软件整个盖住时，Chromium 会当成看不见、停止绘制；从任务栏缩略图点回来时它判断错，

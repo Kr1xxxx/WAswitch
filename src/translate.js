@@ -408,7 +408,7 @@ class Translator {
           base.primaryId = typeof raw.primaryId === 'string' ? raw.primaryId : '';
           base.fallbackId = typeof raw.fallbackId === 'string' ? raw.fallbackId : '';
           base.fixId = typeof raw.fixId === 'string' && base.providers.some((p) => p.id === raw.fixId) ? raw.fixId : '';
-          if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200) };
+          if (raw.network && ['system', 'direct', 'proxy'].includes(raw.network.mode)) base.network = { mode: raw.network.mode, proxyUrl: line(raw.network.proxyUrl, 200).replace(/^socks:/i, 'socks5:') }; // 老配置里的 socks:// 在 Chromium 按 SOCKS4 走，改成 socks5://
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
           if (raw.accountAuto && typeof raw.accountAuto === 'object') for (const [k, v] of Object.entries(raw.accountAuto)) if (v === false) base.accountAuto[k] = false;
           base.autoDefaultOn = raw.autoDefaultOn === true;
@@ -693,7 +693,7 @@ class Translator {
         const u = new URL(String(proxyUrl || '').trim());
         if (!['http:', 'socks5:', 'socks:'].includes(u.protocol) || !u.hostname || !u.port) throw new Error();
         if (u.username || u.password) return { error: '翻译代理暂不支持用户名密码，请填本机 Clash 端口' };
-        url = `${u.protocol}//${u.hostname}:${u.port}`;
+        url = `${u.protocol === 'socks:' ? 'socks5:' : u.protocol}//${u.hostname}:${u.port}`; // socks:// 在 Chromium 按 SOCKS4 走，域名在本机解析
       } catch { return { error: '代理地址格式：http://127.0.0.1:7890 或 socks5://127.0.0.1:7891' }; }
     }
     c.network = { mode, proxyUrl: url };
@@ -1035,11 +1035,18 @@ class Translator {
     const base = this.deps.retryMs ?? RETRY_MS;
     const once = async (wav) => {
       const { body, type } = asr.formOf(wav);
+      let netTried = false; // 网络断了就地重试这一段一次：前面转好的段已经付过钱，不能让整条重来。超时不重试（智谱可能已经处理并计费）
       for (let n = 0; ; n += 1) {
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort('timeout'), TIMEOUT_MS);
         let res;
-        try { res = await this.post(url, { 'Content-Type': type, Authorization: `Bearer ${key}` }, body, chk.local, ac.signal); } finally { clearTimeout(timer); }
+        try { res = await this.post(url, { 'Content-Type': type, Authorization: `Bearer ${key}` }, body, chk.local, ac.signal); } catch (e) {
+          if (!e || e.kind !== 'network' || netTried) throw e;
+          netTried = true;
+          n -= 1; // 不占 429 的重试次数
+          await new Promise((ok) => setTimeout(ok, Math.min(backoffMs(0, null, base, rand), RETRY_WAIT_MAX)));
+          continue;
+        } finally { clearTimeout(timer); }
         if (res.ok) return asr.textOf(res.text);
         // 智谱余额不足（1113）也是 429：不重试
         if (res.status === 429 && asr.broke(res.text)) throw { kind: 'quota', text: `${provName(p)}余额不足，语音转文字要先充值` };

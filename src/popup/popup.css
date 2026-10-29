@@ -1,10 +1,10 @@
-/* 通知弹窗：B 样式（WhatsApp 头像卡），跟系统深浅色走。
+/* 通知弹窗：B 样式（WhatsApp 头像卡），只有浅色。
    窗口是透明的，卡片四周留透明边给阴影（和 src/popup.js 里的 PAD 一致）。
    透明窗口里 backdrop-filter 模糊不到桌面，所以底色几乎不透明。 */
 /* 细线：边框、分割线、描边统一用 --hair。高分屏 0.5px；普通屏（如 Windows 100% 缩放）用 1px，避免线变淡或消失 */
 :root { --hair: 1px; }
 @media (min-resolution: 2dppx) { :root { --hair: .5px; } }
-/* 颜色用 Radix 变量（src/colors/radix.css）；深色时 radix-dark.css 换成 Radix 深色色阶，这里只改底色和阴影 */
+/* 颜色用 Radix 变量（src/colors/radix.css） */
 :root {
   --nt-bg: var(--slate-2);
   --nt-solid: var(--slate-2);
@@ -17,14 +17,6 @@
   --wa: var(--green-9);
   --wa-ink: var(--white);
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --nt-bg: var(--slate-4);
-    --nt-solid: var(--slate-4);
-    --nt-shadow: 0 10px 28px var(--black-a7), 0 1px 3px var(--black-a6);
-    color-scheme: dark;
-  }
 }
 
 * { box-sizing: border-box; }
