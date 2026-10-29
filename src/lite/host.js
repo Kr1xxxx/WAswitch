@@ -6,6 +6,10 @@ const { utilityProcess } = require('electron');
 const { EventEmitter } = require('events');
 const path = require('path');
 
+// 发消息最长等多久。Baileys 给单个人发时先查设备、再补会话，两次各最多等 60 秒（defaultQueryTimeoutMs），网络慢但没断时要 2 分钟多才真的发出，所以等 2 × 60 + 10 秒。
+// 等太短会先报“没发出去”，消息随后却发出了，用户重发就成了两条
+const SEND_TIMEOUT_MS = 130000;
+
 const scrub = (s) => String(s || '').replace(/\d{6,}/g, '[号码]').slice(0, 500);
 
 // 一个后台进程
@@ -106,7 +110,10 @@ class LiteProc {
   request(msg, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const reqId = this.nextReq++;
-      const timer = setTimeout(() => { this.pending.delete(reqId); reject(new Error('后台进程没有响应')); }, timeoutMs);
+      const timer = setTimeout(() => {
+        this.pending.delete(reqId);
+        reject(Object.assign(new Error('后台进程没有响应'), { code: 'TIMEOUT' }));
+      }, timeoutMs);
       this.pending.set(reqId, { resolve, reject, timer });
       this.send({ ...msg, reqId });
     });
@@ -159,7 +166,7 @@ class LiteProc {
 
   sendText(id, jid, text) {
     if (!this.sessions.has(id)) return Promise.reject(new Error('这个号没有在运行'));
-    return this.request({ type: 'send', id, jid, text }, 30000);
+    return this.request({ type: 'send', id, jid, text }, SEND_TIMEOUT_MS);
   }
 
   // MCP 搜索对话：这个号在本机保存的全部对话。号没在运行时返回 null（不为了这个启动后台进程）
@@ -309,4 +316,4 @@ class LiteHost extends EventEmitter {
   resume() { for (const p of this.procs()) p.resume(); }
 }
 
-module.exports = { LiteHost };
+module.exports = { LiteHost, SEND_TIMEOUT_MS };

@@ -870,6 +870,17 @@ async function persisted() {
   assert(!fs.existsSync(oldDir), '搬完删掉旧的');
   assert.strictEqual(migrate(oldDir, dDir), 0);
   assert.strictEqual(migrate(dDir, dDir), 0);
+  // 搬家合并别名表 _chats.json：alias、seen 没有 at，按表合，目标那份为准
+  const mA = path.join(base, 'mfrom');
+  const mB = path.join(base, 'mto');
+  fs.mkdirSync(path.join(mA, 'M'), { recursive: true });
+  fs.mkdirSync(path.join(mB, 'M'), { recursive: true });
+  fs.writeFileSync(path.join(mA, 'M', '_chats.json'), JSON.stringify({ alias: { A: 'B', X: 'old' }, seen: { h1: 'B' } }));
+  fs.writeFileSync(path.join(mB, 'M', '_chats.json'), JSON.stringify({ alias: { C: 'D', B: 'Z', X: 'new' }, seen: { h2: 'D' } }));
+  assert.strictEqual(migrate(mA, mB), 1);
+  const merged = JSON.parse(fs.readFileSync(path.join(mB, 'M', '_chats.json'), 'utf8'));
+  assert.deepStrictEqual(merged.alias, { A: 'Z', C: 'D', B: 'Z', X: 'new' }, '两边的别名都在；A→B 接上目标的 B→Z 压平成 A→Z；两边冲突留目标的');
+  assert.deepStrictEqual(merged.seen, { h2: 'D', h1: 'B' }, '两边见过的都在');
   // 关于页显示的大小：只算每个号文件夹里的 .json
   fs.writeFileSync(path.join(dDir, 'A', 'note.txt'), 'xxxxxxxx');
   assert.deepStrictEqual(await dirInfo(dDir), { bytes: 7 + 11, files: 2 });

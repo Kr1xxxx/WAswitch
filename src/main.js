@@ -3072,6 +3072,8 @@ handleShell('lite:send', async ({ id, jid, text } = {}) => {
     await liteHost.sendText(id, jid, text);
     return { ok: true };
   } catch (e) {
+    // 等了很久没有回音：消息可能已经发出（回复晚到会被忽略），让用户先看聊天记录，免得重发成两条
+    if (e && e.code === 'TIMEOUT') return { error: '可能已经发出，先看一下聊天记录再重发（文字还在输入框里）' };
     // 自己写的提示是中文，原样给；底层库（Baileys）的英文换成人话，原话放“详细信息”
     const raw = errtext.rawOf(e);
     if (errtext.hasChinese(raw)) return { error: raw };

@@ -422,6 +422,16 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   fs.rmSync(dN,{recursive:true,force:true});
   assert(tW.setWigTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')).wigTerms,true);
   fs.rmSync(dW,{recursive:true,force:true});
+  // 翻译代理：socks:// 在 Chromium 里按 SOCKS4 走（域名在本机解析），一律改成 socks5://，老配置读出来也改
+  const dP=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const tP=new T.Translator({seed:false,dir:dP,safeStorage:ss,sessionFor:()=>fake});
+  assert(tP.setNetwork({mode:'proxy',proxyUrl:'socks://127.0.0.1:7891'}).ok);
+  assert.equal(tP.publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
+  assert(tP.setNetwork({mode:'proxy',proxyUrl:'socks5://127.0.0.1:7891'}).ok); assert.equal(tP.publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
+  assert(tP.setNetwork({mode:'proxy',proxyUrl:'http://127.0.0.1:7890'}).ok); assert.equal(tP.publicConfig().network.proxyUrl,'http://127.0.0.1:7890');
+  fs.writeFileSync(path.join(dP,'translate.json'),JSON.stringify({network:{mode:'proxy',proxyUrl:'socks://127.0.0.1:7891'}}));
+  assert.equal(new T.Translator({seed:false,dir:dP,safeStorage:ss,sessionFor:()=>fake}).publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
+  fs.rmSync(dP,{recursive:true,force:true});
   assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));
   fs.rmSync(d4,{recursive:true,force:true});
   // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
