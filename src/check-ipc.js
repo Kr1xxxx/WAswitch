@@ -8,7 +8,7 @@ const { isValidRegion, regionForTimezone, regionLabel } = require('./regions');
 function setupCheckIpc(ctx) {
   const {
     handleShell, findAcc, isLite, visibleAccounts, views, problems, LITE_SCHEMES, WA_URL, webrtcPolicy,
-    regionName, recordExit, saveAccounts, pushState, createView, destroyView, refresh,
+    regionName, recordExit, saveAccounts, pushState, createView, destroyView, refresh, directTz,
   } = ctx;
 
   handleShell('check:run', async () => {
@@ -36,7 +36,7 @@ function setupCheckIpc(ctx) {
             items.push({
               level: 'warn',
               title: `${acc.name}：时区和出口对不上`,
-              detail: `系统代理现在的出口在 ${sysExit.timezone} 时区，账号设的是 ${effTz}。${fixRegion ? '' : '请在编辑账号里选一个最接近的地区。'}`,
+              detail: `系统代理现在的出口在 ${sysExit.timezone} 时区，${fingerprint.resolve(acc.fingerprint).timezone ? `账号设的是 ${effTz}` : `时区跟随本机（${localTz}）`}，对不上。`,
               fix: fixRegion ? { id: acc.id, region: fixRegion, label: regionLabel(fixRegion) } : null,
             });
           }
@@ -112,13 +112,20 @@ function setupCheckIpc(ctx) {
     const acc = findAcc(id);
     if (!acc || isLite(acc) || !isValidRegion(region) || region === 'auto') return { error: '改不了' };
     if (acc.fingerprint.region === region) return { ok: true };
+    // 直连网页号和后台跟随出口走同一条路：页面不重开，直接换时区
+    if (!proxy.parse(acc.proxy)) {
+      await directTz.apply(acc, region);
+      saveAccounts();
+      refresh();
+      return { ok: true };
+    }
     acc.fingerprint.region = region;
     saveAccounts();
     destroyView(acc.id);
     problems.delete(acc.id);
     await createView(acc);
     refresh();
-    return { ok: true };
+    return { ok: true, reloaded: true };
   });
 }
 

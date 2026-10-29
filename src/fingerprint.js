@@ -99,7 +99,9 @@ async function attach(wc, fp) {
     platform: r.platform,
     userAgentMetadata: r.metadata,
   });
-  if (r.timezone) await send('Emulation.setTimezoneOverride', { timezoneId: r.timezone });
+  // 等空白页期间地区可能被改过（直连号跟随出口），发之前再读一次
+  const tz = timezoneOf(fp.region);
+  if (tz) await send('Emulation.setTimezoneOverride', { timezoneId: tz });
   if (r.locale) await send('Emulation.setLocaleOverride', { locale: r.locale });
   return r;
 }
