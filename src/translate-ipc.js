@@ -307,19 +307,14 @@ function setupTranslateIpc(ctx) {
     }
   }
   function setupFloatCore() {
-    // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
+    // 启动时同步定位置（D 盘能用就是 D 盘，否则 C），D 盘能用而 C 盘还有译文就搬过去一次；只往 D 搬，选了 C 不动 D 盘的
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
-    const dTrDir = 'D:\\WAswitch\\translations';
-    const guess = process.platform === 'win32' && fs.existsSync(dTrDir) ? dTrDir : oldTrDir;
-    trStore = new TrStore(guess);
-    pickTrDir(oldTrDir, { preferred: dTrDir }).then((dir) => {
-      if (!trStore) return;
-      if (!trStore.flush()) return; // 写盘失败时保留脏缓存和原目录，不能开始搬家
-      if (process.platform === 'win32') migrateTr(dir === dTrDir ? oldTrDir : dTrDir, dir);
-      const moved = dir !== trStore.dir;
-      trStore.setDir(dir); // 同目录合并后也要丢弃旧的内存快照
-      if (moved) console.log(`译文存在：${dir}`);
-    }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
+    const dir = pickTrDir(oldTrDir);
+    if (dir !== oldTrDir) {
+      try { migrateTr(oldTrDir, dir); } catch (e) { console.warn(`译文搬家失败：${e.message}`); }
+      console.log(`译文存在：${dir}`);
+    }
+    trStore = new TrStore(dir);
     floatCore = new FloatCore({
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },

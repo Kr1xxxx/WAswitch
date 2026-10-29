@@ -24,10 +24,29 @@ const VIEW_MAX = 40; // 和 floatcore.js 的 KEEP_VIEW 一样：翻译栏最多 
 const HEX_KEY = /^[0-9a-f]{24}$/;
 const CHAT_KEY = /^[0-9a-f]{16}$/; // floatcore.js hashOf 算出来的对话 hash（别的文件名不走别名）
 const META = '_chats'; // 每个号的别名表和最近消息索引
+const META_FILE = `${META}.json`;
 const SEEN_MAX = 2000; // 见过的客户消息最多记 2000 条，先记的先删
 const RETRY_MS = 5000; // 读不了的文件最多每 5 秒再读一次
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
+
+// 别名表（_chats.json）的 alias、seen 两张表各自合并，b 优先。返回要盖到合并结果上的键（两边不都是表就不返回）。
+// 读不了期间或搬家时 link 可能留下两跳链：压平成一跳
+function mergeMeta(a, b) {
+  const out = {};
+  const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if (obj(a.alias) && obj(b.alias)) {
+    const alias = { ...a.alias, ...b.alias };
+    for (const k of Object.keys(alias)) {
+      let to = alias[k];
+      for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
+      alias[k] = to;
+    }
+    out.alias = alias;
+  }
+  if (obj(a.seen) && obj(b.seen)) out.seen = { ...b.seen, ...a.seen, ...b.seen }; // b 的在前，a 新记的排后面；同一条以 b 为准
+  return out;
+}
 
 class TrStore {
   constructor(dir) {
@@ -87,20 +106,7 @@ class TrStore {
     for (const [k, m] of Object.entries(e.data)) {
       if (HEX_KEY.test(k) && m && m.edited && Object.hasOwn(r.data, k) && !(r.data[k] && r.data[k].edited)) merged[k] = m;
     }
-    if (chat === META) { // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
-      const [a, b] = [e.data, r.data];
-      const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
-      if (obj(a.alias) && obj(b.alias)) {
-        const alias = { ...a.alias, ...b.alias };
-        for (const k of Object.keys(alias)) { // 读不了期间 link 可能留下两跳链：压平成一跳
-          let to = alias[k];
-          for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
-          alias[k] = to;
-        }
-        merged.alias = alias;
-      }
-      if (obj(a.seen) && obj(b.seen)) merged.seen = { ...b.seen, ...a.seen, ...b.seen }; // 盘上的在前，新记的排后面；同一条以盘上的为准
-    }
+    if (chat === META) Object.assign(merged, mergeMeta(e.data, r.data)); // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
     e.data = merged;
     delete e.unread;
     return true;
@@ -367,44 +373,19 @@ class TrStore {
 }
 
 // 存在哪（shen 2026-10-26）：Windows 上不放 C 盘，放 D:\WAswitch\translations；不放桌面。Mac 不变。
-// 2026-10-27：D 盘必须是本机固定硬盘才放（U 盘、SD 卡、移动硬盘、网络盘、光驱都不放），查不出盘的类型也不放，
-// 写不进去也不放，这些情况都放 C（userData 里）。类型是固定硬盘、只是查不出接口（动态磁盘、软件 RAID 这类 Get-Partition 不认的盘）时
-// 按本机硬盘算：USB 移动硬盘的接口一般查得出，改成放 C 会把已经在用 D 盘的电脑的译文全搬回去。查盘要调 PowerShell，所以是异步的。opts 只给自检用。
-async function pickDir(fallback, { platform = process.platform, preferred = 'D:\\WAswitch\\translations', probe = probeDrive } = {}) {
+// 同步判断，不调 PowerShell：D:\WAswitch 已经存在（安装包确认 D 盘是本机硬盘后建的）、能建 translations、能写文件才放 D 盘，否则放 C（userData 里）。
+// 软件自己不建 D:\WAswitch：只有 U 盘的笔记本，U 盘会被分成 D 盘，客户聊天的译文不能写到会被带走的盘上。opts 只给自检用。
+function pickDir(fallback, { platform = process.platform, root = 'D:\\WAswitch' } = {}) {
   if (platform !== 'win32') return fallback;
-  let info = null;
-  try { info = await probe(path.parse(preferred).root); } catch { /* 查不出来 */ }
-  if (!isLocalFixed(info)) return fallback;
+  const preferred = path.join(root, 'translations');
   try {
+    if (!fs.statSync(root).isDirectory()) return fallback;
     fs.mkdirSync(preferred, { recursive: true });
     const probeFile = path.join(preferred, `.probe-${process.pid}`);
     fs.writeFileSync(probeFile, '');
     fs.rmSync(probeFile, { force: true });
     return preferred;
   } catch { return fallback; }
-}
-
-// 盘的类型（.NET DriveInfo）和接口（Get-Disk 的 BusType，认出插在 USB 上的移动硬盘）。输出像 "Fixed|NVMe"。
-const REMOVABLE_BUS = new Set(['usb', 'sd', 'mmc', '7', '12', '13']);
-function parseDriveProbe(out) {
-  const [type = '', bus = ''] = String(out || '').trim().split(/\r?\n/).pop().split('|').map((x) => x.trim());
-  return type ? { type, bus } : null;
-}
-function isLocalFixed(info) {
-  return !!info && info.type.toLowerCase() === 'fixed' && !REMOVABLE_BUS.has(info.bus.toLowerCase());
-}
-function probeDrive(root) {
-  const letter = String(root || '').charAt(0).toUpperCase();
-  if (!/^[A-Z]$/.test(letter)) return Promise.resolve(null);
-  const ps = "$ErrorActionPreference='SilentlyContinue';"
-    + `$t=(New-Object System.IO.DriveInfo '${letter}').DriveType;`
-    + `$b=(Get-Partition -DriveLetter ${letter} | Get-Disk | Select-Object -First 1).BusType;`
-    + "Write-Output ([string]$t+'|'+[string]$b)"; // 不用双引号：Windows 传参时双引号要转义，容易出错
-  const { execFile } = require('child_process');
-  return new Promise((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-      { timeout: 15000, windowsHide: true }, (e, out) => resolve(e ? null : parseDriveProbe(out)));
-  });
 }
 
 // 关于页用：文件夹里存了多少（每个号一个文件夹，每个对话一个 .json）
@@ -455,6 +436,7 @@ function migrate(from, to) {
             Object.defineProperty(merged, key, { value: rec, enumerable: true, writable: true, configurable: true });
           }
         }
+        if (f === META_FILE) Object.assign(merged, mergeMeta(source, merged)); // 别名表和“见过”没有 at，按表合，目标那份为准
         writeJsonAtomic(dst, merged);
         fs.unlinkSync(src);
         n++;
@@ -466,4 +448,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo };
+module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, dirInfo };
