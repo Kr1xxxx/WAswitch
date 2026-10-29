@@ -1,0 +1,46 @@
+# Windows 安装包实测：打真安装包，在 windows-latest 上装、更新、卸载，确认默认装到 D:\WAswitch\app、
+# 自动更新原地装且不动 D:\WAswitch 里的译文、老电脑的程序不挪。没有这个实测，改 NSIS 脚本是否正确没人知道。
+# 只在改了安装包相关的文件时跑，不拖慢平时的 CI。所有 action 按 commit 固定版本；只读权限。
+name: installer-win
+
+on:
+  pull_request:
+    paths:
+      - 'build/**'
+      - 'package.json'
+      - 'scripts/win-installer-test.ps1'
+      - '.github/workflows/installer-win.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'build/**'
+      - 'package.json'
+      - 'scripts/win-installer-test.ps1'
+      - '.github/workflows/installer-win.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 和发版一样：MCP 不进安装包，只带它的校验值
+      - name: 打包 MCP 模块
+        run: npm run build:mcp
+      - name: 打包（Windows 安装包）
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: 装、更新、卸载实测
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist\WAswitch-Setup-*.exe | Select-Object -First 1).FullName
+          pwsh -File scripts/win-installer-test.ps1 $setup

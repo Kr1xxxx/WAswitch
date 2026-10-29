@@ -842,23 +842,37 @@ async function persisted() {
   fc.forget('P');
   assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).filter((f) => f !== '_chats.json').length, 2, '删号不删存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
-  // 存哪：Windows 上 D 盘是本机固定硬盘才放 D 盘，U 盘/移动硬盘/网络盘/查不出来/写不进去都回到 C（userData）；Mac 不变；
-  // 'Fixed|'（类型是固定硬盘、只是查不出接口，动态磁盘、软件 RAID 这类）有意放 D：按本机硬盘算，改成放 C 会把已经在用 D 盘的电脑的译文搬回去；
-  // 旧文件搬过去一次，不覆盖新位置已有的
-  const { pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo } = require('../src/trstore');
+  // 存哪（同步判断，不调 PowerShell）：Windows 上 D:\WAswitch 已经存在（安装包确认 D 盘是本机硬盘后才建）并且写得进去才放 D 盘，
+  // 否则回到 C（userData）；软件自己不建 D:\WAswitch；Mac 不变。旧文件只从 C 搬到 D，选了 C 时 D 盘的一个都不动
+  const { pickDir, migrate, dirInfo } = require('../src/trstore');
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trdir-'));
   const oldDir = path.join(base, 'old');
-  const dDir = path.join(base, 'D', 'WAswitch', 'translations');
-  const fixed = async () => ({ type: 'Fixed', bus: 'NVMe' });
-  assert.strictEqual(await pickDir(oldDir, { platform: 'darwin', preferred: dDir, probe: fixed }), oldDir);
-  for (const [out, want] of [['Removable|USB', oldDir], ['Fixed|USB', oldDir], ['Fixed|SD', oldDir], ['Network|', oldDir], ['CDRom|', oldDir], ['NoRootDirectory|', oldDir], ['', oldDir], ['Fixed|SATA', dDir], ['Fixed|', dDir]]) {
-    assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: dDir, probe: async () => parseDriveProbe(out) }), want, `D 盘是 ${out || '查不出来'}`);
-  }
-  assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: dDir, probe: async () => { throw new Error('x'); } }), oldDir, '查盘出错就用 C');
-  assert.deepStrictEqual(parseDriveProbe('Fixed|NVMe\r\n'), { type: 'Fixed', bus: 'NVMe' });
-  assert(!isLocalFixed(parseDriveProbe('Fixed|7')), 'BusType 是数字 7 也是 USB');
+  const dRoot = path.join(base, 'D', 'WAswitch');
+  const dDir = path.join(dRoot, 'translations');
+  assert.strictEqual(pickDir(oldDir, { platform: 'darwin', root: dRoot }), oldDir, 'Mac 不变');
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', root: dRoot }), oldDir, 'D:\\WAswitch 不存在就用 C');
+  assert(!fs.existsSync(dRoot), '软件自己不建 D:\\WAswitch（没有它就可能是 U 盘）');
+  fs.mkdirSync(dRoot, { recursive: true });
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', root: dRoot }), dDir, '根目录在、写得进去就放 D');
+  assert(fs.statSync(dDir).isDirectory());
+  assert.deepStrictEqual(fs.readdirSync(dDir), [], '探测用的临时文件删干净');
   fs.writeFileSync(path.join(base, 'file'), '');
-  assert.strictEqual(await pickDir(oldDir, { platform: 'win32', preferred: path.join(base, 'file', 'x'), probe: fixed }), oldDir, '写不进去就用 C');
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', root: path.join(base, 'file') }), oldDir, '根目录是个文件，写不进去就用 C');
+  fs.mkdirSync(path.join(base, 'ro'));
+  fs.writeFileSync(path.join(base, 'ro', 'translations'), '');
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', root: path.join(base, 'ro') }), oldDir, 'translations 建不了就用 C');
+  fs.rmSync(dRoot, { recursive: true, force: true });
+  // 选了 C 时（D 盘暂时打不开）：D 盘的译文一个都不动，也不往 C 搬（审计第 3 条的回归）
+  fs.mkdirSync(path.join(dDir, 'A'), { recursive: true });
+  fs.writeFileSync(path.join(dDir, 'A', 'c0.json'), '{"k":0}');
+  fs.mkdirSync(path.join(oldDir, 'A'), { recursive: true });
+  fs.writeFileSync(path.join(oldDir, 'A', 'c9.json'), '{"k":9}');
+  const gone = path.join(base, 'D-gone');
+  assert.strictEqual(pickDir(oldDir, { platform: 'win32', root: path.join(gone, 'WAswitch') }), oldDir);
+  assert.strictEqual(fs.readFileSync(path.join(dDir, 'A', 'c0.json'), 'utf8'), '{"k":0}', '选了 C，D 盘的不动');
+  assert.strictEqual(fs.readFileSync(path.join(oldDir, 'A', 'c9.json'), 'utf8'), '{"k":9}', '选了 C，C 盘新存的留着');
+  fs.rmSync(path.join(base, 'D'), { recursive: true, force: true });
+  fs.rmSync(oldDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(oldDir, 'A'), { recursive: true });
   fs.writeFileSync(path.join(oldDir, 'A', 'c1.json'), '{"k":1}');
   fs.writeFileSync(path.join(oldDir, 'A', 'c2.json'), '{"k":"old"}');
