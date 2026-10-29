@@ -33,7 +33,7 @@
     "check:records": "node scripts/check-records.js && node scripts/check-undo.js",
     "check:import": "node scripts/check-import.js",
     "check:downloads": "node scripts/check-downloads.js",
-    "check:translate": "node scripts/check-drafts.js && node scripts/check-translate.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
+    "check:translate": "node scripts/check-drafts.js && node scripts/check-translate.js && node scripts/check-race.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
     "check:customer-time": "node scripts/check-customer-time.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:asr": "node scripts/check-asr.js && node scripts/check-lite-voice.mjs",

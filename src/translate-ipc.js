@@ -262,6 +262,18 @@ function setupTranslateIpc(ctx) {
     return ctx.translator.transcribe(pcm);
   }
 
+  // 付费的备用一次只翻一条：等主通道空下来、用户自己的翻译先翻（最多等 60 秒）
+  async function onMainLane(args) {
+    const until = Date.now() + 60000;
+    for (;;) {
+      if (!ctx.translator.busy && !userTr.waiting && !userTr.running) {
+        const r = await ctx.translator.translate(args);
+        if (!(r && r.kind === 'busy')) return r;
+      }
+      if (Date.now() > until) return { error: '上一段还在翻译', kind: 'busy' };
+      await new Promise((res) => setTimeout(res, 250));
+    }
+  }
   function setupFloatCore() {
     // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
@@ -285,6 +297,11 @@ function setupTranslateIpc(ctx) {
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
         if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+        // 默认服务商是免费的（智谱、混元）：同时发给有密钥的免费服务商，用先翻出来的；各走各的通道，
+        // 不占用户翻译用的那条，可以同时翻好几条（见 parallel）。都失败了才用付费的备用，一次一条
+        if (!slow && !fix && ctx.translator.raceSet().length) {
+          return ctx.translator.raceFree({ text, mode, target: '中文', context }, { paid: onMainLane });
+        }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
         // 在后台慢慢补翻的更早的消息：只用免费的智谱或混元，都没填密钥就不翻（留着「翻译」按钮）
@@ -297,6 +314,8 @@ function setupTranslateIpc(ctx) {
           .finally(() => { userTr.slow = false; });
       },
     });
+    // 同时翻几条：用免费服务商时 3 条，付费的（DeepL 等）一次一条
+    floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) pushFloat(); };
   }
   // 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
@@ -315,8 +334,10 @@ function setupTranslateIpc(ctx) {
     if (!readerOn() || floatBusy) return;
     const target = floatCanRead();
     let delay = 2000;
+    let readAt = 0;
     if (target) {
       floatBusy = true;
+      readAt = Date.now();
       let r;
       try {
         if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc);
@@ -346,9 +367,29 @@ function setupTranslateIpc(ctx) {
         }
       }
     }
-    scheduleFloat(delay);
+    // 网页号读到了对话：不干等 2 秒，页面上对话一有变化（客户发来新消息）就再读；没变化最多等 2 秒再读一次
+    if (target && !target.lite && delay === 2000 && floatReadable === 'ok') waitFloat(target.wc, readAt);
+    else scheduleFloat(delay);
+  }
+  const READ_GAP = 150; // 两次读之间至少隔 150 毫秒（页面一直在变时也不会一直读）
+  let floatWaitGen = 0;
+  let floatWaiting = false; // 正在等页面变化（等完会自己安排下一次读）
+  let floatWatchWc = null; // 在看着哪个页面（面板关了就停）
+  function waitFloat(wc, readAt) {
+    if (floatTimer) clearTimeout(floatTimer);
+    floatTimer = null;
+    const gen = ++floatWaitGen;
+    floatWaiting = true;
+    floatWatchWc = wc;
+    waPage.waitChatChange(wc, 2000).then(() => {
+      if (gen !== floatWaitGen) return; // 等的时候已经另外安排了（换号、开关面板……）
+      floatWaiting = false;
+      scheduleFloat(Math.max(0, READ_GAP - (Date.now() - readAt)));
+    });
   }
   function scheduleFloat(ms) {
+    floatWaitGen += 1;
+    floatWaiting = false;
     if (floatTimer) clearTimeout(floatTimer);
     floatTimer = readerOn() ? setTimeout(floatTick, ms) : null;
   }
@@ -431,8 +472,11 @@ function setupTranslateIpc(ctx) {
       floatReadable = 'loading';
       pushFloat();
       scheduleFloat(200);
-    } else if (readerOn() && !floatTimer && !floatBusy) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
-    if (!readerOn()) floatLastAcc = null;
+    } else if (readerOn() && !floatTimer && !floatBusy && !floatWaiting) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
+    if (!readerOn()) { // 面板关了：不再等页面变化，页面里也停止看着
+      floatLastAcc = null; floatWaitGen += 1; floatWaiting = false;
+      if (floatWatchWc) { waPage.stopChatWatch(floatWatchWc); floatWatchWc = null; }
+    }
   }
   function readerItem(h, fix) {
     if (typeof h !== 'string' || !ctx.activeId) return null;

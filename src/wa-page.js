@@ -361,6 +361,66 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
   }
 }
 
+// 等当前对话有变化（新消息、改了的消息、换了对话）：隔离环境里用 MutationObserver 只看着 #main，不改页面。
+// 有变化后再等 40 毫秒（一条消息常分几次加进页面），没变化最多等 ms 毫秒。返回 true = 有变化。
+// 看着的东西存在隔离环境里，每次等都接着用；两次等之间的变化也算（seq 记着）
+const WAIT_CHAT_CODE = (ms) => `(() => {
+  const SEL = ${JSON.stringify(SELECTORS.chatMain)};
+  let w = window.__wsChatWatch;
+  if (!w) {
+    w = window.__wsChatWatch = { seq: 0, seen: 0, main: null, waiters: [], t: 0 };
+    const fire = () => {
+      w.t = 0;
+      const list = w.waiters.splice(0);
+      for (const f of list) f(true);
+    };
+    w.hit = () => { w.seq += 1; if (!w.t && w.waiters.length) w.t = setTimeout(fire, 40); };
+    // 输入框（footer）和顶部（header，“正在输入…”“在线”）的变化不算：打字时不跟着一直读
+    const outside = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !el || !el.closest('header, footer'); };
+    w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target))) w.hit(); });
+    // #main 换了（切对话、关掉对话）：看它的父元素有没有增删子元素
+    w.outer = new MutationObserver(() => { if (document.querySelector(SEL) !== w.main) { w.bind(); w.hit(); } });
+    w.bind = () => {
+      w.inner.disconnect();
+      w.outer.disconnect();
+      w.main = document.querySelector(SEL);
+      if (!w.main) return;
+      w.inner.observe(w.main, { childList: true, subtree: true, characterData: true });
+      if (w.main.parentElement) w.outer.observe(w.main.parentElement, { childList: true });
+    };
+  }
+  if (document.querySelector(SEL) !== w.main) { w.bind(); w.seq += 1; }
+  if (w.seq !== w.seen) { w.seen = w.seq; return true; }
+  return new Promise((done) => {
+    const f = (v) => { clearTimeout(timer); w.seen = w.seq; done(v); };
+    const timer = setTimeout(() => { const i = w.waiters.indexOf(f); if (i >= 0) w.waiters.splice(i, 1); w.seen = w.seq; done(false); }, ${Math.max(0, Math.floor(ms))});
+    w.waiters.push(f);
+  });
+})()`;
+
+// 不用再等了（面板关了）：停止看着，下次等时再接上
+const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); w.main = null; } return 1; })()`;
+async function stopChatWatch(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  try { await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: STOP_WATCH_CODE }]); } catch {}
+}
+
+async function waitChatChange(wc, ms = 2000) {
+  if (wc.isDestroyed() || wc.isLoading()) return false;
+  let timer;
+  try {
+    // 页面在后台时计时器会被放慢：主进程这边也计时，最多多等 500 毫秒
+    return await Promise.race([
+      wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: WAIT_CHAT_CODE(ms) }]).then((v) => v === true),
+      new Promise((res) => { timer = setTimeout(() => res(false), ms + 500); }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 顶栏“客户当地时间”用：当前打开的对话是谁。只读标题和消息 data-id 中间一致的对话编号，
 // 私聊是“号码@c.us”，群是“…@g.us”），不读消息内容。号码只留在主进程，见 customer-time.js
 const READ_PEER_CODE = `(() => {
@@ -613,5 +673,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 
