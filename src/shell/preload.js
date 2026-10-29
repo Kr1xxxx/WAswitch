@@ -30,9 +30,6 @@ contextBridge.exposeInMainWorld('wa', {
   panelData: () => ipcRenderer.invoke('panel:data'),
   onPanelChanged: (cb) => ipcRenderer.on('panel:changed', () => cb()),
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
-  // 语音转文字：主进程把下载好的语音给界面解码（见 shell/voice.js）
-  onVoiceDecode: (cb) => ipcRenderer.on('voice:decode', (_e, req) => cb(req)),
-  voiceDecoded: (n, r) => ipcRenderer.send('voice:decoded', n, r),
   dockGet: () => ipcRenderer.invoke('dock:get'),
   dockItem: (h, fix) => ipcRenderer.invoke('dock:item', { h, fix: fix === true }),
   dockSuggest: (accountId, h, take) => ipcRenderer.invoke('dock:suggest', { accountId, h, take: take === true }),

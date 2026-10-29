@@ -87,24 +87,6 @@ class TrStore {
     return true;
   }
 
-  // 语音转出来的文字：还没翻成功也先存（heard），翻译失败、重启后不再花钱重转；没听出话的存空文字。
-  // 已经有译文的记录不动；之后翻好了 putKey 整条换掉
-  putHeard(acc, chat, key, text) {
-    const e = this.load(acc, chat);
-    if (!e || !HEX_KEY.test(String(key))) return;
-    const old = Object.hasOwn(e.data, key) ? e.data[key] : null;
-    if (old && typeof old.tr === 'string' && old.tr) return;
-    e.data[key] = { tr: '', text: String(text || '').slice(0, TEXT_MAX), heard: true, at: Date.now() };
-    this.touch(e);
-  }
-
-  // 存着的语音转写（没有返回 null；没听出话是 ''）
-  getHeard(acc, chat, key) {
-    const e = this.load(acc, chat);
-    const r = e && HEX_KEY.test(String(key)) && Object.hasOwn(e.data, key) ? e.data[key] : null;
-    return r && r.heard === true && typeof r.text === 'string' ? r.text : null;
-  }
-
   // 轻量号上次补原文时这个对话缓存里有几条（没补过是 -1）
   fillMark(acc, chat) {
     const e = this.load(acc, chat);
@@ -139,14 +121,13 @@ class TrStore {
     const v = e && e.data[VIEW_KEY];
     if (!v || !Array.isArray(v.list)) return [];
     return v.list.filter((x) => x && typeof x.h === 'string' && HEX_KEY.test(String(x.k)))
-      .map((x) => ({ h: x.h.slice(0, 64), k: x.k, t: typeof x.t === 'string' ? x.t.slice(0, 5) : '', ...(Number.isFinite(x.v) ? { v: x.v } : {}) }));
+      .map((x) => ({ h: x.h.slice(0, 64), k: x.k, t: typeof x.t === 'string' ? x.t.slice(0, 5) : '' }));
   }
 
   putView(acc, chat, list) {
     const e = this.load(acc, chat);
     if (!e || !Array.isArray(list)) return;
-    // v：语音的时长（秒），只有语音有
-    const next = list.slice(-VIEW_MAX).map(({ h, k, t, v }) => ({ h, k, t: t || '', ...(Number.isFinite(v) ? { v } : {}) }));
+    const next = list.slice(-VIEW_MAX).map(({ h, k, t }) => ({ h, k, t: t || '' }));
     const prev = e.data[VIEW_KEY];
     if (!prev && !next.length) return; // 打开过、没有收到消息的对话：不为它建文件
     if (prev && JSON.stringify(prev.list) === JSON.stringify(next)) return;

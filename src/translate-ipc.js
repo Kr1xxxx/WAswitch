@@ -14,7 +14,6 @@ const { makeOutTranslate } = require('./outcache');
 const { DraftStore } = require('./drafts');
 const { shortName } = require('./undo');
 const ReplyLang = require('./shell/reply-lang');
-const { friendly } = require('./errtext');
 
 function setupTranslateIpc(ctx) {
   const {
@@ -229,39 +228,6 @@ function setupTranslateIpc(ctx) {
       + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
     temperature: 0.2,
   };
-  // ---- 语音转文字（轻量号客户发来的语音） ----
-  // 后台进程下载语音（只走这个号自己的代理）→ 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
-  // 音频只在内存里，不写盘
-  let decodeN = 0;
-  const decodes = new Map(); // n -> { resolve, reject, timer }
-  function decodeVoice(bytes) {
-    const wc = ctx.shellView && ctx.shellView.webContents;
-    if (!wc || wc.isDestroyed()) return Promise.reject(new Error('界面没准备好'));
-    return new Promise((resolve, reject) => {
-      decodeN += 1;
-      const n = decodeN;
-      const timer = setTimeout(() => { decodes.delete(n); reject(new Error('解码超时')); }, 30000);
-      decodes.set(n, { resolve, reject, timer });
-      wc.send('voice:decode', { n, bytes });
-    });
-  }
-  onShell('voice:decoded', (n, r) => {
-    const d = decodes.get(n);
-    if (!d) return;
-    decodes.delete(n);
-    clearTimeout(d.timer);
-    if (r && r.pcm instanceof Int16Array && r.pcm.length) d.resolve(r.pcm); else d.reject(new Error('解不开'));
-  });
-  async function transcribeVoice(accId, src) {
-    const host = ctx.liteHost;
-    if (!host || !src || typeof src.jid !== 'string' || typeof src.id !== 'string') return { error: '找不到这条语音，请在手机上听', kind: 'other' };
-    let bytes;
-    try { bytes = await host.voice(accId, src.jid, src.id); } catch (e) { return { error: friendly(e, '下载语音失败，请重试').text, kind: 'network' }; }
-    let pcm;
-    try { pcm = await decodeVoice(bytes); } catch { return { error: '这条语音打不开，请在手机上听', kind: 'other' }; }
-    return ctx.translator.transcribe(pcm);
-  }
-
   function setupFloatCore() {
     // 先用上次的位置（D 盘有就是 D 盘，否则 C），后台查 D 盘是不是本机固定硬盘，定下来后把另一处的译文搬过来
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
@@ -279,7 +245,6 @@ function setupTranslateIpc(ctx) {
     floatCore = new FloatCore({
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
-      transcribe: (accId, src) => transcribeVoice(accId, src),
       translate: (text, { fix, context, prev, slow } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';

@@ -8,7 +8,7 @@
 //   - 被退出登录（401）或拒绝连接（403）后不再重连，交给用户处理
 import fs from 'node:fs';
 import net from 'node:net';
-import makeWASocket, { Browsers, DisconnectReason, downloadContentFromMessage } from 'baileys';
+import makeWASocket, { Browsers, DisconnectReason } from 'baileys';
 import QRCode from 'qrcode';
 import { makeTransport, makeDirectTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
@@ -17,8 +17,6 @@ import { waVersion, resetVersionCache } from './version.mjs';
 import { crmItem } from './crm.mjs';
 
 export const SEND_LIMIT = 10;
-export const VOICE_MAX_BYTES = 16 * 1024 * 1024; // 一条语音最多下载这么多（5 分钟的语音一般不到 1 MB）
-const VOICE_TIMEOUT_MS = 45 * 1000;
 const SEND_WINDOW_MS = 60 * 1000;
 const MAX_TEXT = 4000;
 const MAX_SAME_ERROR = 5; // 这些错误连续出现这么多次就不再重连
@@ -368,53 +366,6 @@ export class Session {
       return '';
     }
     return m ? m[1] : '';
-  }
-
-  // 转文字用：下载并解密客户发来的一条语音（OGG/Opus），只放内存，不写盘。
-  // 只走这个号自己的代理（transport.dispatcher）；链接过期（404/410）就请手机重新上传一次再下。
-  // opts.download 自检时替换
-  async voice(jid, id, opts = {}) {
-    const v = this.store?.voice(jid, id);
-    if (!v) throw new Error('找不到这条语音，请在手机上听');
-    if (!this.transport) throw new Error('还没连上，暂时不能转文字');
-    const download = opts.download || downloadContentFromMessage;
-    const get = async () => {
-      let stream = null;
-      let timer;
-      const read = (async () => {
-        stream = await download({ mediaKey: Buffer.from(v.mk, 'base64'), directPath: v.dp || undefined, url: v.url || undefined }, 'audio', { options: { dispatcher: this.transport.dispatcher } });
-        const parts = [];
-        let size = 0;
-        for await (const chunk of stream) {
-          size += chunk.length;
-          if (size > VOICE_MAX_BYTES) throw new Error('语音太大，请在手机上听');
-          parts.push(chunk);
-        }
-        return Buffer.concat(parts);
-      })();
-      const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('下载语音超时')), VOICE_TIMEOUT_MS); });
-      try {
-        return await Promise.race([read, late]);
-      } finally {
-        clearTimeout(timer);
-        read.catch(() => {});
-        try { stream?.destroy?.(); } catch { /* 已经结束 */ }
-      }
-    };
-    try {
-      return await get();
-    } catch (e) {
-      const code = e?.output?.statusCode || e?.data?.statusCode;
-      if (![404, 410].includes(code) || !this.sock || this.status !== 'open') throw e;
-      // 链接过期：让手机重新上传（手机要在线），拿到新地址再下一次
-      const message = { audioMessage: { mediaKey: Buffer.from(v.mk, 'base64'), directPath: v.dp, url: v.url } };
-      const updated = await this.sock.updateMediaMessage({ key: { remoteJid: jid, id, fromMe: false, ...(v.p ? { participant: v.p } : {}) }, message });
-      const a = updated?.message?.audioMessage || message.audioMessage;
-      this.store.setVoicePath(jid, id, a.directPath, a.url);
-      v.dp = a.directPath || v.dp;
-      v.url = a.url || v.url;
-      return get();
-    }
   }
 
   async send(jid, text) {
