@@ -52,6 +52,7 @@ const ICONS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   copy: '<rect x="4" y="8" width="12" height="12" rx="2.5"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
   swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
+  voice: '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
 };
 

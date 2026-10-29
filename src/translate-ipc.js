@@ -8,7 +8,8 @@ const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { needsKey, extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
-const { FloatCore, fromLite } = require('./floatcore');
+const { FloatCore, fromLite, VOICE_MAX_S } = require('./floatcore');
+const webVoice = require('./web-voice');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
 const { DraftStore } = require('./drafts');
@@ -229,8 +230,9 @@ function setupTranslateIpc(ctx) {
       + '保留数字、链接、表情和换行，不增加任何承诺。只输出改好的译文，不要解释。',
     temperature: 0.2,
   };
-  // ---- 语音转文字（轻量号客户发来的语音） ----
-  // 后台进程下载语音（只走这个号自己的代理）→ 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
+  // ---- 语音转文字（客户发来的语音） ----
+  // 轻量号：后台进程下载语音；网页号：读 WhatsApp 本机存储里的下载信息，用这个号自己的会话下载解密（见 web-voice.js）。
+  // 都只走这个号自己的代理 → 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
   // 音频只在内存里，不写盘
   let decodeN = 0;
   const decodes = new Map(); // n -> { resolve, reject, timer }
@@ -252,14 +254,44 @@ function setupTranslateIpc(ctx) {
     clearTimeout(d.timer);
     if (r && r.pcm instanceof Int16Array && r.pcm.length) d.resolve(r.pcm); else d.reject(new Error('解不开'));
   });
-  async function transcribeVoice(accId, src) {
-    const host = ctx.liteHost;
-    if (!host || !src || typeof src.jid !== 'string' || typeof src.id !== 'string') return { error: '找不到这条语音，请在手机上听', kind: 'other' };
+  // 网页号页面重新加载后：之前连续读不到语音的记录清掉（见 FloatCore.voiceReset）
+  const hooked = new WeakSet();
+  async function webVoiceBytes(acc, src, opts) {
+    const view = views.get(acc.id);
+    const wc = view && view.webContents;
+    if (!wc || wc.isDestroyed()) return { error: '页面还没准备好，请稍后重试', kind: 'other' };
+    if (!hooked.has(wc)) { hooked.add(wc); wc.on('did-finish-load', () => { if (floatCore) floatCore.voiceReset(acc.id); }); }
+    const ses = session.fromPartition(`persist:wa-${acc.id}`);
+    const r = await webVoice.fetchVoice(wc, (url, o) => ses.fetch(url, o), src.dataId, { accId: acc.id, maxSeconds: opts && opts.auto ? VOICE_MAX_S : 0 });
+    if (r.ok) return r;
+    const seconds = r.seconds || 0;
+    if (r.kind === 'long') return { kind: 'long', seconds };
+    if (r.kind === 'expired') return { error: '语音已过期，在 WhatsApp 里播放一次后重试', kind: 'expired', code: r.code, seconds };
+    if (r.kind === 'network') return { error: friendly(r.error, '下载语音失败，请重试').text, kind: 'network', code: r.code, seconds };
+    if (r.kind === 'nomedia' || r.kind === 'badfile') return { error: '读不到这条语音，请在 WhatsApp 里听', kind: r.kind, code: r.code, seconds };
+    // 页面正在加载：自动转的退回按钮，下次再排（不报错）
+    if (opts && opts.auto) return { kind: 'later' };
+    return { error: '页面还没准备好，请稍后重试', kind: 'other', code: r.code, seconds };
+  }
+  async function transcribeVoice(accId, src, opts = {}) {
+    const acc = findAcc(accId);
     let bytes;
-    try { bytes = await host.voice(accId, src.jid, src.id); } catch (e) { return { error: friendly(e, '下载语音失败，请重试').text, kind: 'network' }; }
+    let seconds = 0;
+    if (acc && !isLite(acc) && src && typeof src.dataId === 'string') {
+      const r = await webVoiceBytes(acc, src, opts);
+      if (!r.ok) return r;
+      bytes = r.data;
+      seconds = r.seconds;
+    } else {
+      const host = ctx.liteHost;
+      if (!host || !src || typeof src.jid !== 'string' || typeof src.id !== 'string') return { error: '找不到这条语音，请在手机上听', kind: 'other' };
+      try { bytes = await host.voice(accId, src.jid, src.id); } catch (e) { return { error: friendly(e, '下载语音失败，请重试').text, kind: 'network' }; }
+    }
     let pcm;
-    try { pcm = await decodeVoice(bytes); } catch { return { error: '这条语音打不开，请在手机上听', kind: 'other' }; }
-    return ctx.translator.transcribe(pcm);
+    try { pcm = await decodeVoice(bytes); } catch { return { error: acc && !isLite(acc) ? '这条语音打不开，请在 WhatsApp 里听' : '这条语音打不开，请在手机上听', kind: 'other', seconds }; } finally { if (Buffer.isBuffer(bytes)) bytes.fill(0); }
+    const r = await ctx.translator.transcribe(pcm);
+    pcm.fill(0);
+    return seconds ? { ...r, seconds } : r;
   }
 
   // 付费的备用一次只翻一条：等主通道空下来、用户自己的翻译先翻（最多等 60 秒）
@@ -291,7 +323,7 @@ function setupTranslateIpc(ctx) {
     floatCore = new FloatCore({
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
-      transcribe: (accId, src) => transcribeVoice(accId, src),
+      transcribe: (accId, src, _seconds, opts) => transcribeVoice(accId, src, opts),
       translate: (text, { fix, context, prev, slow } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';

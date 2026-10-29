@@ -16,6 +16,7 @@
     "check:lite": "node scripts/run-check-lite.js",
     "check:lite-unread": "node scripts/check-lite-unread.mjs",
     "check:wa-page": "electron scripts/check-wa-page.js",
+    "check:web-voice": "electron scripts/check-web-voice.js",
     "check:draft": "electron scripts/check-draft.js",
     "check:read-messages": "electron scripts/check-read-messages.js",
     "check:view-race": "node scripts/check-view-race.js",

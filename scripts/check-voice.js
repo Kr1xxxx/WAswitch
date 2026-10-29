@@ -53,6 +53,11 @@ const scenario = async () => {
     it('v4', { state: 'error', err: '智谱余额不足，语音转文字要先充值' }),
     it('v5', { voice: 412, note: 'long' }),
     it('v6', { state: 'error', err: '智谱还没填密钥', errPid: 'z' }),
+    // 网页号：时长还不知道；读不到、过期
+    it('w1', { voice: 0 }),
+    it('w2', { voice: 0, state: 'error', err: '读不到这条语音，请在 WhatsApp 里听', code: 'W2 no_media_fields' }),
+    it('w4', { voice: 12, state: 'done', text: 'Ok', tr: '' }),
+    it('w3', { voice: 41, state: 'error', err: '语音已过期，在 WhatsApp 里播放一次后重试', code: 'W2 http_410' }),
   ];
   window.__dock = { ...base, items };
   window.__cbs.state({ accounts: [{ id: 'a1', name: 'Sophie', color: '#3b82f6', lite: true }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
@@ -64,16 +69,25 @@ const scenario = async () => {
   const info = (h) => {
     const el = row(h);
     if (!el) return null;
-    const tag = el.querySelector('.dk-voice');
+    const tag = el.querySelector('.dk-voice, .dk-voice-btn');
+    const next = tag && tag.nextElementSibling;
+    const tr = tag && tag.getBoundingClientRect();
+    const nr = next && next.getBoundingClientRect();
+    // 图标在左边、和右边的文字在同一行
+    const beside = !!(tr && nr && tr.right <= nr.left + 1 && Math.abs(tr.top - nr.top) < 8);
     const btns = [...el.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean);
     const lineH = (n) => (n ? Math.round(n.getBoundingClientRect().height) : 0);
     const clipped = [...el.querySelectorAll('.dk-voice, .dk-link')].some((n) => n.scrollWidth > n.clientWidth + 1);
-    return { tag: tag ? tag.textContent : '', tagH: lineH(tag), text: el.textContent, btns, clipped, linkH: [...el.querySelectorAll('.dk-link')].map(lineH) };
+    const bad = el.querySelector('.dk-tr.bad');
+    return { code: bad ? bad.getAttribute('title') || '' : '', tag: tag ? String(tag.getAttribute('title') || '').split('，')[0] : '', beside, svg: !!(tag && tag.querySelector('svg')), text: el.textContent, btns, clipped, linkH: [...el.querySelectorAll('.dk-link')].map(lineH) };
   };
   const out = {};
   for (const x of items) out[x.h] = info(x.h);
   const panel = document.querySelector('.dk-list');
   out.panelW = panel ? Math.round(panel.getBoundingClientRect().width) : 0;
+  // 点语音图标：展开识别出的原文
+  row('v3').querySelector('.dk-voice-btn').click();
+  out.v3open = row('v3').querySelector('.dk-fold').classList.contains('open');
   // 点「转文字」：叫主进程翻这一条
   row('v1').querySelector('.dk-link').click();
   return out;
@@ -87,20 +101,27 @@ async function rowsCheck() {
   const r = await w.webContents.executeJavaScript(`(${scenario})()`);
   assert.deepStrictEqual(errs, [], `页面没有报错：${errs.join('\n')}`);
   assert(r.panelW > 200 && r.panelW <= 400, `工作台宽度 ${r.panelW}`);
-  const lineH = r.v1.tagH;
-  assert(lineH > 0 && lineH <= 20, `「语音 0:23」一行高 ${lineH}`);
+  const lineH = 24;
   assert.strictEqual(r.v1.tag, '语音 0:23');
   assert.deepStrictEqual(r.v1.btns, ['转文字']);
   assert(r.v2.text.includes('转文字中…') && !r.v2.text.includes('翻译中'), r.v2.text);
   assert(r.v3.text.includes('你好，这顶假发还有货吗？') && r.v3.btns.includes('纠错') && r.v3.btns.includes('编辑'), JSON.stringify(r.v3));
   assert(r.v3.text.includes('Bonjour'), '转出来的原文可展开（在页面上，默认收起）');
+  assert.strictEqual(r.v3.tag, '语音 0:23');
+  assert.strictEqual(r.v3open, true, '点语音图标展开识别的原文');
   assert(r.v4.text.includes('余额不足') && r.v4.btns.includes('重试'), JSON.stringify(r.v4));
   assert.strictEqual(r.v5.tag, '语音 6:52');
   assert.deepStrictEqual(r.v5.btns, ['转文字（太长，只转前 5 分钟）']);
   assert(r.v6.btns.includes('去填密钥') && r.v6.btns.includes('重试'), JSON.stringify(r.v6));
-  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6']) {
+  assert.strictEqual(r.w1.tag, '语音');
+  assert.deepStrictEqual(r.w1.btns, ['转文字']);
+  assert(r.w2.text.includes('读不到这条语音') && r.w2.btns.includes('重试') && r.w2.code === 'W2 no_media_fields', JSON.stringify(r.w2));
+  assert(r.w3.text.includes('语音已过期') && r.w3.btns.includes('重试') && r.w3.tag === '语音 0:41', JSON.stringify(r.w3));
+  assert.strictEqual(r.w4.tag, '语音 0:12', '有原文没译文时也有语音图标');
+  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'w1', 'w2', 'w3', 'w4']) {
     assert(!r[h].clipped, `${h} 的文字被裁了`);
-    assert.strictEqual(r[h].tagH, lineH, `${h} 的「语音」换行了`);
+    assert(r[h].svg && r[h].beside, `${h} 的语音图标不在左边同一行：${JSON.stringify(r[h])}`);
+    assert(!r[h].text.includes('语音 '), `${h} 不再写「语音」字样`);
   }
   for (const h of ['v1', 'v5']) for (const x of r[h].linkH) assert(x <= lineH + 8, `${h} 的按钮换行了（${x}px）`);
   w.destroy();
