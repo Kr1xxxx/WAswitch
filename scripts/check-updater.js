@@ -23,6 +23,11 @@ check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话�
 check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都只设直连，不设任何别的代理');
 check(/redirect:\s*'manual'/.test(code), 'Mac 下载手动跟重定向（每一跳都检查主机）');
 
+// 自动更新不经用户点击，所以主进程的 busyReason 要把键盘之外的操作（鼠标、选图片、上传媒体）也算在用
+const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+const busyFn = (mainSrc.match(/function updateBusyReason\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+check(/idleSeconds\(\) < TYPING_MS \/ 1000/.test(busyFn) && /lastTypedAt/.test(busyFn) && /liteHost\.busy\(\)/.test(busyFn), 'main.js：自动更新前除了打字，键盘鼠标的系统空闲时间、发消息、扫码、页面加载也要等');
+
 // ---------- 假的 electron ----------
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-upd-'));
 const routes = new Map(); // url -> { status, body, location }
@@ -134,8 +139,9 @@ const fakeOps = {
   launch: (script, args) => launched.push({ script, args }),
 };
 let idle = null;
+let busyNow = null; // 用户手上在忙（打字、编辑账号等）：默认模式下先等
 const make = () => new Updater({
-  onChange() {}, idleReason: () => idle, beforeInstall: async () => {}, installFailed: async () => { installFailedCalls += 1; },
+  onChange() {}, idleReason: () => idle, busyReason: () => busyNow, waitPollMs: 20, beforeInstall: async () => {}, installFailed: async () => { installFailedCalls += 1; },
   notify: (t, b, click) => notes.push({ t, click }), idleMs: 200, macOps: fakeOps,
 });
 const updatesDir = path.join(home, 'updates');
@@ -149,7 +155,7 @@ const updatesDir = path.join(home, 'updates');
   const staged = path.join(updatesDir, 'staging', 'WAswitch.app');
   check(u.state.status === 'downloaded' && u.state.version === '0.3.0' && u.state.percent === 100, `Mac：下载并校验通过（${u.state.status} ${u.state.lastResult}）`);
   check(fs.existsSync(file) && fs.readFileSync(file).equals(dmg) && !fs.existsSync(`${file}.part`), 'Mac：安装包存到数据目录，没有残留 .part');
-  check(notes.length === 1, 'Mac：下载好后弹通知');
+  check(notes.length === 1 && opened.length === 0, 'Mac 手动：后台下完只弹通知，不自己打开安装包');
   notes[0].click();
   check(opened.includes(staged) && opened.includes('/Applications'), 'Mac 手动：点通知在 Finder 里选中新 WAswitch.app 并打开「应用程序」');
   check(u.state.manual && launched.length === 0 && quits === 0, 'Mac 手动：不在「应用程序」里时不自动替换');
@@ -272,14 +278,13 @@ const updatesDir = path.join(home, 'updates');
   check(!fs.existsSync(path.join(updatesDir, 'WAswitch-0.1.0-arm64.zip')) && !fs.existsSync(path.join(updatesDir, 'WAswitch-0.1.0-arm64.dmg')), 'Mac：启动时清掉已经装过的旧安装包');
   serve();
   notes.length = 0;
-  idle = '窗口开着';
+  busyNow = '正在打字';
   await u.check();
-  check(u.state.status === 'downloaded' && fs.existsSync(staged) && notes.length === 0 && launched.length === 0, `Mac 自动：下好解压，不弹拖拽提示，用户在用时不装（${u.state.lastResult}）`);
-  idle = null;
-  u.maybeAutoInstall();
-  await new Promise((r) => setTimeout(r, 20));
+  check(u.state.status === 'downloaded' && fs.existsSync(staged) && notes.length === 0 && launched.length === 0 && u.state.waitReason === '正在打字', `Mac 自动：下好解压，不弹拖拽提示，正在打字时先不装（${u.state.lastResult}）`);
+  busyNow = null;
+  await new Promise((r) => setTimeout(r, 60));
   const l = launched[0];
-  check(launched.length === 1 && quits === 1 && l && l.args[0] === String(process.pid) && l.args[1] === bundle && l.args[2] === staged && /install-failed/.test(l.args[3]), `Mac 自动：空闲时启动替换脚本并退出（${JSON.stringify(l && l.args)}）`);
+  check(launched.length === 1 && quits === 1 && l && l.args[0] === String(process.pid) && l.args[1] === bundle && l.args[2] === staged && /install-failed/.test(l.args[3]), `Mac 自动：停手后启动替换脚本并退出（${JSON.stringify(l && l.args)}）`);
   check(l && fs.readFileSync(l.script, 'utf8') === MAC_INSTALL_SCRIPT, 'Mac 自动：替换脚本写到数据目录');
   // 用户点“检查并更新”：下好后不等空闲，马上重启安装（一次点击就够）
   fs.rmSync(path.join(updatesDir, 'staging'), { recursive: true, force: true });
@@ -287,11 +292,31 @@ const updatesDir = path.join(home, 'updates');
   quits = 0;
   idle = '窗口开着';
   u = make();
+
   u.setupMac();
   u.userUpdate();
   check(u.state.userAsked, '点“检查并更新”后记下用户要更新');
   for (let i = 0; i < 50 && !launched.length; i += 1) await new Promise((r) => setTimeout(r, 20));
   check(launched.length === 1 && quits === 1, `Mac：用户点了更新，下好后窗口开着也直接重启安装（${u.state.status} ${u.state.lastResult}）`);
+  check(!u.state.later, '点“立即更新”清掉“稍后”');
+  // “稍后”只管点它的那个版本：换了新版本清掉；同一个版本重新开始下载（比如安装没启动后再查到）不清
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+  u = make();
+  u.setupMac();
+  u.set({ version: '0.2.9' });
+  u.userLater();
+  check(u.state.later, '点“稍后”后记下 later');
+  await u.check();
+  check(u.state.status === 'downloaded' && u.state.version === '0.3.0' && !u.state.later, `新版本开始下载时清掉“稍后”（later=${u.state.later}）`);
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+  u = make();
+  u.setupMac();
+  u.set({ version: '0.3.0' });
+  u.userLater();
+  launched.length = 0;
+  await u.check();
+  check(u.state.status === 'downloaded' && u.state.later && launched.length === 0, `同一个版本重新下载，“稍后”还算数（later=${u.state.later}）`);
+  idle = null;
   idle = null;
   // 已是最新版：用户的“要更新”不留着
   serve({ tag: 'v0.2.0' });
@@ -308,9 +333,27 @@ const updatesDir = path.join(home, 'updates');
     w.updater = { quitAndInstall: () => { installs += 1; } };
     w.set({ status: 'downloaded', version: '0.3.0', manual: false });
     idle = '窗口开着';
+    // 后台下完、什么都没点、手上没在忙：马上装，窗口开着也一样
     w.maybeAutoInstall();
     await new Promise((r) => setTimeout(r, 10));
-    check(installs === 0, 'Windows：没点更新、用户在用时不自动装');
+    check(installs === 1, 'Windows：后台下完不用点任何按钮，手上没在忙就马上安装');
+    // 点了“稍后”：窗口开着不装，缩到托盘空闲后才装
+    const wl = make();
+    wl.mac = false;
+    installs = 0;
+    wl.updater = { quitAndInstall: () => { installs += 1; } };
+    wl.set({ status: 'downloaded', version: '0.3.0', manual: false });
+    wl.userLater();
+    wl.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 0 && wl.state.later && !wl.state.waitReason, 'Windows：点了“稍后”，窗口开着不自动装');
+    idle = null;
+    wl.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 1, 'Windows：点了“稍后”，空闲后自动装');
+    idle = '窗口开着';
+    installs = 0;
+    w.installing = false;
     w.userUpdate();
     await new Promise((r) => setTimeout(r, 10));
     check(installs === 1, 'Windows：已下好时点一下就重启安装');
@@ -362,7 +405,25 @@ const updatesDir = path.join(home, 'updates');
     await new Promise((r) => setTimeout(r, 60));
     w4.maybeAutoInstall();
     await new Promise((r) => setTimeout(r, 10));
-    check(installs4 === 0 && !w4.state.userAsked && !w4.state.waitReason, 'Windows：等停手时点“稍后”，窗口开着就不自动重启');
+    check(installs4 === 0 && !w4.state.userAsked && w4.state.later && !w4.state.waitReason, 'Windows：等停手时点“稍后”，窗口开着就不自动重启');
+    // 后台下完（没点任何按钮）时正在打字：先等，waitReason 写出来，停手后自动装
+    busy = '正在打字';
+    let installs5 = 0;
+    const w5 = new Updater({
+      onChange() {}, idleReason: () => '窗口开着', busyReason: () => busy, beforeInstall: async () => {}, installFailed: async () => {},
+      notify: () => {}, idleMs: 200, waitPollMs: 20, macOps: fakeOps,
+    });
+    w5.mac = false;
+    w5.updater = { quitAndInstall: () => { installs5 += 1; } };
+    w5.set({ status: 'downloading', version: '0.3.0', manual: false });
+    w5.succeed('downloaded', 'ok', { version: '0.3.0', percent: 100 });
+    w5.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 60));
+    check(installs5 === 0 && w5.state.waitReason === '正在打字' && !w5.state.userAsked, `Windows：后台下完时正在打字，先不装（${w5.state.waitReason}）`);
+    busy = null;
+    await new Promise((r) => setTimeout(r, 60));
+    check(installs5 === 1 && !w5.state.waitReason, 'Windows：停手后自动安装并重新打开');
+    check(w5.trayText() === '新版本 0.3.0 已下载', `托盘提示不写“重启”（${w5.trayText()}）`);
     idle = null;
   }
   // 上次替换失败：这次改成手动

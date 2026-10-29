@@ -665,7 +665,7 @@ const notifier = new Notifier({
     if (!u || u.status !== 'downloaded') return [];
     return u.manual
       ? [{ label: `打开新版本 ${u.version} 的安装包`, click: () => updater.openMacInstaller() }]
-      : [{ label: `重启以更新到 ${u.version}`, click: () => updater.install() }];
+      : [{ label: `立即更新到 ${u.version}`, click: () => updater.install() }];
   },
 });
 
@@ -2519,12 +2519,21 @@ function updateIdleReason() {
   return null;
 }
 
-// 用户点了更新、已经下好：窗口开着时，30 秒内打过字、在编辑账号或正在确认操作，先不重启
+// 下好后默认直接自动更新（用户没点任何按钮），所以会打断手上操作的几项窗口开不开都要等；
+// 窗口开着时，30 秒内打过字、在编辑账号也先等
 function updateBusyReason() {
+  if (liteHost && liteHost.busy()) return '有消息在发';
+  if (accounts.some((a) => isLite(a) && liteStates.get(a.id)?.status === 'qr')) return '有账号在扫码';
+  // 网页版停在二维码页、且 10 分钟内刚加载过：可能有人正要扫码。长期掉线的号不挡更新
+  if (accounts.some((a) => !isLite(a) && loginStates.get(a.id) === 'needs_qr' && Date.now() - (webLoadedAt.get(a.id) || 0) < QUIET_MS)) return '有账号在扫码';
+  if (pendingLoad.size || [...views.values()].some((v) => !v.webContents.isDestroyed() && v.webContents.isLoading())) return '有页面在加载';
+  if (rebuilding.size) return '有页面在重建';
+  if (confirmDialogOpen || clearingCache) return '正在操作';
   if (!win || !win.isVisible() || win.isMinimized()) return null;
   if (page === 'editor') return '正在编辑账号';
-  if (confirmDialogOpen || clearingCache) return '正在操作';
   if (Date.now() - lastTypedAt < TYPING_MS) return '正在打字';
+  // 键盘之外的操作（鼠标点击、选图片、上传媒体）也算在用：系统空闲时间键盘鼠标都看
+  if (idleSeconds() < TYPING_MS / 1000) return '正在操作';
   return null;
 }
 
@@ -3265,10 +3274,10 @@ handleShell('exit:ack', ({ id } = {}) => {
   return { ok: true };
 });
 
-// 关于页：检查更新、重启以更新（Mac：打开安装包）
-onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动重启安装
-onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动重启了
-onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动重启
+// 关于页：检查更新、立即更新（Mac：打开安装包）
+onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后马上安装
+onShell('update:later', () => updater?.userLater()); // 点了“稍后”：改成缩到托盘空闲时再装
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后一样自动更新（等手上的事做完）
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）
