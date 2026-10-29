@@ -95,6 +95,41 @@ async function core() {
   await sendNoJump();
   scrollNoBottom();
   await reopenKeepsAll();
+  await savedNotInBackfill();
+}
+
+// 切到一个对话补翻最近 5 条时，以前翻过、存着的不占名额（shen 2026-10-29 截图：后面 4 条存着译文，
+// 前面 3 条没翻、只剩「翻译」按钮）。打开自动翻译时的补翻也一样
+async function savedNotInBackfill() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-backfill-'));
+  const store = new TrStore(dir);
+  const sent = [];
+  const fc = new FloatCore({ store, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  const chat = '31612345678@c.us';
+  const texts = ['Hi', 'Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oh, I see', 'OK, next order then', 'Can you send it to my husband?', 'Oohhh'];
+  const msgs = texts.map((text, i) => ({ id: `false_${chat}_3EB${i}`, out: false, text }));
+  const ck = hashOf('N', `chat|${chat}`);
+  for (const t of texts.slice(5, 8)) store.put('N', ck, t, { tr: `存:${t}` });
+  fc.ingest('N', { title: 'Sanne', bottom: true, msgs }, { auto: true, dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oohhh'], '存着的不占补翻的 5 条');
+  assert.deepStrictEqual(fc.viewOf('N').items.map((x) => x.state), ['manual', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']);
+  // 自动关着打开对话，再打开自动：补翻的 5 条也不算存着的
+  sent.length = 0;
+  const msgs2 = texts.map((text, i) => ({ id: `false_${chat}_3EC${i}`, out: false, text: i < 5 ? `Old ${i}` : text }));
+  fc.ingest('M', { title: 'Sanne', bottom: true, msgs: msgs2.map((m) => ({ ...m })) }, { auto: false, dailyCap: 500 });
+  for (const t of texts.slice(5)) store.put('M', hashOf('M', `chat|${chat}`), t, { tr: `存:${t}` });
+  fc.forget('M');
+  fc.ingest('M', { title: 'Sanne', bottom: true, msgs: msgs2 }, { auto: false, dailyCap: 500 });
+  fc.backfill('M', { dailyCap: 500 });
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['Old 0', 'Old 1', 'Old 2', 'Old 3', 'Old 4']);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('补翻不算存着的译文自检通过');
 }
 
 // 重新打开对话、重启软件后，翻译栏上以前的译文一条不少（shen 2026-10-28「后续打开页面，翻译的文本都一直在这」）：

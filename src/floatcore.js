@@ -174,8 +174,8 @@ class FloatCore {
     }
     // 只保留最近 200 条（最早的先删）
     while (st.items.size > KEEP_PER_ACCOUNT) st.items.delete(st.items.keys().next().value);
-    // 刚切到这个对话：已经在屏幕上的旧消息只补翻最后 5 条；之后新来的都算
-    const candidates = newChat ? fresh.slice(-BACKFILL) : fresh;
+    // 刚切到这个对话：已经在屏幕上的旧消息只补翻最后 5 条还没翻的（以前翻过、存着的不占这 5 条）；之后新来的都算
+    const candidates = newChat ? fresh.filter((it) => it.state === 'manual').slice(-BACKFILL) : fresh;
     if (opts.auto) for (const item of candidates) this.queueAuto(accId, st, item, opts, recent);
     let view = msgs.filter((m) => !m.out && String(m.text || '').trim()).map((m) => hashOf(accId, m.id));
     // 读页面只读最后 20 条（双方）：自己每发一条，最老的一条就被挤出去。还是同一个对话、和上次读到的接得上，
@@ -255,10 +255,10 @@ class FloatCore {
     return hs.length > 0 && st.seen.includes(hs[hs.length - 1]);
   }
 
-  // 打开自动翻译：当前对话最近 5 条还没翻的补上
+  // 打开自动翻译：当前对话最近 5 条还没翻的补上（翻过的不占这 5 条）
   backfill(accId, opts) {
     const st = this.acc(accId);
-    const items = st.view.map((h) => st.items.get(h)).filter(Boolean).slice(-BACKFILL);
+    const items = st.view.map((h) => st.items.get(h)).filter((it) => it && it.state === 'manual').slice(-BACKFILL);
     for (const item of items) this.queueAuto(accId, st, item, { ...opts, auto: true });
     this.pump();
   }
