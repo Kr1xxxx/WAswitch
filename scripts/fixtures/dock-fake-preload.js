@@ -8,6 +8,8 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   if (k === 'dockDraft') return (acc, chat, d) => { (window.__drafts = window.__drafts || []).push({ acc, chat, d: JSON.parse(JSON.stringify(d)) }); };
   if (k === 'trRun') return (a) => (window.__trRun ? window.__trRun(a) : Promise.resolve({ text: `EN:${a.text}`, warn: [] }));
   if (k === 'dockLang') return async () => window.__dock || null;
+  if (k === 'panelData') return async () => ({ replies: [], customers: [] });
+  if (k === 'panelTab') return (tab) => { (window.__panelTabs = window.__panelTabs || []).push(tab); };
   if (k === 'panelInsert') return async () => window.__insertResult || null;
   if (k === 'trPage') return async (a) => { (window.__trCalls = window.__trCalls || []).push(a); return window.__trPage ? window.__trPage(a) : null; };
   return async () => null;

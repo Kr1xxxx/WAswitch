@@ -7,9 +7,10 @@
 // 启动 1 分钟后查一次，之后每 6 小时查一次，有新版就自动下载。
 //
 // Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
-//   - 用户点“重启以更新”（关于页或托盘菜单）；
-//   - 窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
-//     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）。
+//   - 默认：下载完就自动静默安装并重新打开，只等用户手上的事做完（30 秒内打过字、在编辑账号等）；
+//   - 用户点过“稍后”：改成窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
+//     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）；
+//   - 用户点“立即更新”（侧栏、关于页或托盘菜单）：马上安装。
 // macOS：没有签名证书，electron-updater 的 Mac 流程（Squirrel.Mac）用不了，自己做：
 //   下载 zip，按 latest-mac.yml 里的 sha512 校验，用 ditto 解压，确认是 WAswitch.app、版本号对得上。
 //   App 在「应用程序」里且有写权限时，和 Windows 一样的安装时机：App 退出后由一个小脚本替换旧的 WAswitch.app、
@@ -240,8 +241,9 @@ class Updater {
       failures: 0,
       mac: this.mac,
       manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
-      userAsked: false, // 用户点了“检查并更新”：下好后不等空闲就重启安装，不用再点一次（只等用户停手）
-      waitReason: '', // 用户点了更新、已经下好，但还在打字：等停手再重启
+      userAsked: false, // 用户点了“检查并更新”（Mac 手动模式下：下好后直接打开安装包）
+      later: false, // 用户对这个版本点了“稍后”：下好后不等用户停手，改成缩到托盘空闲时再装
+      waitReason: '', // 已经下好，但用户还在打字：等停手再自动更新
     };
     this.updater = null;
     this.ops = hooks.macOps || macOps;
@@ -291,7 +293,7 @@ class Updater {
   trayText() {
     const s = this.state;
     if (s.status === 'downloading') return `正在下载新版本 ${s.percent}%`;
-    if (s.status === 'downloaded') return s.manual ? `新版本 ${s.version} 已下载` : `新版本 ${s.version} 已下载，重启后生效`;
+    if (s.status === 'downloaded') return `新版本 ${s.version} 已下载`;
     return '';
   }
 
@@ -306,21 +308,25 @@ class Updater {
     this.set({ status, lastCheckAt: Date.now(), lastResult, lastDetail: '', failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
   }
 
-  // 用户点“检查并更新”（或下载中点“下好后自动重启”）：一次点击 = 同意下好后马上重启安装
+  // 用户点“检查并更新”“立即更新”：下好后马上安装
   userUpdate() {
     const s = this.state.status;
     if (s === 'dev' || s === 'off') return;
     if (s === 'downloaded') { this.install(); return; }
-    this.set({ userAsked: true });
+    this.set({ userAsked: true, later: false });
     if (s !== 'checking' && s !== 'downloading') this.check();
   }
 
-  // 下好后在等用户停手时点了“稍后”：不自动重启了，改回空闲（缩到托盘）时再装
+  // “稍后”只管点它的那个版本：同一个版本重新开始下载（比如安装没启动、6 小时后再查到）还算点过，换了新版本才清掉
+  laterFor(version) {
+    return this.state.later && this.state.version === version;
+  }
+
+  // 用户点了“稍后”：不再等用户停手就装，改回空闲（缩到托盘）时再装
   userLater() {
-    if (!this.state.userAsked) return;
     clearTimeout(this.waitTimer);
     this.waitTimer = null;
-    this.set({ userAsked: false, waitReason: '' });
+    this.set({ later: true, userAsked: false, waitReason: '' });
   }
 
   async check() {
@@ -375,7 +381,7 @@ class Updater {
       if (!ok) console.warn(`[更新] 拦下了非 GitHub 地址：${safeHost(details.url)}`);
       callback({ cancel: !ok });
     });
-    autoUpdater.on('update-available', (info) => this.set({ status: 'downloading', version: info.version, percent: 0 }));
+    autoUpdater.on('update-available', (info) => this.set({ status: 'downloading', version: info.version, percent: 0, later: this.laterFor(info.version) }));
     autoUpdater.on('update-not-available', () => this.succeed('none', '已是最新版本'));
     autoUpdater.on('download-progress', (p) => {
       const percent = Math.floor(p.percent || 0);
@@ -388,8 +394,8 @@ class Updater {
     autoUpdater.on('error', (e) => { if (!isPending(e)) this.fail(e); });
   }
 
-  // 自动安装：只在用户肯定不在用的时候。
-  // 用户点了更新：不等缩到托盘，但手上在忙（30 秒内打过字、在编辑账号）时先等，停手了再重启，免得打到一半的字没了
+  // 自动安装。默认下好就装，只在用户手上在忙（30 秒内打过字、在编辑账号等）时先等，停手了再重启，免得打到一半的字没了。
+  // 用户点过“稍后”：只在用户肯定不在用的时候（缩到托盘且空闲）装
   maybeAutoInstall() {
     clearTimeout(this.waitTimer);
     this.waitTimer = null;
@@ -397,7 +403,7 @@ class Updater {
       if (this.state.waitReason) this.set({ waitReason: '' });
       return;
     }
-    if (this.state.userAsked) {
+    if (!this.state.later) {
       const busy = this.hooks.busyReason ? this.hooks.busyReason() : null;
       if (busy !== (this.state.waitReason || null)) this.set({ waitReason: busy || '' });
       if (busy) {
@@ -406,11 +412,11 @@ class Updater {
         return;
       }
     } else if (this.hooks.idleReason()) return;
-    console.log(`${this.state.userAsked ? '用户点了更新，' : ''}自动安装新版本 ${this.state.version}`);
+    console.log(`${this.state.later ? '' : '下载完，'}自动安装新版本 ${this.state.version}`);
     this.install();
   }
 
-  // 用户点“重启以更新”，或空闲时自动调用
+  // 用户点“立即更新”，或自动调用
   async install() {
     if (this.state.manual || this.state.status !== 'downloaded' || this.installing) return;
     clearTimeout(this.waitTimer);
@@ -466,7 +472,7 @@ class Updater {
       await this.macDownloaded(info.version, dest);
       return;
     }
-    this.set({ status: 'downloading', version: info.version, percent: 0 });
+    this.set({ status: 'downloading', version: info.version, percent: 0, later: this.laterFor(info.version) });
     const part = `${dest}.part`;
     const out = fs.createWriteStream(part);
     const hash = crypto.createHash('sha512');

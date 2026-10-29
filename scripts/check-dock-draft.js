@@ -171,6 +171,62 @@ const part3 = async () => {
   return out;
 };
 
+// 工作台回到“翻译”（shen 2026-10-29）：换号、从一个认得出的对话换到另一个，并且停在客户资料或话术时，调 panelTab('translate')；
+// 同一个对话不跳；还没认出对话不跳；正在填表单（pn.edit）不跳
+const part4 = async () => {
+  const A = 'aaaaaaaaaaaaaaaa'; const B = 'bbbbbbbbbbbbbbbb';
+  const accounts = [{ id: 'a1', name: 'Shop', color: '#3b82f6' }, { id: 'a2', name: 'New', color: '#10b981' }];
+  const state = (tab, activeId = 'a1') => window.__cbs.state({ accounts, groups: [], activeId, page: 'account', panelOpen: true, panelTab: tab, platform: 'linux', collapsed: false });
+  const calls = () => (window.__panelTabs || []).splice(0);
+  const out = {};
+  state('translate');
+  window.__push({ chatKey: A });
+  await window.__wait(100);
+  out.first = calls(); // 第一次推送（刚启动）
+  state('customers');
+  window.__push({ chatKey: A }); // 同一个对话再推一次（来了新消息等）
+  window.__push({ chatKey: A, items: [] });
+  await window.__wait(50);
+  out.same = calls();
+  window.__push({ chatKey: '', title: '', items: [] }); // 还没认出对话
+  await window.__wait(50);
+  out.unknown = calls();
+  window.__push({ chatKey: A });
+  await window.__wait(50);
+  out.recognized = calls(); // 认出来的还是刚才那个对话
+  window.__push({ title: 'Lukas Becker', chatKey: B });
+  await window.__wait(50);
+  out.chat = calls();
+  // 换对话中间有一阵读不出对话（刚点开、还没读到）：B → 读不出 → A 照样算换了对话
+  state('customers');
+  window.__push({ chatKey: '', title: '', items: [] });
+  await window.__wait(50);
+  window.__push({ chatKey: A });
+  await window.__wait(50);
+  out.viaUnknown = calls();
+  state('translate');
+  window.__push({ chatKey: A });
+  await window.__wait(50);
+  out.alreadyTr = calls(); // 已经在翻译页：不用再切
+  state('replies');
+  window.__push({ accountId: 'a2', chatKey: '', title: '', items: [], readable: 'loading' });
+  await window.__wait(50);
+  out.acc = calls();
+  // 填着表单：换对话、换号都不跳
+  state('customers', 'a2');
+  pn.edit = { accountId: 'a2', tags: [] };
+  window.__push({ accountId: 'a2', title: 'Sophie Martin', chatKey: A });
+  window.__push({ accountId: 'a2', title: 'Lukas Becker', chatKey: B });
+  window.__push({ accountId: 'a1', title: 'Emma Wilson', chatKey: A });
+  await window.__wait(50);
+  out.editing = calls();
+  pn.edit = null;
+  window.__push({ accountId: 'a2', title: 'Sophie Martin', chatKey: A });
+  await window.__wait(50);
+  out.afterEdit = calls();
+  return out;
+};
+
 let w = null;
 const errs = [];
 app.whenReady().then(async () => {
@@ -225,7 +281,21 @@ app.whenReady().then(async () => {
   assert.strictEqual(r3.usedBox.text, '补一句，明天发货', '这次框里还在');
   assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句，明天发货!', '放进去以后再改就又存');
   assert(r3.langKept, '换目标语言不换回复框');
+
+  await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
+  await w.webContents.executeJavaScript(`(${helpers})()`);
+  const r4 = await w.webContents.executeJavaScript(`(${part4})()`);
+  assert.deepStrictEqual(r4.first, [], '刚启动第一次推送不用切');
+  assert.deepStrictEqual(r4.same, [], '同一个对话不切页');
+  assert.deepStrictEqual(r4.unknown, [], '还没认出对话不切页');
+  assert.deepStrictEqual(r4.recognized, [], '认出来还是刚才那个对话不切页');
+  assert.deepStrictEqual(r4.chat, ['translate'], `换了客户对话，客户资料页回到翻译 ${JSON.stringify(r4.chat)}`);
+  assert.deepStrictEqual(r4.viaUnknown, ['translate'], `换对话中间读不出对话也要回到翻译 ${JSON.stringify(r4.viaUnknown)}`);
+  assert.deepStrictEqual(r4.alreadyTr, [], '已经在翻译页不用再切');
+  assert.deepStrictEqual(r4.acc, ['translate'], `换号，话术页回到翻译 ${JSON.stringify(r4.acc)}`);
+  assert.deepStrictEqual(r4.editing, [], `填着表单时换对话、换号都不切 ${JSON.stringify(r4.editing)}`);
+  assert.deepStrictEqual(r4.afterEdit, ['translate'], `表单关了以后换对话照样切 ${JSON.stringify(r4.afterEdit)}`);
   assert.deepStrictEqual(errs, [], '页面没有报错');
-  console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留）');
+  console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留、换号换对话回翻译页）');
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });

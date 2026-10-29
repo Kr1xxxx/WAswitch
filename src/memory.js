@@ -32,7 +32,6 @@ const DEFAULTS = {
   capMB: 4096, // 所有账号加起来的总上限，超过就回收后台账号，0 表示不限
   memDefaults: 3, // 第几版默认值；老设置里这个数比现在小时，把还停在旧默认值的项改成新默认值（每版只改一次）
   lockMinutes: 15, // 聊天锁：电脑这么多分钟没有键盘鼠标操作就遮住聊天区，0 表示关闭
-  panelTab: 'translate', // 工作台上次停在哪一页，重启后还在这一页；新装默认翻译
   popupSeconds: 6, // 通知弹窗多少秒后自动收走，0 表示不自动收
   popupSound: true, // 弹窗时放提示音
   popupDnd: false, // 勿扰：不弹窗，只记进通知记录
@@ -92,7 +91,6 @@ function loadSettings() {
       lastAccountId: typeof raw.lastAccountId === 'string' ? raw.lastAccountId.slice(0, 40) : '',
       capMB: CAP_CHOICES.includes(raw.capMB) ? raw.capMB : DEFAULTS.capMB,
       lockMinutes: LOCK_CHOICES.includes(raw.lockMinutes) ? raw.lockMinutes : DEFAULTS.lockMinutes,
-      panelTab: PANEL_TABS.includes(raw.panelTab) ? raw.panelTab : DEFAULTS.panelTab,
       popupSeconds: POPUP_SECONDS.includes(raw.popupSeconds) ? raw.popupSeconds : DEFAULTS.popupSeconds,
       popupSound: bool('popupSound'),
       popupDnd: bool('popupDnd'),
