@@ -54,9 +54,10 @@ function readPointer(home) {
   const p = readJson(path.join(home, POINTER));
   return p && typeof p.dir === 'string' && p.dir ? p : null;
 }
-function writePointer(home, p) { writeJsonAtomic(path.join(home, POINTER), p, 2); }
+// 新装的电脑第一次启动时 userData 已经指到 D，Electron 不会再建 %APPDATA%\WAswitch：先建好再写
+function writePointer(home, p) { fs.mkdirSync(home, { recursive: true }); writeJsonAtomic(path.join(home, POINTER), p, 2); }
 function readState(home) { const s = readJson(path.join(home, STATE)); return { tries: Number(s?.tries) || 0, lastAt: Number(s?.lastAt) || 0, error: s?.error || '' }; }
-function writeState(home, s) { try { writeJsonAtomic(path.join(home, STATE), s, 2); } catch { /* 写不了就下次再算 */ } }
+function writeState(home, s) { try { fs.mkdirSync(home, { recursive: true }); writeJsonAtomic(path.join(home, STATE), s, 2); } catch { /* 写不了就下次再算 */ } }
 
 // D:\WAswitch 存在，能在里面建 data 并写文件
 function rootUsable(root) {

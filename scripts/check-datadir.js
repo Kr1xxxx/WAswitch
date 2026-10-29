@@ -102,6 +102,18 @@ test('新装的电脑：C 盘没数据、D 能用 → D:\\WAswitch\\data，写�
   assert.equal(again.fresh, false);
 });
 
+test('新装的电脑 %APPDATA%\\WAswitch 还不存在：指针照样写出来（D 盘以后打不开才有提示）', () => {
+  const b = box({ root: true });
+  fs.rmSync(b.home, { recursive: true });
+  const r = win(b);
+  assert.equal(r.dir, b.data);
+  assert.deepEqual(dd.readPointer(b.home), { dir: b.data, cleanC: false });
+  fs.renameSync(b.root, `${b.root}-x`);
+  const f = win(b);
+  assert.equal(f.fallback, true, '有指针，D 盘打不开时有提示');
+  assert.equal(f.wanted, b.data);
+});
+
 test('老电脑：C 盘有数据 → 先留在 C，不写指针；空闲时该搬', () => {
   const b = box({ root: true, old: true });
   const app = fakeApp(b.home);
