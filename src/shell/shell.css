@@ -508,6 +508,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-item.foot { padding-bottom: 20px; }
 .dk-meta { position: absolute; right: 8px; bottom: 4px; display: flex; align-items: center; gap: 5px; line-height: 15px; pointer-events: none; }
 .dk-time { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dk-voice { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dk-item.last .dk-time { color: var(--green-11); }
 .dk-spacer { display: inline-block; width: 52px; height: 1px; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: var(--fs-s); padding: 0 4px; line-height: 16px; }
