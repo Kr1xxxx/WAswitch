@@ -108,6 +108,7 @@ async function oldRecordsGetOriginals() {
   const path = require('path');
   const { TrStore } = require('../src/trstore');
   const { fillLite } = require('../src/trfill');
+  const { textKey } = require('../src/trstore');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-orig-'));
   const sent = [];
   let clock = Date.parse('2026-10-29T09:00:00Z');
@@ -161,7 +162,7 @@ async function oldRecordsGetOriginals() {
   await sleep(20);
   assert.deepStrictEqual(sent, ['Hello 2']);
   assert.strictEqual(store.missingText('W', ck).size, 2);
-  assert.strictEqual(store.getKey('W', ck, require('../src/trstore').textKey('Hello 2')).text, 'Hello 2');
+  assert.strictEqual(store.getKey('W', ck, textKey('Hello 2')).text, 'Hello 2');
 
   // 轻量号：记录里缺原文的，按聊天缓存（带 [图片] 这种标签的去掉标签再认）在后台补
   const jid = '4915123456789@s.whatsapp.net';
@@ -177,23 +178,34 @@ async function oldRecordsGetOriginals() {
   assert.strictEqual(fc.viewOf('L').items.length, 30);
   assert.strictEqual(store.missingText('L', lck).size, 10, '轻量号旧记录：更早的 10 条缺原文');
   const before = fc.viewOf('L').items.map((x) => x.h);
+  // 还有一条旧记录，那条消息已经不在缓存里了：补不上
+  store.putKey('L', lck, textKey('Gone from cache'), { tr: '已经不在缓存里' });
   const filled = [];
-  const n = await fillLite({
+  const asked = [];
+  const cache = ['Guten Tag 0', ...lite]; // 同一句出现两次也只补一次
+  const runFill = () => fillLite({
     store, accId: 'L', gap: 0, alive: () => true,
-    jids: async () => ['111111111@s.whatsapp.net', jid],
-    incoming: async (j) => (j === jid ? ['Guten Tag 0', ...lite] : ['Hi']), // 同一句出现两次也只补一次
+    jids: async () => [['111111111@s.whatsapp.net', 1], [jid, cache.length]],
+    incoming: async (j) => { asked.push(j); return j === jid ? cache : ['Hi']; },
     onFill: (c, k, text) => { filled.push(text); fc.fillText('L', c, k, text); },
   });
+  const n = await runFill();
   assert.strictEqual(n, 10);
   assert.strictEqual(filled.length, 10);
   assert(filled.includes('Look at this 3'), '去掉 [图片] 标签再认');
-  assert.strictEqual(store.missingText('L', lck).size, 0);
+  assert.deepStrictEqual([...store.missingText('L', lck)], [textKey('Gone from cache')]);
+  assert.deepStrictEqual(asked, [jid], '没有译文记录的对话不去要缓存');
+  assert.strictEqual(await runFill(), 0);
+  assert.deepStrictEqual(asked, [jid], '缓存条数没变：下次启动不再去要');
+  cache.push('Gute Nacht');
+  assert.strictEqual(await runFill(), 0);
+  assert.deepStrictEqual(asked, [jid, jid], '缓存变多了（历史同步晚到）：再补一次');
   items = fc.viewOf('L').items;
   assert.deepStrictEqual(items.map((x) => x.h), before, '补原文不多出、不挪动翻译栏上的消息');
   assert(items.every((x) => x.text), '翻译栏上的也补上了原文');
   unique(items);
   assert.strictEqual(fs.existsSync(path.join(dir, 'L')) && fs.readdirSync(path.join(dir, 'L')).length, 1, '没有译文的对话不建文件');
-  assert.strictEqual(await fillLite({ store, accId: 'L', gap: 0, alive: () => true, jids: async () => [jid], incoming: async () => lite }), 0, '再跑一次没有要补的');
+  assert.strictEqual(await fillLite({ store, accId: 'L', gap: 0, alive: () => true, jids: async () => [[jid, 99]], incoming: async () => lite }), 0, '再跑一次没有要补的');
   // 重启后：补回来的直接带原文
   store.flush();
   ({ store, fc } = make());
@@ -202,8 +214,14 @@ async function oldRecordsGetOriginals() {
   assert.strictEqual(items.length, 30);
   assert(items.every((x) => x.text));
   unique(items);
+  // 超过 4000 字的原文不截断（截了 hash 对不上，补回来时认不出）
+  const long = 'Lorem ipsum dolor sit amet. '.repeat(150);
+  store.putKey('L', lck, textKey(long), { tr: '长', text: long });
+  assert.strictEqual(store.getKey('L', lck, textKey(long)).text, long);
+  store.putKey('L', lck, textKey(long + '!'), { tr: '长' });
+  assert(store.fillText('L', lck, textKey(long + '!'), long + '!'), '长原文也能补');
   // 原文对不上（hash 不一样）的不补
-  assert.strictEqual(store.fillText('L', lck, require('../src/trstore').textKey('x'), 'y'), false);
+  assert.strictEqual(store.fillText('L', lck, textKey('x'), 'y'), false);
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('旧译文记录补原文自检通过');
 }

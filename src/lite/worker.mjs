@@ -61,7 +61,7 @@ async function handle(m) {
       return readHistory(s.store, m.jid, m.limit);
     // 后台补译文记录里的原文（见 trfill.js）：有消息的对话、某个对话里对方发来的消息文字，只读本机缓存
     case 'jids':
-      return s && s.store ? [...s.store.msgs.keys()] : null;
+      return s && s.store ? [...s.store.msgs.entries()].map(([jid, list]) => [jid, list.length]) : null;
     case 'incoming':
       return s && s.store ? s.store.messages(m.jid, MAX_PER_CHAT).filter((x) => x && !x.me).map((x) => String(x.text || '')) : null;
     case 'send':

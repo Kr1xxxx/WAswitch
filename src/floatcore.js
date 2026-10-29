@@ -156,6 +156,7 @@ class FloatCore {
     const newest = Math.max(0, ...msgs.map((m) => (m.t && Number.isFinite(m.t.at) ? m.t.at : 0)));
     if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
+    let filled = false;
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
     const recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
@@ -164,7 +165,7 @@ class FloatCore {
       if (!String(m.text || '').trim()) continue;
       const h = hashOf(accId, m.id);
       const had = st.items.get(h);
-      if (had) { if (!had.text) this.fillItem(accId, had, String(m.text)); continue; } // 补回来时没有原文的旧消息又读到了：补上原文
+      if (had) { if (!had.text && this.fillItem(accId, had, String(m.text), true)) filled = true; continue; } // 补回来时没有原文的旧消息又读到了：补上原文
       const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
       const skip = noWords(item.text);
@@ -200,7 +201,7 @@ class FloatCore {
     }
     // 刚打开（切回、重启后）这个对话：读页面只读得到最后 20 条，以前翻译栏上更早的译文按存的记录补在上面
     if (newChat && chat) view = [...this.restore(accId, st, chat, view, msgs), ...view];
-    const changed = newChat || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
+    const changed = newChat || filled || fresh.length > 0 || view.join() !== st.view.join() || st.title !== (read.title || '');
     st.chat = chat;
     st.title = read.title || '';
     st.recent = recent;
@@ -363,11 +364,12 @@ class FloatCore {
   }
 
   // 补回来时没有原文的旧消息：原文对得上（hash 一样）就补到这条上，也补进磁盘的记录
-  fillItem(accId, item, text) {
+  // quiet：读页面时一次补好几条，由 ingest 的返回值统一刷新
+  fillItem(accId, item, text, quiet = false) {
     if (item.text || !item.k || !text.trim() || textKey(text) !== item.k) return false;
     item.text = text;
     if (this.deps.store && item.ck) this.deps.store.fillText(accId, item.ck, item.k, text);
-    this.onChange(accId);
+    if (!quiet) this.onChange(accId);
     return true;
   }
 
