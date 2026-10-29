@@ -6,6 +6,7 @@
 const dk = {
   listKey: '', // 消息列表上次画的是哪个号的哪个对话（判断要不要保持滚动位置）
   stick: true, // 消息列表是不是停在最底下（用户自己滚动时更新）；在底下就跟着新消息滚
+  pill: false, // 往上翻着的时候来了新消息：列表底部显示「新消息」，点了回到最底下；滚回底部、换对话就收起
   st: null, // 主进程推来的：当前对话收到的消息、目标语言、额度
   text: '', // 写的回复（中文或外文）
   // 语言条的临时选择，只管当前这个对话（换对话、换号回到自动）：src 原文语言（'' = 自动检测），
@@ -19,6 +20,7 @@ const dk = {
   forTitle: null, // 译文是给哪个对话翻的
   warn: [],
   busy: false,
+  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（按钮上倒计时）
   msg: '',
   bad: false,
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
@@ -29,6 +31,13 @@ const dk = {
   seenTitle: null,
   unread: 0,
   acc: null,
+  draftKey: '', // 回复框现在是哪个对话的草稿：`${号}|${chatKey}`，'' = 还没认出对话
+  draftSent: '', // 上次存的草稿（JSON），没变就不再发
+  draftTimer: null,
+  draftUsed: '', // 放进输入框时的草稿（JSON）：没再改就算用掉了，不再存
+  lastInput: 0, // 上次在回复框里打字的时间
+  typingBase: null, // 这一阵打字之前的草稿
+  redraw: false, // 换了对话：下次重画连回复框一起换
 };
 
 const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !s.locked && s.page === 'account');
@@ -46,23 +55,159 @@ function dockCountUnread() {
   dk.unread = st.items.filter((it) => !dk.seen.has(it.h)).length;
 }
 
+// ---- 草稿 ----
+// 回复框写的话和译文按对话存在本机（主进程 drafts.js）：切到别的对话再切回来、重启软件都还在，清空回复框就删掉。
+// 认对话用主进程给的 chatKey（对话的 hash）；还没认出对话（刚打开号、打开还没有消息的新对话）时先不存，认出来以后归到那个对话。
+// 放进输入框以后草稿算用掉了：这次还留在框里，不再改就不存（切走、重启后不再出现）
+const DRAFT_TYPING_MS = 2500; // 网页号每 2 秒读一次页面：换对话后这么久以内打的字算新对话的
+const dockDraftOf = () => ({ text: dk.text, out: dk.out, src: dk.src, edited: dk.edited, fixed: dk.fixed, warn: dk.warn });
+function dockDraftSend(key, d) {
+  if (!key || !window.wa.dockDraft) return;
+  const [acc, chat] = key.split('|');
+  window.wa.dockDraft(acc, chat, d);
+}
+function dockDraftFlush() {
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = null;
+  if (!dk.draftKey) return;
+  const cur = JSON.stringify(dockDraftOf());
+  const used = cur === dk.draftUsed;
+  const json = used ? 'null' : cur;
+  if (json === dk.draftSent) return;
+  dk.draftSent = json;
+  dockDraftSend(dk.draftKey, used ? null : dockDraftOf());
+}
+// 打字时等停手 300ms 再存；重画时（翻译、纠错、对调这类一下子改完的）已经在等就不再往后推
+function dockDraftQueue(restart = true) {
+  if (!dk.draftKey || (!restart && dk.draftTimer)) return;
+  clearTimeout(dk.draftTimer);
+  dk.draftTimer = setTimeout(dockDraftFlush, 300);
+}
+// 点进回复框（点 WhatsApp 换对话再点回来，焦点必然重新进来）：从这一刻起打的字算“这一阵”
+function dockFocused() { dk.typingBase = dockDraftOf(); dk.lastInput = 0; }
+// 回复框里打了字（input 事件里、改 dk 之前调）：记下这一阵打字之前的草稿，换对话时用
+function dockTyped() {
+  const now = Date.now();
+  if (now - dk.lastInput > DRAFT_TYPING_MS) dk.typingBase = dockDraftOf();
+  dk.lastInput = now;
+}
+// 点 WhatsApp 页面换对话时焦点会离开软件界面；焦点还在回复框里说明是换完对话才点进来打的字
+const dockTypingNow = () => Date.now() - dk.lastInput < DRAFT_TYPING_MS && document.hasFocus() && !!document.activeElement && !!document.activeElement.closest('.dk-compose');
+// 回复框换成某个对话存的草稿（没有就清空）
+function dockLoadDraft(d, title) {
+  d = d || {};
+  Object.assign(dk, {
+    text: d.text || '', out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
+    suggest: '', forTitle: d.out ? title : null, msg: '', bad: false, msgPid: '',
+  });
+  dk.draftSent = JSON.stringify(dockDraftOf());
+  dk.draftUsed = '';
+  dk.redraw = true; // 回复框要换成这个对话的内容（正在打字也换）
+}
+// 没认出对话时写的字归到认出来的对话；那个对话原来就有草稿的话，原来的写在前面
+function dockCarry(d) {
+  if (d && (d.text || '').trim()) {
+    dk.text = dk.text.trim() ? `${d.text}\n${dk.text}` : d.text;
+    if (!dk.out.trim()) Object.assign(dk, { out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [] });
+    dk.redraw = true;
+  }
+  dk.draftSent = '';
+  dk.draftUsed = '';
+  dockDraftQueue();
+}
+// 主进程推来新状态：换了对话（或换了号）就先把上一个对话的草稿写下来，再换成这个对话的
+function dockAdopt(st) {
+  const key = st.accountId && st.chatKey ? `${st.accountId}|${st.chatKey}` : '';
+  if (dk.acc !== st.accountId) { dockDraftFlush(); dockReset(); dk.acc = st.accountId; dk.draftKey = ''; dk.lastInput = 0; }
+  dk.st = st;
+  if (key === dk.draftKey) return;
+  const old = dk.draftKey;
+  if (!key) {
+    // 打开了还没有消息的对话（认不出是哪个）：上一个对话的写下来，回复框清空；这里写的等认出对话再存
+    dockDraftFlush();
+    dk.draftKey = '';
+    dockLoadDraft(null, st.title);
+    return;
+  }
+  if (!old) {
+    dk.draftKey = key;
+    if (dk.text.trim() || dk.out.trim()) dockCarry(st.draft);
+    else dockLoadDraft(st.draft, st.title);
+    return;
+  }
+  // 换对话后网页号要过一会儿才读到：刚点开新对话就打的字归到新对话，上一个对话留打字之前的那份
+  if (dockTypingNow() && !(st.draft && ((st.draft.text || '').trim() || (st.draft.out || '').trim()))) {
+    clearTimeout(dk.draftTimer);
+    dk.draftTimer = null;
+    const base = dk.typingBase || {};
+    const bt = base.text || '';
+    // 上一个对话留打字之前的那份；那时是空的就不动它（不删 300ms 前已经存好的）
+    if (bt.trim() || (base.out || '').trim()) dockDraftSend(old, base);
+    dk.draftUsed = '';
+    // 新对话只拿这一阵打的字：接在上一个对话的原文后面打的，前面那段留给上一个对话
+    if (bt && dk.text.startsWith(bt)) dk.text = dk.text.slice(bt.length).replace(/^\s+/, '');
+    if (dk.out === (base.out || '')) Object.assign(dk, { out: '', src: '', edited: false, fixed: false, warn: [], suggest: '', forTitle: null });
+    dk.draftKey = key;
+    dk.draftSent = '';
+    dk.redraw = true;
+    dockDraftQueue();
+    return;
+  }
+  dockDraftFlush();
+  dk.draftKey = key;
+  dockLoadDraft(st.draft, st.title);
+}
+window.addEventListener('beforeunload', dockDraftFlush);
+
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false });
   dk.seen.clear();
+}
+
+// 同一个对话、用户不在最底下，最后一条换成了以前没有的消息 = 来了新消息。
+// 翻译中 → 译文、补回旧译文、上面的消息被挤掉，最后一条都不变；撤回最新一条，最后一条变成以前就有的，都不算
+function dockHasNew(prev, st) {
+  if (dk.stick || !prev || !st || !dockVisible()) return false;
+  // dk.stick 可能过期（窗口拉高后不用滚了、滚回底的那一下被当成程序滚的）：再看一眼列表现在是不是在底下
+  const l = $panel.querySelector('.dk-host .dk-list');
+  if (!l || l.scrollHeight - l.scrollTop - l.clientHeight <= 24) { dk.stick = true; return false; }
+  if (prev.accountId !== st.accountId || prev.title !== st.title || !prev.items.length || !st.items.length) return false;
+  const last = st.items[st.items.length - 1].h;
+  return !prev.items.some((it) => it.h === last);
 }
 
 function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
 
+// 服务商太忙、等着重试：转圈的按钮显示还要等几秒，等完回到「翻译中」
+let dkWaitTimer = 0;
+function dockBusyText() {
+  const left = dk.waitUntil ? Math.ceil((dk.waitUntil - Date.now()) / 1000) : 0;
+  return left > 0 ? `${left} 秒后重试… 取消` : '翻译中… 取消';
+}
+function dockWait(ms) {
+  dk.waitUntil = ms > 0 && dk.busy ? Date.now() + ms : 0;
+  clearInterval(dkWaitTimer);
+  const paint = () => {
+    const b = document.querySelector('.dk-cancel');
+    if (b) b.textContent = dockBusyText();
+    if (!dk.waitUntil || Date.now() >= dk.waitUntil) clearInterval(dkWaitTimer);
+  };
+  if (dk.waitUntil) dkWaitTimer = setInterval(paint, 250);
+  paint();
+}
+if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'dock') dockWait(Number(w.ms) || 0); });
+
 window.wa.onDock((st) => {
-  if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; }
-  dk.st = st;
+  const fresh = dockHasNew(dk.st, st); // 和上一次的状态比（换号时 dockAdopt 会清掉）
+  dockAdopt(st);
+  if (fresh) dk.pill = true;
   const before = dk.unread;
   dockCountUnread();
   if (dockVisible()) dockRender(false);
   if (before !== dk.unread && s) refreshPanelHead();
 });
 async function dockFetch() {
-  try { const st = await window.wa.dockGet(); if (st) { if (dk.acc !== st.accountId) { dockReset(); dk.acc = st.accountId; } dk.st = st; dockCountUnread(); } } catch {}
+  try { const st = await window.wa.dockGet(); if (st) { dockAdopt(st); dockCountUnread(); } } catch {}
   dockRender(true);
 }
 
@@ -105,11 +250,13 @@ async function dockTranslate(insert = false, fresh = false) {
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
 async function dockRun(p) {
+  p.key = dk.draftKey;
   dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
-  if (!dk.st || p.acc !== dk.st.accountId) return dockRender(true); // 换号了：作废
+  dockWait(0);
+  if (!dk.st || p.acc !== dk.st.accountId || p.key !== dk.draftKey) return dockRender(true); // 换号、换对话了：作废（再翻一次直接用记下的译文）
   if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
@@ -120,8 +267,10 @@ async function dockRun(p) {
 async function dockInsert() {
   if (!dk.out.trim()) return dockSay('还没有译文', true);
   if (dk.st && dk.forTitle !== null && dk.st.title !== dk.forTitle) return dockSay('译文是给另一个对话翻的，没有放。看一下再点', true);
+  const key = dk.draftKey;
   await panelInsert(dk.out);
   dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
+  if (!dk.bad && dk.msg && key === dk.draftKey) { dk.draftUsed = JSON.stringify(dockDraftOf()); dockDraftFlush(); } // 放进去了：草稿用掉了
   dockRender(true);
 }
 // 放进输入框：有译文就放（改过的就放改过的）；原文改了又没手动改译文，先重新翻
@@ -160,7 +309,8 @@ function dockLangBar() {
   src.value = lt.src || '__auto';
   const setTarget = async (lang) => {
     lt.tgt = ''; lt.swapped = false;
-    dk.st = await window.wa.dockLang(st.accountId, st.title, lang);
+    const next = await window.wa.dockLang(st.accountId, st.title, lang);
+    if (next) dockAdopt(next);
     dockRender(true);
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
@@ -222,9 +372,10 @@ function dockSuggestBox(text, take, drop) {
     h('span', { class: 'dk-tr' }, text),
     h('span', { class: 'dk-row' }, h('button', { class: 'pn-btn primary', onclick: take }, '采用'), h('button', { class: 'pn-btn', onclick: drop }, '不用')));
 }
+// 重新打开对话时补回来的旧译文没有原文（磁盘上只存译文）：不能纠错，也没有原文可展开
 function dockItemActs(it) {
   return h('span', { class: 'dk-acts-mini' },
-    h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: () => window.wa.dockItem(it.h, true) }, '纠错'),
+    it.text ? h('button', { class: 'dk-link', title: '用更仔细的校对方式重新翻这一条（会替换现在的译文）', onclick: () => window.wa.dockItem(it.h, true) }, '纠错') : null,
     h('button', { class: 'dk-link', title: '直接改译文，改过的不会被自动覆盖', onclick: () => { dk.editing = it.h; dk.editText = it.tr; dockRender(true); } }, '编辑'));
 }
 
@@ -272,37 +423,57 @@ function dockHoldScroll(el) {
 function dockItemRow(it, last) {
   const cls = `dk-item${last ? ' last' : ''}`;
   if (dk.editing === it.h && it.state === 'done') {
-    return h('div', { class: `${cls} wide foot`, 'data-h': it.h }, h('span', { class: 'dk-orig' }, it.text), fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
+    return h('div', { class: `${cls} wide foot`, 'data-h': it.h }, it.text ? h('span', { class: 'dk-orig' }, it.text) : null, fx('dk-edit', it.h, dockItemEdit(it), 'fx-fade'), dockMeta(it));
   }
   const warn = it.warn && it.warn.length ? h('span', { class: 'tr-warn' }, `注意：译文里有原文没有的内容：${it.warn.slice(0, 3).join('、')}`) : null;
   const foot = !!(warn || (it.state === 'done' && it.suggest));
   const sp = foot ? null : dockSpacer();
   // 译文出来（翻译中 → 完成）淡入；纠错建议出现时淡入
   const trFx = fxChanged(`dk-tr:${it.h}`, it.state === 'done' ? `done|${it.tr}` : it.state, false);
-  const orig = dockOrig(it.h, it.text, it.state === 'done' && !!it.tr);
+  const orig = it.text ? dockOrig(it.h, it.text, it.state === 'done' && !!it.tr) : { box: null, btn: null };
   const trText = trFx ? fxPlay(h('span', { class: 'dk-tr' }, it.tr, sp), 'fx-fade') : h('span', { class: 'dk-tr' }, it.tr, sp);
   const tr = it.state === 'done' ? [orig.btn ? h('span', { class: 'dk-trline' }, orig.btn, trText) : trText, dockItemActs(it),
     it.suggest ? fx(`dk-sg:${it.h}`, it.suggest, dockSuggestBox(it.suggest, () => window.wa.dockSuggest(dk.st.accountId, it.h, true), () => window.wa.dockSuggest(dk.st.accountId, it.h, false))) : null]
+    : it.state === 'skip' ? h('span', { class: 'dk-tr' }, it.text, sp) // 时间、数字、表情这类不用翻：原文当译文显示
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, '翻译中…', sp)
       : it.state === 'error' ? h('span', { class: 'dk-tr bad' }, it.err, ' ',
         it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译'), sp);
   return h('div', { class: `${cls}${foot ? ' foot' : ''}`, 'data-h': it.h },
-    orig.box,
+    it.state === 'skip' ? null : orig.box,
     tr,
     warn,
     dockMeta(it));
 }
 
+// 「新消息」浮在消息列表底部正中，不占列表的高度（不影响滚动位置）。box 是包着列表的 .dk-listbox
+function dockPillSync(box) {
+  if (!box) return;
+  const old = box.querySelector('.dk-newpill');
+  const play = fxChanged('dk-pill', dk.pill, false);
+  if (!dk.pill) { if (old) old.remove(); return; }
+  if (old) return;
+  const pill = h('button', { class: 'dk-newpill', onclick: () => {
+    const list = box.querySelector('.dk-list');
+    dk.pill = false; dk.stick = true;
+    if (list) { list.scrollTop = list.scrollHeight; list._setTop = list.scrollTop; }
+    dockPillSync(box);
+  } }, icon('down', 14), '新消息');
+  box.append(play ? fxPlay(pill, 'fx-fade') : pill);
+}
+
 function dockIncoming() {
   const st = dk.st;
   const list = h('div', { class: 'dk-list' });
+  const box = h('div', { class: 'dk-listbox' }, list);
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
   // 程序自己设的滚动（恢复位置）也会触发 scroll：滚动距离没变就不算用户滚的
   list.addEventListener('scroll', () => {
-    if (!list.isConnected || list.scrollTop === list._setTop) return;
+    if (!list.isConnected) return;
+    if (list.scrollTop === list._setTop) { list._setTop = null; return; } // 程序设一次只发一次 scroll，只吞这一次
     dk.stick = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+    if (dk.stick && dk.pill) { dk.pill = false; dockPillSync(box); }
   }, { passive: true });
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
@@ -321,7 +492,8 @@ function dockIncoming() {
   });
   if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
   else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
-  return list;
+  dockPillSync(box);
+  return box;
 }
 
 // 重画时保持滚动位置（翻译中、点纠错/编辑都不跳）。
@@ -335,7 +507,7 @@ function dockScrollMark() {
   const same = dk.listKey === key;
   dk.listKey = key;
   if (!same || !prev || !prev.isConnected) dk.stick = true;
-  if (dk.stick) return { bottom: true };
+  if (dk.stick) { dk.pill = false; return { bottom: true }; }
   // 用 offsetTop（列表是 position: relative）：不受淡入、上浮这些动画的位移影响
   const top = prev.scrollTop;
   const row = [...prev.querySelectorAll('.dk-item[data-h]')].find((r) => r.offsetTop + r.offsetHeight > top + 1);
@@ -398,7 +570,8 @@ function dockCompose() {
   // 按键提示常驻在框内右下角，打了字也看得到；Mac 和 Windows 键盘上都有 Shift 和回车，用同一句（shen 2026-10-27）
   const keyHint = h('span', { class: 'dk-keyhint' }, ...segs('回车翻译', 'Shift + 回车换行'));
   const input = h('textarea', { class: 'dk-in', maxlength: '4000', rows: '3', 'aria-label': '要回的话（中文翻成客户的语言，英文翻成中文）', 'aria-description': '回车翻译，Shift + 回车换行' }, dk.text);
-  input.addEventListener('input', () => { dk.text = input.value; });
+  input.addEventListener('input', () => { dockTyped(); dk.text = input.value; dockDraftQueue(); });
+  input.addEventListener('focus', dockFocused);
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
     if (e.shiftKey) return; // 换行
@@ -407,8 +580,11 @@ function dockCompose() {
     dockTranslate(false);
   });
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
+  out.addEventListener('focus', dockFocused);
   out.addEventListener('input', () => {
+    dockTyped();
     dk.out = out.value;
+    dockDraftQueue();
     if (!dk.edited) { dk.edited = true; editedTag.hidden = false; status.querySelectorAll('.dk-fixed, .dk-dim').forEach((x) => x.remove()); }
   });
   const stale = dk.out && !dk.edited && dk.src !== dk.text;
@@ -423,7 +599,7 @@ function dockCompose() {
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       dockLangBar(),
-      dk.busy ? h('button', { class: 'dk-btn', onclick: () => window.wa.trCancel() }, '翻译中… 取消')
+      dk.busy ? h('button', { class: 'dk-btn dk-cancel', onclick: () => window.wa.trCancel() }, dockBusyText())
         : h('span', { class: 'dk-row' },
           dk.out ? h('button', { class: 'dk-btn', title: 'AI 对照原文和聊天上下文校对下面的译文（改过的只给建议）', onclick: dockFix }, '纠错') : null,
           h('button', { class: 'dk-btn', title: dk.out ? '按现在的原文重新调模型翻一版，会替换下面的译文和记下的译文' : '翻译（这句以前翻过就直接用记下的）', onclick: () => dockTranslate(false, !!dk.out && dk.src === dk.text) }, dk.out ? '重新翻译' : '翻译'))),
@@ -466,10 +642,14 @@ function dockRender(force = false) {
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   const mark = dockScrollMark();
-  if (root && !force && typing) {
+  dockDraftQueue(false); // 翻译、纠错、对调这些改了草稿的，重画时一起存（没变就不发）
+  const redraw = dk.redraw;
+  dk.redraw = false;
+  if (root && !force && !redraw && typing) {
     // 正在写或在选：只换上面几块
     const keep = root.querySelector('.dk-compose');
-    const list = dk.editing ? root.querySelector('.dk-list') : null; // 正在改译文：消息列表先不动
+    const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动
+    dockPillSync(list);
     root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
     dockScrollRestore(mark);
     return;

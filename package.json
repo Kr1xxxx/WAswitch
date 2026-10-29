@@ -8,6 +8,8 @@
     "start": "electron .",
     "check": "electron scripts/check-isolation.js",
     "check:middot": "node scripts/check-no-middot.js",
+    "check:agents": "node scripts/check-agents-md.js",
+    "check:ime-enter": "node scripts/check-ime-enter.js",
     "check:emoji": "node scripts/check-emoji.js",
     "check:mcp": "node scripts/check-mcp.js && node scripts/check-mcp-search.js && node scripts/check-mcp-customer-search.js && node scripts/check-mcp-helpers.js && node scripts/check-mcp-customers.js && node scripts/check-open-chat.js && node scripts/check-mcp-module.js",
     "check:review": "node scripts/check-review.mjs && node scripts/check-review2.mjs",
@@ -30,19 +32,23 @@
     "check:records": "node scripts/check-records.js && node scripts/check-undo.js",
     "check:import": "node scripts/check-import.js",
     "check:downloads": "node scripts/check-downloads.js",
-    "check:translate": "node scripts/check-translate.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
+    "check:translate": "node scripts/check-drafts.js && node scripts/check-translate.js && node scripts/check-reply-lang.js && node scripts/check-errtext.js && node scripts/check-outcache.js",
     "check:customer-time": "node scripts/check-customer-time.js",
     "check:float": "node scripts/check-float.js && electron scripts/check-float.js",
     "check:font-sizes": "node scripts/check-font-sizes.js",
     "check:colors": "node scripts/check-colors.js",
     "make:colors": "node scripts/make-colors.js",
     "check:radius-motion": "node scripts/check-radius-motion.js",
+    "check:visual": "node scripts/check-visual.js",
     "check:dock-scroll": "electron scripts/check-dock-scroll.js",
+    "check:dock-draft": "electron scripts/check-dock-draft.js",
     "check:add-menu": "electron scripts/check-add-menu.js",
     "check:topbar": "electron scripts/check-topbar-fit.js",
     "check:sel-translate": "electron scripts/check-sel-translate.js",
     "check:tp-swap": "electron scripts/check-tp-swap.js",
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
+    "check:tr-wait": "electron scripts/check-tr-wait.js",
+    "check:tr-keys": "electron scripts/check-tr-keys.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"
   },
@@ -66,6 +72,14 @@
   "build": {
     "appId": "com.waswitch.app",
     "productName": "WAswitch",
+    "electronLanguages": [
+      "zh-CN",
+      "zh_CN",
+      "zh-TW",
+      "zh_TW",
+      "en-US",
+      "en"
+    ],
     "files": [
       "src/**/*",
       "!src/fonts/misans{,/**/*}",
@@ -73,7 +87,9 @@
       "src/mcp/settings.html",
       "src/mcp/settings.js",
       "src/mcp/preload.js",
-      "assets/**/*"
+      "assets/**/*",
+      "!**/node_modules/**/*.{map,md,markdown,d.ts,d.mts,d.cts}",
+      "**/node_modules/**/{LICENSE,LICENCE,license,licence}.{md,markdown}"
     ],
     "icon": "assets/icon.png",
     "win": {

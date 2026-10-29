@@ -11,6 +11,7 @@ const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore')
 const { FloatCore, fromLite } = require('./floatcore');
 const { detectLang } = require('./langdetect');
 const { makeOutTranslate } = require('./outcache');
+const { DraftStore } = require('./drafts');
 const { shortName } = require('./undo');
 const ReplyLang = require('./shell/reply-lang');
 
@@ -117,16 +118,22 @@ function setupTranslateIpc(ctx) {
   // 发出的翻译：同一句中文、同一种语言、同一个模式翻过就直接用记下的译文（见 outcache.js）；fresh = 用户点了“重新翻译”
   // 角色设定（固定译法，含打开的假发词汇）也算进记录的键：改了固定译法或开关假发词汇，老译文不再用
   const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.roleText() });
+  // 服务商太忙要等着重试时，告诉界面还要等几毫秒（按钮上倒计时）；lane：dock = 工作台，page = 翻译页
+  const waitTo = (lane) => (ms) => {
+    const wc = ctx.shellView && ctx.shellView.webContents;
+    if (wc && !wc.isDestroyed()) wc.send('tr:wait', { lane, ms });
+  };
   handleShell('tr:run', async ({ text, modeId, target, source, ctxAccount, fix, draft, fresh } = {}) => {
+    const onWait = waitTo('dock');
     // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;
     // __back：回译成中文核对，用固定的忠实翻译提示词
     // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
-    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, source, context, draft, fix: true });
+    if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, source, context, draft, fix: true, onWait });
     let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
       : typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
-    if (modeId === '__back') return userTranslate({ text, mode, target, source });
-    return outTranslate({ text, mode, target, source, context }, fresh === true);
+    if (modeId === '__back') return userTranslate({ text, mode, target, source, onWait });
+    return outTranslate({ text, mode, target, source, context, onWait }, fresh === true);
   });
   handleShell('tr:cancel', () => userCancel());
   // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
@@ -144,8 +151,8 @@ function setupTranslateIpc(ctx) {
     const pid = typeof providerId === 'string' ? providerId : '';
     // 纠错也用这一栏选的模型（按钮就在模型旁边）
     const r = fix === true && typeof draft === 'string' && draft.trim()
-      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid })
-      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, providerId: pid });
+      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid, onWait: waitTo('page') })
+      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, providerId: pid, onWait: waitTo('page') });
     return { ...r, detected };
   });
   handleShell('tr:page:cancel', () => pageTr().cancel());
@@ -195,6 +202,8 @@ function setupTranslateIpc(ctx) {
   let floatReadable = 'loading'; // ok | nochat | qr | unreadable | loading
   let floatCore = null;
   let trStore = null; // 收到的消息的译文，永久存在磁盘上
+  let drafts = null; // 工作台回复框没发的草稿，每个对话一份（见 drafts.js）
+  const draftStore = () => drafts || (drafts = new DraftStore(path.join(app.getPath('userData'), 'reply-drafts.json')));
   // 自动翻译默认开，只有手动关掉的号是 false
   const floatAuto = (id) => !!id && ctx.translator.load().accountAuto[id] !== false;
   // 读当前对话的条件：右侧面板开着（翻译页显示收到的消息，其他页给“翻译”记未读）
@@ -234,6 +243,7 @@ function setupTranslateIpc(ctx) {
     }).catch((e) => console.warn(`译文位置检查失败：${e.message}`));
     floatCore = new FloatCore({
       store: trStore,
+      keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
       translate: (text, { fix, context, prev } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
@@ -360,6 +370,8 @@ function setupTranslateIpc(ctx) {
       autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
       accountLang: (acc && cfg.accountLang[acc.id]) || '', // 读不到对话时，手动选的语言记在号上
       canRemember: !!v.chatKey, // 认得出是哪个对话，才能把语言记在对话上
+      chatKey: v.chatKey || '', // 回复框的草稿按它存（对话的 hash，不含号码）
+      draft: acc && v.chatKey ? draftStore().get(acc.id, v.chatKey) : null, // 这个对话上次没发的草稿
     };
   }
   function pushFloat() {
@@ -415,6 +427,11 @@ function setupTranslateIpc(ctx) {
     pushFloat();
     return floatState();
   });
+  // 回复框的草稿：写了、翻了、改了就存；清空就删。对话可能已经切走了（切走时才把上一个对话的写下来），所以按 chatKey 存，不看当前对话
+  onShell('dock:draft', ({ accountId, chatKey, draft } = {}) => {
+    if (!findAcc(accountId)) return;
+    draftStore().set(accountId, chatKey, draft);
+  });
   // 设置 › 翻译 里按号拨的自动翻译开关（和面板、悬浮窗里的是同一个设置）
   handleShell('tr:auto', ({ accountId, on } = {}) => {
     const acc = findAcc(accountId);
@@ -445,6 +462,9 @@ function setupTranslateIpc(ctx) {
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatCore() { return floatCore; },
     get trStore() { return trStore; },
+    get drafts() { return drafts; },
+    // 删号：这个号的草稿一起删
+    forgetDrafts(id) { draftStore().forgetAccount(id); },
   };
 }
 

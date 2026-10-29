@@ -16,6 +16,7 @@ const tp = {
   autoFold: false, // 原文太长（超出输入框）：这一次自动收起对照栏，只翻一栏（不改记下的展开/收起）
   hist: [],
   busy: false,
+  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（转圈的按钮上倒计时）
   cancelled: false, // 这次翻译被取消了：第二栏不再翻
   ui: null,
 };
@@ -185,6 +186,27 @@ function tpBuild() {
   tpHist();
   return tp.el;
 }
+
+// 服务商太忙、等着重试：转圈的按钮（翻译、纠错）把「翻译中」换成还要等几秒，等完换回来
+let tpWaitTimer = 0;
+function tpWaitPaint() {
+  const left = tp.waitUntil ? Math.ceil((tp.waitUntil - Date.now()) / 1000) : 0;
+  if (!tp.el) return;
+  for (const span of tp.el.querySelectorAll('.morph > .mb-busy')) {
+    const t = span.lastChild;
+    if (!t || t.nodeType !== 3) continue;
+    if (span._label == null) span._label = t.nodeValue;
+    t.nodeValue = left > 0 ? `${left} 秒后重试` : span._label;
+  }
+  if (left <= 0) { tp.waitUntil = 0; clearInterval(tpWaitTimer); }
+}
+function tpWait(ms) {
+  tp.waitUntil = ms > 0 && tp.busy ? Date.now() + ms : 0;
+  clearInterval(tpWaitTimer);
+  if (tp.waitUntil) tpWaitTimer = setInterval(tpWaitPaint, 250);
+  tpWaitPaint();
+}
+if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'page') tpWait(Number(w.ms) || 0); });
 
 // 改了原文或清空：主按钮回到「翻译」（不留着上一次的已翻译 / 重试）
 function tpIdle() {
@@ -361,11 +383,8 @@ function tpQuota() {
           h('span', { class: 'tp-meter-fill', style: { width: `${pct}%` } })),
         h('span', null, `${tpWan(used)} / ${tpWan(cap)}`));
     } else quota = h('span', { class: 'tp-prov-quota' }, '无限免费');
-    // 点一下去填（或改）这个服务商的密钥；列表里没有这个服务商就打开翻译设置
-    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => {
-      if (id) trOpenKey(id);
-      else { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); }
-    } },
+    // 点一下去填（或改）这个服务商的密钥；列表里还没有这个服务商，就打开它的空密钥框
+    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => trOpenKey(id, preset) },
     h('span', { class: 'tp-prov-top' }, h('span', { class: 'tp-prov-name' }, name), h('span', { class: `tp-prov-on${on ? ' on' : ''}` }, on ? '已启用' : '未启用')),
     quota);
   }));
@@ -466,7 +485,7 @@ async function tpRun() {
   if (r1 && !r1.error) tpSetOut(ui.o1, r1.text); else tpShowOut(ui.o1, r1);
   tp.detected = (r1 && r1.detected) || '';
   if (both && !tp.cancelled) await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
-  tp.busy = false;
+  tp.busy = false; tpWait(0);
   const ok = r1 && !r1.error;
   // 只有重试可能有用的失败才显示「重试」；没填密钥、取消这些回到「翻译」
   const res = ok ? { ok: true } : TP_RETRY.includes(r1 && r1.kind) || !(r1 && r1.kind) ? { ok: false } : {};
@@ -521,7 +540,7 @@ async function tpRerun(which) {
     o.box.value = ''; tpShowOut(o, null);
     tpUpdate();
     const ok = await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
-    tp.busy = false;
+    tp.busy = false; tpWait(0);
     tpUpdate();
     tpLoadCfg();
     return ok;
@@ -538,7 +557,7 @@ async function tpFillCompare() {
     tp.busy = true;
     tpUpdate();
     const ok = await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
-    tp.busy = false;
+    tp.busy = false; tpWait(0);
     tpUpdate();
     tpLoadCfg();
     return ok;
@@ -557,7 +576,7 @@ async function tpFix(which) {
   let r;
   // 纠错用这一栏选的模型（按钮就在模型旁边）
   try { r = await window.wa.trPage({ text, source, target, fix: true, draft, providerId: which === 1 ? tp.p1 : tp.p2 }); } catch { r = { error: '纠错失败' }; }
-  tp.busy = false;
+  tp.busy = false; tpWait(0);
   const ok = r && !r.error;
   if (ok) { tpSetOut(o, r.text); tpShowOut(o, null); } else tpShowOut(o, r);
   tpUpdate();

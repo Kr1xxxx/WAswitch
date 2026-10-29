@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('wa', {
   dockAuto: (on) => ipcRenderer.invoke('dock:auto', on === true),
   dockInMode: (id) => ipcRenderer.invoke('dock:inmode', id),
   dockLang: (accountId, title, lang) => ipcRenderer.invoke('dock:lang', { accountId, title, lang }),
+  dockDraft: (accountId, chatKey, draft) => ipcRenderer.send('dock:draft', { accountId, chatKey, draft }),
   replySave: (data) => ipcRenderer.invoke('reply:save', data),
   replyDelete: (id) => ipcRenderer.invoke('reply:delete', id),
   custSave: (data) => ipcRenderer.invoke('cust:save', data),
@@ -63,6 +64,8 @@ contextBridge.exposeInMainWorld('wa', {
   selTranslate: (accountId, text) => ipcRenderer.invoke('seltr:translate', { accountId, text }),
   trPage: (data) => ipcRenderer.invoke('tr:page', data),
   trPageCancel: () => ipcRenderer.invoke('tr:page:cancel'),
+  // 服务商太忙、等着重试：{ lane: 'dock' | 'page', ms }，ms = 还要等多久，0 = 等完了
+  onTrWait: (cb) => ipcRenderer.on('tr:wait', (_e, w) => cb(w)),
   trChatLang: (accountId) => ipcRenderer.invoke('tr:chatlang', accountId),
   trLang: (accountId, lang) => ipcRenderer.invoke('tr:lang', { accountId, lang }),
   tmodeSave: (data) => ipcRenderer.invoke('tmode:save', data),
