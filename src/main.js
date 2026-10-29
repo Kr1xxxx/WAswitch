@@ -13,7 +13,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const log = require('./log');
-const { writeJsonAtomic, hasBrokenBackup } = require('./atomic');
+const { writeJsonAtomic, writeJsonQuiet, hasBrokenBackup } = require('./atomic');
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
@@ -222,9 +222,10 @@ function loadGroups() {
     return [];
   }
 }
+// 写不进去（盘满、文件被锁）不抛错，只记日志：内存里是整份数据，下一次保存会补上。
+// 抛错的话，启动、菜单点击、切号、页面事件都会中断，定时器里还会让软件退出
 function saveGroups() {
-  const file = groupsFile();
-  writeJsonAtomic(file, groups, 2);
+  writeJsonQuiet(groupsFile(), groups, 2);
 }
 const groupOf = (acc) => (acc.groupId ? groups.find((g) => g.id === acc.groupId) : null);
 // 是否不弹通知：账号自己关了，或者所在分组整组关了
@@ -288,9 +289,9 @@ function createGroup(moveId) {
   return g.id;
 }
 
+// 和 saveGroups 一样，写失败只记日志
 function saveAccounts() {
-  const file = storeFile();
-  writeJsonAtomic(file, accounts, 2);
+  writeJsonQuiet(storeFile(), accounts, 2);
 }
 
 function loadAccounts() {
@@ -1099,7 +1100,8 @@ function checkFollowUps() {
   const due = customerStore.list().filter((c) => c.followUpAt && !c.reminded && c.followUpAt <= now && !parkedCustomer(c));
   if (!due.length) return;
   for (const c of due) customerStore.patch(c.id, { reminded: true }, { save: false });
-  customerStore.save();
+  // 写不进去也照常提醒：内存里已经标了已提醒，这次运行不会重复弹。定时器里抛错会让软件退出
+  try { customerStore.save(); } catch (e) { console.warn(`跟进提醒保存失败：${e.code || e.message}`); }
   for (const c of due.slice(0, 3)) {
     const accId = c.accountId;
     notifier.notifyApp('跟进提醒', c.name || '一位客户', () => {
@@ -2793,7 +2795,11 @@ app.whenReady().then(async () => {
 
 // 只接受本地界面发来的消息，WhatsApp 页面没有这些接口
 const fromShell = (e) => shellView && e.sender === shellView.webContents;
-const onShell = (channel, fn) => ipcMain.on(channel, (e, ...args) => { if (fromShell(e)) fn(...args); });
+// 处理里同步抛错只记日志：一次点击出错不能让整个软件弹窗重启、所有号断一下
+const onShell = (channel, fn) => ipcMain.on(channel, (e, ...args) => {
+  if (!fromShell(e)) return;
+  try { fn(...args); } catch (err) { console.error(`界面操作 ${channel} 出错：${err && err.stack ? err.stack : err}`); }
+});
 const handleShell = (channel, fn) => ipcMain.handle(channel, (e, ...args) => {
   if (!fromShell(e)) throw new Error('not allowed');
   return fn(...args);

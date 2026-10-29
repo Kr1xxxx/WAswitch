@@ -92,6 +92,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-web-voice.js
       - name: 页面崩溃重建和保存设置同时发生
         run: xvfb-run -a node scripts/check-view-race.js
+      - name: 写盘一直失败时软件照常打开、不退出
+        run: xvfb-run -a node scripts/check-write-fail.js
       - name: 工作台每次打开、换号、换客户都在翻译页
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
       - name: 扫码后侧栏几秒内变成已登录
