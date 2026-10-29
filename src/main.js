@@ -34,6 +34,7 @@ const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
+const { fillLite } = require('./trfill');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
@@ -47,6 +48,7 @@ const { setupEditorIpc } = require('./editor-ipc');
 const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
+const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock } = require('./peer-clock');
@@ -1512,10 +1514,24 @@ async function onNetworkChange() {
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   reconnectStuck();
+  directTz.sync().catch(() => {});
   // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
   setTimeout(reconnectStuck, 30000);
 }
+const directTz = createDirectTz({
+  accounts: visibleAccounts,
+  isDirectWeb: (acc) => !isLite(acc) && !proxy.parse(acc.proxy),
+  testSystem: () => proxy.testSystem(),
+  save: saveAccounts,
+  viewOf: (id) => views.get(id)?.webContents,
+  idleSeconds: () => powerMonitor.getSystemIdleTime(),
+  onChange: (changed, region) => {
+    console.log(`系统代理出口变了，直连号时区改成 ${regionLabel(region)}：${changed.map((a) => a.name).join('、')}`);
+    refresh();
+  },
+});
 function watchNetwork() {
+  directTz.start();
   setInterval(async () => {
     if (netBusy) return;
     netBusy = true;
@@ -2071,6 +2087,27 @@ function userIsReading(id, jid) {
   return !locked && !!win && id === activeId && page === 'account' && win.isVisible() && win.isFocused() && liteOpen.get(id) === jid && !problems.has(id);
 }
 
+// 轻量号连上后：以前存的译文记录里没有原文的，按本机聊天缓存在后台慢慢补（见 trfill.js）。每次运行每个号补一次
+const liteFilled = new Set();
+function fillOriginalsSoon(id) {
+  if (liteFilled.has(id)) return;
+  liteFilled.add(id);
+  setTimeout(() => {
+    const store = trIpc.trStore;
+    const alive = () => !quitting && isLite(findAcc(id)) && liteStates.get(id)?.status === 'open';
+    if (!store || !alive()) { liteFilled.delete(id); return; }
+    fillLite({
+      store,
+      accId: id,
+      jids: () => liteHost.chatJids(id),
+      incoming: (jid) => liteHost.incomingTexts(id, jid),
+      alive,
+      onFill: (ck, k, text) => { if (trIpc.floatCore) trIpc.floatCore.fillText(id, ck, k, text); },
+    }).then((n) => { if (n) console.log(`轻量号补上了 ${n} 条译文的原文`); }, (e) => console.warn(`补原文失败：${e.message}`))
+      .finally(() => { if (!alive()) liteFilled.delete(id); }); // 补到一半断线了：下次连上再补
+  }, 30000);
+}
+
 function bindLiteEvents() {
   liteHost.on('state', ({ id, status, qr, me, detail, fresh }) => {
     const acc = findAcc(id);
@@ -2079,6 +2116,7 @@ function bindLiteEvents() {
     liteStates.set(id, { status, qr: status === 'qr' ? qr : null, fresh: fresh !== false });
     // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
     if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
+    if (status === 'open') fillOriginalsSoon(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
@@ -2696,6 +2734,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
     offlineWatch.restart();
+    setTimeout(() => directTz.sync().catch(() => {}), 10000);
     crmQueue?.sweep();
     setTimeout(reconnectStuck, 5000);
   });
@@ -2933,6 +2972,7 @@ handleShell('panel:import', async ({ kind } = {}) => {
 // ---------- 拆出去的接口模块（editor-ipc.js、check-ipc.js、translate-ipc.js）共用的上下文 ----------
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
 const ctx = {
+  directTz,
   get accounts() { return accounts; },
   get groups() { return groups; },
   moveAccount,

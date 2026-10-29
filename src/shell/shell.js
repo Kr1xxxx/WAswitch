@@ -610,7 +610,12 @@ function fitTop() {
   }
   $top.classList.remove('fitting');
 }
-window.addEventListener('resize', () => fitTop());
+// 顶栏按自己的宽度重排，不看窗口：拖窗口、收起展开侧栏，宽度一变就重新藏放
+let topW = 0;
+new ResizeObserver(([e]) => {
+  const w = Math.round(e.contentRect.width);
+  if (w && w !== topW) { topW = w; fitTop(); }
+}).observe($top);
 
 function renderTop() {
   const acc = active();
@@ -1526,8 +1531,10 @@ function editorPage(id) {
     const drawTags = () => {
       const opt = d.regions.find((r) => r.key === region.value) || (region.selectedOptions[0] && { label: region.selectedOptions[0].textContent });
       const auto = region.value === 'auto';
+      const direct = mode !== 'lite' && !proxyInput.value.trim();
+      region.hidden = direct;
       tags.replaceChildren(
-        h('span', { class: 'tag' }, auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, direct ? '时区：跟随系统代理出口' : auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
         h('span', { class: 'tag' }, '浏览器：Chrome，操作系统跟随本机'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
@@ -1587,6 +1594,7 @@ function editorPage(id) {
       proxyInput.placeholder = '留空表示直连，例如 socks5://127.0.0.1:7891';
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
+      drawTags();
       callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
@@ -1952,7 +1960,7 @@ function settingsPage() {
           c.fix ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: async (e) => {
             e.currentTarget.disabled = true;
             const r = await window.wa.checkFix(c.fix.id, c.fix.region);
-            if (r && r.ok) { c.level = 'ok'; c.detail = `已改成「${c.fix.label}」，页面已重新加载。`; c.fix = null; }
+            if (r && r.ok) { c.level = 'ok'; c.detail = r.reloaded ? `已改成「${c.fix.label}」，页面已重新加载。` : `已改成「${c.fix.label}」。`; c.fix = null; }
             render(true);
           } }, `地区改成 ${c.fix.label}`)) : null,
           c.logs ? h('span', null, h('button', { class: 'btn', style: { height: '30px', padding: '0 14px', marginTop: '4px' }, onclick: () => window.wa.openLogs() }, '打开日志文件夹')) : null)))),

@@ -166,5 +166,17 @@ const form = (extra) => ({ id: 'a1', name: '新名字', color: COLORS[0], proxy:
   ctx.accounts = [webAcc({ id: 'l1', mode: 'lite', primary: false, proxy: lf.proxy, proxyPassword: proxy.encryptPassword('test-one') })];
   assert.ok((await save({ ...lf, id: 'l1', proxy: 'http://alice:changed-inline@127.0.0.1:8080', password: '' })).error, 'inline password changes also require a matching test');
 
+  // 直连网页号：时区跟着系统代理出口走，编辑页传来的地区不算数
+  let sysTests = 0;
+  proxy.testSystem = async () => { sysTests++; return { ok: true, ip: '8.8.8.8', country: 'HK', timezone: 'Asia/Hong_Kong' }; };
+  ctx.accounts = [webAcc({ proxy: '', fingerprint: { region: 'HK' } })];
+  await save(form({ proxy: '', region: 'US_W' }));
+  assert.strictEqual(ctx.accounts[0].fingerprint.region, 'HK', '老的直连号保持现有时区');
+  assert.strictEqual(sysTests, 0, '老的直连号保存不测');
+  ctx.accounts = [webAcc({ fingerprint: { region: 'US' } })];
+  await save(form({ proxy: '', region: 'US' }));
+  assert.strictEqual(ctx.accounts[0].fingerprint.region, 'HK', '代理号改成直连：按系统代理出口定时区');
+  assert.strictEqual(sysTests, 1);
+
   console.log('check-editor-save: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -174,6 +174,12 @@ class LiteProc {
     return this.request({ type: 'peer', id, jid }, 5000);
   }
 
+  // 转文字：下载客户发来的一条语音（只在内存里），返回 Uint8Array
+  voice(id, jid, msgId) {
+    if (!this.sessions.has(id) || !this.proc) return Promise.reject(new Error('这个号没有在运行'));
+    return this.request({ type: 'voice', id, jid, msgId }, 120000);
+  }
+
   // MCP read_messages：按名称或号码找对话、读最近的消息（只读本机缓存）
   ask(msg) {
     if (!this.sessions.has(msg.id)) return Promise.resolve({ ok: false, reason: 'notrunning' });
@@ -273,6 +279,22 @@ class LiteHost extends EventEmitter {
   history(id, jid, limit) {
     const p = this.procOf(id);
     return p ? p.ask({ type: 'history', id, jid, limit }) : Promise.resolve({ ok: false, reason: 'notrunning' });
+  }
+
+  // 后台补译文记录里的原文（见 trfill.js）。号没在运行时返回 null
+  chatJids(id) {
+    const p = this.procOf(id);
+    return p && p.running() ? p.request({ type: 'jids', id }, 10000) : Promise.resolve(null);
+  }
+
+  incomingTexts(id, jid) {
+    const p = this.procOf(id);
+    return p && p.running() ? p.request({ type: 'incoming', id, jid }, 10000) : Promise.resolve(null);
+  }
+
+  voice(id, jid, msgId) {
+    const p = this.procOf(id);
+    return p ? p.voice(id, jid, msgId) : Promise.reject(new Error('这个号没有在运行'));
   }
 
   // 两个后台进程的 pid（内存统计用）

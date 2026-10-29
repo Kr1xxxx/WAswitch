@@ -1,4 +1,5 @@
 // 轻量模式的聊天缓存：只存文字和类型说明（图片、语音等显示成“[图片]”），不下载媒体。
+// 客户发来的语音另外记下载信息（mediaKey、directPath、url，几百字节），转文字时才下载（见 session.mjs 的 voice）。
 // 每个对话最多保留 500 条，加密后写盘（见 vault.mjs）。
 import path from 'node:path';
 import { getContentType, normalizeMessageContent, isJidGroup, isJidBroadcast, isJidNewsletter, jidNormalizedUser, proto } from 'baileys';
@@ -8,6 +9,7 @@ export const MAX_PER_CHAT = 500;
 const MAX_UNREAD_KEYS = 50;
 export const MAX_NAMES = 2000; // 联系人名称最多记这么多（通讯录很大时不会整个写盘）
 export const MAX_SENT = 50; // 自己发出的消息保留原文，对方没收到、请求重发时用
+export const MAX_VOICES = 1000; // 客户发来的语音的下载信息最多记这么多条（最早的先删）
 
 // 不显示的对话：状态、广播、频道
 export const ignoredJid = (jid) => !jid || isJidBroadcast(jid) || isJidNewsletter(jid);
@@ -38,6 +40,16 @@ const LABELS = {
 // 不算一条消息的类型（回执、反应、撤回通知、密钥分发等）
 const SKIP = new Set(['protocolMessage', 'reactionMessage', 'senderKeyDistributionMessage', 'messageContextInfo', 'pollUpdateMessage', 'keepInChatMessage', 'encReactionMessage']);
 
+// 客户发来的语音：转文字时下载要用的信息和时长（秒）；不是语音、或信息不全返回 null
+export function voiceOf(message) {
+  const content = normalizeMessageContent(message);
+  const a = content && getContentType(content) === 'audioMessage' ? content.audioMessage : null;
+  if (!a || !a.mediaKey || !(a.directPath || a.url)) return null;
+  const mk = Buffer.from(a.mediaKey).toString('base64');
+  if (!mk) return null;
+  return { mk, dp: String(a.directPath || '').slice(0, 500), url: String(a.url || '').slice(0, 1000), s: Math.max(0, Math.round(toNumber(a.seconds))) };
+}
+
 // 消息 → 要显示的文字；不显示的返回 null
 export function textOf(message) {
   const content = normalizeMessageContent(message);
@@ -62,6 +74,7 @@ export class ChatStore {
     this.unreadKeys = new Map(); // jid -> 未读消息的 key（发已读回执用，不写盘）
     this.altPn = new Map(); // 隐私编号 @lid -> 消息里带的真实号码 jid（remoteJidAlt，只在内存）
     this.sent = new Map(); // 消息 id -> 自己发出的消息原文（protobuf，base64），最近 MAX_SENT 条
+    this.voices = new Map(); // `${jid}|${消息 id}` -> 客户语音的下载信息 { mk, dp, url, s, p(群成员) }，最近 MAX_VOICES 条
     this.save = debounced(() => {
       try { writeSealed(this.file, this.key, this.toJSON()); } catch (e) { onError(e); }
     }, 10000);
@@ -71,11 +84,12 @@ export class ChatStore {
       for (const [jid, list] of data.msgs || []) this.msgs.set(jid, list);
       for (const [jid, name] of (data.names || []).slice(-MAX_NAMES)) this.names.set(jid, name);
       for (const [id, b64] of data.sent || []) this.sent.set(id, b64);
+      for (const [k, v] of (data.voices || []).slice(-MAX_VOICES)) this.voices.set(k, v);
     }
   }
 
   toJSON() {
-    return { chats: [...this.chats.values()], msgs: [...this.msgs.entries()], names: [...this.names.entries()], sent: [...this.sent.entries()] };
+    return { chats: [...this.chats.values()], msgs: [...this.msgs.entries()], names: [...this.names.entries()], sent: [...this.sent.entries()], voices: [...this.voices.entries()] };
   }
 
   chat(jid) {
@@ -149,6 +163,13 @@ export class ChatStore {
       text: text.slice(0, 4000),
       from: group && !key.fromMe ? (msg.pushName || this.names.get(sender) || '') : '',
     };
+    // 客户发来的语音：消息上只记时长（界面显示「语音 0:23」），下载信息另放，不跟着对话推给界面
+    const voice = key.fromMe ? null : voiceOf(msg.message);
+    if (voice) {
+      item.voice = voice.s;
+      this.voices.set(`${jid}|${key.id}`, { ...voice, ...(key.participant ? { p: String(key.participant) } : {}) });
+      if (this.voices.size > MAX_VOICES) this.voices.delete(this.voices.keys().next().value);
+    }
     list.push(item);
     list.sort((a, b) => a.ts - b.ts);
     if (list.length > MAX_PER_CHAT) list.splice(0, list.length - MAX_PER_CHAT);
@@ -175,6 +196,18 @@ export class ChatStore {
     if (!id || !message) return;
     this.sent.set(id, Buffer.from(proto.Message.encode(message).finish()).toString('base64'));
     if (this.sent.size > MAX_SENT) this.sent.delete(this.sent.keys().next().value);
+    this.save.schedule();
+  }
+
+  // 转文字用：这条语音的下载信息；没有返回 null
+  voice(jid, id) { return this.voices.get(`${jid}|${id}`) || null; }
+
+  // 手机重新上传后（旧链接过期），换成新的下载地址
+  setVoicePath(jid, id, dp, url) {
+    const v = this.voices.get(`${jid}|${id}`);
+    if (!v) return;
+    v.dp = String(dp || v.dp).slice(0, 500);
+    v.url = String(url || v.url).slice(0, 1000);
     this.save.schedule();
   }
 
@@ -214,6 +247,7 @@ export class ChatStore {
     this.chats.delete(jid);
     this.msgs.delete(jid);
     this.unreadKeys.delete(jid);
+    for (const k of [...this.voices.keys()]) if (k.startsWith(`${jid}|`)) this.voices.delete(k);
     this.save.schedule();
   }
 }

@@ -91,6 +91,13 @@ if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
 
 仓库是公开的。代码、注释、测试数据、截图里不放密钥、令牌、真实客户的名字、号码和聊天内容。
 
+## 11. 按所在区域的大小排版
+
+- 样式里不按窗口宽高写 `@media (max-width…)`、`@media (max-height…)`，用容器查询：`@container card`（右侧整张卡片的宽高）、`@container tp-pane`（翻译页一栏的宽）。`npm run check:container` 会查。
+- 窗口窄时收侧栏、收工作台由主进程判断（`src/main.js` 的 `NARROW_SIDE`、`NARROW_PANEL`），样式层不管。
+- 顶栏放不下时按优先级整块藏起（`shell.js` 的 `fitTop`），不用省略号；它看顶栏自己的宽度。
+- 中文标签、按钮、角标不能被挤成一字一行：加 `white-space: nowrap`，需要缩时给 `min-width: 0`，不要 `word-break: break-all`。
+
 ## 提交前
 
 改了界面至少跑这些（全部列表在 `.github/workflows/ci.yml`）：
@@ -102,6 +109,7 @@ npm run check:ime-enter     # 回车处理带输入法守卫
 npm run check:font-sizes    # 只有四种字号
 npm run check:radius-motion # 圆角四档、动效 250ms ease-out
 npm run check:colors        # 只用 Radix 颜色
+npm run check:container     # 没有按窗口宽高写的 @media
 xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual   # 组件总览页和基准图逐像素一致
 ```
 
