@@ -164,6 +164,11 @@ function setupEditorIpc(ctx) {
     // 还不知道出口所在地、或刚从别的地区改回“跟随本机”时才测
     const exitUnknown = !acc || acc.proxy !== proxyStored || (plan.kind === 'new' && !keepOld) || !acc.exitLabel || acc.fingerprint.region !== 'auto';
     let directTested = !parsed && lastTest && lastTest.identity === identity ? lastTest : null;
+    // 直连网页号的时区跟着系统代理出口走（见 direct-tz.js），编辑页里不让选：
+    // 刚测过就用测到的，老的直连号保持现有的，其他情况下面按出口测一次
+    if (mode === 'web' && !parsed) {
+      region = (directTested && directTested.region) || (acc && !isLite(acc) && !acc.proxy ? acc.fingerprint.region : 'auto');
+    }
     if (mode === 'web' && region === 'auto') {
       if (parsed && !tested && exitUnknown) {
         const res = await proxy.test(String(proxyText || ''), proxy.passwordFor(acc ? acc.proxy : '', acc ? acc.proxyPassword : '', String(proxyText || ''), password));

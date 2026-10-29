@@ -47,6 +47,7 @@ const { setupEditorIpc } = require('./editor-ipc');
 const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
+const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock } = require('./peer-clock');
@@ -1512,10 +1513,24 @@ async function onNetworkChange() {
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   reconnectStuck();
+  directTz.sync().catch(() => {});
   // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
   setTimeout(reconnectStuck, 30000);
 }
+const directTz = createDirectTz({
+  accounts: visibleAccounts,
+  isDirectWeb: (acc) => !isLite(acc) && !proxy.parse(acc.proxy),
+  testSystem: () => proxy.testSystem(),
+  save: saveAccounts,
+  viewOf: (id) => views.get(id)?.webContents,
+  idleSeconds: () => powerMonitor.getSystemIdleTime(),
+  onChange: (changed, region) => {
+    console.log(`系统代理出口变了，直连号时区改成 ${regionLabel(region)}：${changed.map((a) => a.name).join('、')}`);
+    refresh();
+  },
+});
 function watchNetwork() {
+  directTz.start();
   setInterval(async () => {
     if (netBusy) return;
     netBusy = true;
@@ -2696,6 +2711,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('resume', () => {
     offlineWatch.restart();
+    setTimeout(() => directTz.sync().catch(() => {}), 10000);
     crmQueue?.sweep();
     setTimeout(reconnectStuck, 5000);
   });
@@ -2933,6 +2949,7 @@ handleShell('panel:import', async ({ kind } = {}) => {
 // ---------- 拆出去的接口模块（editor-ipc.js、check-ipc.js、translate-ipc.js）共用的上下文 ----------
 // 会重新赋值的状态用 getter：模块里读 ctx.activeId 拿到的总是现在的值；写 ctx.page = 'account' 就是改这里的变量
 const ctx = {
+  directTz,
   get accounts() { return accounts; },
   get groups() { return groups; },
   moveAccount,
