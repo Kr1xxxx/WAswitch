@@ -19,16 +19,15 @@ Module._load = function load(req, ...rest) {
 };
 const { MemoryManager, loadSettings, saveSettings } = require('../src/memory');
 
-// 0. 工作台默认停在“翻译”；切到别的页后存进设置，重启（重新读设置）还在那一页；写坏的值回到翻译
-assert.strictEqual(loadSettings().panelTab, 'translate', '新装应默认翻译');
-saveSettings({ ...loadSettings(), panelTab: 'replies' });
-assert.strictEqual(loadSettings().panelTab, 'replies', '重启后应记住话术');
-saveSettings({ ...loadSettings(), panelTab: 'bogus' });
-assert.strictEqual(loadSettings().panelTab, 'translate', '坏值应回到翻译');
-const legacy = { lockMinutes: 15 }; // 老版本的设置文件没有 panelTab
-fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(legacy));
-assert.strictEqual(loadSettings().panelTab, 'translate', '老用户升级后默认翻译');
-console.log('✓ 工作台默认翻译，并记住上次的页');
+// 0. 工作台每次打开都在“翻译”，不记上次的页：老设置文件里留着的 panelTab 读的时候就丢掉，下次保存后文件里也没有
+assert.strictEqual(loadSettings().panelTab, undefined, '设置里不再有 panelTab');
+for (const old of ['customers', 'replies', 'bogus']) {
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ lockMinutes: 15, panelTab: old }));
+  assert.strictEqual(loadSettings().panelTab, undefined, `老设置文件里的 panelTab: ${old} 不应再读出来`);
+}
+saveSettings(loadSettings());
+assert.ok(!('panelTab' in JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'))), '保存后设置文件里不应有 panelTab');
+console.log('✓ 设置里不再记工作台停在哪一页');
 
 function setup(n, mb, settings) {
   const views = new Map();
