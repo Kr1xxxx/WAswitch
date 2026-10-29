@@ -5,6 +5,8 @@
 // 客户发来的语音（轻量号和网页号）：先转文字（deps.transcribe，智谱 GLM-ASR），转出来的文字当原文照常翻译；按「voice:+消息编号」存，不再转。
 // 转文字单独一条道（一次一条），不占文字翻译的队列：一条长语音转的时候，新来的文字消息照常翻。
 // 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（记录里有原文的连原文一起）。
+// 同一个对话 WhatsApp 可能换编号（手机号 @c.us 换成隐私编号 @lid，data-id 中间那段变，消息编号不变）：
+// 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
 const crypto = require('crypto');
 const { textKey, VIEW_MAX } = require('./trstore');
 
@@ -32,6 +34,13 @@ function contextFrom(list, h) {
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
 const chatOf = (dataId) => String(dataId).split('_')[1] || '';
+// 认消息用的：方向 + 消息编号，不带对话编号和群成员（这两段都可能在 @c.us 和 @lid 之间换）。
+// 别的形状（读不到 data-id 时按内容算的 chat:<标题>_h…）照旧用整条：那种编号离开对话就不唯一
+const REAL_ID = /^(true|false)_[^_]+@(?:c\.us|s\.whatsapp\.net|g\.us|lid)_([^_]+)(?:_|$)/;
+const msgKey = (dataId) => { const m = REAL_ID.exec(String(dataId)); return m ? `${m[1]}_${m[2]}` : String(dataId); };
+const msgHash = (accId, dataId) => hashOf(accId, msgKey(dataId));
+const chatHash = (accId, dataId) => hashOf(accId, `chat|${chatOf(dataId)}`);
+const PHONE_CHAT = /@(?:c\.us|s\.whatsapp\.net)$/;
 // 按本机日期算“今天”（北京时间 0 点换天，不是 UTC）
 const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 
@@ -154,7 +163,7 @@ class FloatCore {
   // 还在排队没开始翻的撤掉，并退回占用的自动翻译额度
   dropOwn(accId, st, id) {
     if (!id.startsWith('true_')) return;
-    const h = hashOf(accId, 'false_' + id.slice(5));
+    const h = msgHash(accId, 'false_' + id.slice(5));
     const item = st.items.get(h);
     if (!item) return;
     if (item.state === 'running') return;
@@ -180,20 +189,22 @@ class FloatCore {
   ingest(accId, read, opts) {
     const st = this.acc(accId);
     const msgs = (read.msgs || []).filter((m) => m && typeof m.id === 'string');
-    const chat = msgs.length ? chatOf(msgs[msgs.length - 1].id) : '';
+    this.learnAlias(accId, st, msgs);
+    // st.chat：这个对话的正式 hash（别名都归到它）
+    const chat = msgs.length ? this.canon(accId, chatHash(accId, msgs[msgs.length - 1].id)) : '';
     const newChat = chat !== st.chat;
-    const hs = msgs.map((m) => hashOf(accId, m.id));
+    const hs = msgs.map((m) => msgHash(accId, m.id));
     const newest = Math.max(0, ...msgs.map((m) => (m.t && Number.isFinite(m.t.at) ? m.t.at : 0)));
     if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
     let filled = false;
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
-    const recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: hashOf(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
+    const recent = msgs.filter((m) => String(m.text || '').trim()).slice(-RECENT).map((m) => ({ h: msgHash(accId, m.id), out: !!m.out, text: String(m.text).slice(0, 1000) }));
     for (const m of msgs) {
       if (m.out) { this.dropOwn(accId, st, m.id); continue; }
       if (!shown(m)) continue;
-      const h = hashOf(accId, m.id);
+      const h = msgHash(accId, m.id);
       const had = st.items.get(h);
       if (had) {
         if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; // 补回来时没有原文的旧消息又读到了：补上原文
@@ -201,13 +212,16 @@ class FloatCore {
         else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued') && String(m.text).trim() && String(m.text) !== had.text) { had.text = String(m.text); filled = true; }
         continue;
       }
-      const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
+      const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       if (isVoice(m)) {
         // 语音：按消息编号存（没有原文 hash）；以前转过、翻过的直接用转出来的文字和译文
         // 网页号：下载要用 data-id（只留在主进程）；时长认不出（0）时用以前存下的
-        Object.assign(item, { text: '', voice: m.voice, src: m.src || (m.id.startsWith('false_') ? { dataId: m.id } : null), k: textKey(`voice:${m.id}`) });
+        // 以前按整条 data-id 存（vOld）：找到就按新键再存一份，以后换了编号也认得出
+        const vOld = textKey(`voice:${m.id}`);
+        Object.assign(item, { text: '', voice: m.voice, src: m.src || (m.id.startsWith('false_') ? { dataId: m.id } : null), k: textKey(`voice:${msgKey(m.id)}`) });
+        if (this.deps.store && this.deps.store.copyKey && vOld !== item.k) this.deps.store.copyKey(accId, item.ck, vOld, item.k);
         if (!item.voice && this.deps.store && this.deps.store.getView) {
-          const x = this.deps.store.getView(accId, item.ck).find((v) => v.k === item.k && v.v > 0);
+          const x = this.deps.store.getView(accId, item.ck).find((v) => (v.k === item.k || v.k === vOld) && v.v > 0);
           if (x) item.voice = x.v;
         }
         const saved = this.deps.store ? this.deps.store.getKey(accId, item.ck, item.k) : null;
@@ -242,15 +256,15 @@ class FloatCore {
       if (newChat) this.catchUp(accId, st, hs, opts, recent);
       else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent);
     }
-    let view = msgs.filter(shown).map((m) => hashOf(accId, m.id));
+    let view = msgs.filter(shown).map((m) => msgHash(accId, m.id));
     // 读页面只读最后 20 条（双方）：自己每发一条，最老的一条就被挤出去。还是同一个对话、和上次读到的接得上，
     // 挤出去的客户消息照样留在翻译栏上面，不然每发一条，翻译栏就少一条、整列往上跳（shen 2026-10-28）
     const prevAll = new Set(st.recent.map((m) => m.h));
-    if (!newChat && msgs.some((m) => prevAll.has(hashOf(accId, m.id)))) {
+    if (!newChat && msgs.some((m) => prevAll.has(msgHash(accId, m.id)))) {
       // 只留比这次读到的都早的那一段（中间不见了的是客户撤回的，不留）；这次认出是自己发的（上次当成了收到的）也不留
       const inView = new Set(view);
       const first = st.view.findIndex((h) => inView.has(h));
-      const own = new Set(msgs.filter((m) => m.out && m.id.startsWith('true_')).map((m) => hashOf(accId, 'false_' + m.id.slice(5))));
+      const own = new Set(msgs.filter((m) => m.out && m.id.startsWith('true_')).map((m) => msgHash(accId, 'false_' + m.id.slice(5))));
       const kept = (first < 0 ? st.view : st.view.slice(0, first)).filter((h) => !own.has(h) && st.items.has(h));
       // 只限制留下的旧消息，这次读到的一条不少；轻量号一次读到的多，按上次的条数留
       const room = Math.max(0, Math.max(KEEP_VIEW, st.view.length) - view.length);
@@ -270,16 +284,48 @@ class FloatCore {
     return changed;
   }
 
+  canon(accId, ck) {
+    const store = this.deps.store;
+    return store && store.canon ? store.canon(accId, ck) : ck;
+  }
+
+  // 认出同一个对话的两个编号：
+  // a. 一次读到的私聊里两种编号都有（手机号的和隐私编号的，比如客户的消息是 @c.us、自己刚发的是 @lid）；
+  // b. 一条客户消息以前在另一个编号下见过（这次运行里看 st.items，重启后看存着的最近消息索引）。
+  // 每条读到的客户消息都记进索引（只有 hash），以后换了编号也认得出
+  learnAlias(accId, st, msgs) {
+    const store = this.deps.store;
+    if (!store || !store.link) return;
+    let learned = false;
+    const chats = [...new Set(msgs.map((m) => chatOf(m.id)))];
+    if (chats.length === 2) {
+      const phone = chats.find((c) => PHONE_CHAT.test(c));
+      const lid = chats.find((c) => c.endsWith('@lid'));
+      if (phone && lid && store.link(accId, hashOf(accId, `chat|${phone}`), hashOf(accId, `chat|${lid}`))) learned = true;
+    }
+    for (const m of msgs) {
+      if (m.out || !shown(m) || !REAL_ID.test(m.id)) continue;
+      const h = msgHash(accId, m.id);
+      const ck = chatHash(accId, m.id);
+      const had = st.items.get(h);
+      const before = (had && had.ck) || store.seenChat(accId, h);
+      if (before && store.link(accId, before, ck)) learned = true;
+      store.markSeen(accId, h, store.canon(accId, ck));
+    }
+    if (learned) (this.deps.log || console.log)('译文记录：同一个对话换了编号，沿用原来的译文');
+  }
+
   // 存的记录里，比这次读到的都早的、有译文的消息：放回 st.items，返回它们的 hash（按原来的顺序）
-  restore(accId, st, chat, view, msgs) {
+  restore(accId, st, ck, view, msgs) {
     const store = this.deps.store;
     if (!store || !store.getView) return [];
-    const ck = hashOf(accId, `chat|${chat}`);
     const saved = store.getView(accId, ck);
     if (!saved.length) return [];
     // 和这次读到的接上：记录里这次读到的第一条之前的那些；接不上（不在的时候又来了 20 多条）就整张单子都比这次早
     const inRead = new Set(view);
-    const readKeys = new Set(msgs.filter((m) => !m.out).map((m) => textKey(String(m.text || ''))));
+    // 原文的 hash；语音是新旧两种消息键（老版本存的 _view 里消息的 hash 按整条 data-id 算，和这次的对不上，按这个去重）
+    const readKeys = new Set(msgs.filter((m) => !m.out).flatMap((m) => (isVoice(m) && !String(m.text || '').trim()
+      ? [textKey(`voice:${msgKey(m.id)}`), textKey(`voice:${m.id}`)] : [textKey(String(m.text || ''))])));
     const at = view.length ? saved.findIndex((x) => x.h === view[0]) : -1;
     const older = (at >= 0 ? saved.slice(0, at) : saved).filter((x) => !inRead.has(x.h) && (at >= 0 || !readKeys.has(x.k)));
     const out = [];
@@ -302,12 +348,12 @@ class FloatCore {
   }
 
   // 翻译栏现在显示的消息记到磁盘上（只有 hash 和时间）
-  keepView(accId, st, chat) {
+  keepView(accId, st, ck) {
     const store = this.deps.store;
     if (!store || !store.putView) return;
     const list = st.view.map((h) => st.items.get(h)).filter(Boolean)
       .map((it) => ({ h: it.h, k: it.k || textKey(it.text), t: it.t || '', ...(isVoice(it) ? { v: it.voice } : {}) }));
-    store.putView(accId, hashOf(accId, `chat|${chat}`), list);
+    store.putView(accId, ck, list);
   }
 
   // 用户往上翻聊天记录：WhatsApp 把最下面的新消息从页面上拿掉了，读到的最后 20 条是更早的。
@@ -338,6 +384,7 @@ class FloatCore {
   queueSlow(accId, item, recent) {
     if (item.state !== 'manual' || !item.text || item.text.length > AUTO_MAX_CHARS) return;
     item.state = 'queued';
+    item.bg = true; // 还没轮到：翻译栏照常显示「翻译」（见 viewOf），真开始翻才显示「翻译中…」
     this.queue.push({ accId, h: item.h, slow: true, context: contextFrom(recent, item.h) });
   }
 
@@ -361,6 +408,7 @@ class FloatCore {
       this.queue.splice(i, 1);
     }
     item.state = 'queued';
+    item.bg = false;
     item.err = '';
     item.errKind = '';
     item.errCode = '';
@@ -439,7 +487,8 @@ class FloatCore {
   fillText(accId, ck, k, text) {
     const st = this.accs.get(accId);
     if (!st) return;
-    for (const item of st.items.values()) if (item.ck === ck && item.k === k && !item.text) this.fillItem(accId, item, text);
+    const c = this.canon(accId, ck);
+    for (const item of st.items.values()) if (this.canon(accId, item.ck) === c && item.k === k && !item.text) this.fillItem(accId, item, text);
   }
 
   // 翻译用的上下文：这条消息之前的最近几条（不传 h 就是整个对话最近几条，写回复时用）
@@ -559,6 +608,7 @@ class FloatCore {
     const item = st && st.items.get(job.h);
     if (!item || item.state !== 'queued') { done(); return; }
     item.state = 'running';
+    item.bg = false;
     this.onChange(job.accId);
     // 语音还没转文字：交给转文字那条道（见 vpump），转好了再回到翻译队列，不占翻译的位置
     if (isVoice(item) && !item.text) {
@@ -589,10 +639,11 @@ class FloatCore {
   // 不再一条条去试（节点挂了时每条要等 30 秒，会一直占着翻译）；下次切到对话再补
   slowFailed(item) {
     item.state = 'manual';
+    item.bg = false;
     this.queue = this.queue.filter((q) => {
       if (!q.slow) return true;
       const it = this.accs.get(q.accId)?.items.get(q.h);
-      if (it && it.state === 'queued') { it.state = 'manual'; this.onChange(q.accId); }
+      if (it && it.state === 'queued') { it.state = 'manual'; it.bg = false; this.onChange(q.accId); }
       return false;
     });
   }
@@ -604,13 +655,13 @@ class FloatCore {
     return {
       title: st.title,
       // 对话的 hash（记住客户语言用），不含号码
-      chatKey: st.chat ? hashOf(accId, `chat|${st.chat}`) : '',
+      chatKey: st.chat || '',
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice }) => ({ h, text, t, state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null })),
+        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice }) => ({ h, text, t, state: state === 'queued' && bg ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null })),
     };
   }
 }
 
-module.exports = { FloatCore, fromLite, liteText, hashOf, chatOf, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
+module.exports = { FloatCore, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };

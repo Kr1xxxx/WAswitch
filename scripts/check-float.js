@@ -2,10 +2,11 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, fromLite, hashOf } = require('../src/floatcore');
+const { FloatCore, fromLite, hashOf, msgHash } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `${out}_${chat}_ID${n}`, out, text });
+// 消息编号带上对话（真 WhatsApp 的消息编号各不相同；按消息编号认消息，不同对话不能撞号）
+const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `${out}_${chat}_ID${chat.replace(/\W/g, '')}N${n}`, out, text });
 
 async function core() {
   let now = Date.parse('2026-10-24T10:00:00Z');
@@ -28,9 +29,9 @@ async function core() {
   // 上下文：这条之前的几条（双方都有）；手动改的译文保留，纠错结果只当建议
   const ctxMsgs = [msg(1, false, '333@c.us'), msg(2, true, '333@c.us'), msg(3, false, '333@c.us')];
   fc.ingest('C', { title: 'c', msgs: ctxMsgs }, { auto: false, dailyCap: 500 });
-  assert.deepStrictEqual(fc.contextOf('C', hashOf('C', ctxMsgs[2].id)).map((m) => m.out), [false, true]);
+  assert.deepStrictEqual(fc.contextOf('C', msgHash('C', ctxMsgs[2].id)).map((m) => m.out), [false, true]);
   assert.strictEqual(fc.contextOf('C').length, 3);
-  const hc = hashOf('C', ctxMsgs[2].id);
+  const hc = msgHash('C', ctxMsgs[2].id);
   assert(fc.edit('C', hc, '我改的'));
   assert(fc.manual('C', hc, true));
   await sleep(20);
@@ -47,7 +48,7 @@ async function core() {
   await sleep(20);
   assert.strictEqual(sent[sent.length - 1], 'hola 12');
   // 手动翻一条旧的
-  assert(fc.manual('A', hashOf('A', first[0].id)));
+  assert(fc.manual('A', msgHash('A', first[0].id)));
   await sleep(20);
   assert.strictEqual(sent[sent.length - 1], 'hola 0');
   // 每分钟最多 20 条（已经自动翻了 6 条）：一下来 30 条新消息，只再翻 14 条
@@ -99,6 +100,133 @@ async function core() {
   await oldRecordsGetOriginals();
   await catchUpOlder();
   await parallelAuto();
+  await lidSwitch();
+}
+
+// WhatsApp 把同一个对话的编号从手机号（@c.us）换成隐私编号（@lid）：data-id 中间那段变，消息编号不变。
+// 切回、重启都不重翻；草稿和客户语言跟着对话走；老版本按整条 data-id 存的语音、_view 照样用（客户反馈 2026-10-29「切回来怎么又在重新翻译」）
+async function lidSwitch() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore, textKey } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-lid-'));
+  const calls = [];
+  const heard = [];
+  const logs = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    const fc = new FloatCore({ store, slowGap: 30, parallel: () => 3, log: (x) => logs.push(x),
+      transcribe: async () => { heard.push(1); return { text: 'Voice words' }; },
+      translate: async (text, o = {}) => { calls.push((o.slow ? '慢:' : '') + text); await sleep(5); return { text: `译:${text}` }; } });
+    return { store, fc };
+  };
+  const idle = async (fc) => { for (let i = 0; i < 300 && (fc.running || fc.queue.length || fc.vrunning); i += 1) await sleep(10); };
+  const IN = [0, 2, 5, 8, 11, 14, 17, 19];
+  const win = (jid) => Array.from({ length: 20 }, (_, i) => { const inc = IN.includes(i); return { id: `${!inc}_${jid}_3EB0${i}`, out: !inc, text: inc ? `Customer ${i}` : `Me ${i}`, t: { h: 10, mi: i, at: 1e12 + i * 60000 } }; });
+  const other = [{ id: 'false_999@lid_3EB0X', out: false, text: 'Other chat', t: { h: 11, mi: 0, at: 2e12 } }];
+  const opts = { auto: true, dailyCap: 500 };
+  const phone = '4915112345678@c.us';
+  const lid = '123456789012345@lid';
+  const unique = (items) => { assert.strictEqual(new Set(items.map((x) => x.h)).size, items.length, '没有重复的行'); assert.strictEqual(new Set(items.map((x) => x.text)).size, items.length, '没有重复的行'); };
+  let { store, fc } = make();
+  // 后台慢慢补的还没轮到：显示「翻译」，不显示「翻译中…」
+  fc.ingest('W', { title: 'Mia', msgs: win(phone), bottom: true }, opts);
+  await sleep(1);
+  const st0 = fc.viewOf('W').items.map((x) => x.state);
+  assert.deepStrictEqual(st0.slice(0, 3), ['manual', 'manual', 'manual'], '后台排队的看起来没开始');
+  assert(st0.slice(3).every((x) => x === 'queued' || x === 'running' || x === 'done'), '最新 5 条照常');
+  assert(fc.manual('W', fc.viewOf('W').items[0].h), '点了马上翻');
+  await idle(fc);
+  assert.strictEqual(calls.length, 8);
+  assert(calls.includes('Customer 0') && !calls.includes('慢:Customer 0'), '点的那条不走后台');
+  const key0 = fc.viewOf('W').chatKey;
+  // 1. 换编号切回：0 次，都是已翻译，没有重复的行
+  fc.ingest('W', { title: 'Other', msgs: other, bottom: true }, opts);
+  await idle(fc);
+  calls.length = 0;
+  fc.ingest('W', { title: 'Mia', msgs: win(lid), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, [], '换编号切回不重翻');
+  let items = fc.viewOf('W').items;
+  assert.strictEqual(items.length, 8);
+  assert(items.every((x) => x.state === 'done'));
+  unique(items);
+  assert.strictEqual(fc.viewOf('W').chatKey, key0, '草稿、客户语言跟着对话走');
+  assert.strictEqual(logs.length, 1, '认出别名时记一行日志');
+  assert(!logs[0].includes('@'), '日志里没有编号');
+  // 2. 换编号 + 重启（新的 FloatCore 和 TrStore，同一个文件夹）
+  store.flush();
+  ({ store, fc } = make());
+  fc.ingest('W', { title: 'Mia', msgs: win('987654321098765@lid'), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, [], '重启后换编号也不重翻');
+  assert.strictEqual(fc.viewOf('W').items.length, 8);
+  assert.strictEqual(fc.viewOf('W').chatKey, key0);
+  // 3. 一屏两种编号：客户的 @c.us，自己刚发的 @lid 是最后一条：不算换对话
+  ({ store, fc } = make());
+  const mixed = win('31612345678@c.us');
+  fc.ingest('X', { title: 'Sanne', msgs: mixed, bottom: true }, opts);
+  await idle(fc);
+  calls.length = 0;
+  const keyX = fc.viewOf('X').chatKey;
+  const n = fc.viewOf('X').items.length;
+  const mine = { id: 'true_99988877766655@lid_3EB0Z', out: true, text: 'Sure', t: { h: 10, mi: 30, at: 1e12 + 30 * 60000 } };
+  fc.ingest('X', { title: 'Sanne', msgs: [...mixed.slice(1), mine], bottom: true }, opts);
+  assert.strictEqual(fc.viewOf('X').chatKey, keyX);
+  assert.strictEqual(fc.viewOf('X').items.length, n, '翻译栏条数不变');
+  await idle(fc);
+  assert.deepStrictEqual(calls, []);
+  // 6. 群：群成员编号变了也是同一条
+  fc.ingest('X', { title: 'Team', msgs: [{ id: 'false_120363@g.us_3EBG1_4915112345678@c.us', out: false, text: 'Group hello' }], bottom: true }, opts);
+  await idle(fc);
+  calls.length = 0;
+  fc.ingest('X', { title: 'Team', msgs: [{ id: 'false_120363@g.us_3EBG1_123456789012345@lid', out: false, text: 'Group hello' }], bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(fc.viewOf('X').items.length, 1);
+  // 4. 网页号语音：老版本按整条 data-id 存的转写和译文照用，不再转；之后换了编号也认得出
+  const vid = 'false_447700900123@c.us_3EBV1';
+  const vck = hashOf('V', 'chat|447700900123@c.us');
+  store.putKey('V', vck, textKey(`voice:${vid}`), { tr: '语音译文', text: 'Voice words' });
+  fc.ingest('V', { title: 'Oliver', msgs: [{ id: vid, out: false, text: '', voice: 12 }], bottom: true }, opts);
+  await idle(fc);
+  assert.strictEqual(heard.length, 0, '老键的转写照用');
+  assert.deepStrictEqual(fc.viewOf('V').items.map((x) => [x.state, x.tr]), [['done', '语音译文']]);
+  store.flush();
+  ({ store, fc } = make());
+  fc.ingest('V', { title: 'Oliver', msgs: [{ id: 'false_555666777888999@lid_3EBV1', out: false, text: '', voice: 12 }], bottom: true }, opts);
+  await idle(fc);
+  assert.strictEqual(heard.length, 0, '换了编号也不再转');
+  assert.deepStrictEqual(fc.viewOf('V').items.map((x) => x.tr), ['语音译文']);
+  // 5. 老版本写的 _view（消息 hash 按整条 data-id 算）：升级后打开不出现重复的行
+  const ock = hashOf('O', 'chat|33612345678@c.us');
+  const old = Array.from({ length: 4 }, (_, i) => ({ id: `false_33612345678@c.us_3EBO${i}`, out: false, text: `Bonjour ${i}` }));
+  for (const m of old) store.put('O', ock, m.text, { tr: `存:${m.text}`, text: m.text });
+  store.putView('O', ock, old.map((m) => ({ h: hashOf('O', m.id), k: textKey(m.text), t: '' })));
+  calls.length = 0;
+  fc.ingest('O', { title: 'Camille', msgs: old.slice(2), bottom: true }, opts);
+  await idle(fc);
+  items = fc.viewOf('O').items;
+  assert.deepStrictEqual(items.map((x) => x.text), ['Bonjour 0', 'Bonjour 1', 'Bonjour 2', 'Bonjour 3']);
+  assert.deepStrictEqual(calls, []);
+  // 8. 别名表和索引只有 hash；索引超过上限删最旧的
+  store.flush();
+  for (const acc of ['W', 'X', 'V', 'O']) {
+    const raw = fs.readFileSync(path.join(dir, acc, '_chats.json'), 'utf8');
+    assert(!/@|Customer|Bonjour|Voice|\d{9}/.test(raw), '别名表里没有号码和原文');
+  }
+  // 先见到的那边还没有译文文件、另一边有：正式的用有文件的（草稿、记住的客户语言在它下面）
+  const cOld = hashOf('Y', 'chat|4477@c.us');
+  const cNew = hashOf('Y', 'chat|4477@lid');
+  store.put('Y', cOld, 'Hi', { tr: '你好' });
+  assert(store.link('Y', cNew, cOld));
+  assert.strictEqual(store.canon('Y', cNew), cOld);
+  for (let i = 0; i < 2100; i += 1) store.markSeen('Z', hashOf('Z', `m${i}`), hashOf('Z', 'chat|x'));
+  assert.strictEqual(Object.keys(store.meta('Z').data.seen).length, 2000);
+  assert.strictEqual(store.seenChat('Z', hashOf('Z', 'm0')), null, '最旧的先删');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('同一个对话换编号不重翻自检通过');
 }
 
 // 2026-10-29 之前存的译文记录没有原文（shen「英文的可以也存吗」）：重启后补回来的旧消息先只有译文；
@@ -205,7 +333,7 @@ async function oldRecordsGetOriginals() {
   assert.deepStrictEqual(items.map((x) => x.h), before, '补原文不多出、不挪动翻译栏上的消息');
   assert(items.every((x) => x.text), '翻译栏上的也补上了原文');
   unique(items);
-  assert.strictEqual(fs.existsSync(path.join(dir, 'L')) && fs.readdirSync(path.join(dir, 'L')).length, 1, '没有译文的对话不建文件');
+  assert.strictEqual(fs.existsSync(path.join(dir, 'L')) && fs.readdirSync(path.join(dir, 'L')).filter((f) => f !== '_chats.json').length, 1, '没有译文的对话不建文件');
   assert.strictEqual(await fillLite({ store, accId: 'L', gap: 0, alive: () => true, jids: async () => [[jid, 99]], incoming: async () => lite }), 0, '再跑一次没有要补的');
   // 重启后：补回来的直接带原文
   store.flush();
@@ -346,7 +474,7 @@ async function catchUpOlder() {
   const chat3 = '447700900123@c.us';
   const m3 = Array.from({ length: 9 }, (_, i) => ({ id: `false_${chat3}_3ED${i}`, out: false, text: `Hey ${i}` }));
   fc.ingest('N', { title: 'Oliver', bottom: true, msgs: m3 }, opts);
-  assert(fc.manual('N', hashOf('N', m3[0].id)));
+  assert(fc.manual('N', msgHash('N', m3[0].id)));
   await idle();
   assert.deepStrictEqual(sent.slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
   assert.deepStrictEqual(sent.slice(-3), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1']);
@@ -499,7 +627,7 @@ async function sendNoJump() {
     const b = { id: 'false_777@c.us_B', out: false, text: 'Bis morgen' };
     fc2.ingest('R', { title: 'Anna', msgs: [a, b] }, { auto: true, dailyCap: 500 });
     await sleep(5);
-    fc2.manual('R', hashOf('R', b.id)); // b 排在 a 后面；先让 a 跑着
+    fc2.manual('R', msgHash('R', b.id)); // b 排在 a 后面；先让 a 跑着
     fc2.ingest('R', { title: 'Anna', msgs: [a, { ...b, id: 'true_777@c.us_B', out: true }] }, { auto: true, dailyCap: 500 });
     assert.deepStrictEqual(fc2.viewOf('R').items.map((x) => x.text), ['Hallo']);
     fc2.ingest('R', { title: 'Anna', msgs: [{ ...b, id: 'true_777@c.us_B', out: true }, msg(1, true, '777@c.us')] }, { auto: true, dailyCap: 500 });
@@ -689,10 +817,12 @@ async function persisted() {
   fc.ingest('P', { title: 'p', msgs }, { auto: true, dailyCap: 500 });
   await sleep(20);
   assert.deepStrictEqual(sent, ['hello', 'bye']);
-  assert(fc.edit('P', hashOf('P', msgs[1].id), '再见（我改的）'));
+  assert(fc.edit('P', msgHash('P', msgs[1].id), '再见（我改的）'));
   store.flush();
-  const files = fs.readdirSync(path.join(dir, 'P'));
+  const files = fs.readdirSync(path.join(dir, 'P')).filter((f) => f !== '_chats.json'); // _chats：别名表和最近消息索引
   assert.strictEqual(files.length, 1);
+  const meta = fs.readFileSync(path.join(dir, 'P', '_chats.json'), 'utf8');
+  assert(!meta.includes('555') && !meta.includes('hello'), '别名表和索引里只有 hash');
   const raw = fs.readFileSync(path.join(dir, 'P', files[0]), 'utf8');
   // 只查号码本身（555@），时间戳里碰巧有 555 不算
   assert(raw.includes('"text":"hello"') && !raw.includes('555@'), '磁盘上存原文，不存号码');
@@ -710,7 +840,7 @@ async function persisted() {
   await sleep(20);
   assert.deepStrictEqual(sent, ['new one', 'hello']);
   fc.forget('P');
-  assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).length, 2, '删号不删存的译文');
+  assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).filter((f) => f !== '_chats.json').length, 2, '删号不删存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
   // 存哪：Windows 上 D 盘是本机固定硬盘才放 D 盘，U 盘/移动硬盘/网络盘/查不出来/写不进去都回到 C（userData）；Mac 不变；
   // 旧文件搬过去一次，不覆盖新位置已有的

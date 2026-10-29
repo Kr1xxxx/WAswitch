@@ -22,6 +22,7 @@ check(!/require\(['"]\.\/proxy['"]\)/.test(code), 'updater 不引用 proxy 模�
 check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话跟随系统代理）');
 check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都只设直连，不设任何别的代理');
 check(/redirect:\s*'manual'/.test(code), 'Mac 下载手动跟重定向（每一跳都检查主机）');
+check(/const CHECK_EVERY_MS = 60 \* 60 \* 1000;/.test(code) && /const FIRST_CHECK_MS = 60 \* 1000;/.test(code), '启动 1 分钟后查一次，之后每 1 小时查一次');
 
 // 自动更新不经用户点击，所以主进程的 busyReason 要把键盘之外的操作（鼠标、选图片、上传媒体）也算在用
 const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');

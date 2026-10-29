@@ -4,7 +4,7 @@
 // 重定向到别的地方一律当失败。只走电脑本机网络直连：不用任何账号的代理，也不用系统代理设置
 // （Clash 等的“系统代理”）。系统级 VPN / TUN 模式在网卡层接管流量，软件绕不开。
 // 新版本刚发布时安装包还在打包上传（约 10 分钟），这时 latest*.yml 是 404：不算失败，过一会儿自己再查。
-// 启动 1 分钟后查一次，之后每 6 小时查一次，有新版就自动下载。
+// 启动 1 分钟后查一次，之后每 1 小时查一次，有新版就自动下载。
 //
 // Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
 //   - 默认：下载完就自动静默安装并重新打开，只等用户手上的事做完（30 秒内打过字、在编辑账号等）；
@@ -27,7 +27,7 @@ const OWNER = 'Kr1xxxx';
 const REPO = 'WAswitch';
 const ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']);
 const FIRST_CHECK_MS = 60 * 1000;
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 60 * 60 * 1000;
 const IDLE_POLL_MS = 60 * 1000;
 const WAIT_POLL_MS = 5 * 1000; // 用户点了更新但还在打字：每 5 秒看一次停手没有
 const FAIL_WARN_AT = 3; // 连续失败这么多次，关于页标黄
@@ -317,7 +317,7 @@ class Updater {
     if (s !== 'checking' && s !== 'downloading') this.check();
   }
 
-  // “稍后”只管点它的那个版本：同一个版本重新开始下载（比如安装没启动、6 小时后再查到）还算点过，换了新版本才清掉
+  // “稍后”只管点它的那个版本：同一个版本重新开始下载（比如安装没启动、1 小时后再查到）还算点过，换了新版本才清掉
   laterFor(version) {
     return this.state.later && this.state.version === version;
   }
