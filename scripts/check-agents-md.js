@@ -41,15 +41,8 @@ const scripts = require(path.join(ROOT, 'package.json')).scripts || {};
 for (const m of doc.matchAll(/npm run ([\w:-]+)/g)) if (!scripts[m[1]]) bad.push(`AGENTS.md 写了 npm run ${m[1]}，package.json 里没有`);
 
 // ---------- 3. 没有新的深色模式 ----------
-// 老文件：新消息弹窗、团队后台还跟系统深色走，不再扩展；radix-dark.css 是生成的色阶
-const LEGACY = new Set([
-  'src/popup/popup.css', 'src/popup/index.html',
-  'server/public/admin/admin.css', 'server/public/admin/index.html',
-  'src/colors/radix-dark.css', 'server/public/admin/radix-dark.css',
-]);
 const DARK = [/prefers-color-scheme\s*:\s*dark/i, /color-scheme\s*:\s*(?:light\s+)?dark/i, /data-theme/i, /themeSource\s*=\s*['"`](?:dark|system)/, /shouldUseDarkColors/, /radix-dark\.css/];
 for (const f of files) {
-  if (LEGACY.has(rel(f))) continue;
   fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
     if (DARK.some((re) => re.test(line))) bad.push(`${rel(f)}:${i + 1} 不做深色模式：${line.trim().slice(0, 100)}`);
   });
