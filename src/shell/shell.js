@@ -1814,7 +1814,7 @@ function quickTiles() {
   const ust = u ? u.status : 'dev';
   const usub = {
     dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
-    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每 6 小时自动检查',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每小时自动检查',
   }[ust] || '';
   const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
     ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
@@ -2144,7 +2144,7 @@ function updateBox(u) {
     downloaded: u.manual
       ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, updateWaitLine(u), 'new'],
-    error: ['这次检查没成功', '会在 6 小时后自动再试。', 'idle'],
+    error: ['这次检查没成功', '最多 1 小时后自动再试。', 'idle'],
   }[u.status] || ['软件更新', '', 'idle'];
   const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
