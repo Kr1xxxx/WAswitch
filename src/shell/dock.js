@@ -456,10 +456,11 @@ function dockItemRow(it, last) {
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, dockManualLabel(it)), sp);
   // 语音还没有译文（等着转、转文字中、报错、不用翻）：图标放在这一行左边
-  const voiceLine = typeof it.voice === 'number' && !orig.btn && it.state !== 'done';
+  const voiceLine = typeof it.voice === 'number' && !orig.btn;
   return h('div', { class: `${cls}${foot ? ' foot' : ''}`, 'data-h': it.h },
     it.state === 'skip' ? null : orig.box,
-    voiceLine ? h('span', { class: 'dk-trline' }, dockVoiceTag(it), tr) : tr,
+    // 译文一行（done 时 tr 是 [译文, 纠错/编辑, 建议]）：图标只放在第一项左边
+    !voiceLine ? tr : Array.isArray(tr) ? [h('span', { class: 'dk-trline' }, dockVoiceTag(it), tr[0]), ...tr.slice(1)] : h('span', { class: 'dk-trline' }, dockVoiceTag(it), tr),
     warn,
     dockMeta(it));
 }

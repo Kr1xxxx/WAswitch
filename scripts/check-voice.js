@@ -56,6 +56,7 @@ const scenario = async () => {
     // 网页号：时长还不知道；读不到、过期
     it('w1', { voice: 0 }),
     it('w2', { voice: 0, state: 'error', err: '读不到这条语音，请在 WhatsApp 里听', code: 'W2 no_media_fields' }),
+    it('w4', { voice: 12, state: 'done', text: 'Ok', tr: '' }),
     it('w3', { voice: 41, state: 'error', err: '语音已过期，在 WhatsApp 里播放一次后重试', code: 'W2 http_410' }),
   ];
   window.__dock = { ...base, items };
@@ -116,7 +117,8 @@ async function rowsCheck() {
   assert.deepStrictEqual(r.w1.btns, ['转文字']);
   assert(r.w2.text.includes('读不到这条语音') && r.w2.btns.includes('重试') && r.w2.code === 'W2 no_media_fields', JSON.stringify(r.w2));
   assert(r.w3.text.includes('语音已过期') && r.w3.btns.includes('重试') && r.w3.tag === '语音 0:41', JSON.stringify(r.w3));
-  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'w1', 'w2', 'w3']) {
+  assert.strictEqual(r.w4.tag, '语音 0:12', '有原文没译文时也有语音图标');
+  for (const h of ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'w1', 'w2', 'w3', 'w4']) {
     assert(!r[h].clipped, `${h} 的文字被裁了`);
     assert(r[h].svg && r[h].beside, `${h} 的语音图标不在左边同一行：${JSON.stringify(r[h])}`);
     assert(!r[h].text.includes('语音 '), `${h} 不再写「语音」字样`);
