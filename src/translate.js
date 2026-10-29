@@ -1035,11 +1035,18 @@ class Translator {
     const base = this.deps.retryMs ?? RETRY_MS;
     const once = async (wav) => {
       const { body, type } = asr.formOf(wav);
+      let netTried = false; // 网络断了就地重试这一段一次：前面转好的段已经付过钱，不能让整条重来。超时不重试（智谱可能已经处理并计费）
       for (let n = 0; ; n += 1) {
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort('timeout'), TIMEOUT_MS);
         let res;
-        try { res = await this.post(url, { 'Content-Type': type, Authorization: `Bearer ${key}` }, body, chk.local, ac.signal); } finally { clearTimeout(timer); }
+        try { res = await this.post(url, { 'Content-Type': type, Authorization: `Bearer ${key}` }, body, chk.local, ac.signal); } catch (e) {
+          if (!e || e.kind !== 'network' || netTried) throw e;
+          netTried = true;
+          n -= 1; // 不占 429 的重试次数
+          await new Promise((ok) => setTimeout(ok, Math.min(backoffMs(0, null, base, rand), RETRY_WAIT_MAX)));
+          continue;
+        } finally { clearTimeout(timer); }
         if (res.ok) return asr.textOf(res.text);
         // 智谱余额不足（1113）也是 429：不重试
         if (res.status === 429 && asr.broke(res.text)) throw { kind: 'quota', text: `${provName(p)}余额不足，语音转文字要先充值` };
