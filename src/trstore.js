@@ -25,6 +25,7 @@ const HEX_KEY = /^[0-9a-f]{24}$/;
 const CHAT_KEY = /^[0-9a-f]{16}$/; // floatcore.js hashOf 算出来的对话 hash（别的文件名不走别名）
 const META = '_chats'; // 每个号的别名表和最近消息索引
 const SEEN_MAX = 2000; // 见过的客户消息最多记 2000 条，先记的先删
+const RETRY_MS = 5000; // 读不了的文件最多每 5 秒再读一次
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
 
@@ -41,16 +42,68 @@ class TrStore {
     if (!safe(acc) || !safe(chat)) return null;
     const k = `${acc}/${chat}`;
     let e = this.mem.get(k);
-    if (e) { this.mem.delete(k); this.mem.set(k, e); return e; } // 挪到最近用过
-    let data = {};
-    try {
-      const v = JSON.parse(fs.readFileSync(this.file(acc, chat), 'utf8'));
-      if (v && typeof v === 'object' && !Array.isArray(v)) data = v;
-    } catch { /* 没有或坏了：当空的 */ }
-    e = { data, dirty: false };
+    if (e) {
+      this.mem.delete(k); this.mem.set(k, e); // 挪到最近用过
+      if (e.unread && Date.now() - e.unread >= RETRY_MS) this.reread(acc, chat, e);
+      return e;
+    }
+    const r = this.readDisk(acc, chat);
+    e = { data: r.data || {}, dirty: false, ...(r.data ? {} : { unread: Date.now() }) };
     this.mem.set(k, e);
     this.trim();
     return e;
+  }
+
+  // 读一个对话的文件：{ data } 读到了（没有文件、空文件是 {}）；{ data: null } 一时读不了，先别覆盖它
+  // 内容坏了（不是 JSON 对象）：先在旁边留一份 .broken-时间 的备份，备份成功才当空的
+  readDisk(acc, chat, quiet = false) {
+    const f = this.file(acc, chat);
+    let raw;
+    try { raw = fs.readFileSync(f, 'utf8'); } catch (err) {
+      if (err && err.code === 'ENOENT') return { data: {} };
+      if (!quiet) console.warn(`译文文件读不了（${(err && err.code) || err}），先不覆盖：${acc}/${chat}.json`);
+      return { data: null };
+    }
+    if (!raw.trim()) return { data: {} };
+    try {
+      const v = JSON.parse(raw);
+      if (v && typeof v === 'object' && !Array.isArray(v)) return { data: v };
+    } catch { /* 下面备份 */ }
+    const backup = `${f}.broken-${Date.now()}`;
+    try { fs.copyFileSync(f, backup); } catch (err) {
+      if (!quiet) console.warn(`译文文件坏了，备份失败（${err.code || err.message}），先不覆盖：${acc}/${chat}.json`);
+      return { data: null };
+    }
+    console.warn(`译文文件坏了，已备份到 ${path.basename(backup)}`);
+    return { data: {} };
+  }
+
+  // 上次读不了的再读一次：读到了就合上（同一个键以盘上的为准，这期间新存的只补盘上没有的）
+  reread(acc, chat, e) {
+    const r = this.readDisk(acc, chat, true); // 第一次已经记过日志，重试失败不再刷屏
+    if (!r.data) { e.unread = Date.now(); return false; }
+    const merged = { ...e.data, ...r.data };
+    // 这期间用户手改的译文不能被盘上的自动译文盖掉：同一个键两边都有，内存里手改过、盘上没有的，留内存的
+    for (const [k, m] of Object.entries(e.data)) {
+      if (HEX_KEY.test(k) && m && m.edited && Object.hasOwn(r.data, k) && !(r.data[k] && r.data[k].edited)) merged[k] = m;
+    }
+    if (chat === META) { // 别名表里两张表各自合：盘上的别名不变，这期间新记的“见过”补进去
+      const [a, b] = [e.data, r.data];
+      const obj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+      if (obj(a.alias) && obj(b.alias)) {
+        const alias = { ...a.alias, ...b.alias };
+        for (const k of Object.keys(alias)) { // 读不了期间 link 可能留下两跳链：压平成一跳
+          let to = alias[k];
+          for (let i = 0; i < 4 && typeof alias[to] === 'string' && alias[to] !== to && alias[to] !== k; i += 1) to = alias[to];
+          alias[k] = to;
+        }
+        merged.alias = alias;
+      }
+      if (obj(a.seen) && obj(b.seen)) merged.seen = { ...b.seen, ...a.seen, ...b.seen }; // 盘上的在前，新记的排后面；同一条以盘上的为准
+    }
+    e.data = merged;
+    delete e.unread;
+    return true;
   }
 
   // 内存里超过的对话：先写盘再丢
@@ -278,6 +331,7 @@ class TrStore {
 
   write(k, e) {
     const [acc, chat] = k.split('/');
+    if (e.unread && !this.reread(acc, chat, e)) return; // 还是读不了：不覆盖，留着下次再试
     try {
       fs.mkdirSync(path.join(this.dir, acc), { recursive: true });
       writeJsonAtomic(this.file(acc, chat), e.data);
