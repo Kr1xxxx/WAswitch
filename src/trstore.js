@@ -87,6 +87,24 @@ class TrStore {
     return true;
   }
 
+  // 语音转出来的文字：还没翻成功也先存（heard），翻译失败、重启后不再花钱重转；没听出话的存空文字。
+  // 已经有译文的记录不动；之后翻好了 putKey 整条换掉
+  putHeard(acc, chat, key, text) {
+    const e = this.load(acc, chat);
+    if (!e || !HEX_KEY.test(String(key))) return;
+    const old = Object.hasOwn(e.data, key) ? e.data[key] : null;
+    if (old && typeof old.tr === 'string' && old.tr) return;
+    e.data[key] = { tr: '', text: String(text || '').slice(0, TEXT_MAX), heard: true, at: Date.now() };
+    this.touch(e);
+  }
+
+  // 存着的语音转写（没有返回 null；没听出话是 ''）
+  getHeard(acc, chat, key) {
+    const e = this.load(acc, chat);
+    const r = e && HEX_KEY.test(String(key)) && Object.hasOwn(e.data, key) ? e.data[key] : null;
+    return r && r.heard === true && typeof r.text === 'string' ? r.text : null;
+  }
+
   // 轻量号上次补原文时这个对话缓存里有几条（没补过是 -1）
   fillMark(acc, chat) {
     const e = this.load(acc, chat);

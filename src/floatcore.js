@@ -186,6 +186,12 @@ class FloatCore {
         if (saved && typeof saved.text === 'string' && saved.text.trim()) {
           Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed });
         }
+        else {
+          // 转过、还没翻成的：用存着的文字照常翻，不再转；以前没听出话的显示原因，用户点「重试」才再转
+          const heard = this.deps.store && this.deps.store.getHeard ? this.deps.store.getHeard(accId, item.ck, item.k) : null;
+          if (heard !== null && !heard.trim()) Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
+          else if (heard !== null) Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+        }
         st.items.set(h, item);
         fresh.push(item);
         continue;
@@ -441,13 +447,16 @@ class FloatCore {
           try { v = await this.deps.transcribe(job.accId, item.src, item.voice); } catch { v = { error: '转文字失败', kind: 'other' }; }
           const done = () => { const i = this.queue.indexOf(job); if (i >= 0) this.queue.splice(i, 1); };
           if (this.accs.get(job.accId) !== st) { done(); continue; } // 号被删了或重建了
+          const heard = (t) => { if (this.deps.store && this.deps.store.putHeard && item.ck) this.deps.store.putHeard(job.accId, item.ck, item.k, t); };
           if (!(v && typeof v.text === 'string' && v.text.trim())) {
             done();
+            if (v && v.kind === 'empty') heard(''); // 没听出话也付了钱：记下来，重启后不再自动转
             Object.assign(item, { state: 'error', err: (v && v.error) || '转文字失败', errKind: (v && v.kind) || 'other', errPid: (v && v.kind === 'auth' && v.providerId) || '' });
             this.onChange(job.accId);
             continue;
           }
           item.text = v.text.trim().slice(0, 4000);
+          heard(item.text); // 先存转出来的文字：翻译失败、重启后不再重转
           if (noWords(item.text)) {
             done();
             item.state = 'skip';

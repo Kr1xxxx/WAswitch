@@ -227,10 +227,51 @@ async function backfill() {
   assert.strictEqual(v.items.find((it) => it.voice === 4 && it.state === 'manual') !== undefined, true, '更早的语音留着「转文字」按钮');
 }
 
+// 转写付过钱就存：翻译失败、没听出话，重启后都不再转（Fable 审计 #254 建议 1、2）
+async function heardKept() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-heard-'));
+  const jid = '34612345678@s.whatsapp.net';
+  const heard = [];
+  let trOk = false;
+  const mk = (store) => new FloatCore({
+    store,
+    transcribe: async (acc, src) => { heard.push(src.id); return src.id === 'E1' ? { error: '没听出说的话', kind: 'empty' } : { text: 'Hola, ¿tienen pelucas rubias?' }; },
+    translate: async (text) => (trOk ? { text: `中:${text}`, warn: [] } : { error: '网络不通', kind: 'network' }),
+  });
+  const now = Math.floor(Date.now() / 1000);
+  const msgs = [{ id: 'S1', me: false, ts: now - 2, text: '[语音]', voice: 6 }, { id: 'E1', me: false, ts: now - 1, text: '[语音]', voice: 2 }];
+  const read = fromLite(liteView(jid, msgs), jid);
+  let store = new TrStore(dir);
+  let core = mk(store);
+  core.ingest('a1', read, { auto: true, dailyCap: 100 });
+  await settle(core);
+  let v = core.viewOf('a1');
+  assert.deepStrictEqual(v.items.map((it) => [it.state, it.text]), [['error', 'Hola, ¿tienen pelucas rubias?'], ['error', '']]);
+  assert.deepStrictEqual(heard.sort(), ['E1', 'S1']);
+  store.flush();
+  // 重启：转过的直接拿文字去翻，没听出话的显示原因，都不再转
+  trOk = true;
+  store = new TrStore(dir);
+  core = mk(store);
+  core.ingest('a1', read, { auto: true, dailyCap: 100 });
+  await settle(core);
+  v = core.viewOf('a1');
+  assert.deepStrictEqual(heard.sort(), ['E1', 'S1'], '重启后不再转');
+  assert.deepStrictEqual(v.items.map((it) => [it.state, it.tr, it.err]), [['done', '中:Hola, ¿tienen pelucas rubias?', ''], ['error', '', '没听出说的话']]);
+  // 翻好后记录换成正常译文
+  const it = core.accs.get('a1').items.get(v.items[0].h);
+  assert.strictEqual(store.getKey('a1', it.ck, it.k).tr, '中:Hola, ¿tienen pelucas rubias?');
+  // 用户点「重试」才再转
+  assert.strictEqual(core.manual('a1', v.items[1].h), true);
+  await settle(core);
+  assert.strictEqual(heard.length, 3);
+}
+
 (async () => {
   splitting();
   await translator();
   const n = await floatFlow();
   await backfill();
-  console.log(`语音转文字自检通过（切段、wav、智谱请求和报错、转写后翻译 ${n} 次、存记录不重转、额度、重试、补翻）`);
+  await heardKept();
+  console.log(`语音转文字自检通过（切段、wav、智谱请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻）`);
 })().catch((e) => { console.error(e); process.exit(1); });
