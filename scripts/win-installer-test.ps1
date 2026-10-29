@@ -41,24 +41,52 @@ function Uninstall($dir) {
 }
 function StopApp { Get-Process WAswitch -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
-# 向导：不断点主按钮（NSIS 的下一步/安装/完成都是控件 ID 1），直到安装窗口关闭
+# 向导：不断点主按钮（NSIS 的下一步/安装/完成都是控件 ID 1），直到安装窗口关闭。
+# 直接用 Win32 找安装程序进程的窗口再发 BM_CLICK，不依赖有没有桌面（runner 上 MainWindowHandle 可能是 0）
+Add-Type @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class Wiz {
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr h, int id);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static List<IntPtr> Windows(uint pid) {
+    var r = new List<IntPtr>();
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid) r.Add(h); return true; }, IntPtr.Zero);
+    return r;
+  }
+  public static string Title(IntPtr h) { var sb = new StringBuilder(256); GetWindowText(h, sb, 256); return sb.ToString(); }
+  // 点主按钮；返回按钮上的字，没点到返回 null
+  public static string ClickMain(uint pid) {
+    foreach (var h in Windows(pid)) {
+      var b = GetDlgItem(h, 1);
+      if (b != IntPtr.Zero && IsWindowEnabled(b)) { var t = Title(b); SendMessage(b, 0xF5, IntPtr.Zero, IntPtr.Zero); return t; }
+    }
+    return null;
+  }
+  public static string Dump(uint pid) {
+    var sb = new StringBuilder();
+    foreach (var h in Windows(pid)) sb.AppendLine(h + " visible=" + IsWindowVisible(h) + " title=" + Title(h) + " btn1=" + (GetDlgItem(h, 1) != IntPtr.Zero));
+    return sb.ToString();
+  }
+}
+'@
 function DriveWizard {
-  Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
   $p = Start-Process -FilePath $Setup -PassThru
   $until = (Get-Date).AddMinutes(4)
+  $n = 0
   while (-not $p.HasExited -and (Get-Date) -lt $until) {
     Start-Sleep -Seconds 2
-    $p.Refresh()
-    if ($p.MainWindowHandle -eq 0) { continue }
-    $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
-    $cond = New-Object System.Windows.Automation.AndCondition(
-      (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1')),
-      (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
-    $btn = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
-    if ($btn -and $btn.Current.IsEnabled) {
-      Write-Host "点：$($btn.Current.Name)"
-      try { $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { Write-Host "点不了：$($_.Exception.Message)" }
-    }
+    $t = [Wiz]::ClickMain([uint32]$p.Id)
+    if ($t) { Write-Host "点：$t" }
+    elseif (($n++ % 5) -eq 0) { Write-Host '没找到可点的按钮，窗口：'; Write-Host ([Wiz]::Dump([uint32]$p.Id)) }
   }
   if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Fail '向导 4 分钟没走完' }
 }
