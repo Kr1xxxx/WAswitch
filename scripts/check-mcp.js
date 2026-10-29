@@ -377,6 +377,13 @@ async function main() {
     '账号不存在、内容为空、需要扫码、超过 4000 字：都不放');
   const dl = ctl.status().draftLog;
   check(dl.length >= 4 && dl.every((l) => !('text' in l) && typeof l.chars === 'number') && dl[0].result === 'placed', '起草记录只记字数和结果，不记内容');
+  check(dl.some((l) => l.chat === '…5678') && dl.some((l) => l.chat === 'Anna Müller'), '按号码起草：记录里只有后 4 位（…5678）；按名字起草：名字照记');
+  check(dl.every((l) => !/\d{5,}/.test(l.chat)) && dc.some((c) => c.chat === '+49 151 2345678'), '记录里没有连续 5 位以上的数字，但 placeDraft 收到的仍是完整号码');
+  const mk = require('../src/mcp/drafts').maskChat;
+  const masks = [['+49 151 2345678', '…5678'], ['0049 151 2345678', '…5678'], ['+1 (415) 555-0132', '…0132'], ['+33 6 12 34 56 78', '…5678'],
+    ['Anna Müller', 'Anna Müller'], ['Anna +44 7700 900123', 'Anna …0123'], ['Müller GmbH (030) 1234567', 'Müller GmbH …4567'], ['Order 2024', 'Order 2024'], ['', '']];
+  const badMask = masks.filter(([i, o]) => mk(i) !== o).map(([i]) => i);
+  check(badMask.length === 0, `maskChat：号码留后 4 位，名字和不到 6 位的数字原样（${badMask.join('; ') || 'ok'}）`);
   const changedD2 = listChanged;
   ctl.setDrafts(false);
   await new Promise((r) => setTimeout(r, 200));

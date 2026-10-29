@@ -16,7 +16,7 @@ const EMOJI = require('./emoji/list');
 const RADIX = require('./colors/radix');
 
 const CARD_W = 344;
-const PAD = { top: 4, right: 8, bottom: 24, left: 24 }; // 卡片四周留给阴影的透明边
+const PAD = { top: 10, right: 8, bottom: 24, left: 24 }; // 卡片四周留给阴影的透明边；上边要放得下 Mac 左上角伸出去的关闭按钮和它的阴影
 const WIN_W = CARD_W + PAD.left + PAD.right;
 const WIN_H = 600; // 3 张卡 + “还有 N 条”，透明部分点穿
 const IDLE_CLOSE_MS = 60 * 1000;

@@ -76,6 +76,15 @@ app.whenReady().then(async () => {
   assert.match(await page('document.querySelector(".nt .txt").textContent'), /Liefertermin/, '写最后一条消息');
   await shot('popup-stack.png');
 
+  // 关闭按钮（Mac 在卡片左上角往外伸）和它的阴影要整个在窗口里；卡片在屏幕上的位置不因此挪动
+  const gap = process.platform === 'darwin' ? 10 : 12;
+  const geo = await page('(() => { const c = document.querySelector(".nt").getBoundingClientRect(); const x = document.querySelector(".nt .x").getBoundingClientRect(); return { cardTop: c.top, xTop: x.top, xLeft: x.left }; })()');
+  assert.strictEqual(b.y + geo.cardTop, wa.y + gap, `卡片位置不变（贴着屏幕上边留 ${gap}px）${JSON.stringify(geo)}`);
+  assert(geo.xTop >= 2 && geo.xLeft >= 2, `关闭按钮在窗口里，上方留得下阴影 ${JSON.stringify(geo)}`);
+  await page('(() => { const st = document.createElement("style"); st.id = "force-x"; st.textContent = ".nt:first-child .x { opacity: 1 !important; }"; document.head.append(st); })()');
+  await shot('popup-close-button.png');
+  await page('document.getElementById("force-x").remove()');
+
   // 同一个客户又发一条：合并，不多一张
   popup.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Und noch eine Frage: gibt es das Modell auch in Anthrazit?', count: 3 });
   assert(await until(async () => /3 条/.test(await page('document.querySelector(".nt .cnt") && document.querySelector(".nt .cnt").textContent'))), '合并成一张，3 条');
