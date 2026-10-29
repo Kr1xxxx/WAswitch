@@ -58,10 +58,22 @@ const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./o
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 const DEFAULT_ZOOM = 0.9;
 
+// ---------- 账号数据放哪（Windows：D 盘能用就放 D:\WAswitch\data，见 datadir.js）----------
+// 要在单实例锁（按 userData 路径算）和 app ready 之前定下来
+const datadir = require('./datadir');
+const dataStart = datadir.apply(app);
+// 老电脑空闲时带 --move-data=<上一个进程的 pid> 重启自己来搬：先等上一个完全退出、放开锁
+const moveArg = dataStart.active ? process.argv.find((a) => a.startsWith('--move-data')) : null;
+if (moveArg) datadir.waitForExit(Number(moveArg.split('=')[1]) || 0);
+
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
 const isPrimary = app.requestSingleInstanceLock();
 if (!isPrimary) app.exit(0);
+// 搬家：拿到锁之后、日志开始写之前（日志也在要搬的文件夹里），不开窗口。搬完（成没成都一样）隐藏重启回托盘
+const movingData = !!(moveArg && isPrimary);
+const moveLog = [];
+if (movingData) datadir.move({ home: dataStart.home, root: dataStart.root, log: (m) => moveLog.push(m) });
 
 // 出错时：记日志、提示、自动重启。为免反复崩溃：刚启动 60 秒内出错不重启；
 // 10 分钟内已经自动重启过 3 次也不再重启。次数通过重启参数传给下一次运行。
@@ -93,6 +105,14 @@ log.init((e) => {
     app.exit(1);
   }
 });
+for (const m of moveLog) console.log(m);
+if (dataStart.fallback) console.warn(`D 盘打不开（${dataStart.wanted}），这次用 C 盘的账号数据启动`);
+else if (dataStart.dir !== dataStart.home) console.log(`账号数据在 ${dataStart.dir}`);
+if (movingData) {
+  const args = process.argv.slice(1).filter((a) => !a.startsWith('--move-data') && a !== '--hidden');
+  app.relaunch({ args: [...args, '--hidden'] });
+  app.exit(0);
+}
 
 // 省内存模式要在 app ready 之前生效
 const settings = memory.loadSettings();
@@ -1243,6 +1263,7 @@ function pushState() {
   if (!shellView || shellView.webContents.isDestroyed()) return;
   shellView.webContents.send('state', {
     platform: process.platform,
+    dataNote: datadir.fallbackText(dataStart),
     page,
     activeId,
     editorId,
@@ -2565,6 +2586,24 @@ function setupUpdater() {
     notify: (title, body, onClick) => notifier.notifyApp(title, body, onClick),
   });
   updater.start();
+  setInterval(maybeMoveData, 10 * 60 * 1000).unref?.();
+}
+
+// 老电脑：账号数据还在 C 盘、D:\WAswitch 能用。和自动更新一样等空闲（窗口在托盘、没有未读、10 分钟没新消息……），
+// 带 --move-data 重启自己去搬（见 datadir.move），搬完隐藏重启回托盘。每次至少隔 24 小时，最多试 3 次
+function maybeMoveData() {
+  if (quitting || process.uptime() < 15 * 60) return;
+  // 有更新在下载或等着装：先让更新装完
+  if (updateIdleReason() || !updater || updater.installing || ['downloading', 'downloaded'].includes(updater.state.status)) return;
+  if (!datadir.shouldMove(dataStart)) return;
+  const before = datadir.readState(dataStart.home).tries;
+  datadir.noteAttempt(dataStart.home);
+  if (datadir.readState(dataStart.home).tries === before) return; // 记不下来就不搬，免得反复重启
+  console.log('空闲，重启一次把账号数据搬到 D 盘');
+  const args = process.argv.slice(1).filter((a) => !a.startsWith('--crash-history=') && !a.startsWith('--move-data') && a !== '--hidden');
+  app.relaunch({ args: [...args, `--move-data=${process.pid}`, '--hidden'] });
+  quitting = true;
+  app.quit();
 }
 
 // ---------- 启动 ----------
@@ -2649,7 +2688,7 @@ function setupTeam() {
 
 app.whenReady().then(async () => {
   appReadyAt = Date.now();
-  if (!isPrimary) return;
+  if (!isPrimary || movingData) return;
   setupMenu();
   // 本地界面用的默认会话不需要任何权限
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -2729,12 +2768,17 @@ app.whenReady().then(async () => {
   accounts = loadAccounts();
   if (accountsFileOk) saveAccounts();
   cleanupPartitions();
+  // 搬到 D 盘后第一次正常从 D 盘读到账号：过两分钟在后台删掉 C 盘那份旧数据
+  if (accountsFileOk && dataStart.dir !== dataStart.home && dataStart.pointer?.cleanC) {
+    setTimeout(() => datadir.cleanOld(dataStart.home, { log: (m) => console.log(m) }).catch((e) => console.warn(`删 C 盘旧数据出错：${e.message}`)), 2 * 60 * 1000).unref?.();
+  }
   applyLoginItem();
   setupTeam();
   activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
   page = visibleAccounts().length ? 'account' : 'welcome';
   refresh();
   if (!shouldStartHidden()) win.show();
+  if (dataStart.fallback) setTimeout(() => notifier.notifyApp('D 盘打不开', datadir.fallbackText(dataStart)), 5000);
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
   setInterval(checkIdleLock, LOCK_POLL_MS);
@@ -2764,8 +2808,9 @@ app.whenReady().then(async () => {
   setTimeout(watchExits, 3 * 60 * 1000);
 
   mcpModule = new McpModule({
-    dir: path.join(app.getPath('userData'), 'modules', 'mcp'),
-    dataDir: app.getPath('userData'),
+    // MCP 的文件一直留在 C 盘的 %APPDATA%\WAswitch：Claude Desktop 的配置里写死了这些路径，账号数据搬到 D 盘后不用重配
+    dir: path.join(dataStart.home, 'modules', 'mcp'),
+    dataDir: dataStart.home,
     appDir: app.getAppPath(),
     uiDir: path.join(__dirname, 'mcp'),
     // 从源码运行时总是用仓库里的 src/mcp（即使本地打过 mcp-module.json）
@@ -2776,7 +2821,7 @@ app.whenReady().then(async () => {
     fetch: directRequest,
     loadDev: () => require('./mcp'),
     start: async (setupMcp, extra) => {
-      const m = setupMcp({ hooks: mcpHooks, lockLocalPage, onStatus: () => mcpModule.tick(), ...extra });
+      const m = setupMcp({ hooks: mcpHooks, lockLocalPage, onStatus: () => mcpModule.tick(), dataDir: dataStart.home, ...extra });
       mcp = m;
       await m.init();
       return m;
