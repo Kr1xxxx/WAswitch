@@ -29,6 +29,17 @@ const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'u
 const busyFn = (mainSrc.match(/function updateBusyReason\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
 check(/idleSeconds\(\) < TYPING_MS \/ 1000/.test(busyFn) && /lastTypedAt/.test(busyFn) && /liteHost\.busy\(\)/.test(busyFn), 'main.js：自动更新前除了打字，键盘鼠标的系统空闲时间、发消息、扫码、页面加载也要等');
 
+// 点一次“立即更新”就自动装好并重新打开，中间不弹任何确认（shen 2026-10-29）：更新流程里不能出现对话框，按钮也不能换回别的名字
+check(!/\bdialog\b/.test(code) && !/showMessageBox|showMessageBoxSync|confirm\(/.test(code), 'updater 不弹任何对话框（点更新后不需要确认）');
+const handlerLines = mainSrc.split('\n').filter((l) => /onShell\('update:/.test(l)).join('\n');
+const trayBlock = (mainSrc.match(/updateMenu: \(\) => \{[\s\S]*?\n  \},/) || [''])[0];
+check(handlerLines.includes('update:install') && trayBlock.includes('updater.install()')
+  && !/dialog|showMessageBox|confirm\(/.test(handlerLines + trayBlock), 'main.js：更新按钮和托盘菜单只调 install() 或 openMacInstaller()，不经过确认框');
+const shellSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'shell', 'shell.js'), 'utf8');
+check(!/重启更新|现在重启并更新|重启以更新|下好后自动重启/.test(shellSrc + mainSrc + src), '更新按钮统一叫“立即更新”，没有旧名字');
+check((shellSrc.match(/window\.wa\.updateInstall\(\)/g) || []).length >= 2
+  && !/updateInstall\(\)[^\n]*confirm|confirm[^\n]*updateInstall/.test(shellSrc), '界面上点“立即更新”直接调 updateInstall，不经过 confirm');
+
 // ---------- 假的 electron ----------
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-upd-'));
 const routes = new Map(); // url -> { status, body, location }
