@@ -60,6 +60,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
       - name: 侧栏 + 号（添加账号、添加分组）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+      - name: 更新卡片和关于页文案（立即更新）自检
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       - name: 卡片、翻译页按自己的大小排版（容器查询）
