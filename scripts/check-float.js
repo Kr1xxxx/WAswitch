@@ -111,8 +111,10 @@ async function catchUpOlder() {
   const store = new TrStore(dir);
   const sent = [];
   let free = true;
+  let slowErr = '';
   const fc = new FloatCore({ store, slowGap: 100, translate: async (text, o = {}) => {
     if (o.slow && !free) return { error: '没有免费的翻译服务', kind: 'nofree' };
+    if (o.slow && slowErr) { sent.push(`错:${text}`); return { error: '网络不通', kind: slowErr }; }
     sent.push(o.slow ? `慢:${text}` : text);
     return { text: `译:${text}`, warn: [] };
   } });
@@ -159,6 +161,16 @@ async function catchUpOlder() {
   await idle();
   assert.deepStrictEqual(sent.slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
   assert.deepStrictEqual(sent.slice(-3), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1']);
+  // 免费服务商出错（网络不通）：只试一条，排着的都退回「翻译」按钮，不一条条去试
+  slowErr = 'network';
+  sent.length = 0;
+  const chat5 = '12125550123@c.us';
+  const m5 = Array.from({ length: 12 }, (_, i) => ({ id: `false_${chat5}_3EF${i}`, out: false, text: `Hello ${i}` }));
+  fc.ingest('N', { title: 'Emily', bottom: true, msgs: m5 }, opts);
+  await idle();
+  assert.deepStrictEqual(sent.filter((x) => x.startsWith('错:')), ['错:Hello 6'], '出错只试一条');
+  assert.deepStrictEqual(fc.viewOf('N').items.slice(0, 7).map((x) => [x.state, x.err]), Array(7).fill(['manual', '']));
+  slowErr = '';
   // 自动关着打开对话，再打开自动：一样，存着的不占名额，更早的后台补
   sent.length = 0;
   const chat4 = '33612345678@c.us';

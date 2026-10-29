@@ -395,7 +395,7 @@ class FloatCore {
         if (index >= 0) this.queue.splice(index, 1);
         if (this.accs.get(job.accId) !== st) continue; // 号被删了或重建了
         if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
-        else if (job.slow && !(r && r.text)) this.slowFailed(item, r);
+        else if (job.slow && !(r && r.text)) this.slowFailed(item);
         else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
         else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
         this.onChange(job.accId);
@@ -405,10 +405,10 @@ class FloatCore {
     }
   }
 
-  // 后台补翻失败：不显示报错，退回「翻译」按钮让用户自己点；没有免费服务商（都没填密钥）就把排着的都退回去
-  slowFailed(item, r) {
+  // 后台补翻失败（没有免费服务商、网络不通、超时、密钥不对……）：不显示报错，这条和排着的都退回「翻译」按钮，
+  // 不再一条条去试（节点挂了时每条要等 30 秒，会一直占着翻译）；下次切到对话再补
+  slowFailed(item) {
     item.state = 'manual';
-    if (!r || r.kind !== 'nofree') return;
     this.queue = this.queue.filter((q) => {
       if (!q.slow) return true;
       const it = this.accs.get(q.accId)?.items.get(q.h);

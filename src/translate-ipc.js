@@ -87,12 +87,13 @@ function setupTranslateIpc(ctx) {
   });
   // 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
   // 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
-  const userTr = { waiting: 0, running: false, gen: 0 };
+  const userTr = { waiting: 0, running: false, gen: 0, slow: false }; // slow：正在后台补翻更早的消息（用户一点就让开）
   // run：真正要做的事（默认翻译；测试服务商也走这里排队）
   async function userTranslate(args, run = (a) => ctx.translator.translate(a)) {
     const gen = userTr.gen;
     const until = Date.now() + 35000;
     userTr.waiting += 1;
+    if (userTr.slow) ctx.translator.cancel(); // 后台补翻的那条不急：打断它，用户的先翻，它回去重新排
     try {
       for (;;) {
         if (userTr.gen !== gen) return { error: '已取消', kind: 'cancel' };
@@ -254,7 +255,11 @@ function setupTranslateIpc(ctx) {
         // 在后台慢慢补翻的更早的消息：只用免费的智谱或混元，都没填密钥就不翻（留着「翻译」按钮）
         const free = slow ? ctx.translator.freeProvider() : null;
         if (slow && !free) return Promise.resolve({ error: '没有免费的翻译服务', kind: 'nofree' });
-        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix, ...(free ? { providerId: free.id } : {}) });
+        if (!slow) return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
+        userTr.slow = true;
+        return ctx.translator.translate({ text, mode, target: '中文', context, providerId: free.id })
+          .then((r) => (r && r.kind === 'cancel' ? { error: '让用户先翻', kind: 'busy' } : r)) // 被用户的翻译打断：等一下再排
+          .finally(() => { userTr.slow = false; });
       },
     });
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) pushFloat(); };
