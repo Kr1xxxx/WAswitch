@@ -138,8 +138,8 @@ body.collapsed .foot .upd-check { display: none; }
 .back { display: flex; align-items: center; gap: 6px; height: 28px; padding-left: 6px; border: none; background: transparent; font-size: var(--fs-m); color: var(--soft); }
 
 /* ---------- 右侧卡片 ---------- */
-/* 卡片、翻译页都按自己的宽高排版（容器查询），样式里不再看窗口大小；窗口窄时收侧栏、收工作台还是主进程管 */
-#card { container: card / inline-size; flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: var(--white); border-radius: var(--r-l); box-shadow: 0 1px 2px var(--slate-a3), 0 8px 24px var(--slate-a4); overflow: hidden; display: flex; flex-direction: column; }
+/* 卡片里的页面按卡片自己的宽高排版（容器查询），样式里不再看窗口大小；窗口窄时收侧栏、收工作台还是主进程管 */
+#card { container: card / size; flex: 1; min-width: 0; margin: 8px 8px 8px 0; background: var(--white); border-radius: var(--r-l); box-shadow: 0 1px 2px var(--slate-a3), 0 8px 24px var(--slate-a4); overflow: hidden; display: flex; flex-direction: column; }
 #topbar { flex: none; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: var(--hair) solid var(--line); font-size: var(--fs-m); color: var(--soft); }
 #topbar[hidden] { display: none; }
 /* 顶栏空白处可以拖动窗口；按钮、标签、输入框不拖，照常点 */
@@ -680,7 +680,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp {
   --s1: var(--slate-1); --s2: var(--slate-2); --s3: var(--slate-3); --s4: var(--slate-4); --s5: var(--slate-5); --s6: var(--slate-6); --s7: var(--slate-7); --s8: var(--slate-8);
   --s11: var(--slate-11); --s12: var(--slate-12); --b9: var(--blue-9); --g3: var(--green-3); --g9: var(--green-9); --g11: var(--green-11); --r9: var(--red-9); --r11: var(--red-11); --a9: var(--amber-9);
-  container: trpage / size;
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: var(--fs-m); line-height: 1.5;
 }
 .tp-head { flex: none; height: 64px; display: flex; align-items: center; padding: 16px 24px 0; }
@@ -785,8 +784,8 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp-pop-no { width: 64px; background: transparent; color: var(--s12); font-weight: 400; }
 .tp-pop-no:hover { background: var(--s3); }
 .tp-pop-yes { width: 64px; background: var(--s12); color: var(--white); }
-/* 翻译页矮（笔记本小屏，744 = 原来窗口 760 减卡片上下边距 16）：记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
-@container trpage (max-height: 744px) { .tp-hist-list { height: 120px; } }
+/* 卡片矮（笔记本小屏，744 = 原来窗口 760 减卡片上下边距 16）：翻译页记录区固定三行，给翻译框留够高度；照样只在记录区里滚 */
+@container card (max-height: 744px) { .tp-hist-list { height: 120px; } }
 /* 翻译页动效：译文 / 报错 / 新记录淡入，⇄ 转半圈（--fx 250ms ease-out，减少动态效果时为 0） */
 @keyframes tp-fade { from { opacity: 0; } }
 @keyframes tp-turn { from { transform: rotate(-180deg); } }

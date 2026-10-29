@@ -93,7 +93,7 @@ if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
 
 ## 11. 按所在区域的大小排版
 
-- 样式里不按窗口宽高写 `@media (max-width…)`、`@media (max-height…)`，用容器查询：`@container card`（右侧整张卡片的宽）、`@container trpage`（翻译页的宽高）、`@container tp-pane`（翻译页一栏的宽）。`npm run check:container` 会查。
+- 样式里不按窗口宽高写 `@media (max-width…)`、`@media (max-height…)`，用容器查询：`@container card`（右侧整张卡片的宽高）、`@container tp-pane`（翻译页一栏的宽）。`npm run check:container` 会查。
 - 窗口窄时收侧栏、收工作台由主进程判断（`src/main.js` 的 `NARROW_SIDE`、`NARROW_PANEL`），样式层不管。
 - 顶栏放不下时按优先级整块藏起（`shell.js` 的 `fitTop`），不用省略号；它看顶栏自己的宽度。
 - 中文标签、按钮、角标不能被挤成一字一行：加 `white-space: nowrap`，需要缩时给 `min-width: 0`，不要 `word-break: break-all`。
