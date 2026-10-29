@@ -47,6 +47,7 @@ const { setupEditorIpc } = require('./editor-ipc');
 const { createDownloads } = require('./downloads');
 const { newAccountId } = require('./account-id');
 const { setupCheckIpc } = require('./check-ipc');
+const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock } = require('./peer-clock');
@@ -1512,10 +1513,23 @@ async function onNetworkChange() {
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   reconnectStuck();
+  directTz.sync().catch(() => {});
   // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
   setTimeout(reconnectStuck, 30000);
 }
+const directTz = createDirectTz({
+  accounts: visibleAccounts,
+  isDirectWeb: (acc) => !isLite(acc) && !proxy.parse(acc.proxy),
+  testSystem: () => proxy.testSystem(),
+  save: saveAccounts,
+  viewOf: (id) => views.get(id)?.webContents,
+  onChange: (changed, region) => {
+    console.log(`系统代理出口变了，直连号时区改成 ${regionLabel(region)}：${changed.map((a) => a.name).join('、')}`);
+    refresh();
+  },
+});
 function watchNetwork() {
+  directTz.start();
   setInterval(async () => {
     if (netBusy) return;
     netBusy = true;

@@ -23,10 +23,24 @@ function setupCheckIpc(ctx) {
     if (directWeb.length > 1) items.push({ level: 'warn', title: `${directWeb.join('、')} 都是直连`, detail: '这几个号都跟随系统代理，出口 IP 相同，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
     if (directLite.length > 1) items.push({ level: 'warn', title: `${directLite.join('、')} 都是轻量直连`, detail: '这几个号都用这台电脑的真实 IP，在 WhatsApp 看来在同一个地方，有被关联的风险。' });
     const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // 直连网页号的出口就是系统代理的出口，查一次大家共用
+    const sysExit = directWeb.length ? await proxy.testSystem() : null;
     for (const acc of list) {
       const p = proxy.parse(acc.proxy);
       if (!p) {
         if (!isLite(acc) && directWeb.length < 2) items.push({ level: 'warn', title: `${acc.name}：直连`, detail: '没有设代理，跟随电脑的系统代理：Clash 开着系统代理时走 Clash 当前节点，关了就是这台电脑的真实 IP。' });
+        if (!isLite(acc) && sysExit && sysExit.ok) {
+          const effTz = fingerprint.resolve(acc.fingerprint).timezone || localTz;
+          const fixRegion = regionForTimezone(sysExit.timezone);
+          if (effTz !== sysExit.timezone) {
+            items.push({
+              level: 'warn',
+              title: `${acc.name}：时区和出口对不上`,
+              detail: `系统代理现在的出口在 ${sysExit.timezone} 时区，账号设的是 ${effTz}。${fixRegion ? '' : '请在编辑账号里选一个最接近的地区。'}`,
+              fix: fixRegion ? { id: acc.id, region: fixRegion, label: regionLabel(fixRegion) } : null,
+            });
+          }
+        }
         if (isLite(acc) && directLite.length < 2) items.push({ level: 'warn', title: `${acc.name}：轻量直连`, detail: '没有设代理，不经过系统代理，用这台电脑的真实 IP（Clash 开 TUN 模式时走 Clash）。' });
         continue;
       }
