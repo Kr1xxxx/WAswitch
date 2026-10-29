@@ -28,8 +28,14 @@ function Run($exeArgs) { Start-Process -FilePath $Setup -ArgumentList $exeArgs -
 function Uninstall($dir) {
   $u = Join-Path $dir 'Uninstall WAswitch.exe'
   if (-not (Test-Path $u)) { return }
+  StopApp
   Start-Process -FilePath $u -ArgumentList '/S' # 卸载程序会复制自己再退出，所以不能 -Wait，轮询等程序文件夹消失
-  WaitFor { -not (Test-Path (Join-Path $dir 'WAswitch.exe')) } 90 '卸载' | Out-Null
+  if (-not (WaitFor { -not (Test-Path (Join-Path $dir 'WAswitch.exe')) } 90 '卸载')) {
+    Write-Host '--- 卸载没完成，现场：'
+    Get-Process | Where-Object { $_.MainWindowTitle -or $_.ProcessName -match 'Uninstall|WAswitch|Setup' } | Format-Table Id, ProcessName, MainWindowTitle -AutoSize | Out-String | Write-Host
+    Get-ChildItem $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { Write-Host $_.Name }
+    return
+  }
   WaitFor { -not (Test-Path $dir) } 30 '安装文件夹删除' | Out-Null
   WaitFor { $null -eq (InstallLocation) } 30 '注册表位置清掉（卸载程序最后一步）' | Out-Null
 }
