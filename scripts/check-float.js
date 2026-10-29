@@ -843,6 +843,7 @@ async function persisted() {
   assert.strictEqual(fs.readdirSync(path.join(dir, 'P')).filter((f) => f !== '_chats.json').length, 2, '删号不删存的译文');
   fs.rmSync(dir, { recursive: true, force: true });
   // 存哪：Windows 上 D 盘是本机固定硬盘才放 D 盘，U 盘/移动硬盘/网络盘/查不出来/写不进去都回到 C（userData）；Mac 不变；
+  // 'Fixed|'（类型是固定硬盘、只是查不出接口，动态磁盘、软件 RAID 这类）有意放 D：按本机硬盘算，改成放 C 会把已经在用 D 盘的电脑的译文搬回去；
   // 旧文件搬过去一次，不覆盖新位置已有的
   const { pickDir, migrate, parseDriveProbe, isLocalFixed, dirInfo } = require('../src/trstore');
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trdir-'));
