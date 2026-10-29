@@ -23,7 +23,7 @@
   FunctionEnd
 
   !define MUI_FINISHPAGE_TITLE "WAswitch 已经装好了"
-  !define MUI_FINISHPAGE_TEXT "桌面和开始菜单里都有 WAswitch。$\r$\n$\r$\n以后有新版本会在后台自动下载并更新。"
+  !define MUI_FINISHPAGE_TEXT "桌面和开始菜单里都有 WAswitch。$\r$\n$\r$\n以后有新版本会在后台自动下载，下载好后在软件左下角提醒你更新。"
   !define MUI_FINISHPAGE_RUN
   !define MUI_FINISHPAGE_RUN_TEXT "现在打开 WAswitch"
   !define MUI_FINISHPAGE_RUN_FUNCTION "StartApp"
