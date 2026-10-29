@@ -183,7 +183,12 @@ class FloatCore {
       if (!shown(m)) continue;
       const h = hashOf(accId, m.id);
       const had = st.items.get(h);
-      if (had) { if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; continue; } // 补回来时没有原文的旧消息又读到了：补上原文
+      if (had) {
+        if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; // 补回来时没有原文的旧消息又读到了：补上原文
+        // 还没开始翻的：页面上的文字变了（刚加进来时还没显示全）就用新的
+        else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued') && String(m.text).trim() && String(m.text) !== had.text) { had.text = String(m.text); filled = true; }
+        continue;
+      }
       const item = { h, ck: hashOf(accId, `chat|${chatOf(m.id)}`), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
       if (isVoice(m)) {
         // 语音：按消息编号存（没有原文 hash）；以前转过、翻过的直接用转出来的文字和译文

@@ -808,6 +808,7 @@ class Translator {
     if (fb && !list.some((p) => p.id === fb.id) && !needsKey(fb) && retry && typeof paid === 'function') {
       const r = await paid({ ...args, providerId: fb.id });
       if (r && r.text) return { ...r, fallback: true };
+      if (r && r.kind === 'busy') return r; // 等不到付费的那条通道：让调用方过一会儿重排，不当成失败
     }
     return err;
   }

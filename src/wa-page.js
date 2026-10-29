@@ -398,6 +398,13 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
   });
 })()`;
 
+// 不用再等了（面板关了）：停止看着，下次等时再接上
+const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); w.main = null; } return 1; })()`;
+async function stopChatWatch(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  try { await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: STOP_WATCH_CODE }]); } catch {}
+}
+
 async function waitChatChange(wc, ms = 2000) {
   if (wc.isDestroyed() || wc.isLoading()) return false;
   let timer;
@@ -666,5 +673,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

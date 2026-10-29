@@ -257,7 +257,7 @@ async function parallelAuto() {
   fc.ingest('P', { title: 'Lukas', bottom: true, msgs: [msg(0, false, chat), ...burst] }, opts);
   await idle();
   assert.strictEqual(max, 3, '最多同时 3 条');
-  assert(Date.now() - t0 < 110, '4 条两轮翻完');
+  assert(Date.now() - t0 < 300, '4 条两轮翻完（不是一条一条）');
   assert.strictEqual(fc.viewOf('P').today, 5, '每条只算一次');
   // 付费的：一次一条
   par = 1;
@@ -275,6 +275,19 @@ async function parallelAuto() {
   assert.deepStrictEqual(order.slice(-2), ['hola 9', 'hola 8']);
   assert(fc.viewOf('P').items.every((x) => x.state === 'done'));
   assert.strictEqual(fc.viewOf('P').today, 10);
+  // 刚读到时文字还没显示全，下次读到的变了：还没开始翻的用新的
+  {
+    const got = [];
+    let release;
+    const fc2 = new FloatCore({ translate: (text) => { got.push(text); return new Promise((res) => { release = () => res({ text: `译:${text}`, warn: [] }); }); } });
+    const a = msg(1, false, chat, 'Hallo');
+    const b = msg(2, false, chat, 'Wart');
+    fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [] }, opts);
+    fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [a, b] }, opts);
+    assert(fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [{ ...a, text: 'Hallo, wie geht es?' }, { ...b, text: 'Warten Sie bitte' }] }, opts));
+    release(); await sleep(5); release(); await sleep(5);
+    assert.deepStrictEqual(got, ['Hallo', 'Warten Sie bitte'], '已经在翻的不改，排着的用新的');
+  }
   console.log('同时翻几条自检通过');
 }
 

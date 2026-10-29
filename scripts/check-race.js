@@ -73,6 +73,9 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   assert(rs.every((x) => x.fallback));
   assert.strictEqual(paidCalls, 3);
   assert.strictEqual(paidMax, 1, '付费的不同时发');
+  // 付费那条通道一直等不到：返回 busy，让调用方过一会儿重排，不报免费服务商的错
+  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid: async () => ({ error: '上一段还在翻译', kind: 'busy' }) });
+  assert.strictEqual(r.kind, 'busy');
   // 都失败、报错不是换备用的那种（密钥不对）：不用付费的，报默认服务商的错
   plan['open.bigmodel.cn'] = { ms: 20, status: 401 };
   plan['tokenhub.tencentmaas.com'] = { ms: 10, status: 401 };

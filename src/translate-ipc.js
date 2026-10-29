@@ -374,11 +374,13 @@ function setupTranslateIpc(ctx) {
   const READ_GAP = 150; // 两次读之间至少隔 150 毫秒（页面一直在变时也不会一直读）
   let floatWaitGen = 0;
   let floatWaiting = false; // 正在等页面变化（等完会自己安排下一次读）
+  let floatWatchWc = null; // 在看着哪个页面（面板关了就停）
   function waitFloat(wc, readAt) {
     if (floatTimer) clearTimeout(floatTimer);
     floatTimer = null;
     const gen = ++floatWaitGen;
     floatWaiting = true;
+    floatWatchWc = wc;
     waPage.waitChatChange(wc, 2000).then(() => {
       if (gen !== floatWaitGen) return; // 等的时候已经另外安排了（换号、开关面板……）
       floatWaiting = false;
@@ -471,7 +473,10 @@ function setupTranslateIpc(ctx) {
       pushFloat();
       scheduleFloat(200);
     } else if (readerOn() && !floatTimer && !floatBusy && !floatWaiting) scheduleFloat(300); // 面板刚打开、回到账号页、解锁
-    if (!readerOn()) { floatLastAcc = null; floatWaitGen += 1; floatWaiting = false; } // 面板关了：不再等页面变化
+    if (!readerOn()) { // 面板关了：不再等页面变化，页面里也停止看着
+      floatLastAcc = null; floatWaitGen += 1; floatWaiting = false;
+      if (floatWatchWc) { waPage.stopChatWatch(floatWatchWc); floatWatchWc = null; }
+    }
   }
   function readerItem(h, fix) {
     if (typeof h !== 'string' || !ctx.activeId) return null;
