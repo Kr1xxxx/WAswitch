@@ -716,7 +716,7 @@ class FloatCore {
     else if (job.slow && !(r && r.text)) this.bgFailed(job, item, r, kept);
     else if (!(r && r.text) && !job.manual && !job.fix && this.retryLater(job, item, r)) { /* 自动翻译暂时失败：过一会儿用免费的再翻 */ }
     else if (r && r.text) {
-      if (job.slow && !job.retry) this.bgFails = 0; // 后台补翻翻成一条：重新计数
+      if (job.slow && !job.retry && job.round === this.bgRound) this.bgFails = 0; // 后台补翻这一轮翻成一条：重新计数（停下以前开始、晚回来的不算）
       item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item);
       item.lastErr = null; item.tries = 0;
     }
@@ -734,6 +734,7 @@ class FloatCore {
   retryLater(job, item, r) {
     const kind = (r && r.kind) || 'other';
     if (!TEMP_FAIL.has(kind)) return false;
+    if (this.deps.hasFree && !this.deps.hasFree()) return false; // 智谱、混元都没填密钥：重翻也翻不了，直接显示报错
     const n = item.tries || 0;
     const ms = this.retryDelay(n);
     if (ms < 0) return false;

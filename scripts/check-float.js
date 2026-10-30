@@ -173,6 +173,16 @@ async function autoRetry() {
     assert.strictEqual(calls.length, 2);
     assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
   }
+  // 4b. 智谱、混元都没填密钥（deps.hasFree 说没有）：不等，直接显示报错
+  {
+    const { fc, calls } = mk(() => ({ error: 'DeepL 服务器出错', kind: 'server' }));
+    fc.deps.hasFree = () => false;
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(8)] }, opts);
+    await sleep(10);
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
+    assert.strictEqual(fc.waits.length, 0);
+  }
   // 5. 等着重翻时用户点「翻译」：马上翻，定时到了不再翻
   {
     const { fc, calls } = mk((text, n) => (n === 0 ? { error: '太忙', kind: 'overload' } : null), [80]);
