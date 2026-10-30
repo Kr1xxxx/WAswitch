@@ -8,7 +8,7 @@
 // 同一个对话 WhatsApp 可能换编号（手机号 @c.us 换成隐私编号 @lid，data-id 中间那段变，消息编号不变）：
 // 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
 const crypto = require('crypto');
-const { textKey, VIEW_MAX } = require('./trstore');
+const { textKey, cleanVia, VIEW_MAX } = require('./trstore');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
@@ -51,6 +51,15 @@ const shown = (m) => !m.out && (!!String(m.text || '').trim() || isVoice(m));
 
 // 消息上显示的时间（WhatsApp 页面上写的“几点几分”），认不出就空着
 const hhmm = (t) => (t && Number.isInteger(t.h) && Number.isInteger(t.mi) ? `${String(t.h).padStart(2, '0')}:${String(t.mi).padStart(2, '0')}` : '');
+
+// 存着的记录里这条译文是什么时候、用多久、哪个模型翻的（点译文右下角的时间显示，shen 2026-10-30）：
+// 记录有 via 就用；以前存的没有，没手动改过的记录时间就是翻译（或采用纠错）的时间，只给时间；手动改过的 at 是改的时间，不给
+function viaOf(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  const v = cleanVia(rec.via);
+  if (v) return v;
+  return !rec.edited && Number.isSafeInteger(rec.at) && rec.at > 0 ? { at: rec.at, fix: !!rec.fixed } : null;
+}
 
 // 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
 const noWords = (text) => !/\p{L}/u.test(String(text));
@@ -226,7 +235,7 @@ class FloatCore {
         }
         const saved = this.deps.store ? this.deps.store.getKey(accId, item.ck, item.k) : null;
         if (saved && typeof saved.text === 'string' && saved.text.trim()) {
-          Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed });
+          Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
         }
         else {
           // 转过、还没翻成的：用存着的文字照常翻，不再转；以前没听出话的显示原因，用户点「重试」才再转
@@ -243,7 +252,7 @@ class FloatCore {
       const saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
       if (skip) item.state = 'skip';
       else if (saved) {
-        item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed;
+        item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; item.via = viaOf(saved);
         if (!saved.text) this.deps.store.fillText(accId, item.ck, textKey(item.text), item.text); // 以前存的没有原文：这次读到了，补上
       }
       st.items.set(h, item);
@@ -339,7 +348,7 @@ class FloatCore {
         // 语音的原文是转出来的文字，按消息编号存，hash 对不上原文
         const voice = typeof x.v === 'number';
         const text = typeof rec.text === 'string' && (voice || textKey(rec.text) === x.k) ? rec.text : '';
-        item = { h: x.h, ck, k: x.k, text, t: x.t, state: 'done', tr: rec.edited || this.keepGist(text) ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, err: '', warn: [], note: '', ...(voice ? { voice: x.v } : {}) };
+        item = { h: x.h, ck, k: x.k, text, t: x.t, state: 'done', tr: rec.edited || this.keepGist(text) ? rec.tr : dropGist(rec.tr), edited: !!rec.edited, fixed: !!rec.fixed, via: viaOf(rec), err: '', warn: [], note: '', ...(voice ? { voice: x.v } : {}) };
         st.items.set(x.h, item);
       }
       out.push(x.h);
@@ -450,8 +459,9 @@ class FloatCore {
     const st = this.accs.get(accId);
     const item = st && st.items.get(h);
     if (!item || !item.suggest) return false;
-    if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; this.save(accId, item); }
+    if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; item.via = item.suggestVia || item.via; this.save(accId, item); }
     item.suggest = '';
+    item.suggestVia = null;
     this.onChange(accId);
     return true;
   }
@@ -462,7 +472,7 @@ class FloatCore {
     const item = st && st.items.get(h);
     const t = String(text || '').slice(0, 4000);
     if (!item || !t.trim() || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false;
-    item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = '';
+    item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = ''; item.suggestVia = null;
     this.save(accId, item);
     this.onChange(accId);
     return true;
@@ -470,7 +480,7 @@ class FloatCore {
 
   // 译文和原文写到磁盘（手动改的、纠错采用的也存）
   save(accId, item) {
-    if (this.deps.store && item.ck) this.deps.store.putKey(accId, item.ck, item.k || textKey(item.text), { tr: item.tr, text: item.text, edited: item.edited, fixed: item.fixed });
+    if (this.deps.store && item.ck) this.deps.store.putKey(accId, item.ck, item.k || textKey(item.text), { tr: item.tr, text: item.text, edited: item.edited, fixed: item.fixed, via: item.via });
   }
 
   // 补回来时没有原文的旧消息：原文对得上（hash 一样）就补到这条上，也补进磁盘的记录
@@ -620,6 +630,7 @@ class FloatCore {
       return;
     }
     let r;
+    const t0 = this.now(); // 用时：包括同时发几家、太忙重试的等待、换备用；不包括排队等的时间
     try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow }); } catch { r = { error: '翻译失败', kind: 'other' }; }
     if (r && r.kind === 'busy') {
       // 用户自己在翻、或付费的那条通道正忙：等一下再来（之前翻好的译文还在，状态先回到排队）
@@ -628,9 +639,10 @@ class FloatCore {
     }
     done();
     if (this.accs.get(job.accId) !== st) return; // 号被删了或重建了
-    if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
+    const via = r && r.text ? { at: this.now(), ms: Math.max(0, Math.round(this.now() - t0)), name: r.provider || '', model: r.model || '', fix: !!job.fix } : null;
+    if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.suggestVia = via; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
     else if (job.slow && !(r && r.text)) this.slowFailed(item);
-    else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; this.save(job.accId, item); }
+    else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item); }
     else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
     this.onChange(job.accId);
   }
@@ -659,9 +671,9 @@ class FloatCore {
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice }) => ({ h, text, t, state: state === 'queued' && bg ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null })),
+        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice, via }) => ({ h, text, t, state: state === 'queued' && bg ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null, via: cleanVia(via) })),
     };
   }
 }
 
-module.exports = { FloatCore, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
+module.exports = { FloatCore, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };

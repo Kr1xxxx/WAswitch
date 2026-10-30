@@ -41,6 +41,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   const mode={prompt:'to {目标语言}'};
   r=await tr.translate({text:'你好',mode,target:'西班牙语'});
   assert.equal(r.text,'Hola');
+  assert.equal(r.provider,'OpenRouter'); assert.equal(r.model,'x/y'); // 点译文时间显示「OpenRouter x/y」
   const body=JSON.parse(calls[0].opt.body);
   assert.deepEqual(body.provider,{data_collection:'deny'});
   assert.equal(calls[0].opt.redirect,'error');
@@ -514,7 +515,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   t9.setRoles({primaryId:zid9,fallbackId:dr.id});
   calls=[]; behave=[{status:429,body:'{"error":{"message":"busy"}}'},{status:429,body:'{}'},{status:429,body:'{}'},{status:429,body:'{}'},{body:JSON.stringify({translations:[{text:'Hallo'}]})}];
   q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'德语',source:'中文',context:[{text:'Wie geht es?'},{out:true,text:'好'}]});
-  assert.equal(q.text,'Hallo'); assert.equal(q.fallback,true); assert.equal(q.provider,'DeepL');
+  assert.equal(q.text,'Hallo'); assert.equal(q.fallback,true); assert.equal(q.provider,'DeepL'); assert.equal(q.model,''); // DeepL 没有模型名，点译文时间只写 DeepL
   assert.equal(calls.length,5); assert.equal(calls[4].url,'https://api-free.deepl.com/v2/translate');
   assert.equal(calls[4].opt.headers.Authorization,'DeepL-Auth-Key abc-123:fx');
   const db=JSON.parse(calls[4].opt.body);
