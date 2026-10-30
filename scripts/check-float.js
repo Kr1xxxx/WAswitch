@@ -12,7 +12,7 @@ async function core() {
   let now = Date.parse('2026-10-24T10:00:00Z');
   const sent = [];
   // 没有免费服务商（智谱、混元都没填密钥）：更早的消息不在后台补翻
-  const fc = new FloatCore({ now: () => now, slowGap: 0, translate: async (text, o = {}) => { if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' }; sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  const fc = new FloatCore({ now: () => now, translate: async (text, o = {}) => { if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' }; sent.push(text); return { text: `译:${text}`, warn: [] }; } });
   // 第一次看到一个对话：12 条收到的，只自动翻最后 5 条
   const first = Array.from({ length: 12 }, (_, i) => msg(i));
   first.push(msg(99, true)); // 自己发的不翻
@@ -101,6 +101,7 @@ async function core() {
   await catchUpOlder();
   await parallelAuto();
   await lidSwitch();
+  await slowLanes();
   await translateVia();
 }
 
@@ -260,7 +261,7 @@ async function lidSwitch() {
   const logs = [];
   const make = () => {
     const store = new TrStore(dir);
-    const fc = new FloatCore({ store, slowGap: 30, parallel: () => 3, log: (x) => logs.push(x),
+    const fc = new FloatCore({ store, parallel: () => 3, log: (x) => logs.push(x),
       transcribe: async () => { heard.push(1); return { text: 'Voice words' }; },
       translate: async (text, o = {}) => { calls.push((o.slow ? '慢:' : '') + text); await sleep(5); return { text: `译:${text}` }; } });
     return { store, fc };
@@ -500,6 +501,150 @@ async function oldRecordsGetOriginals() {
 }
 
 // 切到一个对话时没翻的旧消息（shen 2026-10-29 截图：后面 4 条存着译文，前面 3 条只剩「翻译」按钮）：
+// 打开没翻过的对话，更早的消息在后台补得快（shen 2026-10-30「翻译读取还是很慢」）：
+// 后台补翻不再一条一条、每条隔 2 秒，和别的一起最多同时 3 条；新消息、用户点的永远先翻：
+// 3 个位置都被后台补翻占着时，让出一条（取消它，回到后台队列最前面，照旧显示「翻译」，等会儿再翻）；
+// 最近 5 条里被每分钟上限挡下的也交给后台；删号时正在补的停下；付费的默认服务商一次一条，后台补翻照样用另外两个位置
+async function slowLanes() {
+  const chat = '4915112345678@c.us';
+  const opts = { auto: true, dailyCap: 500 };
+  const wins = (n, c = chat, pre = 'Alt') => Array.from({ length: n }, (_, i) => msg(i, false, c, `${pre} ${i}`));
+  const make = (par = 3, ms = 30) => {
+    const t = { now: 0, max: 0, maxFg: 0, fgNow: 0, sent: [], aborted: [], par };
+    t.fc = new FloatCore({ parallel: () => t.par, translate: (text, o = {}) => new Promise((res) => {
+      t.now += 1; t.max = Math.max(t.max, t.now);
+      if (!o.slow) { t.fgNow += 1; t.maxFg = Math.max(t.maxFg, t.fgNow); }
+      t.sent.push((o.slow ? '慢:' : '') + text);
+      let timer = null;
+      const end = (r) => { clearTimeout(timer); t.now -= 1; if (!o.slow) t.fgNow -= 1; res(r); };
+      timer = setTimeout(() => end({ text: `译:${text}`, warn: [] }), ms);
+      if (o.slow) {
+        assert(o.signal, '后台补翻带着能取消的 signal');
+        o.signal.addEventListener('abort', () => { t.aborted.push(text); end({ error: '已取消', kind: 'cancel' }); }, { once: true });
+      }
+    }) });
+    return t;
+  };
+  const idle = async (fc) => { for (let i = 0; i < 500 && (fc.running || fc.queue.length); i += 1) await sleep(5); assert(!fc.running && !fc.queue.length, '都翻完了'); };
+  // 1. 14 条没翻过：最近 5 条 + 9 条后台，同时最多 3 条，不隔时间
+  {
+    const t = make();
+    const t0 = Date.now();
+    t.fc.ingest('S', { title: 'Lena', bottom: true, msgs: wins(14) }, opts);
+    await idle(t.fc);
+    const took = Date.now() - t0;
+    assert.strictEqual(t.max, 3, '同时最多 3 条');
+    assert.strictEqual(t.sent.filter((x) => x.startsWith('慢:')).length, 9);
+    assert.deepStrictEqual(t.sent.slice(0, 5), ['Alt 9', 'Alt 10', 'Alt 11', 'Alt 12', 'Alt 13'], '最近 5 条先翻');
+    assert.deepStrictEqual(t.sent.slice(5).map((x) => x.slice(2)), ['Alt 8', 'Alt 7', 'Alt 6', 'Alt 5', 'Alt 4', 'Alt 3', 'Alt 2', 'Alt 1', 'Alt 0'], '后台的最新的先翻');
+    assert(took < 400, `14 条 5 轮左右翻完（${took} ms），不是一条一条隔 2 秒`);
+    assert(t.fc.viewOf('S').items.every((x) => x.state === 'done'));
+    assert.strictEqual(t.fc.viewOf('S').today, 5, '后台补翻不算额度');
+  }
+  // 2. 3 个位置都在后台补翻：客户发来新消息、用户点「翻译」，马上开始，让出的那条等会儿再翻
+  {
+    const t = make(3, 80);
+    const c2 = '33612345678@c.us';
+    const old = wins(12, c2, 'Vieux');
+    t.fc.ingest('T', { title: 'Camille', bottom: true, msgs: old }, opts);
+    await sleep(100); // 最近 5 条：第一轮 3 条翻完，后两条 + 1 条后台在翻
+    await sleep(90); // 第二轮翻完：3 条都是后台
+    assert.strictEqual(t.fc.slowRun.size, 3, '3 个位置都是后台补翻');
+    const before = t.sent.length;
+    const fresh = msg(99, false, c2, 'Nouveau message');
+    t.fc.ingest('T', { title: 'Camille', bottom: true, msgs: [...old, fresh] }, opts);
+    assert.strictEqual(t.sent[before], 'Nouveau message', '新消息马上开始，不等后台');
+    assert.strictEqual(t.aborted.length, 1, '让出一条后台补翻');
+    assert(t.max <= 3, '加上新消息也不超过 3 条');
+    await sleep(1);
+    const yielded = t.fc.viewOf('T').items.find((x) => x.text === t.aborted[0]);
+    assert.strictEqual(yielded.state, 'manual', '让出的那条照旧显示「翻译」');
+    // 用户点了一条还在后台排着的：也马上开始
+    const waiting = t.fc.viewOf('T').items.find((x) => x.state === 'manual' && x.text !== t.aborted[0]);
+    assert(t.fc.manual('T', waiting.h));
+    assert.strictEqual(t.sent[t.sent.length - 1], waiting.text, '用户点的马上开始');
+    assert.strictEqual(t.aborted.length, 2);
+    await idle(t.fc);
+    assert(t.max <= 3);
+    assert(t.fc.viewOf('T').items.every((x) => x.state === 'done' && !x.err), '让出的后来也翻好了');
+    assert(t.sent.includes('慢:' + t.aborted[0]), '让出的回去重新翻');
+  }
+  // 3. 每分钟 20 条的上限挡下了最近 5 条：交给后台补，不占额度
+  {
+    let now = 1e12;
+    const t = make();
+    t.fc.deps.now = () => now;
+    const c3 = '447700900123@c.us';
+    t.fc.ingest('U', { title: 'Oliver', bottom: true, msgs: [] }, opts);
+    t.fc.acc('U').minute = Array(18).fill(now);
+    t.fc.ingest('U', { title: 'Oliver', bottom: true, msgs: wins(8, c3, 'Hey') }, opts);
+    await idle(t.fc);
+    assert.strictEqual(t.sent.filter((x) => !x.startsWith('慢:')).length, 2, '上限内的 2 条照常');
+    assert.deepStrictEqual(t.sent.filter((x) => x.startsWith('慢:')), ['慢:Hey 7', '慢:Hey 6', '慢:Hey 5', '慢:Hey 2', '慢:Hey 1', '慢:Hey 0'], '挡下的 3 条和更早的都在后台补，最新的先翻');
+    assert(t.fc.viewOf('U').items.every((x) => x.state === 'done'));
+    assert.strictEqual(t.fc.acc('U').minute.length, 20, '后台补的不算额度');
+  }
+  // 4. 删号：正在后台补的停下，不再写回
+  {
+    const t = make(3, 200);
+    t.fc.ingest('V', { title: 'Sofia', bottom: true, msgs: wins(14, '34612345678@c.us', 'Hola') }, opts);
+    await sleep(450);
+    assert(t.fc.slowRun.size > 0);
+    t.fc.forget('V');
+    await sleep(5);
+    assert(t.aborted.length > 0, '删号时取消正在补的');
+    await idle(t.fc);
+    assert(!t.fc.accs.has('V'));
+  }
+  // 5. 默认是付费的（一次一条）：后台补翻照样用另外两个位置，同时最多 3 条
+  {
+    const t = make(1);
+    t.fc.ingest('W', { title: 'Emily', bottom: true, msgs: wins(14, '12125550123@c.us', 'Hi') }, opts);
+    await idle(t.fc);
+    assert.strictEqual(t.maxFg, 1, '付费的一次一条');
+    assert.strictEqual(t.max, 3, '加上后台补翻最多 3 条');
+    assert(t.fc.viewOf('W').items.every((x) => x.state === 'done'));
+  }
+  // 6. 让出的那条取消还没回来时，另一条后台补翻出错（后台整体退回按钮）：让出的那条回来也退回「翻译」，能点，不停在「翻译中…」
+  {
+    const hang = new Map();
+    const fc = new FloatCore({ parallel: () => 3, translate: (text, o = {}) => new Promise((res) => {
+      if (!o.slow) return setTimeout(() => res({ text: `译:${text}` }), 5);
+      hang.set(text, res);
+      o.signal.addEventListener('abort', () => setTimeout(() => res({ error: '已取消', kind: 'cancel' }), 30), { once: true });
+    }) });
+    const c6 = '491701234567@c.us';
+    const old = wins(8, c6, 'Alt');
+    fc.ingest('Y', { title: 'Jonas', bottom: true, msgs: old }, opts);
+    for (let i = 0; i < 100 && fc.slowRun.size < 3; i += 1) await sleep(5);
+    assert.strictEqual(fc.slowRun.size, 3);
+    fc.ingest('Y', { title: 'Jonas', bottom: true, msgs: [...old, msg(50, false, c6, 'Neu')] }, opts); // 让出 Alt 0（最后开始的）
+    hang.get('Alt 2')({ error: '网络不通', kind: 'network' });
+    await sleep(60);
+    const it = fc.viewOf('Y').items.find((x) => x.text === 'Alt 0');
+    assert.strictEqual(it.state, 'manual', '让出的那条退回「翻译」');
+    assert(fc.manual('Y', it.h), '能点');
+    hang.get('Alt 1')({ text: '译:Alt 1' });
+  }
+  // 7. 新消息说忙、等着重试时，不反复取消后台补翻
+  {
+    let busy = true;
+    const t = make(1, 1000);
+    const orig = t.fc.deps.translate;
+    t.fc.deps.translate = (text, o = {}) => (!o.slow && busy ? Promise.resolve({ error: '让用户先翻', kind: 'busy' }) : orig(text, o));
+    const c7 = '4369912345678@c.us';
+    t.fc.ingest('Z', { title: 'Anna', bottom: true, msgs: [] }, opts);
+    t.fc.acc('Z').minute = Array(19).fill(Date.now());
+    t.fc.ingest('Z', { title: 'Anna', bottom: true, msgs: wins(10, c7, 'Hallo') }, opts);
+    await sleep(2000);
+    assert(t.aborted.length <= 1, `等着重试的不反复抢位置（取消了 ${t.aborted.length} 次）`);
+    busy = false;
+    for (let i = 0; i < 100 && (t.fc.running || t.fc.queue.length); i += 1) await sleep(50);
+    assert(t.fc.viewOf('Z').items.every((x) => x.state === 'done'));
+  }
+  console.log('后台补翻同时 3 条、给新消息让位置自检通过');
+}
+
 // 最后 5 条没翻的照常自动翻，存着的不占名额；更早的用免费的智谱或混元在后台慢慢补（slow），最新的先翻，不算额度；
 // 没有免费服务商就留着「翻译」按钮；同一次运行里切走再切回也补；补的时候来了新消息先翻新的；用户点了马上翻
 // 用免费服务商时收到的消息最多同时翻 3 条（shen 2026-10-29「提速做,同时做的仅限于免费 API」），付费的一次一条；
@@ -573,7 +718,7 @@ async function catchUpOlder() {
   const sent = [];
   let free = true;
   let slowErr = '';
-  const fc = new FloatCore({ store, slowGap: 100, translate: async (text, o = {}) => {
+  const fc = new FloatCore({ store, translate: async (text, o = {}) => {
     if (o.slow && !free) return { error: '没有免费的翻译服务', kind: 'nofree' };
     if (o.slow && slowErr) { sent.push(`错:${text}`); return { error: '网络不通', kind: slowErr }; }
     sent.push(o.slow ? `慢:${text}` : text);
@@ -586,19 +731,19 @@ async function catchUpOlder() {
   const ck = hashOf('N', `chat|${chat}`);
   for (const t of texts.slice(5, 8)) store.put('N', ck, t, { tr: `存:${t}` });
   const opts = { auto: true, dailyCap: 500 };
+  const fg = () => sent.filter((x) => !x.startsWith('慢:'));
+  const bg = () => sent.filter((x) => x.startsWith('慢:'));
   fc.ingest('N', { title: 'Sanne', bottom: true, msgs }, opts);
-  await sleep(20); // 最近 5 条翻完，更早的那条还在等（隔 100ms）
-  assert.deepStrictEqual(sent, ['Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oohhh'], '存着的不占最近 5 条');
-  assert.strictEqual(fc.viewOf('N').today, 5);
-  // 补翻的时候客户又发来一条：先翻新的，不等
+  await idle();
+  assert.deepStrictEqual(fg(), ['Hello', 'Thank you', 'Then I have to wait till December', 'Did you get my message on Tuesday?', 'Oohhh'], '存着的不占最近 5 条');
+  assert.deepStrictEqual(bg(), ['慢:Hi'], '更早的用免费服务商在后台补，不等别的翻完');
+  assert(fc.viewOf('N').items.every((x) => x.state === 'done'));
+  assert.strictEqual(fc.viewOf('N').today, 5, '后台补翻不算额度');
   const late = { id: `false_${chat}_3EB9`, out: false, text: 'Are you there?' };
   fc.ingest('N', { title: 'Sanne', bottom: true, msgs: [...msgs, late] }, opts);
-  await sleep(20);
-  assert.strictEqual(sent[5], 'Are you there?');
   await idle();
-  assert.deepStrictEqual(sent.slice(6), ['慢:Hi'], '更早的用免费服务商在后台补');
-  assert(fc.viewOf('N').items.every((x) => x.state === 'done'));
-  assert.strictEqual(fc.viewOf('N').today, 6, '后台补翻不算额度');
+  assert.strictEqual(sent[sent.length - 1], 'Are you there?');
+  assert.strictEqual(fc.viewOf('N').today, 6);
   // 没有免费服务商：留着「翻译」按钮，不报错；之后填了密钥，切走再切回就补上
   free = false;
   sent.length = 0;
@@ -620,8 +765,8 @@ async function catchUpOlder() {
   fc.ingest('N', { title: 'Oliver', bottom: true, msgs: m3 }, opts);
   assert(fc.manual('N', msgHash('N', m3[0].id)));
   await idle();
-  assert.deepStrictEqual(sent.slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
-  assert.deepStrictEqual(sent.slice(-3), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1']);
+  assert.deepStrictEqual(fg().slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
+  assert.deepStrictEqual(bg(), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1'], '后台补的最新的先翻，点了的那条不再走后台');
   // 免费服务商出错（网络不通）：只试一条，排着的都退回「翻译」按钮，不一条条去试
   slowErr = 'network';
   sent.length = 0;
@@ -629,8 +774,11 @@ async function catchUpOlder() {
   const m5 = Array.from({ length: 12 }, (_, i) => ({ id: `false_${chat5}_3EF${i}`, out: false, text: `Hello ${i}` }));
   fc.ingest('N', { title: 'Emily', bottom: true, msgs: m5 }, opts);
   await idle();
-  assert.deepStrictEqual(sent.filter((x) => x.startsWith('错:')), ['错:Hello 6'], '出错只试一条');
-  assert.deepStrictEqual(fc.viewOf('N').items.slice(0, 7).map((x) => [x.state, x.err]), Array(7).fill(['manual', '']));
+  // 同时在翻的几条（最多 3 条）各自出错，排着的不再去试
+  const errs = sent.filter((x) => x.startsWith('错:'));
+  // （这个号一分钟里已经自动翻了 20 多条：最近 5 条也被每分钟的上限挡下，一起交给后台，最新的先试）
+  assert(errs.length >= 1 && errs.length <= 3 && errs[0] === '错:Hello 11', `出错只试同时在翻的那几条：${errs}`);
+  assert(fc.viewOf('N').items.every((x) => (x.state === 'manual' || x.state === 'done') && !x.err), '退回「翻译」按钮，不报错');
   slowErr = '';
   // 自动关着打开对话，再打开自动：一样，存着的不占名额，更早的后台补
   sent.length = 0;
@@ -640,7 +788,8 @@ async function catchUpOlder() {
   fc.ingest('M', { title: 'Camille', bottom: true, msgs: m4 }, { auto: false, dailyCap: 500 });
   fc.backfill('M', { dailyCap: 500 });
   await idle();
-  assert.deepStrictEqual(sent, ['Bonjour 2', 'Bonjour 3', 'Bonjour 4', 'Bonjour 5', 'Bonjour 6', '慢:Bonjour 1', '慢:Bonjour 0']);
+  assert.deepStrictEqual(fg(), ['Bonjour 2', 'Bonjour 3', 'Bonjour 4', 'Bonjour 5', 'Bonjour 6']);
+  assert.deepStrictEqual(bg(), ['慢:Bonjour 1', '慢:Bonjour 0']);
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('切到对话补翻更早的消息自检通过');
 }

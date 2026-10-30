@@ -778,10 +778,14 @@ class Translator {
   // 同一条同时发给 raceSet() 里的服务商，各走各的通道：先翻出来的就用，别的马上取消；先回来的是报错就等别的。
   // 都失败了、报错是网络、超时、太忙、余额这类：用付费的备用再翻一次（paid(args)：调用方一次只放一条过去）。
   // 返回和 translate() 一样；raceSet() 是空的返回 null（调用方照旧走 translate）
-  async raceFree(args, { paid } = {}) {
+  // signal：调用方取消（后台补翻让位置时），各通道一起取消；不给 paid 就不换付费的
+  async raceFree(args, { paid, signal } = {}) {
     const list = this.raceSet();
     if (!list.length) return null;
+    if (signal && signal.aborted) return { error: '已取消', kind: 'cancel' };
     const lanes = list.map(() => this.lane());
+    const stop = () => lanes.forEach((l) => l.cancel());
+    if (signal) signal.addEventListener('abort', stop, { once: true });
     const results = await new Promise((resolve) => {
       const out = new Array(list.length);
       let left = list.length;
@@ -798,6 +802,7 @@ class Translator {
         });
       });
     });
+    if (signal) signal.removeEventListener('abort', stop);
     if (results.win) return results.win;
     // 报错用默认服务商的（排第一）；它是被取消的就用下一个
     const errs = results.errs.filter((r) => r && r.kind !== 'cancel');

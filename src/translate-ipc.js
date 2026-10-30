@@ -89,13 +89,12 @@ function setupTranslateIpc(ctx) {
   });
   // 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
   // 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
-  const userTr = { waiting: 0, running: false, gen: 0, slow: false }; // slow：正在后台补翻更早的消息（用户一点就让开）
+  const userTr = { waiting: 0, running: false, gen: 0 };
   // run：真正要做的事（默认翻译；测试服务商也走这里排队）
   async function userTranslate(args, run = (a) => ctx.translator.translate(a)) {
     const gen = userTr.gen;
     const until = Date.now() + 35000;
     userTr.waiting += 1;
-    if (userTr.slow) ctx.translator.cancel(); // 后台补翻的那条不急：打断它，用户的先翻，它回去重新排
     try {
       for (;;) {
         if (userTr.gen !== gen) return { error: '已取消', kind: 'cancel' };
@@ -306,6 +305,19 @@ function setupTranslateIpc(ctx) {
       await new Promise((res) => setTimeout(res, 250));
     }
   }
+  // 后台补翻更早的消息：只用免费的智谱、混元，走自己的通道（不占用户翻译那条，也不占 DeepL），失败不换付费的备用。
+  // 默认服务商是免费的：和新消息一样同时发给有密钥的智谱、混元，用先回来的；默认是付费的：用 freeProvider() 那一家。
+  // 都没填密钥就不翻（留着「翻译」按钮）。signal：给新消息、用户点的让位置时取消
+  async function slowTranslate(args, signal) {
+    if (signal && signal.aborted) return { error: '已取消', kind: 'cancel' };
+    if (ctx.translator.raceSet().length) return ctx.translator.raceFree(args, { signal });
+    const free = ctx.translator.freeProvider();
+    if (!free) return { error: '没有免费的翻译服务', kind: 'nofree' };
+    const lane = ctx.translator.lane();
+    const stop = () => lane.cancel();
+    if (signal) signal.addEventListener('abort', stop, { once: true });
+    try { return await lane.translate({ ...args, providerId: free.id }); } finally { if (signal) signal.removeEventListener('abort', stop); }
+  }
   function setupFloatCore() {
     // 启动时同步定位置（D 盘能用就是 D 盘，否则 C），D 盘能用而 C 盘还有译文就搬过去一次；只往 D 搬，选了 C 不动 D 盘的
     const oldTrDir = path.join(app.getPath('userData'), 'translations');
@@ -319,26 +331,20 @@ function setupTranslateIpc(ctx) {
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
       transcribe: (accId, src, _seconds, opts) => transcribeVoice(accId, src, opts),
-      translate: (text, { fix, context, prev, slow } = {}) => {
+      translate: (text, { fix, context, prev, slow, signal } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
         if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+        if (slow) return slowTranslate({ text, mode, target: '中文', context }, signal);
         // 默认服务商是免费的（智谱、混元）：同时发给有密钥的免费服务商，用先翻出来的；各走各的通道，
         // 不占用户翻译用的那条，可以同时翻好几条（见 parallel）。都失败了才用付费的备用，一次一条
-        if (!slow && !fix && ctx.translator.raceSet().length) {
+        if (!fix && ctx.translator.raceSet().length) {
           return ctx.translator.raceFree({ text, mode, target: '中文', context }, { paid: onMainLane });
         }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-        // 在后台慢慢补翻的更早的消息：只用免费的智谱或混元，都没填密钥就不翻（留着「翻译」按钮）
-        const free = slow ? ctx.translator.freeProvider() : null;
-        if (slow && !free) return Promise.resolve({ error: '没有免费的翻译服务', kind: 'nofree' });
-        if (!slow) return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
-        userTr.slow = true;
-        return ctx.translator.translate({ text, mode, target: '中文', context, providerId: free.id })
-          .then((r) => (r && r.kind === 'cancel' ? { error: '让用户先翻', kind: 'busy' } : r)) // 被用户的翻译打断：等一下再排
-          .finally(() => { userTr.slow = false; });
+        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
       },
     });
     // 同时翻几条：用免费服务商时 3 条，付费的（DeepL 等）一次一条
