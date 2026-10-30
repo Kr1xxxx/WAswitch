@@ -100,6 +100,8 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
+      - name: 没打开对话时点开一个对话，翻译页 1 秒内显示消息
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
       - name: 内存回收不会反复刷新
         run: npm run check:memory
       - name: 断线提醒（满 2 分钟弹一次、恢复不弹）
