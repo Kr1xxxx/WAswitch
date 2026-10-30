@@ -31,11 +31,6 @@ permissions:
 
 jobs:
   installer:
-    # 临时：5 台验证，合并前去掉
-    strategy:
-      fail-fast: false
-      matrix:
-        run: [1, 2, 3, 4, 5]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
