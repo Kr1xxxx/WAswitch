@@ -39,6 +39,8 @@ const dk = {
   lastInput: 0, // 上次在回复框里打字的时间
   typingBase: null, // 这一阵打字之前的草稿
   redraw: false, // 换了对话：下次重画连回复框一起换
+  info: null, // 点了时间、弹出翻译详情的那条收到消息（hash），没开是 null
+  infoFade: false, // 刚点开：第一次放出来时淡入，之后重画、跟着滚动都不再放
 };
 
 const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !s.locked && s.page === 'account');
@@ -173,7 +175,7 @@ function dockAdopt(st) {
 window.addEventListener('beforeunload', dockDraftFlush);
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false, info: null });
   dk.seen.clear();
 }
 
@@ -394,11 +396,103 @@ function dockItemActs(it) {
 
 // 像 WhatsApp 的收到消息气泡：原文、译文，时间（和“已纠错/已手动修改”）在右下角；纠错/编辑悬停或聚焦时才出现在右上角
 function dockSpacer() { return h('span', { class: 'dk-spacer', 'aria-hidden': 'true' }); }
+// 时间旁边是消息的时间（页面上读来的）。这条译文记着翻译情况时，时间可以点：弹出翻译时间、用时、模型（见 tr-info.js）
 function dockMeta(it) {
+  const time = TrInfo.openable(it)
+    ? h('button', { class: `dk-time dk-time-btn${dk.info === it.h ? ' open' : ''}`, type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': String(dk.info === it.h), onclick: () => dockInfoToggle(it.h) }, it.t)
+    : h('span', { class: 'dk-time' }, it.t || '');
   return h('span', { class: 'dk-meta' },
     it.edited ? h('span', { class: 'dk-edited' }, '已手动修改') : it.fixed ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
-    h('span', { class: 'dk-time' }, it.t || ''));
+    time);
 }
+
+// ---- 翻译详情（点时间弹出） ----
+// 挂在 .dk-listbox 里（它不滚动，列表的滚动区裁不到它），按那条的气泡算位置：气泡上方 4px、右边和时间对齐，上面放不下就放下面。
+// 列表每 2 秒重画一次（连 .dk-listbox 一起换）：每次重画后重新放一遍；列表滚动、窗口变化时跟着走
+function dockInfoClose() {
+  dk.info = null;
+  dockInfoPlace();
+}
+function dockInfoToggle(h) {
+  dk.infoFade = dk.info !== h;
+  dk.info = dk.info === h ? null : h;
+  dockInfoPlace();
+}
+function dockInfoPlace() {
+  const box = $panel.querySelector('.dk-host .dk-listbox');
+  const old = box ? box.querySelector('.dk-info') : null;
+  const list = box ? box.querySelector('.dk-list') : null;
+  const item = dk.info !== null && dk.st ? dk.st.items.find((x) => x.h === dk.info) : null;
+  const row = list && item ? [...list.querySelectorAll('.dk-item[data-h]')].find((r) => r.dataset.h === dk.info) : null;
+  const btn = row ? row.querySelector('.dk-time-btn') : null;
+  // 那条不在了（换对话、翻译被挤出去）或不能点了（重翻中）：关
+  if (dk.info !== null && (!box || !item || !btn || !TrInfo.openable(item))) dk.info = null;
+  // 时间按钮的展开状态跟着 dk.info
+  if (list) {
+    for (const b of list.querySelectorAll('.dk-time-btn')) {
+      const on = !!row && dk.info !== null && b === btn;
+      b.classList.toggle('open', on);
+      b.setAttribute('aria-expanded', String(on));
+    }
+  }
+  if (dk.info === null) { if (old) old.remove(); return; }
+  const lines = TrInfo.rows(item.via);
+  const sig = JSON.stringify(lines);
+  let pop = old;
+  if (!pop || pop.dataset.sig !== sig) {
+    if (old) old.remove();
+    pop = h('div', { class: 'dk-info', role: 'dialog', 'aria-label': '翻译详情', 'data-sig': sig },
+      h('dl', null, lines.flatMap(([k, v]) => [h('dt', null, k), h('dd', { class: k === '模型' ? null : 'num' }, v)])));
+    if (dk.infoFade) fxPlay(pop, 'fx-fade');
+    box.append(pop);
+  }
+  dk.infoFade = false;
+  const lb = box.getBoundingClientRect();
+  const lr = list.getBoundingClientRect();
+  const rr = row.getBoundingClientRect();
+  const br = btn.getBoundingClientRect();
+  // 那条滚出看得见的范围：先藏起来，滚回来再出现
+  pop.hidden = rr.bottom <= lr.top || rr.top >= lr.bottom;
+  if (pop.hidden) return;
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  // 上方放得下就放上方，放不下放下方；两边都放不下（工作台矮）就放宽松的那边，超出列表一点没关系，但不出面板
+  const above = rr.top - lb.top - 4 - ph;
+  const below = rr.bottom - lb.top + 4;
+  const spill = below + ph - lb.height; // 放下方时超出列表多少
+  let top = above >= 0 || -above < spill ? above : below;
+  const pr = $panel.getBoundingClientRect();
+  top = Math.max(pr.top - lb.top + 4, Math.min(top, pr.bottom - lb.top - ph - 4));
+  const left = Math.max(8, Math.min(br.right - lb.left - pw, lb.width - 8 - pw));
+  pop.style.top = `${Math.round(top)}px`;
+  pop.style.left = `${Math.round(left)}px`;
+}
+let dkInfoFrame = 0;
+function dockInfoSoon() {
+  if (dk.info === null || dkInfoFrame) return;
+  dkInfoFrame = requestAnimationFrame(() => { dkInfoFrame = 0; dockInfoPlace(); });
+}
+// 展开、收起原文会让气泡变高变矮（过渡 250ms）：这段时间每帧跟一下
+function dockInfoFollow(ms = 320) {
+  if (dk.info === null) return;
+  const until = performance.now() + ms;
+  const tick = () => { dockInfoPlace(); if (dk.info !== null && performance.now() < until) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+// 点框外、按 Esc 关（点时间按钮的由按钮自己切换）；Esc 关掉后焦点回到那个时间上
+document.addEventListener('pointerdown', (e) => {
+  if (dk.info === null || (e.target.closest && e.target.closest('.dk-info, .dk-time-btn'))) return;
+  dockInfoClose();
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || dk.info === null) return;
+  if (e.target.closest && e.target.closest('.dk-edit')) return; // 改译文时按 Esc 是取消修改，不顺带关框
+  const row = [...document.querySelectorAll('.dk-item[data-h]')].find((r) => r.dataset.h === dk.info);
+  const btn = row ? row.querySelector('.dk-time-btn') : null;
+  dockInfoClose();
+  if (btn && btn.isConnected) btn.focus({ preventScroll: true });
+});
+window.addEventListener('resize', dockInfoSoon);
 
 // 有译文时原文默认完全隐藏，折叠箭头放在中文译文左边：点箭头在译文上面展开原文，再点收起（shen 2026-10-27）。
 // 没译文就直接显示原文。原地切换 class，不重画列表：高度平滑过渡，被点的这条上沿不动，列表不跳
@@ -422,6 +516,7 @@ function dockOrig(key, text, hasTr, voice = '') {
     if (o) dk.openOrig.add(key); else dk.openOrig.delete(key);
     dockHoldScroll(box);
     set(o);
+    dockInfoFollow();
   });
   set(dk.openOrig.has(key));
   return { box, btn };
@@ -506,6 +601,7 @@ function dockIncoming() {
     dk.stick = list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
     if (dk.stick && dk.pill) { dk.pill = false; dockPillSync(box); }
   }, { passive: true });
+  list.addEventListener('scroll', dockInfoSoon, { passive: true });
   if (!dk.editing) fxLast.delete('dk-edit'); // 下次点“编辑”还放淡入
   const add = (...x) => list.append(...kids(x));
   const hint = (t, bad) => h('p', { class: `hint dk-hint${bad ? ' bad' : ''}` }, t);
@@ -653,6 +749,18 @@ function dockKeyBar() {
 // force=false：只刷新状态条和消息列表，正在写的回复不动
 function dockRender(force = false) {
   if (!dockVisible()) return;
+  // 键盘焦点在某个时间按钮上：列表重画后按钮是新的，焦点放回去
+  const at = document.activeElement;
+  const focusH = at && at.classList && at.classList.contains('dk-time-btn') && at.closest('.dk-item') ? at.closest('.dk-item').dataset.h : '';
+  dockRenderBody(force);
+  dockInfoPlace(); // 列表重画过了：翻译详情放回那条气泡旁边（没有消息列表的状态会把它关掉）
+  if (focusH && !(document.activeElement && document.activeElement.classList.contains('dk-time-btn'))) {
+    const row = [...$panel.querySelectorAll('.dk-item[data-h]')].find((r) => r.dataset.h === focusH);
+    const btn = row && row.querySelector('.dk-time-btn');
+    if (btn) btn.focus({ preventScroll: true });
+  }
+}
+function dockRenderBody(force) {
   dockSyncTabTools();
   const host = $panel.querySelector('.dk-host');
   if (!host) return;
