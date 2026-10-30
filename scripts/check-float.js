@@ -103,6 +103,71 @@ async function core() {
   await lidSwitch();
   await slowLanes();
   await translateVia();
+  await sameMessageOtherText();
+}
+
+// 同一条消息（消息编号一样）重启后页面上读到的文字有细微差别（不可见字符、空格、弯引号）：认得出是翻过的，不重翻
+// （shen 2026-10-30「每次点了客户会话又是重新翻译」）；客户真的改了消息、文字变了：照旧重翻，日志里记一行，不记内容
+async function sameMessageOtherText() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore, textKey } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-same-'));
+  const sent = [];
+  const logs = [];
+  let clock = Date.parse('2026-10-30T09:00:00Z');
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, now: () => clock, log: (x) => logs.push(x), translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  const opts = { auto: true, dailyCap: 500 };
+  const chat = '16625550143@c.us';
+  const m = (n, text) => ({ id: `false_${chat}_3EB0SM${n}`, out: false, text });
+  const first = [m(1, 'I don’t like it at all'), m(2, 'Hey I received my hair'), m(3, 'It’s really thin before adding the bundle'), m(4, 'Thank you')];
+  let { store, fc } = make();
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: first }, opts);
+  await sleep(40);
+  store.flush();
+  assert.strictEqual(sent.length, 4);
+  // 重启后同样的消息、文字有细微差别
+  sent.length = 0;
+  ({ store, fc } = make());
+  const again = [m(1, 'I don\'t like it at all'), m(2, 'Hey I received​ my  hair'), m(3, 'It’s really thin before adding the bundle\n'), m(4, 'Thank you')];
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: again }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, [], '细微差别不重翻');
+  let items = fc.viewOf('S').items;
+  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'done', 'done', 'done']);
+  assert.deepStrictEqual(items.map((x) => x.tr), first.map((x) => `译:${x.text}`), '用原来的译文');
+  assert.strictEqual(logs.filter((x) => x.includes('细微差别')).length, 3);
+  assert(!logs.some((x) => x.includes('hair') || x.includes('Tyra')), '日志里不放聊天内容');
+  // 按这次的文字也存了一份：再重启，同样的文字直接认
+  store.flush();
+  logs.length = 0;
+  ({ store, fc } = make());
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: again }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, []);
+  assert.deepStrictEqual(logs, [], '第二次直接认得，不用再比较');
+  assert.strictEqual(fc.viewOf('S').items.length, 4);
+  // 客户改了消息：文字真的不一样，重翻，日志只记字数
+  sent.length = 0;
+  logs.length = 0;
+  ({ store, fc } = make());
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [m(1, 'I like it now, thank you so much'), ...again.slice(1)] }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, ['I like it now, thank you so much']);
+  assert.strictEqual(logs.length, 1);
+  assert(logs[0].includes('和上次不一样') && !logs[0].includes('like'), logs[0]);
+  // 另一条消息碰巧同样的话：各自按文字认，不受影响
+  sent.length = 0;
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [...again, m(5, 'Thank you')] }, opts);
+  await sleep(20);
+  assert.deepStrictEqual(sent, [], '同一句话翻过的直接用');
+  store.flush();
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('同一条消息文字有细微差别不重翻自检通过');
 }
 
 // 点译文右下角的时间显示这条是什么时候翻的、用了多久、哪个模型翻的（shen 2026-10-30）：

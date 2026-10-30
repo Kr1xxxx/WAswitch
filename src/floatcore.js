@@ -62,6 +62,8 @@ function viaOf(rec) {
 
 // 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
 const noWords = (text) => !/\p{L}/u.test(String(text));
+// 比较两次读到的同一条消息的文字时忽略的差别：不可见字符、各种空格和换行、弯引号直引号、全角半角
+const plain = (t) => String(t).normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').trim();
 // 以前默认模式「看懂客户」会在译文后面另起一行写【要点】总结（shen 2026-10-28 不要）：存着的旧译文显示时去掉那段
 function dropGist(tr) {
   const t = String(tr || '');
@@ -107,6 +109,7 @@ class FloatCore {
     this.queue = []; // { accId, h, auto }
     this.running = false; // 有没有正在翻的
     this.active = 0; // 正在翻几条
+    this.changed = new Set(); // 文字变了、已经记过日志的消息（每条只记一次）
     this.slowRun = new Set(); // 正在翻的后台补翻（各带一个 AbortController，新消息、用户点的要位置时让出来）
     this.retryTimer = null;
     this.vq = []; // 等着转文字的语音（单独一条道）
@@ -205,6 +208,7 @@ class FloatCore {
     const newest = Math.max(0, ...msgs.map((m) => (m.t && Number.isFinite(m.t.at) ? m.t.at : 0)));
     if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
+    const views = new Map(); // 对话 -> 翻译栏记录（sameMessage 用，这次读页面里只读一次）
     let filled = false;
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
@@ -248,7 +252,8 @@ class FloatCore {
       }
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
       const skip = noWords(item.text);
-      const saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
+      let saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
+      if (!skip && !saved && this.deps.store) saved = this.sameMessage(accId, item, views);
       if (skip) item.state = 'skip';
       else if (saved) {
         item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; item.via = viaOf(saved);
@@ -290,6 +295,31 @@ class FloatCore {
     if (chat) this.keepView(accId, st, chat);
     this.pump();
     return changed;
+  }
+
+  // 按文字没找到译文时：翻译栏的记录里有同一条消息（消息编号一样），以前翻过，只是这次页面上读到的文字有细微差别
+  // （不可见字符、空格、弯引号）：用原来的译文，再按这次的文字存一份，以后直接认得。
+  // 文字真的不一样了（客户改了消息，或页面多出别的内容）：照旧重翻，日志里记一行（只有字数，不记内容）
+  sameMessage(accId, item, views) {
+    const store = this.deps.store;
+    if (!store.getView || !item.text) return null;
+    let map = views.get(item.ck);
+    if (!map) { map = new Map(store.getView(accId, item.ck).map((x) => [x.h, x])); views.set(item.ck, map); }
+    const x = map.get(item.h);
+    if (!x || x.k === textKey(item.text)) return null;
+    const rec = store.getKey(accId, item.ck, x.k);
+    if (!rec) return null;
+    if (typeof rec.text === 'string' && rec.text && plain(rec.text) === plain(item.text)) {
+      store.putKey(accId, item.ck, textKey(item.text), { tr: rec.tr, text: item.text, edited: rec.edited, fixed: rec.fixed, via: viaOf(rec) });
+      (this.deps.log || console.log)(`译文记录：同一条消息读到的文字有细微差别（${rec.text.length} 字和 ${item.text.length} 字），沿用原来的译文`);
+      return store.getKey(accId, item.ck, textKey(item.text));
+    }
+    if (!this.changed.has(item.h)) {
+      this.changed.add(item.h);
+      if (this.changed.size > 500) this.changed.delete(this.changed.values().next().value);
+      (this.deps.log || console.log)(`译文记录：同一条消息的文字和上次不一样（上次${typeof rec.text === 'string' && rec.text ? ` ${rec.text.length} 字` : '没存原文'}，这次 ${item.text.length} 字），重新翻译`);
+    }
+    return null;
   }
 
   canon(accId, ck) {
