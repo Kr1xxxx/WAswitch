@@ -158,8 +158,13 @@ async function sameMessageOtherText() {
   fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [m(1, 'I like it now, thank you so much'), ...again.slice(1)] }, opts);
   await sleep(40);
   assert.deepStrictEqual(sent, ['I like it now, thank you so much']);
-  assert.strictEqual(logs.length, 1);
-  assert(logs[0].includes('和上次不一样') && !logs[0].includes('like'), logs[0]);
+  const changed = logs.filter((x) => x.includes('和上次不一样'));
+  assert.strictEqual(changed.length, 1);
+  assert(!changed[0].includes('like'), changed[0]);
+  // 打开对话时有没认出的：记一行个数（有记录的对话才记），不含内容
+  const opened = logs.filter((x) => x.includes('打开对话'));
+  assert.strictEqual(opened.length, 1, logs.join('\n'));
+  assert(opened[0].includes('没认出 1 条') && opened[0].includes('见过 1 条') && !opened[0].includes('like'), opened[0]);
   // 另一条消息碰巧同样的话：各自按文字认，不受影响
   sent.length = 0;
   fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [...again, m(5, 'Thank you')] }, opts);
@@ -363,8 +368,8 @@ async function lidSwitch() {
   assert(items.every((x) => x.state === 'done'));
   unique(items);
   assert.strictEqual(fc.viewOf('W').chatKey, key0, '草稿、客户语言跟着对话走');
-  assert.strictEqual(logs.length, 1, '认出别名时记一行日志');
-  assert(!logs[0].includes('@'), '日志里没有编号');
+  assert.strictEqual(logs.filter((x) => x.includes('换了编号')).length, 1, '认出别名时记一行日志');
+  assert(!logs.some((x) => x.includes('@')), '日志里没有编号');
   // 2. 换编号 + 重启（新的 FloatCore 和 TrStore，同一个文件夹）
   store.flush();
   ({ store, fc } = make());

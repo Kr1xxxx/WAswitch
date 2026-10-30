@@ -209,6 +209,7 @@ class FloatCore {
     if (!newChat && this.behind(st, read, hs, newest)) return false;
     const fresh = [];
     const views = new Map(); // 对话 -> 翻译栏记录（sameMessage 用，这次读页面里只读一次）
+    const look = { hit: 0, same: 0, miss: 0, seen: 0 }; // 这次新读到的客户消息：按文字认出的、细微差别认出的、没认出的（其中以前在翻译栏记录里见过的）
     let filled = false;
     // 当前对话最近的消息（双方都有），入队时从这里截上下文；只在内存里，不含 data-id。
     // 下面判断“和上次读到的接不接得上”还要用上次的 st.recent，所以最后才写回
@@ -253,7 +254,12 @@ class FloatCore {
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
       const skip = noWords(item.text);
       let saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
-      if (!skip && !saved && this.deps.store) saved = this.sameMessage(accId, item, views);
+      if (!skip && saved) look.hit += 1;
+      if (!skip && !saved && this.deps.store) {
+        saved = this.sameMessage(accId, item, views);
+        if (saved) look.same += 1;
+        else { look.miss += 1; if (views.get(item.ck) && views.get(item.ck).has(item.h)) look.seen += 1; }
+      }
       if (skip) item.state = 'skip';
       else if (saved) {
         item.state = 'done'; item.tr = saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr); item.edited = !!saved.edited; item.fixed = !!saved.fixed; item.via = viaOf(saved);
@@ -269,6 +275,7 @@ class FloatCore {
       if (newChat) this.catchUp(accId, st, hs, opts, recent);
       else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent);
     }
+    if (newChat && look.miss && this.deps.store && this.deps.store.info) this.logLook(accId, chat, msgs, look);
     let view = msgs.filter(shown).map((m) => msgHash(accId, m.id));
     // 读页面只读最后 20 条（双方）：自己每发一条，最老的一条就被挤出去。还是同一个对话、和上次读到的接得上，
     // 挤出去的客户消息照样留在翻译栏上面，不然每发一条，翻译栏就少一条、整列往上跳（shen 2026-10-28）
@@ -320,6 +327,16 @@ class FloatCore {
       (this.deps.log || console.log)(`译文记录：同一条消息的文字和上次不一样（上次${typeof rec.text === 'string' && rec.text ? ` ${rec.text.length} 字` : '没存原文'}，这次 ${item.text.length} 字），重新翻译`);
     }
     return null;
+  }
+
+  // 打开对话时有客户消息没认出译文：日志记一行（只有个数和消息编号的形状，不含内容），真机上翻了又翻时用来看是哪一种
+  logLook(accId, chat, msgs, look) {
+    const ids = msgs.filter((m) => !m.out).map((m) => m.id);
+    const shape = ids.length === 0 ? '无' : ids.every((id) => REAL_ID.test(id)) ? '带号码' : ids.some((id) => REAL_ID.test(id)) ? '混合' : '按标题';
+    const chats = new Set(msgs.map((m) => chatOf(m.id))).size;
+    const info = this.deps.store.info(accId, chat);
+    if (!info.records && !info.unread && !look.seen) return; // 这个对话本来就没翻过：第一次打开，不用记
+    (this.deps.log || console.log)(`译文记录：打开对话，新读到客户消息 ${look.hit + look.same + look.miss} 条，认出 ${look.hit} 条，细微差别认出 ${look.same} 条，没认出 ${look.miss} 条（以前在翻译栏记录里见过 ${look.seen} 条）；记录 ${info.records} 条${info.unread ? '，文件读不了' : ''}；编号${shape}，${chats} 个对话编号`);
   }
 
   canon(accId, ck) {
