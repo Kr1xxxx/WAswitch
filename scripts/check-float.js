@@ -104,6 +104,7 @@ async function core() {
   await slowLanes();
   await translateVia();
   await sameMessageOtherText();
+  await textDrift();
   await autoRetry();
 }
 
@@ -174,6 +175,92 @@ async function sameMessageOtherText() {
   store.flush();
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('同一条消息文字有细微差别不重翻自检通过');
+}
+
+// 同一条消息刚出现时读到的文字（first）和之后再读到的（later）只差显示格式（方向符、不换行空格和连字符、表情、弯引号）：
+// 内存只留 200 条，切去别的对话被挤出去再切回、重启，都认得是翻过的，不重翻（shen 2026-10-30「点开会话又重新翻译」）
+async function textDrift() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const DRIFT = {
+    方向符: ['My phone number is (662) 997-8241.', 'My phone number is ⁦(662) 997-8241⁩.'],
+    不换行空格和连字符: ['My phone number is (662) 997-8241.', 'My phone number is (662) 997‑8241.'],
+    表情: ['Thanks a lot 😊', 'Thanks a lot '],
+    弯引号: ["I don't like it at all", 'I don’t like it at all'],
+  };
+  for (const [kind, [first, later]] of Object.entries(DRIFT)) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'));
+    const sent = [];
+    const logs = [];
+    const make = () => {
+      const store = new TrStore(dir);
+      return { store, fc: new FloatCore({ store, log: (x) => logs.push(x), translate: async (text) => { sent.push(text); await sleep(2); return { text: `译:${text}`, warn: [] }; } }) };
+    };
+    const msgs = (c, n) => Array.from({ length: n }, (_, i) => ({ id: `false_${5550000 + c}@c.us_3EB0${c}X${i}`, out: false, text: `msg ${c}-${i}` }));
+    const opts = { auto: true, dailyCap: 1e6 };
+    let { store, fc } = make();
+    const base = msgs(0, 6);
+    const live = { id: 'false_5550000@c.us_3EB0LIVE', out: false, text: first };
+    fc.ingest('A', { title: 'Lucy', msgs: base, bottom: true }, opts);
+    await sleep(40);
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, live], bottom: true }, opts);
+    await sleep(40);
+    assert.strictEqual(sent.filter((t) => t === first).length, 1, kind);
+    // 之后再读到的文字不一样：不重翻，日志只记字符编号
+    for (let k = 0; k < 3; k++) { fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts); await sleep(15); }
+    assert.strictEqual(sent.filter((t) => t === later).length, 0, `${kind}：再读到不重翻`);
+    assert(logs.some((x) => x.includes('格式差别：')), kind);
+    assert(!logs.some((x) => x.includes('Lucy') || x.includes('phone') || x.includes('Thanks')), '日志里不放聊天内容');
+    // 切去 16 个别的对话（224 条，超过 200 条上限，对话 0 被挤出内存），再切回
+    for (let c = 1; c <= 16; c++) { fc.ingest('A', { title: `C${c}`, msgs: msgs(c, 14), bottom: true }, opts); await sleep(15); }
+    const before = sent.length;
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts);
+    await sleep(80);
+    assert.deepStrictEqual(sent.slice(before), [], `${kind}：切回不重翻`);
+    assert(fc.viewOf('A').items.every((x) => x.state === 'done'), `${kind}：切回后都是翻好的`);
+    assert.strictEqual(fc.viewOf('A').items[fc.viewOf('A').items.length - 1].tr, `译:${first}`, `${kind}：用原来的译文`);
+    // 重启
+    store.flush();
+    ({ store, fc } = make());
+    const before2 = sent.length;
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts);
+    await sleep(60);
+    assert.deepStrictEqual(sent.slice(before2), [], `${kind}：重启不重翻`);
+    store.flush();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // 客户改了消息（字母数字变了）：不管挤没挤出内存，照旧重翻
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'));
+  const sent = [];
+  const store = new TrStore(dir);
+  const fc = new FloatCore({ store, log: () => {}, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  const opts = { auto: true, dailyCap: 1e6 };
+  const id = 'false_5550000@c.us_3EB0EDIT';
+  fc.ingest('E', { title: 'Lucy', msgs: [{ id, out: false, text: 'I will pay on Friday' }], bottom: true }, opts);
+  await sleep(30);
+  assert.deepStrictEqual(sent, ['I will pay on Friday']);
+  fc.ingest('E', { title: 'Lucy', msgs: [{ id, out: false, text: 'I will pay on Monday' }], bottom: true }, opts);
+  await sleep(30);
+  assert.strictEqual(fc.viewOf('E').items.length, 1);
+  // 又读到的挪到最后：内存满了先挤别的对话的，正在看的对话的译文不被挤掉
+  const items = (n, c) => Array.from({ length: n }, (_, i) => ({ id: `false_${5560000 + c}@c.us_3EB0${c}Y${i}`, out: false, text: `row ${c}-${i}` }));
+  const fc2 = new FloatCore({ store: new TrStore(fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'))), log: () => {}, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  const cur = items(20, 0);
+  fc2.ingest('M', { title: 'Cur', msgs: cur, bottom: true }, opts);
+  await sleep(60);
+  for (let c = 1; c <= 12; c++) { // 13 个对话 260 条，超过 200 条上限
+    fc2.ingest('M', { title: `O${c}`, msgs: items(20, c), bottom: true }, opts);
+    await sleep(30);
+    fc2.ingest('M', { title: 'Cur', msgs: cur, bottom: true }, opts); // 来回切，当前对话一直在看
+    await sleep(10);
+  }
+  const kept = [...fc2.accs.get('M').items.values()];
+  assert.strictEqual(kept.length, 200);
+  assert(kept.filter((x) => x.text.startsWith('row 0-')).length === 20, '当前对话 20 条都留在内存里');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('同一条消息显示格式变了不重翻自检通过');
 }
 
 // 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）用免费的智谱、混元再翻，
