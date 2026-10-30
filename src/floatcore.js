@@ -66,8 +66,12 @@ function viaOf(rec) {
 
 // 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
 const noWords = (text) => !/\p{L}/u.test(String(text));
-// 骨架：只留字母和数字（NFKC 后小写）。同一条消息两次读到的文字只要骨架一样，差的只是显示格式（方向符、空格、连字符、引号、表情），译文照用
-const skel = (t) => String(t).normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+// 骨架：同一条消息两次读到的文字骨架一样，差的只是显示格式（方向符、空格、连字符、引号、表情、问号感叹号、大小写），译文照用。
+// 留字母、数字、货币和数学符号、%；两个数字中间的 - . , : / 也留（1.5 和 15、5:30 和 53:0 不是一回事），各种连字符先归成一种
+const skel = (t) => {
+  const s = String(t).normalize('NFKC').replace(/\p{Pd}/gu, '-');
+  return s.replace(/[^\p{L}\p{N}\p{Sc}\p{Sm}%]/gu, (c, i) => (/[-.,:/]/.test(c) && /\p{N}/u.test(s[i - 1] || '') && /\p{N}/u.test(s[i + 1] || '') ? c : '')).toLowerCase();
+};
 // 两段文字非字母非数字的字符差别，只记字符编号和个数，不含内容：「多了 U+2066×1 U+2069×1，少了 U+0020×1」
 function formatDiff(from, to) {
   const count = (t) => { const m = new Map(); for (const c of String(t).normalize('NFKC')) if (!/[\p{L}\p{N}]/u.test(c)) m.set(c.codePointAt(0), (m.get(c.codePointAt(0)) || 0) + 1); return m; };
@@ -283,9 +287,15 @@ class FloatCore {
         st.items.delete(h); st.items.set(h, had); // 又读到了：挪到最后，内存满了先删别的对话的
         // 翻好了的这条，页面上的文字这次和翻译时不一样（显示的格式变了）：按这次的文字也存一份，以后挤出内存、重启都认得
         if (had.state === 'done' && had.tr && had.text && !isVoice(had) && had.ck && this.deps.store && String(m.text).trim() && String(m.text) !== had.text && skel(m.text) === skel(had.text)) {
-          this.deps.store.putKey(accId, had.ck, textKey(String(m.text)), { tr: had.tr, text: String(m.text), edited: had.edited, fixed: had.fixed, via: had.via });
-          (this.deps.log || console.log)(`译文记录：同一条消息读到的文字有细微差别（格式差别：${formatDiff(had.text, m.text)}），沿用原来的译文`);
+          const k = textKey(String(m.text));
+          if (!this.deps.store.getKey(accId, had.ck, k)) this.deps.store.putKey(accId, had.ck, k, { tr: had.tr, text: String(m.text), edited: had.edited, fixed: had.fixed, via: had.via });
+          if (!this.changed.has(`${h}:fmt`)) { // 每条只记一次，页面上的文字来回变也不刷日志
+            this.changed.add(`${h}:fmt`);
+            if (this.changed.size > 500) this.changed.delete(this.changed.values().next().value);
+            (this.deps.log || console.log)(`译文记录：同一条消息读到的文字有细微差别（格式差别：${formatDiff(had.text, m.text)}），沿用原来的译文`);
+          }
           had.text = String(m.text);
+          filled = true; // 展开的原文跟着刷新
           continue;
         }
         if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; // 补回来时没有原文的旧消息又读到了：补上原文

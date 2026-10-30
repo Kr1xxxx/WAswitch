@@ -244,6 +244,35 @@ async function textDrift() {
   fc.ingest('E', { title: 'Lucy', msgs: [{ id, out: false, text: 'I will pay on Monday' }], bottom: true }, opts);
   await sleep(30);
   assert.strictEqual(fc.viewOf('E').items.length, 1);
+  // 只改数字里的标点、货币、正负号：不是格式差别，重启后读到新文字照旧重翻（外贸最在意的数字）
+  const NUM = [['1.5 kg', '15 kg'], ['price €100 each', 'price $100 each'], ['+5% off', '-5% off'], ['at 5:30 pm', 'at 53:0 pm'], ['2,500 pcs', '25,00 pcs']];
+  for (const [i, [x, y]] of NUM.entries()) {
+    const nid = `false_5550000@c.us_3EB0NUM${i}`;
+    fc.ingest('E', { title: 'Lucy', msgs: [{ id: nid, out: false, text: x }], bottom: true }, opts);
+    await sleep(30);
+    store.flush();
+    sent.length = 0;
+    const fcB = new FloatCore({ store: new TrStore(dir), log: () => {}, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+    fcB.ingest('E', { title: 'Lucy', msgs: [{ id: nid, out: false, text: y }], bottom: true }, opts);
+    await sleep(30);
+    assert.deepStrictEqual(sent, [y], `${x} 改成 ${y}：重翻`);
+  }
+  // 文字在两种格式间来回变：日志每条只记一次，记录里已有就不再写
+  {
+    const logs2 = [];
+    const fcL = new FloatCore({ store, log: (x) => logs2.push(x), translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+    const lid = 'false_5550000@c.us_3EB0FLIP';
+    const A = 'Call me at (662) 997-8241 please';
+    const B = 'Call me at \u2066(662) 997-8241\u2069 please';
+    fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: A }], bottom: true }, opts);
+    await sleep(30);
+    assert.strictEqual(fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: B }], bottom: true }, opts), true, '展开的原文要刷新');
+    for (let k = 0; k < 3; k++) {
+      fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: k % 2 ? B : A }], bottom: true }, opts);
+      fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: k % 2 ? A : B }], bottom: true }, opts);
+    }
+    assert.strictEqual(logs2.filter((x) => x.includes('格式差别')).length, 1, logs2.join('\n'));
+  }
   // 又读到的挪到最后：内存满了先挤别的对话的，正在看的对话的译文不被挤掉
   const items = (n, c) => Array.from({ length: n }, (_, i) => ({ id: `false_${5560000 + c}@c.us_3EB0${c}Y${i}`, out: false, text: `row ${c}-${i}` }));
   const fc2 = new FloatCore({ store: new TrStore(fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'))), log: () => {}, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
