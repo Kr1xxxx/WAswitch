@@ -349,6 +349,8 @@ function setupTranslateIpc(ctx) {
     });
     // 同时翻几条：用免费服务商时 3 条，付费的（DeepL 等）一次一条
     floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
+    // 有没有免费的智谱、混元（自动重翻只用它们，见 slowTranslate）
+    floatCore.deps.hasFree = () => !!(ctx.translator.raceSet().length || ctx.translator.freeProvider());
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) pushFloat(); };
   }
   // 读页面的条件：悬浮窗开着、在账号页、窗口看得见、没锁、号正常、页面不在加载
