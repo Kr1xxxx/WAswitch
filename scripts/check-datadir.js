@@ -351,6 +351,159 @@ test('指针文件坏了：当没有指针（C 没数据就按新装处理）', 
   assert.equal(win(b).dir, b.data);
 });
 
+// ---------- 同一台电脑几个 Windows 用户共用一个 D:\WAswitch ----------
+// 第二个用户：另一个 home，同一个 root
+function otherUser(b, name = 'B') {
+  const home = path.join(path.dirname(path.dirname(b.home)), `C-${name}`, 'WAswitch');
+  fs.mkdirSync(home, { recursive: true });
+  return { ...b, home };
+}
+const owner = (b) => JSON.parse(fs.readFileSync(path.join(b.data, dd.OWNER), 'utf8'));
+
+test('两个用户同一个 D：第一个用 D 并记上自己，第二个用自己的 C，读不到第一个的账号', () => {
+  const a = box({ root: true });
+  const ra = win(a);
+  assert.equal(ra.dir, a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), JSON.stringify([{ id: 'acc-of-A' }]));
+  assert.equal(owner(a).home, a.home);
+  const b = otherUser(a);
+  const rb = win(b);
+  assert.equal(rb.dir, b.home, '第二个用户不能用第一个用户的 D:\\WAswitch\\data');
+  assert.equal(rb.fresh, false);
+  assert.ok(!fs.existsSync(path.join(b.home, dd.POINTER)), '第二个用户不写指向 D 的指针');
+  assert.ok(!fs.existsSync(path.join(rb.dir, 'accounts.json')));
+  assert.equal(owner(a).home, a.home, '记号还是第一个用户的');
+  // 第一个用户下次照样用 D
+  assert.equal(win(a).dir, a.data);
+  // 第二个用户 C 盘有了数据也不搬过去，不会为它重启
+  writeOld(b.home);
+  const sb = dd.apply(fakeApp(b.home), { platform: 'win32', root: b.root });
+  assert.equal(dd.shouldMove(sb), false);
+  const m = dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, false);
+  assert.equal(m.reason, 'owner');
+  assert.equal(fs.readFileSync(path.join(a.data, 'accounts.json'), 'utf8'), JSON.stringify([{ id: 'acc-of-A' }]));
+});
+
+test('两个用户：D:\\WAswitch\\data 空着、只有别人的记号 → 也不用', () => {
+  const a = box({ root: true });
+  win(a);
+  const b = otherUser(a);
+  assert.equal(win(b).dir, b.home);
+});
+
+test('D:\\WAswitch\\data 有账号数据但没记号（不知道是谁的）：新装的用户不用', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, 'accounts.json'), '[{"id":"x"}]');
+  assert.equal(win(b).dir, b.home);
+  assert.ok(!fs.existsSync(path.join(b.data, dd.OWNER)));
+});
+
+test('D:\\WAswitch\\data 空着、没记号（安装包建的）：用，并记上自己', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  assert.equal(win(b).dir, b.data);
+  assert.equal(owner(b).home, b.home);
+});
+
+test('1.0.1 的老指针、还没有记号：照旧用 D，第一次启动补记成自己；之后别的用户就用不了', () => {
+  const a = box({ root: true });
+  fs.mkdirSync(a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), '[{"id":"a"}]');
+  fs.writeFileSync(path.join(a.home, dd.POINTER), JSON.stringify({ dir: a.data, cleanC: false }));
+  const r = win(a);
+  assert.equal(r.dir, a.data);
+  assert.equal(owner(a).home, a.home);
+  assert.equal(win(otherUser(a)).dir, otherUser(a).home);
+});
+
+test('1.0.1 时两个用户已经共用：先启动的补记，后启动的去掉指针回 C，D 盘那份一点不动', () => {
+  const a = box({ root: true });
+  fs.mkdirSync(a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), '[{"id":"shared"}]');
+  const b = otherUser(a);
+  for (const h of [a.home, b.home]) fs.writeFileSync(path.join(h, dd.POINTER), JSON.stringify({ dir: a.data, cleanC: false }));
+  assert.equal(win(a).dir, a.data);
+  const rb = win(b);
+  assert.equal(rb.dir, b.home);
+  assert.equal(rb.shared, a.data);
+  assert.equal(rb.fallback, false, '不是 D 盘打不开，不提示');
+  assert.ok(!fs.existsSync(path.join(b.home, dd.POINTER)), '第二个用户的指针去掉了');
+  assert.equal(fs.readFileSync(path.join(a.data, 'accounts.json'), 'utf8'), '[{"id":"shared"}]');
+  assert.equal(owner(a).home, a.home);
+  // 以后还是 C，第一个用户还是 D
+  assert.equal(win(b).dir, b.home);
+  assert.equal(win(a).dir, a.data);
+});
+
+test('记号坏了、指针是自己的：照旧用 D，重写成自己；新装的用户不认坏记号', () => {
+  const a = box({ root: true });
+  win(a);
+  fs.writeFileSync(path.join(a.data, dd.OWNER), '{oops');
+  assert.equal(win(otherUser(a)).dir, otherUser(a).home);
+  assert.equal(win(a).dir, a.data);
+  assert.equal(owner(a).home, a.home);
+});
+
+test('老电脑搬家：搬过去的 data 带着自己的记号；别人搬不进来', () => {
+  const b = box({ root: true, old: true });
+  const m = dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, true);
+  assert.equal(owner(b).home, b.home);
+  assert.equal(win(b).dir, b.data);
+  const c = otherUser(b, 'C2');
+  writeOld(c.home);
+  const sc = dd.apply(fakeApp(c.home), { platform: 'win32', root: c.root });
+  assert.equal(sc.dir, c.home);
+  assert.equal(dd.shouldMove(sc), false);
+});
+
+test('老电脑：D:\\WAswitch\\data 是空的、只有自己的记号 → 照样搬', () => {
+  const b = box({ root: true, old: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, dd.OWNER), JSON.stringify({ home: b.home }));
+  const s = dd.apply(fakeApp(b.home), { platform: 'win32', root: b.root });
+  assert.equal(dd.shouldMove(s), true);
+  assert.equal(dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait }).ok, true);
+});
+
+test('老电脑复制的那几分钟里另一个用户第一次打开：他用 C，不会被搬家删掉刚写的东西', () => {
+  const a = box({ root: true, old: true });
+  const b = otherUser(a);
+  let rb;
+  const cp = (from, to, o) => { rb = win(b); fs.cpSync(from, to, o); };
+  const m = dd.move({ home: a.home, root: a.root, cp, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, true);
+  assert.equal(rb.dir, b.home, '复制期间 D:\\WAswitch\\data 已经记着 A');
+  assert.equal(owner(a).home, a.home);
+  assert.equal(win(a).dir, a.data);
+});
+
+test('搬家没成：把这次记上的记号拿掉，别的用户以后还能用这个空文件夹', () => {
+  const a = box({ root: true, old: true });
+  const m = dd.move({ home: a.home, root: a.root, statfs: () => ({ bavail: 1, bsize: 1 }), wait: noWait });
+  assert.equal(m.ok, false);
+  const m2 = dd.move({ home: a.home, root: a.root, cp: () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); }, statfs: bigDisk, wait: noWait });
+  assert.equal(m2.reason, 'copy');
+  assert.ok(!fs.existsSync(path.join(a.data, dd.OWNER)), '没留下记号');
+  const b = otherUser(a);
+  assert.equal(win(b).dir, b.data);
+});
+
+test('D 盘那份是别人的：界面和通知有一句说明；D 盘打不开的那句不变', () => {
+  assert.match(dd.fallbackText({ shared: 'D:\\WAswitch\\data' }), /另一个 Windows 用户/);
+  assert.match(dd.fallbackText({ fallback: true, wanted: 'D:\\WAswitch\\data' }), /D 盘打不开/);
+  assert.equal(dd.fallbackText({}), '');
+});
+
+test('home 大小写不同也算同一个用户（Windows 路径不分大小写）', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, dd.OWNER), JSON.stringify({ home: b.home.toUpperCase() }));
+  assert.equal(dd.ownerOf(b.data, b.home), 'mine');
+});
+
 test('waitForExit：进程不在就马上返回', () => {
   const t = Date.now();
   assert.equal(dd.waitForExit(2 ** 22 + 12345, 2000), true);

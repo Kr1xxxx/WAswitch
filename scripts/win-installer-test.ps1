@@ -1,6 +1,7 @@
 # Windows 安装包实测（只在 CI 的 windows-latest 上跑，见 .github/workflows/installer-win.yml）。
 # 验证：第一次安装默认装到 D:\WAswitch\app；自动更新（--updated /S）原地装、不动 D:\WAswitch 里的译文；
-# 卸载只删程序；已经装在 C 盘的老电脑更新后程序不挪；向导（有页面）安装同样装到 D 盘。
+# 卸载只删程序；已经装在 C 盘的老电脑更新后程序不挪；向导（有页面）安装同样装到 D 盘；
+# 同一台电脑另一个用户已经装在 D:\WAswitch\app 时装到 C 盘。
 # 用法：pwsh scripts/win-installer-test.ps1 <安装包.exe>
 param([Parameter(Mandatory = $true)][string]$Setup)
 $ErrorActionPreference = 'Stop'
@@ -154,4 +155,22 @@ Uninstall $CApp
 Run '/S /D=D:\Elsewhere\WAswitch'
 Check (Test-Path 'D:\Elsewhere\WAswitch\WAswitch.exe') '/D= 指定的位置优先'
 Uninstall 'D:\Elsewhere\WAswitch'
+
+# 7. 同一台电脑另一个 Windows 用户已经装在 D:\WAswitch\app（这个用户的注册表里没有）：装到 C，不碰别人的
+Check ($null -eq (InstallLocation)) '开始时这个用户没装过'
+New-Item -ItemType Directory -Force $DApp | Out-Null
+Set-Content "$DApp\WAswitch.exe" 'other-user'
+Set-Content "$DApp\Uninstall WAswitch.exe" 'other-user'
+Run '/S'
+StopApp
+Check (Test-Path "$CApp\WAswitch.exe") '别人装过 D 盘：这个用户装在 C 盘'
+Check ((InstallLocation) -eq $CApp) '别人装过 D 盘：注册表位置是 C 盘'
+Check ((Get-Content "$DApp\WAswitch.exe" -Raw).Trim() -eq 'other-user') '别人的 D:\WAswitch\app 没被覆盖'
+Run '--updated /S'
+StopApp
+Check (Test-Path "$CApp\WAswitch.exe") '这个用户更新后还在 C 盘'
+Check ((Get-Content "$DApp\WAswitch.exe" -Raw).Trim() -eq 'other-user') '更新也没碰别人的'
+Uninstall $CApp
+Check ((Get-Content "$DApp\WAswitch.exe" -Raw).Trim() -eq 'other-user') '卸载这个用户的，别人的还在'
+Remove-Item $DApp -Recurse -Force
 Write-Host '全部通过'
