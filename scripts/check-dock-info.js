@@ -212,6 +212,14 @@ app.whenReady().then(async () => {
   await wait(60); await frames(2);
   assert.strictEqual((await P()).count, 0, 'Esc 关');
   assert.strictEqual(await ev(`document.activeElement === document.querySelector(${JSON.stringify(btnSel('h12'))})`), true, 'Esc 关掉后焦点回到那个时间上');
+  // 改译文时按 Esc 只取消修改，不关框
+  await click(await rectOf(btnSel('h12')));
+  assert.strictEqual((await P()).count, 1);
+  await ev(`(() => { const ta = document.createElement('textarea'); ta.className = 'dk-out'; const box = document.createElement('div'); box.className = 'dk-edit'; box.append(ta); document.body.append(box); ta.focus(); ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); box.remove(); })()`);
+  await frames(2);
+  assert.strictEqual((await P()).count, 1, '改译文时按 Esc 不关框');
+  await click({ x: header.x - 40, y: header.y });
+  assert.strictEqual((await P()).count, 0);
   // 这条开始重翻（翻译中）：关；翻好了也不自己再开
   await click(await rectOf(btnSel('h12')));
   assert.strictEqual((await P()).count, 1);

@@ -486,6 +486,7 @@ document.addEventListener('pointerdown', (e) => {
 }, true);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || dk.info === null) return;
+  if (e.target.closest && e.target.closest('.dk-edit')) return; // 改译文时按 Esc 是取消修改，不顺带关框
   const row = [...document.querySelectorAll('.dk-item[data-h]')].find((r) => r.dataset.h === dk.info);
   const btn = row ? row.querySelector('.dk-time-btn') : null;
   dockInfoClose();
