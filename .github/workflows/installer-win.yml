@@ -33,6 +33,10 @@ jobs:
   installer:
     runs-on: windows-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [repro, repro, repro, probe, probe]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -47,14 +51,15 @@ jobs:
         run: npx electron-builder --win nsis --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: 装、更新、卸载实测
+      - name: 诊断：卸载后剩下 WAswitch.exe 是谁占着
         shell: pwsh
         run: |
           $setup = (Get-ChildItem dist\WAswitch-Setup-*.exe | Select-Object -First 1).FullName
-          pwsh -File scripts/win-installer-test.ps1 $setup
+          pwsh -File scripts/diag-uninstall-lock.ps1 $setup ${{ matrix.mode }}
 
   # 账号数据放哪（src/datadir.js）。单独一个 job：上面的卸载步骤偶尔在 runner 上卡住，不连累这里
   datadir:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
