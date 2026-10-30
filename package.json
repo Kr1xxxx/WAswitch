@@ -49,6 +49,7 @@
     "check:dock-info": "electron scripts/check-dock-info.js",
     "check:dock-draft": "electron scripts/check-dock-draft.js",
     "check:add-menu": "electron scripts/check-add-menu.js",
+    "check:page-menu": "electron scripts/check-page-menu.js",
     "check:topbar": "electron scripts/check-topbar-fit.js",
     "check:container": "electron scripts/check-container-layout.js",
     "check:sel-translate": "electron scripts/check-sel-translate.js",
