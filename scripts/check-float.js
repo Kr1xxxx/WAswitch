@@ -101,6 +101,150 @@ async function core() {
   await catchUpOlder();
   await parallelAuto();
   await lidSwitch();
+  await translateVia();
+}
+
+// 点译文右下角的时间显示这条是什么时候翻的、用了多久、哪个模型翻的（shen 2026-10-30）：
+// 翻好的一条记着 via；存盘后切回、重启（ingest 命中、restore 补回来）显示的还是当时的，不是这次打开的时间；
+// 手动改不动 via，纠错换成纠错那次，改过再纠错采用后才换；以前存的记录没有 via；viewOf 只给 5 项；语音只算翻译这一步
+async function translateVia() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-via-'));
+  let now = Date.parse('2026-10-30T20:45:00Z');
+  const make = () => {
+    const store = new TrStore(dir);
+    const fc = new FloatCore({
+      now: () => now,
+      store,
+      transcribe: async () => { now += 5000; return { text: 'Hallo, ist das noch lieferbar?', seconds: 3 }; },
+      translate: async (text, o = {}) => {
+        now += o.fix ? 3000 : 1234;
+        return o.fix ? { text: `纠:${text}`, provider: '腾讯混元', model: 'hy-mt2-plus', warn: [] } : { text: `译:${text}`, provider: '智谱', model: 'glm-4-flash', warn: [] };
+      },
+    });
+    return { store, fc };
+  };
+  const opts = { auto: true, dailyCap: 500 };
+  const chat = '4915112345678@c.us';
+  const m = (n, text) => ({ id: `false_${chat}_VIA${n}`, out: false, text, t: { h: 20, mi: n, at: now } });
+  const get = (fc, n) => fc.viewOf('V').items.find((x) => x.h === msgHash('V', `false_${chat}_VIA${n}`));
+  let { store, fc } = make();
+  const msgs = [m(1, 'Guten Tag, haben Sie die Perücke in Blond?'), m(2, 'Wie lange dauert der Versand?'), m(3, 'Kann ich per PayPal bezahlen?')];
+  fc.ingest('V', { title: 'Lukas', msgs }, opts);
+  await sleep(30);
+  // 1. 翻好的一条有 via：at 是翻好的时间，ms 按假时钟，只有 5 项
+  const v1 = get(fc, 1).via;
+  assert.deepStrictEqual(v1, { at: v1.at, ms: 1234, name: '智谱', model: 'glm-4-flash', fix: false });
+  assert(v1.at <= now && v1.at >= Date.parse('2026-10-30T20:45:00Z') + 1234, `at 是翻好的时间 ${v1.at}`);
+  const allKeys = fc.viewOf('V').items.flatMap((x) => Object.keys(x.via));
+  assert(allKeys.every((k) => ['at', 'ms', 'name', 'model', 'fix'].includes(k)), `viewOf 的 via 只有那 5 项 ${allKeys}`);
+  assert(!JSON.stringify(fc.viewOf('V').items.map((x) => x.via)).includes('c.us'), 'via 里没有号码和消息编号');
+  const v2 = get(fc, 2).via;
+  const v3 = get(fc, 3).via;
+  assert(v2.at > v1.at && v3.at > v2.at, '每条是各自翻好的时间');
+  // 2. 手动改：via 不变，也不改变存盘里的 via
+  assert(fc.edit('V', get(fc, 1).h, '我改的'));
+  assert.deepStrictEqual(get(fc, 1).via, v1, '手动改不动 via');
+  assert.strictEqual(get(fc, 1).edited, true);
+  // 3. 纠错：换成纠错那次，fix: true
+  now += 60000;
+  assert(fc.manual('V', get(fc, 2).h, true));
+  await sleep(30);
+  const f2 = get(fc, 2);
+  assert.strictEqual(f2.fixed, true);
+  assert.deepStrictEqual(f2.via, { at: f2.via.at, ms: 3000, name: '腾讯混元', model: 'hy-mt2-plus', fix: true });
+  assert(f2.via.at > v2.at);
+  // 改过再纠错：结果只当建议，via 还是原来的；采用后才换成纠错那次
+  assert(fc.manual('V', get(fc, 1).h, true));
+  await sleep(30);
+  assert.strictEqual(get(fc, 1).suggest, '纠:Guten Tag, haben Sie die Perücke in Blond?');
+  assert.deepStrictEqual(get(fc, 1).via, v1, '建议还没采用，via 不变');
+  assert(fc.suggestion('V', get(fc, 1).h, true));
+  const f1 = get(fc, 1);
+  assert.deepStrictEqual(f1.via, { at: f1.via.at, ms: 3000, name: '腾讯混元', model: 'hy-mt2-plus', fix: true });
+  assert(f1.via.at > v1.at);
+  // 改过再纠错，不用建议：via 还是原来的；再采用不了（建议已清）
+  assert(fc.edit('V', get(fc, 3).h, '我也改了'));
+  assert(fc.manual('V', get(fc, 3).h, true));
+  await sleep(30);
+  assert.strictEqual(get(fc, 3).suggest, '纠:Kann ich per PayPal bezahlen?');
+  assert(fc.suggestion('V', get(fc, 3).h, false));
+  assert.deepStrictEqual(get(fc, 3).via, v3, '不用建议，via 还是原来的');
+  const before = ['1', '2', '3'].map((n) => get(fc, Number(n)).via);
+  // 4. 存盘后重启：ingest 命中的 via 一样，不是这次打开的时间
+  store.flush();
+  now += 3600000;
+  ({ store, fc } = make());
+  fc.ingest('V', { title: 'Lukas', msgs }, opts);
+  await sleep(30);
+  assert.deepStrictEqual([1, 2, 3].map((n) => get(fc, n).via), before, '重启后显示当时存下的，不是这次的时间');
+  // 重启后再手动改：via 照旧
+  assert(fc.edit('V', get(fc, 2).h, '重启后改的'));
+  assert.deepStrictEqual(get(fc, 2).via, before[1]);
+  store.flush();
+  // 5. 以前存的记录没有 via：没改过的给 { at: 记录时间, fix }，改过的给 null
+  const file = path.join(dir, 'V', fs.readdirSync(path.join(dir, 'V')).find((f) => f !== '_chats.json'));
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const recs = Object.entries(data).filter(([k, r]) => /^[0-9a-f]{24}$/.test(k) && r && r.tr);
+  assert.strictEqual(recs.length, 3);
+  for (const [, r] of recs) { assert(r.via, '新记录带 via'); delete r.via; }
+  fs.writeFileSync(file, JSON.stringify(data));
+  ({ store, fc } = make());
+  fc.ingest('V', { title: 'Lukas', msgs }, opts);
+  await sleep(30);
+  const recOf = (n) => Object.values(data).find((r) => r && r.text === msgs[n - 1].text);
+  assert.deepStrictEqual(get(fc, 1).via, { at: recOf(1).at, fix: true }, '老记录没改过（采用了纠错）：只有时间，是纠错时间');
+  assert.strictEqual(get(fc, 2).via, null, '老记录手动改过：at 是改的时间，不给');
+  assert.strictEqual(get(fc, 3).via, null, '老记录手动改过：不给');
+  assert.strictEqual(get(fc, 1).edited, false);
+  // 老记录再手动改一次（没传 via）：保留记录里原来的（没有就还是没有）
+  // 6. 补回来（restore）：聊着聊着攒到 26 条，重启后读页面只读 20 条，更早的 6 条按记录补回来，via 一样
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir);
+  ({ store, fc } = make());
+  const rchat = '123456789012345@lid';
+  const conv = Array.from({ length: 26 }, (_, i) => ({ id: `false_${rchat}_VIA${100 + i}`, out: false, text: `Message ${i} about the lace front wig`, t: { h: 9, mi: i, at: 1700000000000 + i * 60000 } }));
+  const read = (n) => ({ title: 'Emma', bottom: true, msgs: conv.slice(0, n).slice(-20) });
+  for (let n = 1; n <= 26; n += 1) { now += 61000; fc.ingest('R', read(n), opts); await sleep(2); } // 每分钟最多自动翻 20 条：假时钟走快点
+  await sleep(30);
+  const live = fc.viewOf('R').items;
+  assert.strictEqual(live.length, 26);
+  assert(live.every((x) => x.state === 'done' && x.via && x.via.ms === 1234));
+  assert.strictEqual(new Set(live.map((x) => x.via.at)).size, 26, '每条的翻译时间不同');
+  store.flush();
+  now += 7200000;
+  ({ store, fc } = make());
+  fc.ingest('R', read(26), opts);
+  await sleep(30);
+  const again = fc.viewOf('R').items;
+  assert.strictEqual(again.length, 26, '更早的 6 条补回来了');
+  assert.deepStrictEqual(again.map((x) => x.via), live.map((x) => x.via), '补回来的和读到的 via 都是当时存下的');
+  // 7. 语音：转文字（5 秒）不算在用时里，只算翻译这一步
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir);
+  ({ store, fc } = make());
+  const vid = `false_${chat}_VOICE1`;
+  fc.ingest('V', { title: 'Lukas', msgs: [{ id: vid, out: false, text: '', voice: 3, t: { h: 20, mi: 59, at: now } }] }, opts);
+  await sleep(50);
+  const vi = fc.viewOf('V').items[0];
+  assert.strictEqual(vi.state, 'done');
+  assert.deepStrictEqual(vi.via, { at: vi.via.at, ms: 1234, name: '智谱', model: 'glm-4-flash', fix: false }, '语音的用时只算翻译');
+  store.flush();
+  ({ store, fc } = make());
+  fc.ingest('V', { title: 'Lukas', msgs: [{ id: vid, out: false, text: '', voice: 3, t: { h: 20, mi: 59, at: now } }] }, opts);
+  await sleep(30);
+  assert.deepStrictEqual(fc.viewOf('V').items[0].via, vi.via, '语音重启后显示当时存下的');
+  // 8. 翻译失败、对方说忙的那次不记 via
+  const bad = new FloatCore({ now: () => now, translate: async () => ({ error: '翻译失败', kind: 'network' }) });
+  bad.ingest('E', { title: 'x', msgs: [m(9, 'Hallo, wie geht es Ihnen?')] }, opts);
+  await sleep(20);
+  assert.strictEqual(bad.viewOf('E').items[0].state, 'error');
+  assert.strictEqual(bad.viewOf('E').items[0].via, null);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('译文时间详情（via）自检通过');
 }
 
 // WhatsApp 把同一个对话的编号从手机号（@c.us）换成隐私编号（@lid）：data-id 中间那段变，消息编号不变。

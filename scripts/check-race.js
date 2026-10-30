@@ -53,6 +53,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   let t0 = Date.now();
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
   assert.strictEqual(r.text, 'HY');
+  assert.deepStrictEqual([r.provider, r.model], [tr.provider(hy).name, 'hy-mt2-plus'], '写先翻出来的那家（点译文时间显示）');
   assert(Date.now() - t0 < 150, '不等慢的那个');
   await new Promise((ok) => setTimeout(ok, 5));
   assert(log.find((x) => x.host === 'open.bigmodel.cn').aborted, '慢的那个被取消');
@@ -61,6 +62,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   plan['tokenhub.tencentmaas.com'] = { ms: 20, status: 500 };
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
   assert.strictEqual(r.text, 'ZP');
+  assert.deepStrictEqual([r.provider, r.model], [tr.provider(zp).name, 'glm-4-flash']);
   // 都失败（服务器出错）：用付费的备用，一次一条
   plan['open.bigmodel.cn'] = { ms: 20, status: 500 };
   let paidCalls = 0;
@@ -71,6 +73,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   const rs = await Promise.all([1, 2, 3].map(() => tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid })));
   assert.deepStrictEqual(rs.map((x) => x.text), ['DL', 'DL', 'DL']);
   assert(rs.every((x) => x.fallback));
+  assert(rs.every((x) => x.provider === 'DeepL' && x.model === ''), '换到备用的，写备用');
   assert.strictEqual(paidCalls, 3);
   assert.strictEqual(paidMax, 1, '付费的不同时发');
   // 付费那条通道一直等不到：返回 busy，让调用方过一会儿重排，不报免费服务商的错

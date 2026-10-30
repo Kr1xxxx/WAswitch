@@ -927,7 +927,7 @@ class Translator {
     return cleanOutput(out);
   }
 
-  // { text, mode, target, source } -> { text, provider, ms, warn[] } 或 { error, kind }
+  // { text, mode, target, source } -> { text, provider, model, ms, warn[] } 或 { error, kind }
   // fix：这是纠错，有纠错专用服务商就先用它（备用照旧）
   // providerId：指定用哪个服务商（翻译页上用户自己选的），只用它，不换备用
   // onWait(ms)：太忙要等着重试时告诉界面还要等多久（按钮上倒计时），等完再调一次 onWait(0)
@@ -996,7 +996,7 @@ class Translator {
             }
           }
           this.stats.ok += 1;
-          return { text: out, provider: p.name, fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
+          return { text: out, provider: p.name, model: p.model || '', fallback: i > 0, ms: Date.now() - started, warn: extraContacts(text, out) };
         } catch (e) {
           const err = e && e.kind ? e : { kind: 'other', text: '翻译失败' };
           // 备用自己配置不对（密钥、地址、模型、语言）：还是报默认服务商的错

@@ -510,6 +510,18 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-time { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dk-voice { flex: none; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin: 2px 0 0 -2px; color: var(--slate-11); }
 .dk-item.last .dk-time { color: var(--green-11); }
+/* 能点的时间（译文记着翻译情况）：看上去和普通时间一样，点的范围放大一圈但不改排版 */
+.dk-time-btn { pointer-events: auto; padding: 2px 4px; margin: -2px -4px; border: 0; border-radius: var(--r-s); background: transparent; font: inherit; font-size: var(--fs-s); cursor: pointer; transition: color var(--fx) var(--fx-ease); }
+.dk-time-btn:hover, .dk-time-btn.open { color: var(--slate-12); }
+.dk-item.last .dk-time-btn:hover, .dk-item.last .dk-time-btn.open { color: var(--green-12); }
+.dk-time-btn:focus-visible { outline: 2px solid var(--focus); }
+/* 点时间弹出的翻译详情：挂在 .dk-listbox 里，位置由 dock.js 的 dockInfoPlace 算 */
+.dk-info { position: absolute; z-index: 3; width: max-content; max-width: calc(100% - 16px); padding: 8px 12px; border-radius: var(--r-m); border: var(--hair) solid var(--slate-7); background: var(--slate-1); box-shadow: 0 4px 12px var(--slate-a3); font-size: var(--fs-s); line-height: 16px; }
+.dk-info[hidden] { display: none; }
+.dk-info dl { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 4px 12px; margin: 0; }
+.dk-info dt { color: var(--slate-11); white-space: nowrap; }
+.dk-info dd { margin: 0; color: var(--slate-12); overflow-wrap: anywhere; }
+.dk-info dd.num { font-variant-numeric: tabular-nums; }
 .dk-spacer { display: inline-block; width: 52px; height: 1px; }
 .dk-item .dk-edited, .dk-item .dk-fixed { font-size: var(--fs-s); padding: 0 4px; line-height: 16px; }
 .dk-item:has(.dk-edited, .dk-fixed) .dk-spacer { width: 112px; }
