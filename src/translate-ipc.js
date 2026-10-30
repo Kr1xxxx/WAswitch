@@ -384,7 +384,7 @@ function setupTranslateIpc(ctx) {
         // 没打开对话：不算失败，0.3 秒后再看（没有 #main，页面变化等不到，用户一点开对话要马上显示）
         // 还在二维码页没登录：不算失败，3 秒后再看
         floatFails = 0;
-        delay = r.why === 'nochat' ? 300 : 3000;
+        delay = r.why === 'nochat' && !target.lite ? 300 : 3000; // 轻量号靠 liteChanged 唤醒，不用轮询
         if (floatReadable !== r.why) { floatReadable = r.why; pushFloat(); }
       } else {
         // 读不到，或对话里有消息行但一条都认不出来：连续 3 次就放慢到 30 秒一次，并提示
