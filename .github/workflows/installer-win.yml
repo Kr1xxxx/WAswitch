@@ -12,6 +12,7 @@ on:
       - 'scripts/win-datadir-test.ps1'
       - 'scripts/check-datadir*.js'
       - 'src/datadir.js'
+      - 'src/main.js'
       - '.github/workflows/installer-win.yml'
   push:
     branches: [main]
@@ -22,6 +23,7 @@ on:
       - 'scripts/win-datadir-test.ps1'
       - 'scripts/check-datadir*.js'
       - 'src/datadir.js'
+      - 'src/main.js'
       - '.github/workflows/installer-win.yml'
 
 permissions:

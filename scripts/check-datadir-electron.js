@@ -6,7 +6,8 @@
 // 2. 搬：datadir.move（和 --move-data 那次启动一样）
 // 3. 读（新版本：datadir.apply 在 ready 之前把 userData 指到 D）：三样都读得出来，safeStorage 解得开；C 盘没被 Chromium 写新东西
 // 另外：新装的电脑 Chromium 直接写在 D；D 盘打不开时用 C 启动
-const { spawnSync } = require('child_process');
+// 搬家那次启动（--move-data=<旧 pid>）用真的 Electron 单实例锁：旧进程一直占着锁 → 放弃搬家并隐藏重开；旧进程晚退出 → 等到它退出再搬
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -34,6 +35,62 @@ if (!PHASE) {
     if (!m) { console.error(out); throw new Error(`${phase} 没有结果（退出码 ${r.status}）`); }
     return JSON.parse(m[1]);
   };
+
+
+  // ---------- 搬家那次启动的单实例锁（真的 Electron 锁；hold = 上一个 WAswitch，take = 带 --move-data 的这一次） ----------
+  const electronBin = require('electron');
+  const spawnPhase = (phase, extra) => spawn(electronBin, ['--no-sandbox', __filename], {
+    env: { ...process.env, DD_PHASE: phase, ...extra }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const collect = (child) => new Promise((resolve, reject) => {
+    let out = '';
+    const t = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`超时\n${out}`)); }, 90000);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('exit', () => {
+      clearTimeout(t);
+      const m = out.match(/DD_RESULT (.*)/);
+      if (m) resolve(JSON.parse(m[1])); else reject(new Error(`没有结果\n${out}`));
+    });
+  });
+  const startHold = (lockHome, holdMs) => new Promise((resolve, reject) => {
+    const child = spawnPhase('hold', { DD_HOME: lockHome, DD_HOLD_MS: String(holdMs) });
+    let out = '';
+    const t = setTimeout(() => reject(new Error(`hold 没有拿到锁\n${out}`)), 60000);
+    const onData = (d) => { out += d; if (out.includes('DD_HELD')) { clearTimeout(t); resolve(child); } };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.on('exit', () => { if (!out.includes('DD_HELD')) { clearTimeout(t); reject(new Error(`hold 退出了\n${out}`)); } });
+  });
+  async function lockScenarios(b) {
+    // 1. 旧进程一直占着锁：这次放弃搬家，隐藏重开（不带 --move-data），自己退出
+    const h1 = path.join(b, 'lock1');
+    fs.mkdirSync(h1, { recursive: true });
+    const old1 = await startHold(h1, 0);
+    const done1 = new Promise((r) => old1.on('exit', r));
+    const t1 = await collect(spawnPhase('take', { DD_HOME: h1, DD_MOVE_PID: String(old1.pid), DD_WAIT_MS: '1500' }));
+    assert.equal(t1.isPrimary, false, '旧进程还占着锁：这次不是主实例');
+    assert.equal(t1.movingData, false, '不搬家');
+    assert.equal(t1.relaunchCalls.length, 1, '重开了一次');
+    assert.deepEqual(t1.relaunchCalls[0], ['--hidden'], '普通方式隐藏重开，不带 --move-data');
+    assert.deepEqual(t1.exitCalls, [0]);
+    old1.kill('SIGKILL');
+    await done1;
+    console.log('ok 旧进程一直不退：放弃搬家，隐藏重开');
+
+    // 2. 旧进程 2 秒后才退出（比等待的下限晚）：等到它退出，拿到锁，搬家，不重开
+    const h2 = path.join(b, 'lock2');
+    fs.mkdirSync(h2, { recursive: true });
+    const old2 = await startHold(h2, 2500);
+    const t0 = Date.now();
+    const t2 = await collect(spawnPhase('take', { DD_HOME: h2, DD_MOVE_PID: String(old2.pid), DD_WAIT_MS: '60000' }));
+    assert.equal(t2.isPrimary, true, '旧进程退出后拿到锁');
+    assert.equal(t2.movingData, true, '照常搬家');
+    assert.equal(t2.relaunchCalls.length, 0);
+    assert.deepEqual(t2.exitCalls, []);
+    assert.ok(Date.now() - t0 < 50000, '不是傻等到期限');
+    console.log('ok 旧进程晚退出：等到它退出再搬家');
+  }
 
   const w = run('write');
   assert.equal(w.ok, true, JSON.stringify(w));
@@ -104,9 +161,38 @@ if (!PHASE) {
     assert.ok(!fs.existsSync(path.join(base, 'nope')), '没有建 D:\\WAswitch');
     console.log('ok 没有 D 盘：全在 C');
 
+    await lockScenarios(base);
+
     fs.rmSync(base, { recursive: true, force: true, maxRetries: 5 });
     console.log('check-datadir-electron: 全部通过');
   }).catch((e) => { console.error(e); process.exit(1); });
+} else if (PHASE === 'hold' || PHASE === 'take') {
+  // ---------- Electron 里：单实例锁 ----------
+  const { app } = require('electron');
+  const dd = require('../src/datadir');
+  app.setPath('userData', process.env.DD_HOME); // 两边用同一个 userData，锁才是同一把
+  const out = (tag, obj) => process.stderr.write(`${tag} ${JSON.stringify(obj)}\n`);
+  app.on('window-all-closed', () => {});
+  if (PHASE === 'hold') {
+    if (!app.requestSingleInstanceLock()) { out('DD_RESULT', { ok: false }); app.exit(1); }
+    app.on('second-instance', () => {}); // 对方来敲门，不动
+    process.stderr.write('DD_HELD\n');
+    setInterval(() => {}, 1000);
+    const ms = Number(process.env.DD_HOLD_MS) || 0;
+    if (ms) setTimeout(() => app.exit(0), ms);
+  } else {
+    const relaunchCalls = [];
+    const exitCalls = [];
+    const fake = {
+      requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
+      relaunch: (o) => relaunchCalls.push(o.args),
+      exit: (c) => exitCalls.push(c),
+    };
+    const argv = ['/x/WAswitch.exe', `--move-data=${process.env.DD_MOVE_PID}`, '--hidden'];
+    const r = dd.takeLock(fake, argv, true, { ms: Number(process.env.DD_WAIT_MS) });
+    out('DD_RESULT', { ...r, relaunchCalls, exitCalls });
+    app.exit(0);
+  }
 } else {
   // ---------- Electron 里 ----------
   const { app, session, safeStorage, BrowserWindow } = require('electron');

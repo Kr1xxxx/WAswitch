@@ -457,6 +457,45 @@ const updatesDir = path.join(home, 'updates');
   await u.install();
   check(installFailedCalls === 1 && u.state.status === 'error' && !u.installing, `安装出错时调用恢复并记为失败（${u.state.lastResult}）`);
 
+  // 设置页点「重启」：Windows 上有下好的更新时走 install()（quitAndInstall(true, true) = 静默装 + 装完 --force-run 重新打开），
+  // 不能自己 relaunch + quit（退出时 autoInstallOnAppQuit 静默装，没有 --force-run，装完软件就不再打开）
+  {
+    const relaunchSrc = (mainSrc.match(/async function relaunchApp\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
+    check(/await updater\.restartWithUpdate\(\)/.test(relaunchSrc) && relaunchSrc.indexOf('restartWithUpdate') < relaunchSrc.indexOf('app.relaunch()'),
+      'main.js：relaunchApp 先看有没有下好的更新，没有才自己 relaunch');
+    const run = async (setup) => {
+      const w = make();
+      w.mac = false;
+      const calls = [];
+      w.updater = { quitAndInstall: (...a) => calls.push(a) };
+      setup(w);
+      const handled = await w.restartWithUpdate();
+      return { handled, calls, w };
+    };
+    let r = await run((w) => w.set({ status: 'downloaded', version: '0.3.0', manual: false }));
+    check(r.handled === true && r.calls.length === 1 && r.calls[0][0] === true && r.calls[0][1] === true,
+      '重启时有下好的更新：走 quitAndInstall(静默, 装完重新打开)，不再自己 relaunch');
+    check(r.w.installing, '重启时有下好的更新：进入安装状态（30 秒内没退出会恢复）');
+    // 已经在装了：不再装第二次，也不要再自己 relaunch
+    r.calls.length = 0;
+    check(await r.w.restartWithUpdate() === true && r.calls.length === 0, '已经在安装：不重复调用，调用方也不再 relaunch');
+    r = await run(() => {});
+    check(r.handled === false && r.calls.length === 0, '没有更新：返回 false，调用方照常 relaunch');
+    r = await run((w) => w.set({ status: 'downloading', version: '0.3.0', manual: false }));
+    check(r.handled === false && r.calls.length === 0, '更新还在下载：返回 false，照常 relaunch');
+    r = await run((w) => w.set({ status: 'downloaded', version: '0.3.0', manual: true }));
+    check(r.handled === false && r.calls.length === 0, 'Mac 手动安装：返回 false，照常 relaunch');
+    // 安装没启动（quitAndInstall 出错）：返回 false，调用方自己 relaunch，软件照样重新打开
+    {
+      const w = make();
+      w.mac = false;
+      w.updater = { quitAndInstall() { throw new Error('安装包被删了'); } };
+      w.set({ status: 'downloaded', version: '0.3.0', manual: false });
+      installFailedCalls = 0;
+      check(await w.restartWithUpdate() === false && installFailedCalls === 1 && !w.installing, '安装没启动：恢复运行并返回 false，调用方照常 relaunch');
+    }
+  }
+
   fs.rmSync(home, { recursive: true, force: true });
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);
