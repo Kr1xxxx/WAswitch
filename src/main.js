@@ -107,6 +107,7 @@ log.init((e) => {
 });
 for (const m of moveLog) console.log(m);
 if (dataStart.fallback) console.warn(`D 盘打不开（${dataStart.wanted}），这次用 C 盘的账号数据启动`);
+else if (dataStart.shared) console.warn(`${dataStart.shared} 是这台电脑另一个 Windows 用户的账号数据，不再共用，改用 C 盘`);
 else if (dataStart.dir !== dataStart.home) console.log(`账号数据在 ${dataStart.dir}`);
 if (movingData) {
   const args = process.argv.slice(1).filter((a) => !a.startsWith('--move-data') && a !== '--hidden');

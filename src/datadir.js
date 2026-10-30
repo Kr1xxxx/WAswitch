@@ -12,14 +12,20 @@
 //   有指针、打不开（D 盘没接上、BitLocker 没解锁）→ 这次用 C 盘，指针不改，D 回来自动回去
 //   没指针、C 盘没有旧数据、D:\WAswitch 已经存在且能写 → 用 D:\WAswitch\data，写指针（新装的电脑）
 //   其他 → C 盘（老电脑等空闲时搬一次，见 move()）
+//
+// 同一台电脑几个 Windows 用户共用一个 D:\WAswitch：D:\WAswitch\data 里放 owner.json，记着它是谁的（那个用户的 home）。
+//   只用自己的、或者空的（顺手记上自己）；别人的、或者有账号数据却没记号的（1.0.1 留下的、不知道是谁的）都不用，留在 C 盘。
+//   1.0.1 的用户指针已经指到 D、还没有记号：第一次启动补记成自己。记号已经是别人的：不再共用，去掉指针回 C 盘。
 // 软件自己不建 D:\WAswitch：只有安装包确认过 D 盘是本机硬盘才建（和译文的规则一样，见 trstore.pickDir）。
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { writeJsonAtomic } = require('./atomic');
 
 const ROOT = 'D:\\WAswitch';
 const POINTER = 'data-dir.json';
 const STATE = 'data-move.json';
+const OWNER = 'owner.json';
 // 一直留在 home、不搬也不删的
 const KEEP = new Set([POINTER, STATE, 'modules', 'mcp.json', 'mcp-token.json', 'mcp-ai-log.json', 'Crashpad']);
 // Chromium 自己会重建的缓存，和正在运行的进程占着的锁文件：不搬
@@ -59,6 +65,40 @@ function writePointer(home, p) { fs.mkdirSync(home, { recursive: true }); writeJ
 function readState(home) { const s = readJson(path.join(home, STATE)); return { tries: Number(s?.tries) || 0, lastAt: Number(s?.lastAt) || 0, error: s?.error || '' }; }
 function writeState(home, s) { try { fs.mkdirSync(home, { recursive: true }); writeJsonAtomic(path.join(home, STATE), s, 2); } catch { /* 写不了就下次再算 */ } }
 
+// ---------- 这份数据是谁的 ----------
+// 认 home（%APPDATA%\WAswitch）：每个 Windows 用户一个，不会重；user 只是给人看的
+const sameHome = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+function userName() {
+  try { return `${process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\` : ''}${os.userInfo().username}`; } catch { return ''; }
+}
+// 'mine' | 'other' | 'none'（没有记号）| 'broken'（有记号但读不懂）
+function ownerOf(dir, home) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(dir, OWNER), 'utf8'); } catch (e) { return e.code === 'ENOENT' ? 'none' : 'broken'; }
+  let o;
+  try { o = JSON.parse(raw); } catch { return 'broken'; }
+  if (!o || typeof o.home !== 'string' || !o.home) return 'broken';
+  return sameHome(o.home, home) ? 'mine' : 'other';
+}
+const ownerBody = (home) => ({ home, user: userName(), at: new Date().toISOString() });
+// 记成自己的。两个用户同时来：只有先建出文件的那个算（wx），另一个读回来不是自己就返回 false
+function claimOwner(dir, home) {
+  try {
+    fs.writeFileSync(path.join(dir, OWNER), JSON.stringify(ownerBody(home), null, 2), { flag: 'wx' });
+    return true;
+  } catch (e) {
+    if (e.code === 'EEXIST') return ownerOf(dir, home) === 'mine';
+    throw e;
+  }
+}
+// 新装时能不能用这个文件夹：自己的，或者没记号也没账号数据（顺手记上自己）
+function adopt(dir, home) {
+  const who = ownerOf(dir, home);
+  if (who === 'mine') return true;
+  if (who !== 'none' || hasData(dir)) return false;
+  try { return claimOwner(dir, home); } catch { return false; }
+}
+
 // D:\WAswitch 存在，能在里面建 data 并写文件
 function rootUsable(root) {
   if (!isDir(root)) return false;
@@ -67,17 +107,29 @@ function rootUsable(root) {
 }
 
 // 选这次用哪个文件夹。不抛错：任何意外都留在 home（C 盘），软件照常打开
-// 返回 { dir, home, pointer, fallback, wanted, fresh }
+// 返回 { dir, home, pointer, fallback, wanted, fresh, shared }（shared：指针指的是别的用户的数据，这次去掉了指针）
 function resolve({ platform = process.platform, home, root = ROOT } = {}) {
-  const out = { dir: home, home, pointer: null, fallback: false, wanted: '', fresh: false };
+  const out = { dir: home, home, pointer: null, fallback: false, wanted: '', fresh: false, shared: '' };
   if (platform !== 'win32') return out;
   try {
     const pointer = readPointer(home);
     out.pointer = pointer;
     if (pointer) {
-      if (writable(pointer.dir)) { out.dir = pointer.dir; return out; }
+      if (writable(pointer.dir)) {
+        let who = ownerOf(pointer.dir, home);
+        // 1.0.1 的指针还没有记号：补记成自己。和别的用户同时补、被别人抢先 → 当别人的
+        if (who === 'none') { try { who = claimOwner(pointer.dir, home) ? 'mine' : 'other'; } catch { who = 'mine'; } }
+        // 记号坏了：分不清是谁的，照旧用（这是自己指针指的地方），重写成自己
+        else if (who === 'broken') { try { writeJsonAtomic(path.join(pointer.dir, OWNER), ownerBody(home), 2); } catch { /* 下次再写 */ } who = 'mine'; }
+        if (who === 'mine') { out.dir = pointer.dir; return out; }
+        // 别的用户的：不再共用。去掉指针，按没有指针的电脑处理（这次留在 C 盘，那份数据一点不动）
+        try { fs.rmSync(path.join(home, POINTER), { force: true }); } catch { /* 删不掉：下次还会走到这里，结果一样 */ }
+        out.pointer = null;
+        out.shared = pointer.dir;
+        return out;
+      }
       // 指的文件夹不见了，但 D:\WAswitch 在、C 盘也没数据（比如有人删了 data）：重新建，不要永远停在 C 盘
-      if (pointer.dir === dataDirOf(root) && !hasData(home) && rootUsable(root)) { out.dir = pointer.dir; return out; }
+      if (pointer.dir === dataDirOf(root) && !hasData(home) && rootUsable(root) && adopt(pointer.dir, home)) { out.dir = pointer.dir; return out; }
       // 打不开：这次用 C 盘，指针的位置不改。C 盘那份旧数据（如果还没删）这次又被用了，以后不再删它
       out.fallback = true;
       out.wanted = pointer.dir;
@@ -86,6 +138,8 @@ function resolve({ platform = process.platform, home, root = ROOT } = {}) {
     }
     if (hasData(home)) return out; // 老电脑：先留在 C，空闲时再搬
     if (!rootUsable(root)) return out;
+    // 同一台电脑别的用户已经在用 D:\WAswitch\data：不碰，用 C 盘
+    if (!adopt(dataDirOf(root), home)) return out;
     out.dir = dataDirOf(root);
     out.fresh = true;
     try { writePointer(home, { dir: out.dir, cleanC: false }); out.pointer = { dir: out.dir, cleanC: false }; } catch { /* 下次启动 C 盘照样没数据，还会选 D */ }
@@ -95,7 +149,7 @@ function resolve({ platform = process.platform, home, root = ROOT } = {}) {
 
 // 在 app ready 之前调用；只有 Windows 打包版生效。opts 只给自检用
 function apply(app, { platform = process.platform, packaged = app.isPackaged, root = ROOT, home = app.getPath('userData') } = {}) {
-  if (!(packaged && platform === 'win32')) return { dir: home, home, pointer: null, fallback: false, wanted: '', fresh: false, active: false };
+  if (!(packaged && platform === 'win32')) return { dir: home, home, pointer: null, fallback: false, wanted: '', fresh: false, shared: '', active: false };
   const r = resolve({ platform, home, root });
   if (r.dir !== home) {
     app.setPath('userData', r.dir);
@@ -112,7 +166,11 @@ function shouldMove(start, { now = Date.now(), root = start.root || ROOT } = {})
   if (!hasData(start.home)) return false;
   const s = readState(start.home);
   if (s.tries >= MAX_TRIES || now - s.lastAt < RETRY_MS) return false;
-  return rootUsable(root);
+  if (!rootUsable(root)) return false;
+  // D 盘那份是别人的、或者已经有数据：搬了也会被 move() 拒绝，不用为它重启
+  const dest = dataDirOf(root);
+  const who = ownerOf(dest, start.home);
+  return who === 'mine' || (who === 'none' && !hasData(dest));
 }
 
 // 准备重启去搬之前记一次：搬的那次启动要是崩了，也不会反复重启
@@ -193,6 +251,9 @@ function move({ home, root = ROOT, cp = fs.cpSync, statfs = fs.statfsSync, wait 
     if (readPointer(home)) return { ok: false, reason: 'already' };
     if (!hasData(home)) return { ok: false, reason: 'nodata' };
     if (!isDir(root)) return fail('noroot');
+    // 同一台电脑别的用户的（或者记号读不懂）：不碰
+    const who = ownerOf(dest, home);
+    if (who === 'other' || who === 'broken') return fail('owner');
     // D:\WAswitch\data 里已经有账号数据（以前在 D 盘用过）：不覆盖
     if (hasData(dest)) return fail('exists');
     const src = measure(home);
@@ -204,6 +265,8 @@ function move({ home, root = ROOT, cp = fs.cpSync, statfs = fs.statfsSync, wait 
     let got;
     try { got = measure(tmp); } catch (e) { return fail('verify', e); }
     if (got.files !== src.files || got.bytes !== src.bytes) return fail(`verify ${got.files}/${src.files} ${got.bytes}/${src.bytes}`);
+    // 改名之前记上自己，D 盘的 data 一出现就带着记号
+    try { writeJsonAtomic(path.join(tmp, OWNER), ownerBody(home), 2); } catch (e) { return fail('owner', e); }
     // 空的 data 文件夹（安装包或上次 rootUsable 建的）先删掉，才能改名
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e) { return fail('dest', e); }
     try { renameRetry(tmp, dest, wait); } catch (e) { return fail('rename', e); }
@@ -253,4 +316,4 @@ function fallbackText(start) {
   return start && start.fallback ? `D 盘打不开，账号数据在 ${start.wanted}，现在先用 C 盘。接好 D 盘后重启 WAswitch。` : '';
 }
 
-module.exports = { ROOT, POINTER, STATE, KEEP, SKIP, apply, resolve, shouldMove, noteAttempt, move, cleanOld, measure, hasData, readPointer, readState, waitForExit, fallbackText, MAX_TRIES, RETRY_MS };
+module.exports = { ROOT, POINTER, STATE, OWNER, ownerOf, KEEP, SKIP, apply, resolve, shouldMove, noteAttempt, move, cleanOld, measure, hasData, readPointer, readState, waitForExit, fallbackText, MAX_TRIES, RETRY_MS };
