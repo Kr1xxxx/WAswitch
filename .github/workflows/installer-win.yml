@@ -53,7 +53,7 @@ jobs:
           $setup = (Get-ChildItem dist\WAswitch-Setup-*.exe | Select-Object -First 1).FullName
           pwsh -File scripts/win-installer-test.ps1 $setup
 
-  # 账号数据放哪（src/datadir.js）。单独一个 job：上面的卸载步骤偶尔在 runner 上卡住，不连累这里
+  # 账号数据放哪（src/datadir.js）。单独一个 job：两件事互不连累，哪个红一看就知道
   datadir:
     runs-on: windows-latest
     timeout-minutes: 30
