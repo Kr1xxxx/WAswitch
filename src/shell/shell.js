@@ -1329,7 +1329,7 @@ function translatePage(page) {
 function renderPanel(force = false) {
   const show = !!s.panelOpen && !s.locked && s.page === 'account';
   $panel.hidden = !show;
-  if (!show) return;
+  if (!show) { dk.info = null; return; }
   if (!pn.loaded) { pn.loaded = true; panelLoad(); }
   const tab = s.panelTab || 'translate';
   const sig = `${s.activeId}|${tab}|${s.accounts.map((a) => a.id + a.name).join(',')}`;
@@ -1337,7 +1337,7 @@ function renderPanel(force = false) {
   if (!force && pn.tab === tab && $panel.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
   pn.sig = sig;
   const tabChanged = fxChanged('wb-tab', tab, false);
-  if (pn.tab !== tab) { pn.edit = null; pn.q = ''; pn.msg = ''; }
+  if (pn.tab !== tab) { pn.edit = null; pn.q = ''; pn.msg = ''; dk.info = null; }
   pn.tab = tab;
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
   $panel.classList.toggle('dock', tab === 'translate');

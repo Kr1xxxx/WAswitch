@@ -62,16 +62,12 @@ const DEFAULT_ZOOM = 0.9;
 // 要在单实例锁（按 userData 路径算）和 app ready 之前定下来
 const datadir = require('./datadir');
 const dataStart = datadir.apply(app);
-// 老电脑空闲时带 --move-data=<上一个进程的 pid> 重启自己来搬：先等上一个完全退出、放开锁
-const moveArg = dataStart.active ? process.argv.find((a) => a.startsWith('--move-data')) : null;
-if (moveArg) datadir.waitForExit(Number(moveArg.split('=')[1]) || 0);
 
 // ---------- 只允许运行一个 WAswitch ----------
 // 开两个会让两个进程同时读写同一批账号数据。第二次打开时只把已有窗口显示出来。
-const isPrimary = app.requestSingleInstanceLock();
-if (!isPrimary) app.exit(0);
+// 老电脑空闲时带 --move-data=<上一个进程的 pid> 重启自己来搬：先等上一个完全退出、放开锁（等不到就普通重开，见 datadir.takeLock）
+const { isPrimary, movingData } = datadir.takeLock(app, process.argv, dataStart.active);
 // 搬家：拿到锁之后、日志开始写之前（日志也在要搬的文件夹里），不开窗口。搬完（成没成都一样）隐藏重启回托盘
-const movingData = !!(moveArg && isPrimary);
 const moveLog = [];
 if (movingData) datadir.move({ home: dataStart.home, root: dataStart.root, log: (m) => moveLog.push(m) });
 
@@ -107,6 +103,7 @@ log.init((e) => {
 });
 for (const m of moveLog) console.log(m);
 if (dataStart.fallback) console.warn(`D 盘打不开（${dataStart.wanted}），这次用 C 盘的账号数据启动`);
+else if (dataStart.shared) console.warn(`${dataStart.shared} 是这台电脑另一个 Windows 用户的账号数据，不再共用，改用 C 盘`);
 else if (dataStart.dir !== dataStart.home) console.log(`账号数据在 ${dataStart.dir}`);
 if (movingData) {
   const args = process.argv.slice(1).filter((a) => !a.startsWith('--move-data') && a !== '--hidden');
@@ -2425,7 +2422,9 @@ function setSetting(key, value) {
 }
 
 // 重启 WAswitch：走正常退出流程（轻量模式后台先写盘），再重新打开
-function relaunchApp() {
+async function relaunchApp() {
+  // 有下好的更新：退出时 electron-updater 会静默装但装完不重新打开，所以直接走更新安装（装完自动打开）
+  if (updater && await updater.restartWithUpdate()) return;
   app.relaunch();
   quitting = true;
   app.quit();
@@ -2779,6 +2778,7 @@ app.whenReady().then(async () => {
   refresh();
   if (!shouldStartHidden()) win.show();
   if (dataStart.fallback) setTimeout(() => notifier.notifyApp('D 盘打不开', datadir.fallbackText(dataStart)), 5000);
+  else if (dataStart.shared) setTimeout(() => notifier.notifyApp('账号数据已分开', datadir.fallbackText(dataStart)), 5000);
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
   setInterval(checkIdleLock, LOCK_POLL_MS);

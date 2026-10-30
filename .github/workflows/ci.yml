@@ -56,6 +56,8 @@ jobs:
         run: npm run check:asr && xvfb-run -a npx electron --no-sandbox scripts/check-voice.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
+      - name: 翻译详情自检（点译文时间出框：三行、位置、跟着气泡、各种关法）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-info.js
       - name: 回复草稿自检（换对话、重启后回复框的字还在）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-draft.js
       - name: 删除不弹确认、撤销提示自检
@@ -100,6 +102,8 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
+      - name: 没打开对话时点开一个对话，翻译页 1 秒内显示消息
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
       - name: 内存回收不会反复刷新
         run: npm run check:memory
       - name: 断线提醒（满 2 分钟弹一次、恢复不弹）

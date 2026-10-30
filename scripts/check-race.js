@@ -53,6 +53,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   let t0 = Date.now();
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
   assert.strictEqual(r.text, 'HY');
+  assert.deepStrictEqual([r.provider, r.model], [tr.provider(hy).name, 'hy-mt2-plus'], '写先翻出来的那家（点译文时间显示）');
   assert(Date.now() - t0 < 150, '不等慢的那个');
   await new Promise((ok) => setTimeout(ok, 5));
   assert(log.find((x) => x.host === 'open.bigmodel.cn').aborted, '慢的那个被取消');
@@ -61,6 +62,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   plan['tokenhub.tencentmaas.com'] = { ms: 20, status: 500 };
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
   assert.strictEqual(r.text, 'ZP');
+  assert.deepStrictEqual([r.provider, r.model], [tr.provider(zp).name, 'glm-4-flash']);
   // 都失败（服务器出错）：用付费的备用，一次一条
   plan['open.bigmodel.cn'] = { ms: 20, status: 500 };
   let paidCalls = 0;
@@ -71,6 +73,7 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   const rs = await Promise.all([1, 2, 3].map(() => tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid })));
   assert.deepStrictEqual(rs.map((x) => x.text), ['DL', 'DL', 'DL']);
   assert(rs.every((x) => x.fallback));
+  assert(rs.every((x) => x.provider === 'DeepL' && x.model === ''), '换到备用的，写备用');
   assert.strictEqual(paidCalls, 3);
   assert.strictEqual(paidMax, 1, '付费的不同时发');
   // 付费那条通道一直等不到：返回 busy，让调用方过一会儿重排，不报免费服务商的错
@@ -84,6 +87,31 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   assert.strictEqual(r.kind, 'auth');
   assert.strictEqual(r.providerId, zp, '报默认服务商的错');
   assert.strictEqual(paidCalls, 0);
+  // 后台补翻（不给 paid）：都失败也不换 DeepL；调用方取消（给新消息让位置）时各通道一起停
+  plan['open.bigmodel.cn'] = { ms: 20, status: 500 };
+  plan['tokenhub.tencentmaas.com'] = { ms: 20, status: 500 };
+  log.length = 0;
+  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
+  assert.strictEqual(r.kind, 'server');
+  assert(!log.some((x) => /deepl/.test(x.host)), '后台补翻不用 DeepL');
+  plan['open.bigmodel.cn'] = { ms: 300 };
+  plan['tokenhub.tencentmaas.com'] = { ms: 300 };
+  log.length = 0;
+  const ac = new AbortController();
+  t0 = Date.now();
+  const pending = tr.raceFree({ text: 'Hello', mode, target: '中文' }, { signal: ac.signal });
+  setTimeout(() => ac.abort(), 20);
+  r = await pending;
+  assert.strictEqual(r.kind, 'cancel');
+  assert(Date.now() - t0 < 200, '取消马上停');
+  assert.strictEqual(log.length, 2);
+  assert(log.every((x) => x.aborted), '两家的请求都停了');
+  assert(!log.some((x) => /deepl/.test(x.host)));
+  const done = new AbortController();
+  done.abort();
+  log.length = 0;
+  assert.strictEqual((await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { signal: done.signal })).kind, 'cancel');
+  assert.strictEqual(log.length, 0, '已经取消的不发');
   // 默认是 DeepL（付费）：不一起发，调用方照旧一次一条
   tr.setRoles({ primaryId: dl, fallbackId: zp });
   assert.deepStrictEqual(tr.raceSet(), []);

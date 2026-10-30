@@ -287,6 +287,56 @@ for (const blank of ['', '  \n\t ']) {
   locked = null;
 }
 
+// 12. via：点译文右下角的时间显示的翻译情况（shen 2026-10-30）。只留 at、ms、name、model、fix，类型不对的丢掉、太长的截断；
+// 没传 via（手动改译文）保留记录里原来的；存盘后读回来一样；复制、搬家整条带上；以前存的没有 via 的记录照常读
+{
+  const { cleanVia, migrate } = require('../src/trstore');
+  assert.strictEqual(cleanVia(null), null);
+  assert.strictEqual(cleanVia('x'), null);
+  assert.strictEqual(cleanVia({ ms: 5 }), null, '没有时间就不要');
+  assert.strictEqual(cleanVia({ at: -1 }), null);
+  assert.strictEqual(cleanVia({ at: 1.5 }), null);
+  assert.strictEqual(cleanVia({ at: '1761857100000' }), null);
+  assert.deepStrictEqual(cleanVia({ at: 5 }), { at: 5, fix: false });
+  assert.deepStrictEqual(cleanVia({ at: 5, ms: -3, name: 7, model: {}, fix: 'yes', extra: 'x', phone: '4915112345678' }), { at: 5, fix: false }, '类型不对的、别的字段丢掉');
+  const long = cleanVia({ at: 5, ms: 1200, name: 'N'.repeat(80), model: 'm'.repeat(300), fix: true });
+  assert.deepStrictEqual([long.name.length, long.model.length, long.ms, long.fix], [40, 100, 1200, true]);
+  const via = { at: 1761857100000, ms: 1234, name: '智谱', model: 'glm-4-flash', fix: false };
+  const dir = fresh();
+  const st = new TrStore(dir);
+  st.put(ACC, CHAT, 'Hola', { tr: '你好', text: 'Hola', via: { ...via, junk: 1, phone: '4915112345678' } });
+  assert.deepStrictEqual(st.get(ACC, CHAT, 'Hola').via, via, '只留那 5 项');
+  st.put(ACC, CHAT, 'Hola', { tr: '你好呀（我改的）', text: 'Hola', edited: true });
+  assert.deepStrictEqual(st.get(ACC, CHAT, 'Hola').via, via, '没传 via（手动改）：保留原来的');
+  st.put(ACC, CHAT, 'Hola', { tr: '你好呀（我改的）', text: 'Hola', edited: true, via: 'bad' });
+  assert.deepStrictEqual(st.get(ACC, CHAT, 'Hola').via, via, 'via 不对也保留原来的');
+  const via2 = { at: 1761857200000, ms: 3000, name: '腾讯混元', model: 'hy-mt2-plus', fix: true };
+  st.put(ACC, CHAT, 'Hola', { tr: '你好呀', text: 'Hola', fixed: true, via: via2 });
+  assert.deepStrictEqual(st.get(ACC, CHAT, 'Hola').via, via2, '重翻、纠错换成新的');
+  const k = textKey('Hola');
+  assert(st.copyKey(ACC, CHAT, k, textKey('voice:x')), '复制');
+  assert.deepStrictEqual(st.getKey(ACC, CHAT, textKey('voice:x')).via, via2, '复制整条带上 via');
+  assert.strictEqual(st.flush(), true);
+  assert.deepStrictEqual(new TrStore(dir).get(ACC, CHAT, 'Hola').via, via2, '存盘读回来一样');
+  // 以前存的记录（没有 via）：照常读；新代码改它（没传 via）不凭空多出 via
+  const legacy = fresh();
+  fs.mkdirSync(path.join(legacy, ACC), { recursive: true });
+  fs.writeFileSync(path.join(legacy, ACC, `${CHAT}.json`), JSON.stringify({ [textKey('Hallo')]: { tr: '你好', text: 'Hallo', edited: false, fixed: false, at: 1761000000000 } }));
+  const ls = new TrStore(legacy);
+  const old = ls.get(ACC, CHAT, 'Hallo');
+  assert.deepStrictEqual([old.tr, old.at, 'via' in old], ['你好', 1761000000000, false]);
+  ls.put(ACC, CHAT, 'Hallo', { tr: '你好（改）', text: 'Hallo', edited: true });
+  assert.strictEqual(ls.get(ACC, CHAT, 'Hallo').via, undefined, '老记录改了也不凭空多出 via');
+  assert.strictEqual(ls.get(ACC, CHAT, 'Hallo').tr, '你好（改）');
+  // 搬家合并：整条复制，via 跟着走
+  const to = fresh();
+  assert.strictEqual(migrate(dir, to), 1);
+  assert.deepStrictEqual(new TrStore(to).get(ACC, CHAT, 'Hola').via, via2, '搬家带上 via');
+  // 新代码写的带 via 的记录，旧代码（只认 tr、text、edited、fixed、at）照常读：多出来的字段它不看
+  const raw = JSON.parse(fs.readFileSync(path.join(to, ACC, `${CHAT}.json`), 'utf8'))[k];
+  assert.deepStrictEqual(Object.keys(raw).sort(), ['at', 'edited', 'fixed', 'text', 'tr', 'via']);
+}
+
 fs.readFileSync = realRead;
 fs.copyFileSync = realCopy;
 console.warn = realWarn;

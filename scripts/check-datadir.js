@@ -351,10 +351,243 @@ test('指针文件坏了：当没有指针（C 没数据就按新装处理）', 
   assert.equal(win(b).dir, b.data);
 });
 
+// ---------- 同一台电脑几个 Windows 用户共用一个 D:\WAswitch ----------
+// 第二个用户：另一个 home，同一个 root
+function otherUser(b, name = 'B') {
+  const home = path.join(path.dirname(path.dirname(b.home)), `C-${name}`, 'WAswitch');
+  fs.mkdirSync(home, { recursive: true });
+  return { ...b, home };
+}
+const owner = (b) => JSON.parse(fs.readFileSync(path.join(b.data, dd.OWNER), 'utf8'));
+
+test('两个用户同一个 D：第一个用 D 并记上自己，第二个用自己的 C，读不到第一个的账号', () => {
+  const a = box({ root: true });
+  const ra = win(a);
+  assert.equal(ra.dir, a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), JSON.stringify([{ id: 'acc-of-A' }]));
+  assert.equal(owner(a).home, a.home);
+  const b = otherUser(a);
+  const rb = win(b);
+  assert.equal(rb.dir, b.home, '第二个用户不能用第一个用户的 D:\\WAswitch\\data');
+  assert.equal(rb.fresh, false);
+  assert.ok(!fs.existsSync(path.join(b.home, dd.POINTER)), '第二个用户不写指向 D 的指针');
+  assert.ok(!fs.existsSync(path.join(rb.dir, 'accounts.json')));
+  assert.equal(owner(a).home, a.home, '记号还是第一个用户的');
+  // 第一个用户下次照样用 D
+  assert.equal(win(a).dir, a.data);
+  // 第二个用户 C 盘有了数据也不搬过去，不会为它重启
+  writeOld(b.home);
+  const sb = dd.apply(fakeApp(b.home), { platform: 'win32', root: b.root });
+  assert.equal(dd.shouldMove(sb), false);
+  const m = dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, false);
+  assert.equal(m.reason, 'owner');
+  assert.equal(fs.readFileSync(path.join(a.data, 'accounts.json'), 'utf8'), JSON.stringify([{ id: 'acc-of-A' }]));
+});
+
+test('两个用户：D:\\WAswitch\\data 空着、只有别人的记号 → 也不用', () => {
+  const a = box({ root: true });
+  win(a);
+  const b = otherUser(a);
+  assert.equal(win(b).dir, b.home);
+});
+
+test('D:\\WAswitch\\data 有账号数据但没记号（不知道是谁的）：新装的用户不用', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, 'accounts.json'), '[{"id":"x"}]');
+  assert.equal(win(b).dir, b.home);
+  assert.ok(!fs.existsSync(path.join(b.data, dd.OWNER)));
+});
+
+test('D:\\WAswitch\\data 空着、没记号（安装包建的）：用，并记上自己', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  assert.equal(win(b).dir, b.data);
+  assert.equal(owner(b).home, b.home);
+});
+
+test('1.0.1 的老指针、还没有记号：照旧用 D，第一次启动补记成自己；之后别的用户就用不了', () => {
+  const a = box({ root: true });
+  fs.mkdirSync(a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), '[{"id":"a"}]');
+  fs.writeFileSync(path.join(a.home, dd.POINTER), JSON.stringify({ dir: a.data, cleanC: false }));
+  const r = win(a);
+  assert.equal(r.dir, a.data);
+  assert.equal(owner(a).home, a.home);
+  assert.equal(win(otherUser(a)).dir, otherUser(a).home);
+});
+
+test('1.0.1 时两个用户已经共用：先启动的补记，后启动的去掉指针回 C，D 盘那份一点不动', () => {
+  const a = box({ root: true });
+  fs.mkdirSync(a.data);
+  fs.writeFileSync(path.join(a.data, 'accounts.json'), '[{"id":"shared"}]');
+  const b = otherUser(a);
+  for (const h of [a.home, b.home]) fs.writeFileSync(path.join(h, dd.POINTER), JSON.stringify({ dir: a.data, cleanC: false }));
+  assert.equal(win(a).dir, a.data);
+  const rb = win(b);
+  assert.equal(rb.dir, b.home);
+  assert.equal(rb.shared, a.data);
+  assert.equal(rb.fallback, false, '不是 D 盘打不开，不提示');
+  assert.ok(!fs.existsSync(path.join(b.home, dd.POINTER)), '第二个用户的指针去掉了');
+  assert.equal(fs.readFileSync(path.join(a.data, 'accounts.json'), 'utf8'), '[{"id":"shared"}]');
+  assert.equal(owner(a).home, a.home);
+  // 以后还是 C，第一个用户还是 D
+  assert.equal(win(b).dir, b.home);
+  assert.equal(win(a).dir, a.data);
+});
+
+test('记号坏了、指针是自己的：照旧用 D，重写成自己；新装的用户不认坏记号', () => {
+  const a = box({ root: true });
+  win(a);
+  fs.writeFileSync(path.join(a.data, dd.OWNER), '{oops');
+  assert.equal(win(otherUser(a)).dir, otherUser(a).home);
+  assert.equal(win(a).dir, a.data);
+  assert.equal(owner(a).home, a.home);
+});
+
+test('老电脑搬家：搬过去的 data 带着自己的记号；别人搬不进来', () => {
+  const b = box({ root: true, old: true });
+  const m = dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, true);
+  assert.equal(owner(b).home, b.home);
+  assert.equal(win(b).dir, b.data);
+  const c = otherUser(b, 'C2');
+  writeOld(c.home);
+  const sc = dd.apply(fakeApp(c.home), { platform: 'win32', root: c.root });
+  assert.equal(sc.dir, c.home);
+  assert.equal(dd.shouldMove(sc), false);
+});
+
+test('老电脑：D:\\WAswitch\\data 是空的、只有自己的记号 → 照样搬', () => {
+  const b = box({ root: true, old: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, dd.OWNER), JSON.stringify({ home: b.home }));
+  const s = dd.apply(fakeApp(b.home), { platform: 'win32', root: b.root });
+  assert.equal(dd.shouldMove(s), true);
+  assert.equal(dd.move({ home: b.home, root: b.root, statfs: bigDisk, wait: noWait }).ok, true);
+});
+
+test('老电脑复制的那几分钟里另一个用户第一次打开：他用 C，不会被搬家删掉刚写的东西', () => {
+  const a = box({ root: true, old: true });
+  const b = otherUser(a);
+  let rb;
+  const cp = (from, to, o) => { rb = win(b); fs.cpSync(from, to, o); };
+  const m = dd.move({ home: a.home, root: a.root, cp, statfs: bigDisk, wait: noWait });
+  assert.equal(m.ok, true);
+  assert.equal(rb.dir, b.home, '复制期间 D:\\WAswitch\\data 已经记着 A');
+  assert.equal(owner(a).home, a.home);
+  assert.equal(win(a).dir, a.data);
+});
+
+test('搬家没成：把这次记上的记号拿掉，别的用户以后还能用这个空文件夹', () => {
+  const a = box({ root: true, old: true });
+  const m = dd.move({ home: a.home, root: a.root, statfs: () => ({ bavail: 1, bsize: 1 }), wait: noWait });
+  assert.equal(m.ok, false);
+  const m2 = dd.move({ home: a.home, root: a.root, cp: () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); }, statfs: bigDisk, wait: noWait });
+  assert.equal(m2.reason, 'copy');
+  assert.ok(!fs.existsSync(path.join(a.data, dd.OWNER)), '没留下记号');
+  const b = otherUser(a);
+  assert.equal(win(b).dir, b.data);
+});
+
+test('D 盘那份是别人的：界面和通知有一句说明；D 盘打不开的那句不变', () => {
+  assert.match(dd.fallbackText({ shared: 'D:\\WAswitch\\data' }), /另一个 Windows 用户/);
+  assert.match(dd.fallbackText({ fallback: true, wanted: 'D:\\WAswitch\\data' }), /D 盘打不开/);
+  assert.equal(dd.fallbackText({}), '');
+});
+
+test('home 大小写不同也算同一个用户（Windows 路径不分大小写）', () => {
+  const b = box({ root: true });
+  fs.mkdirSync(b.data);
+  fs.writeFileSync(path.join(b.data, dd.OWNER), JSON.stringify({ home: b.home.toUpperCase() }));
+  assert.equal(dd.ownerOf(b.data, b.home), 'mine');
+});
+
 test('waitForExit：进程不在就马上返回', () => {
   const t = Date.now();
-  dd.waitForExit(2 ** 22 + 12345, 2000);
+  assert.equal(dd.waitForExit(2 ** 22 + 12345, 2000), true);
   assert.ok(Date.now() - t < 1000);
+});
+
+// 搬家那次启动（--move-data=<旧进程 pid>）：等不到旧进程退出时，软件也要重新打开
+const { spawn } = require('child_process');
+const sleeper = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+// 假的 app：lock 是 requestSingleInstanceLock 的结果；记下 relaunch 和 exit
+function lockApp(lock) {
+  const a = { relaunched: [], exited: [], locks: 0 };
+  a.requestSingleInstanceLock = () => { a.locks += 1; return typeof lock === 'function' ? lock() : lock; };
+  a.relaunch = (o) => a.relaunched.push(o.args);
+  a.exit = (c) => a.exited.push(c);
+  return a;
+}
+const MV = ['/x/WAswitch.exe', '--move-data=%PID%', '--hidden'];
+const argvFor = (pid) => MV.map((x) => x.replace('%PID%', pid));
+
+test('waitForExit：进程还活着返回 false，退出了返回 true', async () => {
+  const c = sleeper();
+  const t = Date.now();
+  assert.equal(dd.waitForExit(c.pid, 300), false);
+  assert.ok(Date.now() - t >= 300);
+  c.kill();
+  await new Promise((r) => c.once('exit', r));
+  assert.equal(dd.waitForExit(c.pid, 5000), true);
+  assert.equal(dd.waitForExit(0), true);
+});
+
+test('takeLock 搬家：旧进程一直不退（拿不到锁）→ 放弃搬家，隐藏重开，不带 --move-data', async () => {
+  const c = sleeper();
+  const app = lockApp(false); // 旧进程还占着锁
+  const r = dd.takeLock(app, argvFor(c.pid), true, { ms: 300 });
+  c.kill();
+  assert.deepEqual(r, { isPrimary: false, movingData: false });
+  assert.equal(app.relaunched.length, 1, '重开了一次');
+  assert.deepEqual(app.relaunched[0], ['--hidden']);
+  assert.deepEqual(app.exited, [0]);
+});
+
+test('takeLock 搬家：旧进程晚退出（超过原来的 60 秒，但在期限内）→ 等到它退出，拿到锁，搬家，不重开', () => {
+  // 同步等待期间收不到子进程退出，所以用假的「等一下」：第 5 次等的时候让这个 pid 消失
+  const realKill = process.kill;
+  let waits = 0;
+  let gone = false;
+  process.kill = (pid, sig) => { if (gone && pid === 424242) { const e = new Error('ESRCH'); e.code = 'ESRCH'; throw e; } return true; };
+  try {
+    const app = lockApp(true);
+    const r = dd.takeLock(app, argvFor(424242), true, { ms: 5 * 60 * 1000, wait: () => { waits += 1; if (waits === 5) gone = true; } });
+    assert.equal(waits, 5, '一直等到它退出');
+    assert.deepEqual(r, { isPrimary: true, movingData: true });
+    assert.equal(app.relaunched.length, 0);
+    assert.equal(app.exited.length, 0);
+  } finally { process.kill = realKill; }
+});
+
+test('takeLock 搬家：pid 还在但锁是空的（别的程序占了这个 pid）→ 等够时间后照样拿锁搬家', async () => {
+  const c = sleeper();
+  const app = lockApp(true);
+  const r = dd.takeLock(app, argvFor(c.pid), true, { ms: 300 });
+  c.kill();
+  assert.deepEqual(r, { isPrimary: true, movingData: true });
+});
+
+test('takeLock 搬家：其它启动参数原样带上（--crash-history 等），去掉 --move-data', () => {
+  const app = lockApp(false);
+  dd.takeLock(app, ['/x/WAswitch.exe', '--move-data=0', '--crash-history=1,2', '--hidden'], true, { ms: 100 });
+  assert.deepEqual(app.relaunched[0], ['--crash-history=1,2', '--hidden']);
+});
+
+test('takeLock 普通启动：拿不到锁就退出，不重开（已有窗口会被显示出来）；拿到就是主实例', () => {
+  const a = lockApp(false);
+  assert.deepEqual(dd.takeLock(a, ['/x/WAswitch.exe'], true), { isPrimary: false, movingData: false });
+  assert.deepEqual([a.relaunched.length, a.exited], [0, [0]]);
+  const b = lockApp(true);
+  assert.deepEqual(dd.takeLock(b, ['/x/WAswitch.exe', '--hidden'], true), { isPrimary: true, movingData: false });
+  assert.equal(b.exited.length, 0);
+});
+
+test('takeLock：账号数据没放 D 盘（active=false）时不理 --move-data', () => {
+  const app = lockApp(true);
+  assert.deepEqual(dd.takeLock(app, argvFor(0), false), { isPrimary: true, movingData: false });
 });
 
 // Windows CI：一个不存在的盘符当作「没有 D 盘」，走真实的 Windows 路径

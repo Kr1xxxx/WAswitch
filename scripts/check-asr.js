@@ -134,7 +134,6 @@ async function floatFlow() {
   let answer = (src) => ({ text: `Bonjour ${src.id}` });
   const mk = (store) => new FloatCore({
     store,
-    slowGap: 1,
     transcribe: async (acc, src) => { heard.push(src.id); return answer(src); },
     translate: async (text) => { translated.push(text); return { text: `中:${text}`, warn: [] }; },
   });
@@ -229,7 +228,6 @@ async function backfill() {
   const heard = [];
   const slow = [];
   const core = new FloatCore({
-    slowGap: 1,
     transcribe: async (acc, src) => { heard.push(src.id); return { text: `Hallo ${src.id}` }; },
     translate: async (text, o) => { if (o.slow) slow.push(text); return { text: `中:${text}`, warn: [] }; },
   });
@@ -298,7 +296,6 @@ async function webFlow() {
   let gate = null;
   const mk = (store) => new FloatCore({
     store,
-    slowGap: 1,
     transcribe: async (acc, src, sec, opts) => { calls.push({ src, opts }); if (gate) await gate; return answer(src, opts); },
     translate: async (t) => { translated.push(t); return { text: `中:${t}`, warn: [] }; },
   });

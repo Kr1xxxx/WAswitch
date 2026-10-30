@@ -9,6 +9,7 @@
 ; 第一次安装默认装到 D:\WAswitch\app（shen 2026-10-29）。
 ; 程序必须在 app 子文件夹里：卸载程序每次更新、卸载时都会清空安装文件夹，D:\WAswitch 里还放着译文，不能直接装在那里。
 ; 只在第一次安装时选：注册表里已经有安装位置（更新、重装、老电脑）或命令行给了 /D= 就不动，更新原地装，老电脑程序不挪。
+; D:\WAswitch\app 里已经有别的 Windows 用户装的程序也不用（同一台电脑几个用户各装各的）。
 ; D 盘要是本机硬盘（GetDriveType = 3，U 盘 2、网络盘 4、光驱 5 都不用），并且能建文件夹、能写文件，否则用默认位置。
 ; 判断 D 盘可用的同时建好 D:\WAswitch：软件靠这个文件夹存在才把译文放 D 盘，自己不建。
 ; 打包卸载程序的那一遍也会展开这个宏，那一遍没有用到这些函数，NSIS 的「函数没用到」警告会被当成错误，所以只在安装程序里定义
@@ -44,8 +45,12 @@
     ${endif}
     ${if} $0 == ""
       Call WASwitchDFixed
+      ; 自己的注册表里没装过，D:\WAswitch\app 里却已经有程序：是这台电脑另一个 Windows 用户装的。
+      ; 装进去会覆盖它，以后卸载还会把它删掉，所以用默认位置（%LOCALAPPDATA%\Programs\WAswitch）
       ${if} $0 == "1"
-        StrCpy $INSTDIR "D:\WAswitch\app"
+        ${ifNot} ${FileExists} "D:\WAswitch\app\WAswitch.exe"
+          StrCpy $INSTDIR "D:\WAswitch\app"
+        ${endif}
       ${endif}
     ${endif}
     Pop $1

@@ -1,5 +1,7 @@
 // 收到的消息的译文永久存在本机磁盘上（shen 2026-10-26：切回对话、重启软件都直接显示，不再调模型、不耗额度）。
-// 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, text, edited, fixed, at } }。
+// 每个号一个文件夹，每个对话一个文件：<dir>/<号>/<对话 hash>.json，里面是 { 原文 hash: { tr, text, edited, fixed, via, at } }。
+// at 是这条记录最后一次写的时间（改译文、采用纠错也算）；via 是最后一次机器翻译的情况 { at: 翻的时间, ms: 用时, name: 服务商, model: 模型, fix: 是不是纠错 }，
+// 点译文右下角的时间显示这个（shen 2026-10-30）。以前存的记录没有 via；手动改译文不动 via。
 // 按原文的 hash 认（同一对话里同样的话只翻一次），消息编号变了也认得出。
 // 原文也存（text，shen 2026-10-29「英文的可以也存吗」「都是自己的电脑」）：补回来的旧消息能展开原文、能纠错。
 // 以前存的记录没有原文：网页号等那条消息又读到时补上，轻量号按本机聊天缓存在后台慢慢补（见 trfill.js）。号码不存。
@@ -27,8 +29,22 @@ const META = '_chats'; // 每个号的别名表和最近消息索引
 const META_FILE = `${META}.json`;
 const SEEN_MAX = 2000; // 见过的客户消息最多记 2000 条，先记的先删
 const RETRY_MS = 5000; // 读不了的文件最多每 5 秒再读一次
+const VIA_NAME_MAX = 40;
+const VIA_MODEL_MAX = 100;
 const textKey = (text) => crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 24);
 const safe = (s) => /^[A-Za-z0-9_-]{1,80}$/.test(String(s));
+
+// 这条译文是什么时候、用多久、哪个模型翻的：只留 at、ms（非负整数）、name、model、fix，别的丢掉；at 不对就整个不要（null）
+function cleanVia(v) {
+  if (!v || typeof v !== 'object' || !Number.isSafeInteger(v.at) || v.at < 0) return null;
+  return {
+    at: v.at,
+    ...(Number.isSafeInteger(v.ms) && v.ms >= 0 ? { ms: v.ms } : {}),
+    ...(typeof v.name === 'string' && v.name ? { name: v.name.slice(0, VIA_NAME_MAX) } : {}),
+    ...(typeof v.model === 'string' && v.model ? { model: v.model.slice(0, VIA_MODEL_MAX) } : {}),
+    fix: v.fix === true,
+  };
+}
 
 // 别名表（_chats.json）的 alias、seen 两张表各自合并，b 优先。返回要盖到合并结果上的键（两边不都是表就不返回）。
 // 读不了期间或搬家时 link 可能留下两跳链：压平成一跳
@@ -224,7 +240,9 @@ class TrStore {
     if (!e || !HEX_KEY.test(String(key)) || !rec || typeof rec.tr !== 'string' || !rec.tr.trim()) return;
     const old = Object.hasOwn(e.data, key) ? e.data[key] : null;
     const text = typeof rec.text === 'string' && rec.text.trim() && rec.text.length <= TEXT_MAX ? rec.text : (old && typeof old.text === 'string' ? old.text : '');
-    e.data[key] = { tr: rec.tr.slice(0, TR_MAX), ...(text ? { text } : {}), edited: !!rec.edited, fixed: !!rec.fixed, at: Date.now() };
+    // via 没传（手动改译文时，这条是以前存的、没有 via）：保留记录里原来的
+    const via = cleanVia(rec.via) || cleanVia(old && old.via);
+    e.data[key] = { tr: rec.tr.slice(0, TR_MAX), ...(text ? { text } : {}), edited: !!rec.edited, fixed: !!rec.fixed, ...(via ? { via } : {}), at: Date.now() };
     this.touch(e);
   }
 
@@ -448,4 +466,4 @@ function migrate(from, to) {
   return n;
 }
 
-module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, pickDir, migrate, dirInfo };
+module.exports = { TrStore, TR_MAX, VIEW_MAX, textKey, cleanVia, pickDir, migrate, dirInfo };

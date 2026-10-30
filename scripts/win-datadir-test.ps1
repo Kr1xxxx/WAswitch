@@ -1,7 +1,7 @@
 # Windows 实测：账号数据放 D 盘（src/datadir.js），用真的安装包和打包好的 WAswitch.exe。
 # 只在 CI 的 windows-latest 上跑（见 .github/workflows/installer-win.yml），在 win-installer-test.ps1 之后。
 # 验证：新装的电脑数据直接在 D:\WAswitch\data；老电脑带 --move-data 启动会搬过去、隐藏重启、两分钟后删 C 盘旧的；
-# 指针指的盘打不开时用 C 启动、指针不改。
+# 指针指的盘打不开时用 C 启动、指针不改；D 盘那份记着别的用户时不用。
 # 用法：pwsh scripts/win-datadir-test.ps1 <安装包.exe>
 param([Parameter(Mandatory = $true)][string]$Setup)
 $ErrorActionPreference = 'Stop'
@@ -41,6 +41,7 @@ function Reset {
   Remove-Item $Home_ -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $Data -Recurse -Force -ErrorAction SilentlyContinue
 }
+function Owner { $f = Join-Path $Data 'owner.json'; if (Test-Path $f) { return (Get-Content $f -Raw | ConvertFrom-Json).home } return $null }
 function Launch($argsList) { Start-Process -FilePath $Exe -ArgumentList $argsList | Out-Null }
 
 if (-not (Test-Path 'D:\')) {
@@ -58,6 +59,7 @@ Reset
 Launch @('--hidden')
 Check (WaitFor { Test-Path (Join-Path $Data 'Local State') } 90 'D 盘出现 Local State') '新装：Local State 在 D:\WAswitch\data'
 Check ((Pointer).dir -eq $Data) '新装：指针指向 D:\WAswitch\data'
+Check ((Owner) -eq $Home_) '新装：D:\WAswitch\data 记上了这个用户'
 Check (WaitFor { Test-Path (Join-Path $Data 'logs') } 30 'D 盘日志') '新装：日志也在 D'
 StopApp
 Check (-not (Test-Path (Join-Path $Home_ 'Local State'))) '新装：C 盘没有 Local State'
@@ -85,6 +87,7 @@ Check (Test-Path (Join-Path $Data 'Local State')) '搬家：Local State 到了 D
 Check (Test-Path (Join-Path $Data 'accounts.json')) '搬家：accounts.json 到了 D'
 Check (-not (Test-Path (Join-Path $Data 'mcp-token.json'))) '搬家：MCP 的 token 留在 C'
 Check (-not (Test-Path "$Data.tmp")) '搬家：没有留下 data.tmp'
+Check ((Owner) -eq $Home_) '搬家：D 盘那份记着这个用户'
 Check (WaitFor { Get-Process WAswitch -ErrorAction SilentlyContinue } 60 '重启') '搬完自己隐藏重启了'
 Check (Test-Path (Join-Path $Home_ 'accounts.json')) '刚搬完 C 盘那份还在'
 # 从 D 盘读到 accounts.json 两分钟后删 C 盘旧数据
@@ -116,4 +119,15 @@ Check (WaitFor { Test-Path (Join-Path $Data 'logs') } 90 'D 盘出现日志') 'D
 Check (-not (Test-Path (Join-Path $Home_ 'logs'))) 'D 盘回来：C 盘没有新日志'
 Check (Test-Path (Join-Path $Data 'Partitions\wa-x\marker.txt')) 'D 盘回来：数据还在'
 StopApp
+
+# 6. 同一台电脑另一个 Windows 用户的数据（1.0.1 时两人共用过）：记号是别人的 -> 去掉指针，用 C 启动，D 盘那份不动
+Set-Content (Join-Path $Data 'owner.json') (@{ home = 'C:\Users\other-user\AppData\Roaming\WAswitch' } | ConvertTo-Json)
+Remove-Item (Join-Path $Home_ 'Local State') -Force -ErrorAction SilentlyContinue
+Launch @('--hidden')
+Check (WaitFor { Test-Path (Join-Path $Home_ 'Local State') } 90 'C 盘出现 Local State') '别人的数据：用 C 启动'
+Check (WaitFor { Get-Process WAswitch -ErrorAction SilentlyContinue } 10 '在运行') '别人的数据：软件开着'
+StopApp
+Check ($null -eq (Pointer)) '别人的数据：指针去掉了'
+Check ((Owner) -eq 'C:\Users\other-user\AppData\Roaming\WAswitch') '别人的记号没改'
+Check ((Get-Content (Join-Path $Data 'Partitions\wa-x\marker.txt') -Raw).Trim() -eq 'logged-in') '别人的数据没动'
 Write-Host '全部通过'
