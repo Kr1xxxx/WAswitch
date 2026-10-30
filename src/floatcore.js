@@ -526,7 +526,7 @@ class FloatCore {
       const fg = this.active - this.slowRun.size;
       const next = fg < max ? this.queue.find((q) => !q.slow && !q.taken && !(q.after > now)) : null;
       if (next) {
-        if (this.active >= MAX_PARALLEL) this.yieldSlow();
+        if (this.active >= MAX_PARALLEL) { if (next.after) return; this.yieldSlow(); } // 说过忙、等着重试的不抢后台的位置（不然每 700 毫秒取消一条）
         if (this.active >= MAX_PARALLEL) return; // 让出来的那条还在收尾：它结束时会再来
         this.start(next);
         continue;
@@ -645,7 +645,7 @@ class FloatCore {
     try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow, ...(job.slow ? { signal: job.ctl.signal } : {}) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
     if (job.yielded && !(r && r.text)) {
       // 给新消息、用户点的让了位置：回到后台队列最前面，照旧显示「翻译」
-      if (this.queue.includes(job)) { item.state = 'queued'; item.bg = true; this.queue.splice(this.queue.indexOf(job), 1); this.queue.unshift(job); }
+      if (this.queue.includes(job)) { item.state = 'queued'; item.bg = true; this.queue.splice(this.queue.indexOf(job), 1); this.queue.unshift(job); } else if (item.state === 'running') { item.state = 'manual'; item.bg = false; } // 让的时候后台补翻已经整体退回按钮了
       this.onChange(job.accId);
       return;
     }

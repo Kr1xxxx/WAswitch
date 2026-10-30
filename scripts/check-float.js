@@ -605,6 +605,43 @@ async function slowLanes() {
     assert.strictEqual(t.max, 3, '加上后台补翻最多 3 条');
     assert(t.fc.viewOf('W').items.every((x) => x.state === 'done'));
   }
+  // 6. 让出的那条取消还没回来时，另一条后台补翻出错（后台整体退回按钮）：让出的那条回来也退回「翻译」，能点，不停在「翻译中…」
+  {
+    const hang = new Map();
+    const fc = new FloatCore({ parallel: () => 3, translate: (text, o = {}) => new Promise((res) => {
+      if (!o.slow) return setTimeout(() => res({ text: `译:${text}` }), 5);
+      hang.set(text, res);
+      o.signal.addEventListener('abort', () => setTimeout(() => res({ error: '已取消', kind: 'cancel' }), 30), { once: true });
+    }) });
+    const c6 = '491701234567@c.us';
+    const old = wins(8, c6, 'Alt');
+    fc.ingest('Y', { title: 'Jonas', bottom: true, msgs: old }, opts);
+    for (let i = 0; i < 100 && fc.slowRun.size < 3; i += 1) await sleep(5);
+    assert.strictEqual(fc.slowRun.size, 3);
+    fc.ingest('Y', { title: 'Jonas', bottom: true, msgs: [...old, msg(50, false, c6, 'Neu')] }, opts); // 让出 Alt 0（最后开始的）
+    hang.get('Alt 2')({ error: '网络不通', kind: 'network' });
+    await sleep(60);
+    const it = fc.viewOf('Y').items.find((x) => x.text === 'Alt 0');
+    assert.strictEqual(it.state, 'manual', '让出的那条退回「翻译」');
+    assert(fc.manual('Y', it.h), '能点');
+    hang.get('Alt 1')({ text: '译:Alt 1' });
+  }
+  // 7. 新消息说忙、等着重试时，不反复取消后台补翻
+  {
+    let busy = true;
+    const t = make(1, 1000);
+    const orig = t.fc.deps.translate;
+    t.fc.deps.translate = (text, o = {}) => (!o.slow && busy ? Promise.resolve({ error: '让用户先翻', kind: 'busy' }) : orig(text, o));
+    const c7 = '4369912345678@c.us';
+    t.fc.ingest('Z', { title: 'Anna', bottom: true, msgs: [] }, opts);
+    t.fc.acc('Z').minute = Array(19).fill(Date.now());
+    t.fc.ingest('Z', { title: 'Anna', bottom: true, msgs: wins(10, c7, 'Hallo') }, opts);
+    await sleep(2000);
+    assert(t.aborted.length <= 1, `等着重试的不反复抢位置（取消了 ${t.aborted.length} 次）`);
+    busy = false;
+    for (let i = 0; i < 100 && (t.fc.running || t.fc.queue.length); i += 1) await sleep(50);
+    assert(t.fc.viewOf('Z').items.every((x) => x.state === 'done'));
+  }
   console.log('后台补翻同时 3 条、给新消息让位置自检通过');
 }
 
