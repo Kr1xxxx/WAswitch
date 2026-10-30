@@ -197,6 +197,19 @@ class TrStore {
     return true;
   }
 
+  // 诊断用：这个对话的译文文件里有几条记录、读不读得了（日志里记，不含内容）
+  info(acc, chat) {
+    let records = 0;
+    let unread = false;
+    for (const c of this.group(acc, chat)) {
+      const e = this.load(acc, c);
+      if (!e) continue;
+      records += Object.keys(e.data).filter((k) => HEX_KEY.test(k)).length;
+      if (e.unread) unread = true;
+    }
+    return { records, unread };
+  }
+
   hasFile(acc, chat) {
     const e = this.mem.get(`${acc}/${chat}`);
     return (e ? Object.keys(e.data).length > 0 : false) || fs.existsSync(this.file(acc, chat));

@@ -103,6 +103,361 @@ async function core() {
   await lidSwitch();
   await slowLanes();
   await translateVia();
+  await sameMessageOtherText();
+  await textDrift();
+  await autoRetry();
+}
+
+// 同一条消息（消息编号一样）重启后页面上读到的文字有细微差别（不可见字符、空格、弯引号）：认得出是翻过的，不重翻
+// （shen 2026-10-30「每次点了客户会话又是重新翻译」）；客户真的改了消息、文字变了：照旧重翻，日志里记一行，不记内容
+async function sameMessageOtherText() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore, textKey } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-same-'));
+  const sent = [];
+  const logs = [];
+  let clock = Date.parse('2026-10-30T09:00:00Z');
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, now: () => clock, log: (x) => logs.push(x), translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } }) };
+  };
+  const opts = { auto: true, dailyCap: 500 };
+  const chat = '16625550143@c.us';
+  const m = (n, text) => ({ id: `false_${chat}_3EB0SM${n}`, out: false, text });
+  const first = [m(1, 'I don’t like it at all'), m(2, 'Hey I received my hair'), m(3, 'It’s really thin before adding the bundle'), m(4, 'Thank you')];
+  let { store, fc } = make();
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: first }, opts);
+  await sleep(40);
+  store.flush();
+  assert.strictEqual(sent.length, 4);
+  // 重启后同样的消息、文字有细微差别
+  sent.length = 0;
+  ({ store, fc } = make());
+  const again = [m(1, 'I don\'t like it at all'), m(2, 'Hey I received​ my  hair'), m(3, 'It’s really thin before adding the bundle\n'), m(4, 'Thank you')];
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: again }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, [], '细微差别不重翻');
+  let items = fc.viewOf('S').items;
+  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'done', 'done', 'done']);
+  assert.deepStrictEqual(items.map((x) => x.tr), first.map((x) => `译:${x.text}`), '用原来的译文');
+  assert.strictEqual(logs.filter((x) => x.includes('细微差别')).length, 3);
+  assert(!logs.some((x) => x.includes('hair') || x.includes('Tyra')), '日志里不放聊天内容');
+  // 按这次的文字也存了一份：再重启，同样的文字直接认
+  store.flush();
+  logs.length = 0;
+  ({ store, fc } = make());
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: again }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, []);
+  assert.deepStrictEqual(logs, [], '第二次直接认得，不用再比较');
+  assert.strictEqual(fc.viewOf('S').items.length, 4);
+  // 客户改了消息：文字真的不一样，重翻，日志只记字数
+  sent.length = 0;
+  logs.length = 0;
+  ({ store, fc } = make());
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [m(1, 'I like it now, thank you so much'), ...again.slice(1)] }, opts);
+  await sleep(40);
+  assert.deepStrictEqual(sent, ['I like it now, thank you so much']);
+  const changed = logs.filter((x) => x.includes('和上次不一样'));
+  assert.strictEqual(changed.length, 1);
+  assert(!changed[0].includes('like'), changed[0]);
+  // 打开对话时有没认出的：记一行个数（有记录的对话才记），不含内容
+  const opened = logs.filter((x) => x.includes('打开对话'));
+  assert.strictEqual(opened.length, 1, logs.join('\n'));
+  assert(opened[0].includes('没认出 1 条') && opened[0].includes('见过 1 条') && !opened[0].includes('like'), opened[0]);
+  // 另一条消息碰巧同样的话：各自按文字认，不受影响
+  sent.length = 0;
+  fc.ingest('S', { title: 'Tyra', bottom: true, msgs: [...again, m(5, 'Thank you')] }, opts);
+  await sleep(20);
+  assert.deepStrictEqual(sent, [], '同一句话翻过的直接用');
+  store.flush();
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('同一条消息文字有细微差别不重翻自检通过');
+}
+
+// 同一条消息刚出现时读到的文字（first）和之后再读到的（later）只差显示格式（方向符、不换行空格和连字符、表情、弯引号）：
+// 内存只留 200 条，切去别的对话被挤出去再切回、重启，都认得是翻过的，不重翻（shen 2026-10-30「点开会话又重新翻译」）
+async function textDrift() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const DRIFT = {
+    方向符: ['My phone number is (662) 997-8241.', 'My phone number is ⁦(662) 997-8241⁩.'],
+    不换行空格和连字符: ['My phone number is (662) 997-8241.', 'My phone number is (662) 997‑8241.'],
+    表情: ['Thanks a lot 😊', 'Thanks a lot '],
+    弯引号: ["I don't like it at all", 'I don’t like it at all'],
+  };
+  for (const [kind, [first, later]] of Object.entries(DRIFT)) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'));
+    const sent = [];
+    const logs = [];
+    const make = () => {
+      const store = new TrStore(dir);
+      return { store, fc: new FloatCore({ store, log: (x) => logs.push(x), translate: async (text) => { sent.push(text); await sleep(2); return { text: `译:${text}`, warn: [] }; } }) };
+    };
+    const msgs = (c, n) => Array.from({ length: n }, (_, i) => ({ id: `false_${5550000 + c}@c.us_3EB0${c}X${i}`, out: false, text: `msg ${c}-${i}` }));
+    const opts = { auto: true, dailyCap: 1e6 };
+    let { store, fc } = make();
+    const base = msgs(0, 6);
+    const live = { id: 'false_5550000@c.us_3EB0LIVE', out: false, text: first };
+    fc.ingest('A', { title: 'Lucy', msgs: base, bottom: true }, opts);
+    await sleep(40);
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, live], bottom: true }, opts);
+    await sleep(40);
+    assert.strictEqual(sent.filter((t) => t === first).length, 1, kind);
+    // 之后再读到的文字不一样：不重翻，日志只记字符编号
+    for (let k = 0; k < 3; k++) { fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts); await sleep(15); }
+    assert.strictEqual(sent.filter((t) => t === later).length, 0, `${kind}：再读到不重翻`);
+    assert(logs.some((x) => x.includes('格式差别：')), kind);
+    assert(!logs.some((x) => x.includes('Lucy') || x.includes('phone') || x.includes('Thanks')), '日志里不放聊天内容');
+    // 切去 16 个别的对话（224 条，超过 200 条上限，对话 0 被挤出内存），再切回
+    for (let c = 1; c <= 16; c++) { fc.ingest('A', { title: `C${c}`, msgs: msgs(c, 14), bottom: true }, opts); await sleep(15); }
+    const before = sent.length;
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts);
+    await sleep(80);
+    assert.deepStrictEqual(sent.slice(before), [], `${kind}：切回不重翻`);
+    assert(fc.viewOf('A').items.every((x) => x.state === 'done'), `${kind}：切回后都是翻好的`);
+    assert.strictEqual(fc.viewOf('A').items[fc.viewOf('A').items.length - 1].tr, `译:${first}`, `${kind}：用原来的译文`);
+    // 重启
+    store.flush();
+    ({ store, fc } = make());
+    const before2 = sent.length;
+    fc.ingest('A', { title: 'Lucy', msgs: [...base, { ...live, text: later }], bottom: true }, opts);
+    await sleep(60);
+    assert.deepStrictEqual(sent.slice(before2), [], `${kind}：重启不重翻`);
+    store.flush();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // 客户改了消息（字母数字变了）：不管挤没挤出内存，照旧重翻
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'));
+  const sent = [];
+  const store = new TrStore(dir);
+  const fc = new FloatCore({ store, log: () => {}, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+  const opts = { auto: true, dailyCap: 1e6 };
+  const id = 'false_5550000@c.us_3EB0EDIT';
+  fc.ingest('E', { title: 'Lucy', msgs: [{ id, out: false, text: 'I will pay on Friday' }], bottom: true }, opts);
+  await sleep(30);
+  assert.deepStrictEqual(sent, ['I will pay on Friday']);
+  fc.ingest('E', { title: 'Lucy', msgs: [{ id, out: false, text: 'I will pay on Monday' }], bottom: true }, opts);
+  await sleep(30);
+  assert.strictEqual(fc.viewOf('E').items.length, 1);
+  // 只改数字里的标点、货币、正负号：不是格式差别，重启后读到新文字照旧重翻（外贸最在意的数字）
+  const NUM = [['1.5 kg', '15 kg'], ['price €100 each', 'price $100 each'], ['+5% off', '-5% off'], ['at 5:30 pm', 'at 53:0 pm'], ['2,500 pcs', '25,00 pcs']];
+  for (const [i, [x, y]] of NUM.entries()) {
+    const nid = `false_5550000@c.us_3EB0NUM${i}`;
+    fc.ingest('E', { title: 'Lucy', msgs: [{ id: nid, out: false, text: x }], bottom: true }, opts);
+    await sleep(30);
+    store.flush();
+    sent.length = 0;
+    const fcB = new FloatCore({ store: new TrStore(dir), log: () => {}, translate: async (text) => { sent.push(text); return { text: `译:${text}`, warn: [] }; } });
+    fcB.ingest('E', { title: 'Lucy', msgs: [{ id: nid, out: false, text: y }], bottom: true }, opts);
+    await sleep(30);
+    assert.deepStrictEqual(sent, [y], `${x} 改成 ${y}：重翻`);
+  }
+  // 文字在两种格式间来回变：日志每条只记一次，记录里已有就不再写
+  {
+    const logs2 = [];
+    const fcL = new FloatCore({ store, log: (x) => logs2.push(x), translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+    const lid = 'false_5550000@c.us_3EB0FLIP';
+    const A = 'Call me at (662) 997-8241 please';
+    const B = 'Call me at \u2066(662) 997-8241\u2069 please';
+    fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: A }], bottom: true }, opts);
+    await sleep(30);
+    assert.strictEqual(fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: B }], bottom: true }, opts), true, '展开的原文要刷新');
+    for (let k = 0; k < 3; k++) {
+      fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: k % 2 ? B : A }], bottom: true }, opts);
+      fcL.ingest('E', { title: 'Lucy', msgs: [{ id: lid, out: false, text: k % 2 ? A : B }], bottom: true }, opts);
+    }
+    assert.strictEqual(logs2.filter((x) => x.includes('格式差别')).length, 1, logs2.join('\n'));
+  }
+  // 又读到的挪到最后：内存满了先挤别的对话的，正在看的对话的译文不被挤掉
+  const items = (n, c) => Array.from({ length: n }, (_, i) => ({ id: `false_${5560000 + c}@c.us_3EB0${c}Y${i}`, out: false, text: `row ${c}-${i}` }));
+  const fc2 = new FloatCore({ store: new TrStore(fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-drift-'))), log: () => {}, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
+  const cur = items(20, 0);
+  fc2.ingest('M', { title: 'Cur', msgs: cur, bottom: true }, opts);
+  await sleep(60);
+  for (let c = 1; c <= 12; c++) { // 13 个对话 260 条，超过 200 条上限
+    fc2.ingest('M', { title: `O${c}`, msgs: items(20, c), bottom: true }, opts);
+    await sleep(30);
+    fc2.ingest('M', { title: 'Cur', msgs: cur, bottom: true }, opts); // 来回切，当前对话一直在看
+    await sleep(10);
+  }
+  const kept = [...fc2.accs.get('M').items.values()];
+  assert.strictEqual(kept.length, 200);
+  assert(kept.filter((x) => x.text.startsWith('row 0-')).length === 20, '当前对话 20 条都留在内存里');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('同一条消息显示格式变了不重翻自检通过');
+}
+
+// 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）用免费的智谱、混元再翻，
+// 每条最多再翻 3 次，DeepL 不用、额度不多扣；等着的时候显示「翻译」；用户点了马上翻、定时到了不再翻；
+// 密钥、内容、余额、没有免费服务商的不重翻；后台补翻失败先停再接着补；网络换了马上再试；删号不再翻（shen 2026-10-30）
+async function autoRetry() {
+  const chat = '4915112345678@c.us';
+  const m = (n, text = `Hallo ${n}`) => ({ id: `false_${chat}_3RT${n}`, out: false, text });
+  const opts = { auto: true, dailyCap: 500 };
+  const settle = async (fc, ms = 400) => { const end = Date.now() + ms; while (Date.now() < end && (fc.running || fc.queue.length || fc.waits.length || fc.bgUntil)) await sleep(5); };
+  const mk = (plan, retryMs = [20, 40, 60]) => {
+    const calls = [];
+    const fc = new FloatCore({ retryMs, translate: async (text, o = {}) => {
+      const n = calls.filter((c) => c.text === text).length;
+      calls.push({ text, slow: !!o.slow });
+      const r = plan(text, n, o);
+      return r || { text: `译:${text}`, warn: [] };
+    } });
+    return { fc, calls };
+  };
+  const st = (fc, acc, h) => fc.accs.get(acc).items.get(h);
+  // 1. 服务器出错一次：不点任何东西，过一会儿自己有译文；重翻走的是免费那条路（slow），额度只算第一次
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '智谱服务器出错', kind: 'server' } : null));
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(1)] }, opts);
+    await sleep(10);
+    const h = msgHash('R', m(1).id);
+    assert.strictEqual(st(fc, 'R', h).state, 'wait');
+    assert.strictEqual(fc.viewOf('R').items[0].state, 'manual', '等着重翻时显示「翻译」，不显示报错');
+    assert.strictEqual(fc.viewOf('R').items[0].err, '');
+    await settle(fc);
+    assert.deepStrictEqual(calls, [{ text: 'Hallo 1', slow: false }, { text: 'Hallo 1', slow: true }], '重翻只走免费那条路，不换 DeepL');
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].tr], ['done', '译:Hallo 1']);
+    assert.strictEqual(fc.viewOf('R').today, 1, '重翻不算额度');
+  }
+  // 2. 一直失败：再翻 3 次后显示报错和「重试」，之后不再自动翻；最后显示最后一次的报错
+  {
+    const { fc, calls } = mk((text, n) => ({ error: n < 3 ? '连接超时' : '网络不通', kind: n < 3 ? 'timeout' : 'network' }));
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(2)] }, opts);
+    await settle(fc, 800);
+    assert.strictEqual(calls.length, 4, `第一次 + 再翻 3 次：${calls.length}`);
+    assert.deepStrictEqual(calls.map((c) => c.slow), [false, true, true, true]);
+    const v = fc.viewOf('R').items[0];
+    assert.deepStrictEqual([v.state, v.err], ['error', '网络不通']);
+    await sleep(150);
+    assert.strictEqual(calls.length, 4, '不再自动翻');
+    // 用户点「重试」：马上翻，失败了不再自动重翻
+    assert(fc.manual('R', v.h));
+    await settle(fc, 200);
+    assert.strictEqual(calls.length, 5);
+    assert.strictEqual(fc.viewOf('R').items[0].state, 'error');
+    assert.strictEqual(fc.waits.length, 0, '用户点的失败不排自动重翻');
+  }
+  // 3. 密钥、内容、余额、没有免费服务商、语言：不自动重翻
+  for (const kind of ['auth', 'input', 'quota', 'nofree', 'lang', 'model', 'config', 'big', 'bad', 'cancel']) {
+    const { fc, calls } = mk(() => ({ error: '不行', kind }));
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(3)] }, opts);
+    await settle(fc, 150);
+    assert.strictEqual(calls.length, 1, `${kind} 不重翻`);
+    assert.strictEqual(fc.viewOf('R').items[0].state, 'error', kind);
+  }
+  // 4. 重翻时没有免费服务商（默认是付费的、智谱混元都没填）：显示原来那次的报错
+  {
+    const { fc, calls } = mk((text, n, o) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : { error: 'DeepL 服务器出错', kind: 'server' }));
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(4)] }, opts);
+    await settle(fc);
+    assert.strictEqual(calls.length, 2);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
+  }
+  // 4b. 智谱、混元都没填密钥（deps.hasFree 说没有）：不等，直接显示报错
+  {
+    const { fc, calls } = mk(() => ({ error: 'DeepL 服务器出错', kind: 'server' }));
+    fc.deps.hasFree = () => false;
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(8)] }, opts);
+    await sleep(10);
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
+    assert.strictEqual(fc.waits.length, 0);
+  }
+  // 5. 等着重翻时用户点「翻译」：马上翻，定时到了不再翻
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '太忙', kind: 'overload' } : null), [80]);
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(5)] }, opts);
+    await sleep(10);
+    const h = msgHash('R', m(5).id);
+    assert(fc.manual('R', h));
+    await sleep(10);
+    assert.deepStrictEqual(calls.map((c) => c.slow), [false, false]);
+    assert.strictEqual(fc.viewOf('R').items[0].state, 'done');
+    await sleep(120);
+    assert.strictEqual(calls.length, 2, '定时到了不再重复翻');
+  }
+  // 6. 等着重翻时网络换了：马上排上，不等定时
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '网络不通', kind: 'network' } : null), [5000]);
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(6)] }, opts);
+    await sleep(10);
+    assert.strictEqual(fc.waits.length, 1);
+    fc.netChanged();
+    await sleep(20);
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(fc.viewOf('R').items[0].state, 'done');
+    assert.strictEqual(fc.waitTimer, null, '没有等着的，定时器也清掉');
+  }
+  // 7. 删号：等着的不再翻
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '网络不通', kind: 'network' } : null), [40]);
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(7)] }, opts);
+    await sleep(10);
+    fc.forget('R');
+    assert.strictEqual(fc.waits.length, 0);
+    await sleep(80);
+    assert.strictEqual(calls.length, 1);
+  }
+  // 8. 很多条一起失败：只用一个定时器
+  {
+    const { fc } = mk((text, n) => (n === 0 ? { error: '网络不通', kind: 'network' } : null), [60]);
+    fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(10), m(11), m(12)] }, opts);
+    await sleep(15);
+    assert.strictEqual(fc.waits.length, 3);
+    await settle(fc);
+    assert(fc.viewOf('R').items.every((x) => x.state === 'done'));
+  }
+  // 9. 语音转出文字后的翻译也自动重翻（转文字本身不重转）
+  {
+    let heard = 0;
+    const calls = [];
+    const fc = new FloatCore({ retryMs: [20], transcribe: async () => { heard += 1; return { text: 'Hola, ¿tienen pelucas?' }; },
+      translate: async (text, o = {}) => { calls.push(!!o.slow); return calls.length === 1 ? { error: '网络不通', kind: 'network' } : { text: `译:${text}` }; } });
+    fc.ingest('V', { title: 'Lucía', bottom: true, msgs: [{ id: 'false_34612345678@c.us_3RV1', out: false, text: '', voice: 4, src: { jid: 'x', id: 'y' } }] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual([heard, calls], [1, [false, true]]);
+    assert.strictEqual(fc.viewOf('V').items[0].tr, '译:Hola, ¿tienen pelucas?');
+  }
+  // 10. 后台补翻：一条失败，整排先停，过一会儿接着补（失败的那条先），最后都补上；中间翻成一条就重新计数
+  {
+    let failing = 1;
+    const calls = [];
+    const fc = new FloatCore({ retryMs: [50, 50, 50], parallel: () => 1, translate: async (text, o = {}) => {
+      calls.push({ text, slow: !!o.slow, at: Date.now() });
+      await sleep(2);
+      if (o.slow && failing > 0) { failing -= 1; return { error: '网络不通', kind: 'network' }; }
+      return { text: `译:${text}` };
+    } });
+    const msgs = Array.from({ length: 9 }, (_, i) => m(20 + i, `Guten Tag ${i}`));
+    fc.ingest('B', { title: 'Jonas', bottom: true, msgs }, opts);
+    await sleep(15);
+    const slowCalls = () => calls.filter((c) => c.slow);
+    const firstFail = slowCalls()[0];
+    assert(fc.bgUntil > 0, '后台补翻先停');
+    await settle(fc);
+    assert(fc.viewOf('B').items.every((x) => x.state === 'done'), '最后都补上');
+    const after = slowCalls().filter((c) => c.at > firstFail.at + 5);
+    assert.strictEqual(after[0].text, firstFail.text, '失败的那条先接着补');
+    assert(after[0].at - firstFail.at >= 35, `停了一会儿才接着补：${after[0].at - firstFail.at}ms`);
+    assert.strictEqual(fc.bgFails, 0, '翻成一条就重新计数');
+    assert.strictEqual(fc.viewOf('B').today, 5, '后台补翻不算额度');
+    // 网络换了：停着的马上接着补
+    failing = 1;
+    const fc2 = new FloatCore({ retryMs: [5000], parallel: () => 1, translate: async (text, o = {}) => (o.slow && failing-- > 0 ? { error: '网络不通', kind: 'network' } : { text: `译:${text}` }) });
+    fc2.ingest('B', { title: 'Jonas', bottom: true, msgs }, opts);
+    await sleep(20);
+    assert(fc2.bgUntil > 0);
+    fc2.netChanged();
+    await settle(fc2, 300);
+    assert(fc2.viewOf('B').items.every((x) => x.state === 'done'), '网络换了马上接着补');
+  }
+  console.log('翻译失败自动重翻自检通过');
 }
 
 // 点译文右下角的时间显示这条是什么时候翻的、用了多久、哪个模型翻的（shen 2026-10-30）：
@@ -239,7 +594,7 @@ async function translateVia() {
   await sleep(30);
   assert.deepStrictEqual(fc.viewOf('V').items[0].via, vi.via, '语音重启后显示当时存下的');
   // 8. 翻译失败、对方说忙的那次不记 via
-  const bad = new FloatCore({ now: () => now, translate: async () => ({ error: '翻译失败', kind: 'network' }) });
+  const bad = new FloatCore({ now: () => now, retryMs: [], translate: async () => ({ error: '翻译失败', kind: 'network' }) });
   bad.ingest('E', { title: 'x', msgs: [m(9, 'Hallo, wie geht es Ihnen?')] }, opts);
   await sleep(20);
   assert.strictEqual(bad.viewOf('E').items[0].state, 'error');
@@ -298,8 +653,8 @@ async function lidSwitch() {
   assert(items.every((x) => x.state === 'done'));
   unique(items);
   assert.strictEqual(fc.viewOf('W').chatKey, key0, '草稿、客户语言跟着对话走');
-  assert.strictEqual(logs.length, 1, '认出别名时记一行日志');
-  assert(!logs[0].includes('@'), '日志里没有编号');
+  assert.strictEqual(logs.filter((x) => x.includes('换了编号')).length, 1, '认出别名时记一行日志');
+  assert(!logs.some((x) => x.includes('@')), '日志里没有编号');
   // 2. 换编号 + 重启（新的 FloatCore 和 TrStore，同一个文件夹）
   store.flush();
   ({ store, fc } = make());
@@ -718,7 +1073,7 @@ async function catchUpOlder() {
   const sent = [];
   let free = true;
   let slowErr = '';
-  const fc = new FloatCore({ store, translate: async (text, o = {}) => {
+  const fc = new FloatCore({ store, retryMs: [20, 20, 20], translate: async (text, o = {}) => {
     if (o.slow && !free) return { error: '没有免费的翻译服务', kind: 'nofree' };
     if (o.slow && slowErr) { sent.push(`错:${text}`); return { error: '网络不通', kind: slowErr }; }
     sent.push(o.slow ? `慢:${text}` : text);
@@ -767,17 +1122,19 @@ async function catchUpOlder() {
   await idle();
   assert.deepStrictEqual(fg().slice(0, 2), ['Hey 4', 'Hey 0'], '点了的插到最前面（正在翻的那条翻完就轮到它）');
   assert.deepStrictEqual(bg(), ['慢:Hey 3', '慢:Hey 2', '慢:Hey 1'], '后台补的最新的先翻，点了的那条不再走后台');
-  // 免费服务商出错（网络不通）：只试一条，排着的都退回「翻译」按钮，不一条条去试
+  // 免费服务商一直出错（网络不通）：每轮只试同时在翻的那几条，停一会儿再接着补；连着 4 轮（第一次 + 再补 3 轮）都失败，
+  // 排着的都退回「翻译」按钮，不一条条去试
   slowErr = 'network';
   sent.length = 0;
   const chat5 = '12125550123@c.us';
   const m5 = Array.from({ length: 12 }, (_, i) => ({ id: `false_${chat5}_3EF${i}`, out: false, text: `Hello ${i}` }));
   fc.ingest('N', { title: 'Emily', bottom: true, msgs: m5 }, opts);
   await idle();
-  // 同时在翻的几条（最多 3 条）各自出错，排着的不再去试
   const errs = sent.filter((x) => x.startsWith('错:'));
   // （这个号一分钟里已经自动翻了 20 多条：最近 5 条也被每分钟的上限挡下，一起交给后台，最新的先试）
-  assert(errs.length >= 1 && errs.length <= 3 && errs[0] === '错:Hello 11', `出错只试同时在翻的那几条：${errs}`);
+  assert(errs.length >= 4 && errs.length <= 12 && errs[0] === '错:Hello 11', `每轮只试同时在翻的那几条，共 4 轮：${errs}`);
+  assert.strictEqual(errs.filter((x) => x === '错:Hello 11').length, 4, '失败的那条每轮先试');
+  assert.strictEqual(fc.bgFails, 0, '放弃后重新计数');
   assert(fc.viewOf('N').items.every((x) => (x.state === 'manual' || x.state === 'done') && !x.err), '退回「翻译」按钮，不报错');
   slowErr = '';
   // 自动关着打开对话，再打开自动：一样，存着的不占名额，更早的后台补

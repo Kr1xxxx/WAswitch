@@ -18,6 +18,7 @@ const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
 const { addMenuTemplate } = require('./add-menu');
+const { pageMenuTemplate } = require('./page-menu');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
@@ -1533,6 +1534,8 @@ async function onNetworkChange() {
   const tr = trIpc.translateSession(false); // 翻译可能跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
+  // 等着自动重翻的、停着的后台补翻：换了线路马上再试（刚掉线那一下不试，试了也是白白用掉一次）
+  if (trIpc.floatCore && electronNet.isOnline()) trIpc.floatCore.netChanged();
   reconnectStuck();
   directTz.sync().catch(() => {});
   // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
@@ -1782,28 +1785,15 @@ function setSpellcheck(id, on) {
   applySpellcheck(acc);
   pushState();
 }
-// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、剪切/复制/粘贴，选中聊天文字时还有「翻译」。不提供“检查元素”
+// 账号页面里的右键菜单（原生菜单，不往页面里加东西）：拼写建议、加入词典、右键图片有复制图片、剪切/复制/粘贴，选中聊天文字时还有「翻译」。不提供“检查元素”。菜单内容见 page-menu.js
 function setupPageMenu(wc, ses, id) {
   wc.on('context-menu', (_e, p) => {
-    const items = [];
-    if (p.misspelledWord) {
-      for (const word of (p.dictionarySuggestions || []).slice(0, 5)) items.push({ label: word, click: () => wc.replaceMisspelling(word) });
-      if (!items.length) items.push({ label: '没有拼写建议', enabled: false });
-      items.push({ label: `把“${p.misspelledWord.slice(0, 30)}”加入词典`, click: () => ses.addWordToSpellCheckerDictionary(p.misspelledWord) });
-      items.push({ type: 'separator' });
-    }
-    if (p.isEditable) {
-      items.push(
-        { label: '剪切', role: 'cut', enabled: p.editFlags.canCut },
-        { label: '复制', role: 'copy', enabled: p.editFlags.canCopy },
-        { label: '粘贴', role: 'paste', enabled: p.editFlags.canPaste },
-        { label: '全选', role: 'selectAll', enabled: p.editFlags.canSelectAll },
-      );
-    } else if (p.selectionText) {
-      items.push({ label: '复制', role: 'copy' });
-      // 和选中后出现的小按钮同一条路：在选区旁边弹出悬浮译文窗
-      if (p.selectionText.trim()) items.push({ label: '翻译', click: () => selTr.fromMenu(id, wc, p.selectionText, { x: p.x, y: p.y }) });
-    }
+    const items = pageMenuTemplate(p, {
+      replaceMisspelling: (word) => wc.replaceMisspelling(word),
+      addWord: (word) => ses.addWordToSpellCheckerDictionary(word),
+      copyImage: () => wc.copyImageAt(p.x, p.y),
+      translate: () => selTr.fromMenu(id, wc, p.selectionText, { x: p.x, y: p.y }),
+    });
     if (items.length) Menu.buildFromTemplate(items).popup({ window: win });
   });
 }
