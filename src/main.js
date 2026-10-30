@@ -2780,6 +2780,7 @@ app.whenReady().then(async () => {
   refresh();
   if (!shouldStartHidden()) win.show();
   if (dataStart.fallback) setTimeout(() => notifier.notifyApp('D 盘打不开', datadir.fallbackText(dataStart)), 5000);
+  else if (dataStart.shared) setTimeout(() => notifier.notifyApp('账号数据已分开', datadir.fallbackText(dataStart)), 5000);
 
   // 电脑睡眠醒来后，网络和 Clash 需要几秒恢复，之后重连所有连不上的账号
   setInterval(checkIdleLock, LOCK_POLL_MS);

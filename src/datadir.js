@@ -240,8 +240,10 @@ function renameRetry(from, to, wait) {
 function move({ home, root = ROOT, cp = fs.cpSync, statfs = fs.statfsSync, wait = sleep, log = () => {} } = {}) {
   const dest = dataDirOf(root);
   const tmp = `${dest}.tmp`;
+  let claimed = false; // 这次给空的 D:\WAswitch\data 记上了自己：没搬成就把记号拿掉，别的用户还能用
   const fail = (reason, e) => {
     try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 }); } catch { /* 下次搬之前还会先删 */ }
+    if (claimed) { try { if (!hasData(dest) && ownerOf(dest, home) === 'mine') fs.rmSync(path.join(dest, OWNER), { force: true }); } catch { /* 留着也只是空文件夹带着自己的记号 */ } }
     const s = readState(home);
     writeState(home, { ...s, error: reason });
     log(`账号数据没搬到 D 盘（${reason}${e ? `：${e.message}` : ''}），继续用 C 盘`);
@@ -256,6 +258,11 @@ function move({ home, root = ROOT, cp = fs.cpSync, statfs = fs.statfsSync, wait 
     if (who === 'other' || who === 'broken') return fail('owner');
     // D:\WAswitch\data 里已经有账号数据（以前在 D 盘用过）：不覆盖
     if (hasData(dest)) return fail('exists');
+    // 复制要几分钟：先记上自己，这期间别的用户第一次打开不会用这个空文件夹（不然改名前删 dest 会删掉他刚写的东西）
+    if (who === 'none') {
+      try { fs.mkdirSync(dest, { recursive: true }); claimed = claimOwner(dest, home); } catch (e) { return fail('owner', e); }
+      if (!claimed) return fail('owner');
+    }
     const src = measure(home);
     let free;
     try { free = freeBytes(root, statfs); } catch (e) { return fail('nostat', e); }
@@ -267,7 +274,9 @@ function move({ home, root = ROOT, cp = fs.cpSync, statfs = fs.statfsSync, wait 
     if (got.files !== src.files || got.bytes !== src.bytes) return fail(`verify ${got.files}/${src.files} ${got.bytes}/${src.bytes}`);
     // 改名之前记上自己，D 盘的 data 一出现就带着记号
     try { writeJsonAtomic(path.join(tmp, OWNER), ownerBody(home), 2); } catch (e) { return fail('owner', e); }
-    // 空的 data 文件夹（安装包或上次 rootUsable 建的）先删掉，才能改名
+    // 空的 data 文件夹（安装包或上次 rootUsable 建的）先删掉，才能改名。删之前再看一眼：还是自己的、还是空的
+    if (ownerOf(dest, home) !== 'mine') return fail('owner');
+    if (hasData(dest)) return fail('exists');
     try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e) { return fail('dest', e); }
     try { renameRetry(tmp, dest, wait); } catch (e) { return fail('rename', e); }
     try { writePointer(home, { dir: dest, cleanC: true, movedAt: Date.now() }); } catch (e) {
@@ -311,9 +320,11 @@ function waitForExit(pid, ms = 60000, wait = sleep) {
   }
 }
 
-// D 盘打不开时界面上那一句
+// D 盘打不开、或者 D 盘那份是别的用户的时，界面上那一句
 function fallbackText(start) {
-  return start && start.fallback ? `D 盘打不开，账号数据在 ${start.wanted}，现在先用 C 盘。接好 D 盘后重启 WAswitch。` : '';
+  if (start && start.fallback) return `D 盘打不开，账号数据在 ${start.wanted}，现在先用 C 盘。接好 D 盘后重启 WAswitch。`;
+  if (start && start.shared) return `${start.shared} 里的账号数据属于这台电脑的另一个 Windows 用户，已改用你自己的位置，请重新登录账号。`;
+  return '';
 }
 
 module.exports = { ROOT, POINTER, STATE, OWNER, ownerOf, KEEP, SKIP, apply, resolve, shouldMove, noteAttempt, move, cleanOld, measure, hasData, readPointer, readState, waitForExit, fallbackText, MAX_TRIES, RETRY_MS };
