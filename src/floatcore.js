@@ -20,6 +20,10 @@ const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
 const VOICE_MAX_S = 300; // 超过 5 分钟的语音不自动转（点「转文字」只转前 5 分钟，见 asr.js）
 const VOICE_TRIP = 3; // 网页号连续 3 条语音读不到（存储改版等）：这次运行里不再自动去读，新语音只给「转文字」按钮
+// 暂时的失败（网络、超时、服务器、太忙、别的）过一会儿自动再翻：10 秒、30 秒、90 秒各一次（各加减 15%），只用免费的智谱、混元。
+// 自动翻译的一条最多再翻 3 次；后台补翻失败先停，按这个间隔接着补，连着再失败 3 轮才退回「翻译」按钮（shen 2026-10-30）
+const RETRY_MS = [10000, 30000, 90000];
+const TEMP_FAIL = new Set(['network', 'timeout', 'server', 'overload', 'other']);
 const KEEP_VIEW = VIEW_MAX; // 40（和 trstore.js 存的条数一样）。读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
 // 从最近消息里截上下文：这条消息之前的几条；这条不在里面就不给（别的对话的内容不能串进来）
@@ -111,7 +115,51 @@ class FloatCore {
     this.retryTimer = null;
     this.vq = []; // 等着转文字的语音（单独一条道）
     this.vrunning = false;
+    this.waits = []; // 等着自动重翻的：{ accId, h, at, context }
+    this.waitTimer = null; // 重翻和后台补翻接着补共用一个定时器
+    this.bgFails = 0; // 后台补翻连着失败了几轮（有一条翻成就清零）
+    this.bgRound = 0; // 后台补翻第几轮：停下来时加一，之前开始的那些再失败不算一轮
+    this.bgUntil = 0; // 后台补翻停到什么时候（Date.now()）
     this.onChange = () => {};
+  }
+
+  // 自动重翻的间隔（测试里换短的）；第 n 次（从 0 起）超出就不再重翻
+  retryDelay(n) {
+    const list = Array.isArray(this.deps.retryMs) ? this.deps.retryMs : RETRY_MS;
+    if (n >= list.length) return -1;
+    return Math.round(list[n] * (0.85 + Math.random() * 0.3));
+  }
+
+  // 只用一个定时器：到最早那条该重翻、或后台补翻该接着补的时候
+  armWait() {
+    if (this.waitTimer) { clearTimeout(this.waitTimer); this.waitTimer = null; }
+    const times = this.waits.map((w) => w.at);
+    if (this.bgUntil) times.push(this.bgUntil);
+    if (!times.length) return;
+    this.waitTimer = setTimeout(() => { this.waitTimer = null; this.wake(); }, Math.max(0, Math.min(...times) - Date.now()));
+    if (this.waitTimer.unref) this.waitTimer.unref();
+  }
+
+  // 到时间了（或网络换了，all=true）：等着的排进后台那条路，后台补翻接着补
+  wake(all = false) {
+    const now = Date.now();
+    if (this.bgUntil && (all || this.bgUntil <= now)) this.bgUntil = 0;
+    const due = this.waits.filter((w) => all || w.at <= now);
+    this.waits = this.waits.filter((w) => !due.includes(w));
+    for (const w of due) {
+      const item = this.accs.get(w.accId)?.items.get(w.h);
+      if (!item || item.state !== 'wait') continue; // 用户点过、改过，或者号删了
+      item.state = 'queued';
+      item.bg = true;
+      this.queue.push({ accId: w.accId, h: w.h, slow: true, retry: true, context: w.context });
+    }
+    this.armWait();
+    this.pump();
+  }
+
+  // 网络恢复、换了线路：等着重翻的马上排上，后台补翻马上接着补，不等定时
+  netChanged() {
+    if (this.waits.length || this.bgUntil) this.wake(true);
   }
 
   now() { return this.deps.now ? this.deps.now() : Date.now(); }
@@ -131,6 +179,8 @@ class FloatCore {
     this.queue = this.queue.filter((q) => q.accId !== accId);
     this.vq = this.vq.filter((q) => q.accId !== accId);
     for (const job of this.slowRun) if (job.accId === accId) job.ctl.abort(); // 删号：正在后台补翻的也停下
+    this.waits = this.waits.filter((w) => w.accId !== accId);
+    this.armWait();
   }
 
   // 网页号页面重新加载了：之前连续读不到语音的记录清掉，新语音再自动去读
@@ -217,7 +267,7 @@ class FloatCore {
       if (had) {
         if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; // 补回来时没有原文的旧消息又读到了：补上原文
         // 还没开始翻的：页面上的文字变了（刚加进来时还没显示全）就用新的
-        else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued') && String(m.text).trim() && String(m.text) !== had.text) { had.text = String(m.text); filled = true; }
+        else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued' || had.state === 'wait') && String(m.text).trim() && String(m.text) !== had.text) { had.text = String(m.text); filled = true; }
         continue;
       }
       const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
@@ -412,8 +462,9 @@ class FloatCore {
     const item = st && st.items.get(h);
     if (!item || (!item.text && !(isVoice(item) && item.src)) || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文还没补上原文的，不能重翻
     if (!item.text && !this.deps.transcribe) return false;
+    if (item.state === 'wait') this.waits = this.waits.filter((w) => !(w.accId === accId && w.h === h)); // 等着自动重翻的：现在就翻，不再等
     if (item.state === 'queued') {
-      // 在后台慢慢补的那条用户等不及点了：插到最前面马上翻
+      // 在后台慢慢补的那条（或排着自动重翻的）用户等不及点了：插到最前面马上翻
       const i = this.queue.findIndex((q) => q.accId === accId && q.h === h && q.slow);
       if (i < 0) return false;
       this.queue.splice(i, 1);
@@ -423,6 +474,7 @@ class FloatCore {
     item.err = '';
     item.errKind = '';
     item.errCode = '';
+    item.tries = 0; // 用户自己点的：之前自动重翻过几次不再算
     this.queue.unshift({ accId, h, manual: true, fix: fix === true, context: this.contextOf(accId, h) });
     this.pump();
     return true;
@@ -535,7 +587,8 @@ class FloatCore {
       const later = this.queue.filter((q) => !q.slow && !q.taken && q.after > now).map((q) => q.after);
       if (later.length && !this.retryTimer) this.retryTimer = setTimeout(() => { this.retryTimer = null; this.pump(); }, Math.max(0, Math.min(...later) - now));
       if (this.active >= MAX_PARALLEL) return;
-      const slow = this.queue.find((q) => q.slow && !q.taken);
+      // 自动重翻的先（是最近的消息）；后台补翻停着（刚失败、等着接着补）时不取补翻的
+      const slow = this.queue.find((q) => q.slow && q.retry && !q.taken) || (this.bgUntil ? null : this.queue.find((q) => q.slow && !q.taken));
       if (!slow) return;
       this.start(slow);
     }
@@ -611,7 +664,7 @@ class FloatCore {
     job.released = false;
     this.active += 1;
     this.running = true;
-    if (job.slow) { job.ctl = new AbortController(); this.slowRun.add(job); }
+    if (job.slow) { job.ctl = new AbortController(); job.round = this.bgRound; this.slowRun.add(job); }
     this.run(job).catch(() => {}).finally(() => {
       job.taken = false;
       if (job.slow) this.slowRun.delete(job);
@@ -654,23 +707,83 @@ class FloatCore {
       if (this.queue.includes(job)) { item.state = 'queued'; job.after = Date.now() + BUSY_RETRY; }
       return;
     }
+    const kept = this.queue.includes(job); // 后台补翻整体退回按钮时，排着的（包括正在翻的）都拿掉了
     done();
     if (this.accs.get(job.accId) !== st) return; // 号被删了或重建了
     const via = r && r.text ? { at: this.now(), ms: Math.max(0, Math.round(this.now() - t0)), name: r.provider || '', model: r.model || '', fix: !!job.fix } : null;
     if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.suggestVia = via; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
-    else if (job.slow && !(r && r.text)) this.slowFailed(item);
-    else if (r && r.text) { item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item); }
-    else { item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || ''; }
+    else if (job.retry && !(r && r.text)) this.retryFailed(job, item, r);
+    else if (job.slow && !(r && r.text)) this.bgFailed(job, item, r, kept);
+    else if (!(r && r.text) && !job.manual && !job.fix && this.retryLater(job, item, r)) { /* 自动翻译暂时失败：过一会儿用免费的再翻 */ }
+    else if (r && r.text) {
+      if (job.slow && !job.retry) this.bgFails = 0; // 后台补翻翻成一条：重新计数
+      item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item);
+      item.lastErr = null; item.tries = 0;
+    }
+    else this.showError(item, r);
     this.onChange(job.accId);
   }
 
-  // 后台补翻失败（没有免费服务商、网络不通、超时、密钥不对……）：不显示报错，这条和排着的都退回「翻译」按钮，
+  showError(item, r) {
+    item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || '';
+    item.lastErr = null;
+  }
+
+  // 自动翻译（新消息、最近 5 条、语音转出来的文字）暂时失败：先显示「翻译」按钮，过一会儿用免费服务商再翻。
+  // 密钥、余额、内容、语言、模型、设置这类再翻也一样的不重翻（密钥的填好后由 retryKeyErrors 重翻）。返回 true 表示排上了
+  retryLater(job, item, r) {
+    const kind = (r && r.kind) || 'other';
+    if (!TEMP_FAIL.has(kind)) return false;
+    const n = item.tries || 0;
+    const ms = this.retryDelay(n);
+    if (ms < 0) return false;
+    item.tries = n + 1;
+    item.lastErr = r || { error: '翻译失败', kind: 'other' }; // 重翻时没有免费服务商等：最后显示这次的报错
+    item.state = 'wait';
+    item.bg = false;
+    this.waits.push({ accId: job.accId, h: job.h, at: Date.now() + ms, context: job.context });
+    this.armWait();
+    return true;
+  }
+
+  // 自动重翻又失败：还是暂时的就再等（最多 3 次），否则显示报错和「重试」。
+  // 重翻这条路本身的问题（没有免费服务商、被取消）显示原来那次的报错
+  retryFailed(job, item, r) {
+    if (this.retryLater(job, item, r)) return;
+    const kind = r && r.kind;
+    this.showError(item, (kind === 'nofree' || kind === 'cancel') && item.lastErr ? item.lastErr : r);
+  }
+
+  // 后台补翻失败：暂时的（网络、超时……）整个后台补翻先停，10 秒、30 秒、90 秒后接着补，失败的那条排最前；
+  // 连着再失败 3 轮，或者是再翻也一样的（没有免费服务商、密钥不对……），才全部退回「翻译」按钮，下次切到对话再补。
+  // 同时在翻的几条一起失败只算一轮（停下以前开始的再失败不算）
+  bgFailed(job, item, r, kept) {
+    if (!kept) { item.state = 'manual'; item.bg = false; return; } // 已经整体退回了
+    const kind = (r && r.kind) || 'other';
+    if (TEMP_FAIL.has(kind) && job.round !== this.bgRound) { this.requeueBg(job, item); return; }
+    const ms = TEMP_FAIL.has(kind) ? this.retryDelay(this.bgFails) : -1;
+    if (ms < 0) { this.bgFails = 0; this.bgUntil = 0; this.bgRound += 1; this.slowFailed(item); return; }
+    this.bgFails += 1;
+    this.bgRound += 1;
+    this.bgUntil = Date.now() + ms;
+    this.requeueBg(job, item);
+    this.armWait();
+  }
+
+  // 放回后台队列最前面，照旧显示「翻译」
+  requeueBg(job, item) {
+    item.state = 'queued';
+    item.bg = true;
+    this.queue.unshift(job);
+  }
+
+  // 后台补翻放弃（见 bgFailed）：不显示报错，这条和排着的都退回「翻译」按钮，
   // 不再一条条去试（节点挂了时每条要等 30 秒，会一直占着翻译）；下次切到对话再补
   slowFailed(item) {
     item.state = 'manual';
     item.bg = false;
     this.queue = this.queue.filter((q) => {
-      if (!q.slow) return true;
+      if (!q.slow || q.retry) return true; // 自动重翻的各自算次数
       const it = this.accs.get(q.accId)?.items.get(q.h);
       if (it && it.state === 'queued') { it.state = 'manual'; it.bg = false; this.onChange(q.accId); }
       return false;
@@ -688,7 +801,7 @@ class FloatCore {
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice, via }) => ({ h, text, t, state: state === 'queued' && bg ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null, via: cleanVia(via) })),
+        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice, via }) => ({ h, text, t, state: (state === 'queued' && bg) || state === 'wait' ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null, via: cleanVia(via) })),
     };
   }
 }

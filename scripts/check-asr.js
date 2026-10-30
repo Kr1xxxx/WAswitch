@@ -250,6 +250,7 @@ async function heardKept() {
   let trOk = false;
   const mk = (store) => new FloatCore({
     store,
+    retryMs: [], // 翻译失败不自动重翻，直接看报错
     transcribe: async (acc, src) => { heard.push(src.id); return src.id === 'E1' ? { error: '没听出说的话', kind: 'empty' } : { text: 'Hola, ¿tienen pelucas rubias?' }; },
     translate: async (text) => (trOk ? { text: `中:${text}`, warn: [] } : { error: '网络不通', kind: 'network' }),
   });
