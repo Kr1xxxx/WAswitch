@@ -1,6 +1,6 @@
 # Windows 安装包实测（只在 CI 的 windows-latest 上跑，见 .github/workflows/installer-win.yml）。
 # 验证：第一次安装默认装到 D:\WAswitch\app；自动更新（--updated /S）原地装、不动 D:\WAswitch 里的译文；
-# 卸载只删程序；已经装在 C 盘的老电脑更新后程序不挪；向导（有页面）安装同样装到 D 盘；
+# 卸载只删程序（卸载前先等 WAswitch.exe 能删，跑完以注册表位置清掉为准）；已经装在 C 盘的老电脑更新后程序不挪；向导（有页面）安装同样装到 D 盘；
 # 同一台电脑另一个用户已经装在 D:\WAswitch\app 时装到 C 盘。
 # 用法：pwsh scripts/win-installer-test.ps1 <安装包.exe>
 param([Parameter(Mandatory = $true)][string]$Setup)
@@ -26,19 +26,66 @@ function WaitFor($cond, $secs, $what) {
   return $false
 }
 function Run($exeArgs) { Start-Process -FilePath $Setup -ArgumentList $exeArgs -Wait }
+# 刚装完、更新完约 1 秒内，系统外壳会短暂占住 WAswitch.exe（读新快捷方式的图标）。卸载程序删文件夹只删一次、不重试，
+# 删不掉的跳过，所以卸载前先等 exe 能删，免得它被留下来。
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Lk {
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetFileInformationByHandle(IntPtr h, int c, ref byte v, uint n);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  // 开一下（写 + 删除权限，全共享）就关：0 能开；32 别人开着且不让写/删；2 文件不在
+  public static int Open(string p) {
+    IntPtr h = CreateFileW(p, 0x40000000u | 0x00010000u, 7, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    if (h == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+    CloseHandle(h); return 0;
+  }
+  // 标记删除再马上取消（不会真删）：0 能删；5 被映射着删不掉；32 别人开着不让删
+  public static int Disp(string p) {
+    IntPtr h = CreateFileW(p, 0x00010000u, 7, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    if (h == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+    try {
+      byte y = 1;
+      if (!SetFileInformationByHandle(h, 4, ref y, 1)) return Marshal.GetLastWin32Error();
+      byte n = 0; SetFileInformationByHandle(h, 4, ref n, 1); return 0;
+    } finally { CloseHandle(h); }
+  }
+}
+'@
+function Probe($exe) { "open=$([Lk]::Open($exe)) disp=$([Lk]::Disp($exe))" }
+# 先等 2 秒，再每 100 毫秒探一次，连续 1 秒都能删才算；最多等 60 秒
+function WaitDeletable($exe) {
+  if (-not (Test-Path $exe)) { return }
+  $t0 = Get-Date
+  Start-Sleep -Seconds 2
+  $okSince = $null
+  while (((Get-Date) - $t0).TotalSeconds -lt 60) {
+    if ((Probe $exe) -eq 'open=0 disp=0') {
+      if (-not $okSince) { $okSince = Get-Date }
+      if (((Get-Date) - $okSince).TotalSeconds -ge 1) { break }
+    } else { $okSince = $null }
+    Start-Sleep -Milliseconds 100
+  }
+  Write-Host ("卸载前等了 {0:N1} 秒，WAswitch.exe：{1}" -f ((Get-Date) - $t0).TotalSeconds, (Probe $exe))
+}
 function Uninstall($dir) {
   $u = Join-Path $dir 'Uninstall WAswitch.exe'
   if (-not (Test-Path $u)) { return }
+  $exe = Join-Path $dir 'WAswitch.exe'
   StopApp
-  Start-Process -FilePath $u -ArgumentList '/S' # 卸载程序会复制自己再退出，所以不能 -Wait，轮询等程序文件夹消失
-  if (-not (WaitFor { -not (Test-Path (Join-Path $dir 'WAswitch.exe')) } 240 '卸载')) {
-    Write-Host '--- 卸载没完成，现场：'
+  WaitDeletable $exe
+  Start-Process -FilePath $u -ArgumentList '/S' # 卸载程序会复制自己再退出，所以不能 -Wait；它最后一步清注册表位置，看这个判断跑完
+  $done = WaitFor { $null -eq (InstallLocation) } 60 '注册表位置清掉（卸载程序最后一步）'
+  if (-not $done -or (Test-Path $exe)) {
+    Write-Host ($(if ($done) { '--- 卸载跑完了，WAswitch.exe 还在，' } else { '--- 卸载 60 秒没跑完，' }) + "探针：$(Probe $exe)，现场：")
     Get-Process | Sort-Object StartTime -Descending -ErrorAction SilentlyContinue | Select-Object -First 25 | Format-Table Id, ProcessName, StartTime, MainWindowTitle -AutoSize | Out-String | Write-Host
     Get-ChildItem $dir -Force -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { Write-Host "$($_.Name) $($_.Length)" }
-    return
+    Fail "卸载 $dir 没删干净"
   }
   WaitFor { -not (Test-Path $dir) } 30 '安装文件夹删除' | Out-Null
-  WaitFor { $null -eq (InstallLocation) } 30 '注册表位置清掉（卸载程序最后一步）' | Out-Null
 }
 function StopApp { Get-Process WAswitch -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
