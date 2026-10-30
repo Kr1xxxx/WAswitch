@@ -238,14 +238,33 @@ async function cleanOld(home, { log = () => {} } = {}) {
   return true;
 }
 
-// 搬家那次启动：等上一个 WAswitch 完全退出（它还占着单实例锁）
+// 搬家那次启动：等上一个 WAswitch 完全退出（它还占着单实例锁）。返回 true 表示它已经退出
 function waitForExit(pid, ms = 60000, wait = sleep) {
-  if (!pid) return;
+  if (!pid) return true;
   const until = Date.now() + ms;
   while (Date.now() < until) {
-    try { process.kill(pid, 0); } catch { return; }
+    try { process.kill(pid, 0); } catch { return true; }
     wait(200);
   }
+  return false;
+}
+
+// 上一个进程退出最多等多久。退出时要先让轻量号写盘，慢的时候超过一分钟
+const MOVE_WAIT_MS = 5 * 60 * 1000;
+
+// 单实例锁。普通启动：拿不到就退出（已有窗口会被显示出来）。
+// 搬家那次启动（--move-data=<pid>）：先等上一个退出，再拿锁；等了 MOVE_WAIT_MS 还拿不到就放弃这次搬家，
+// 按普通方式（隐藏）重开一次，免得上一个退出后软件就这么没了。搬家的尝试已记在 data-move.json 里，隔 24 小时再试。
+// 返回 { isPrimary, movingData }
+function takeLock(app, argv, active, { ms = MOVE_WAIT_MS, wait = sleep } = {}) {
+  const moveArg = active ? argv.find((a) => a.startsWith('--move-data')) : null;
+  if (moveArg) waitForExit(Number(moveArg.split('=')[1]) || 0, ms, wait);
+  const isPrimary = app.requestSingleInstanceLock();
+  if (!isPrimary) {
+    if (moveArg) app.relaunch({ args: [...argv.slice(1).filter((a) => !a.startsWith('--move-data') && a !== '--hidden'), '--hidden'] });
+    app.exit(0);
+  }
+  return { isPrimary, movingData: !!(moveArg && isPrimary) };
 }
 
 // D 盘打不开时界面上那一句
@@ -253,4 +272,4 @@ function fallbackText(start) {
   return start && start.fallback ? `D 盘打不开，账号数据在 ${start.wanted}，现在先用 C 盘。接好 D 盘后重启 WAswitch。` : '';
 }
 
-module.exports = { ROOT, POINTER, STATE, KEEP, SKIP, apply, resolve, shouldMove, noteAttempt, move, cleanOld, measure, hasData, readPointer, readState, waitForExit, fallbackText, MAX_TRIES, RETRY_MS };
+module.exports = { ROOT, POINTER, STATE, KEEP, SKIP, apply, resolve, shouldMove, noteAttempt, move, cleanOld, measure, hasData, readPointer, readState, waitForExit, takeLock, MOVE_WAIT_MS, fallbackText, MAX_TRIES, RETRY_MS };

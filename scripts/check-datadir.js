@@ -353,8 +353,88 @@ test('指针文件坏了：当没有指针（C 没数据就按新装处理）', 
 
 test('waitForExit：进程不在就马上返回', () => {
   const t = Date.now();
-  dd.waitForExit(2 ** 22 + 12345, 2000);
+  assert.equal(dd.waitForExit(2 ** 22 + 12345, 2000), true);
   assert.ok(Date.now() - t < 1000);
+});
+
+// 搬家那次启动（--move-data=<旧进程 pid>）：等不到旧进程退出时，软件也要重新打开
+const { spawn } = require('child_process');
+const sleeper = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+// 假的 app：lock 是 requestSingleInstanceLock 的结果；记下 relaunch 和 exit
+function lockApp(lock) {
+  const a = { relaunched: [], exited: [], locks: 0 };
+  a.requestSingleInstanceLock = () => { a.locks += 1; return typeof lock === 'function' ? lock() : lock; };
+  a.relaunch = (o) => a.relaunched.push(o.args);
+  a.exit = (c) => a.exited.push(c);
+  return a;
+}
+const MV = ['/x/WAswitch.exe', '--move-data=%PID%', '--hidden'];
+const argvFor = (pid) => MV.map((x) => x.replace('%PID%', pid));
+
+test('waitForExit：进程还活着返回 false，退出了返回 true', async () => {
+  const c = sleeper();
+  const t = Date.now();
+  assert.equal(dd.waitForExit(c.pid, 300), false);
+  assert.ok(Date.now() - t >= 300);
+  c.kill();
+  await new Promise((r) => c.once('exit', r));
+  assert.equal(dd.waitForExit(c.pid, 5000), true);
+  assert.equal(dd.waitForExit(0), true);
+});
+
+test('takeLock 搬家：旧进程一直不退（拿不到锁）→ 放弃搬家，隐藏重开，不带 --move-data', async () => {
+  const c = sleeper();
+  const app = lockApp(false); // 旧进程还占着锁
+  const r = dd.takeLock(app, argvFor(c.pid), true, { ms: 300 });
+  c.kill();
+  assert.deepEqual(r, { isPrimary: false, movingData: false });
+  assert.equal(app.relaunched.length, 1, '重开了一次');
+  assert.deepEqual(app.relaunched[0], ['--hidden']);
+  assert.deepEqual(app.exited, [0]);
+});
+
+test('takeLock 搬家：旧进程晚退出（超过原来的 60 秒，但在期限内）→ 等到它退出，拿到锁，搬家，不重开', () => {
+  // 同步等待期间收不到子进程退出，所以用假的「等一下」：第 5 次等的时候让这个 pid 消失
+  const realKill = process.kill;
+  let waits = 0;
+  let gone = false;
+  process.kill = (pid, sig) => { if (gone && pid === 424242) { const e = new Error('ESRCH'); e.code = 'ESRCH'; throw e; } return true; };
+  try {
+    const app = lockApp(true);
+    const r = dd.takeLock(app, argvFor(424242), true, { ms: 5 * 60 * 1000, wait: () => { waits += 1; if (waits === 5) gone = true; } });
+    assert.equal(waits, 5, '一直等到它退出');
+    assert.deepEqual(r, { isPrimary: true, movingData: true });
+    assert.equal(app.relaunched.length, 0);
+    assert.equal(app.exited.length, 0);
+  } finally { process.kill = realKill; }
+});
+
+test('takeLock 搬家：pid 还在但锁是空的（别的程序占了这个 pid）→ 等够时间后照样拿锁搬家', async () => {
+  const c = sleeper();
+  const app = lockApp(true);
+  const r = dd.takeLock(app, argvFor(c.pid), true, { ms: 300 });
+  c.kill();
+  assert.deepEqual(r, { isPrimary: true, movingData: true });
+});
+
+test('takeLock 搬家：其它启动参数原样带上（--crash-history 等），去掉 --move-data', () => {
+  const app = lockApp(false);
+  dd.takeLock(app, ['/x/WAswitch.exe', '--move-data=0', '--crash-history=1,2', '--hidden'], true, { ms: 100 });
+  assert.deepEqual(app.relaunched[0], ['--crash-history=1,2', '--hidden']);
+});
+
+test('takeLock 普通启动：拿不到锁就退出，不重开（已有窗口会被显示出来）；拿到就是主实例', () => {
+  const a = lockApp(false);
+  assert.deepEqual(dd.takeLock(a, ['/x/WAswitch.exe'], true), { isPrimary: false, movingData: false });
+  assert.deepEqual([a.relaunched.length, a.exited], [0, [0]]);
+  const b = lockApp(true);
+  assert.deepEqual(dd.takeLock(b, ['/x/WAswitch.exe', '--hidden'], true), { isPrimary: true, movingData: false });
+  assert.equal(b.exited.length, 0);
+});
+
+test('takeLock：账号数据没放 D 盘（active=false）时不理 --move-data', () => {
+  const app = lockApp(true);
+  assert.deepEqual(dd.takeLock(app, argvFor(0), false), { isPrimary: true, movingData: false });
 });
 
 // Windows CI：一个不存在的盘符当作「没有 D 盘」，走真实的 Windows 路径

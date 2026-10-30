@@ -438,6 +438,16 @@ class Updater {
     }
   }
 
+  // 软件要自己重启（设置页改了省内存模式）时：Windows 上有下好的更新，退出时 electron-updater 会静默装，
+  // 参数里没有 --force-run，装完软件不会重新打开。这时改走 install()（装完自动重新打开）。
+  // 返回 true 表示已经走了安装（正在退出），false 表示没有下好的更新或没装成，调用方照常重启
+  async restartWithUpdate() {
+    if (this.installing) return true;
+    if (this.mac || this.state.manual || this.state.status !== 'downloaded') return false;
+    await this.install();
+    return this.installing;
+  }
+
   // ---------- macOS：自己下载 dmg 并校验 ----------
 
   async checkMac() {
