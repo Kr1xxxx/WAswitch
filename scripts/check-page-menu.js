@@ -67,16 +67,18 @@ async function checkRealPage() {
   for (let i = 0; i < 40 && wc.getTitle() !== 'ready'; i += 1) await wait(100);
   assert.strictEqual(wc.getTitle(), 'ready', '页面里的 blob: 图片没加载出来');
   const rectOf = (id) => wc.executeJavaScript(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-  const rightClick = (id) => new Promise(async (resolve, reject) => {
+  const rightClick = async (id) => {
     const pt = await rectOf(id);
     const x = Math.round(pt.x * 0.9);
     const y = Math.round(pt.y * 0.9);
-    const timer = setTimeout(() => reject(new Error(`右键 #${id} 没触发 context-menu`)), 5000);
-    wc.once('context-menu', (_e, p) => { clearTimeout(timer); resolve(p); });
-    wc.sendInputEvent({ type: 'mouseMove', x, y });
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'right', clickCount: 1 });
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'right', clickCount: 1 });
-  });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`右键 #${id} 没触发 context-menu`)), 5000);
+      wc.once('context-menu', (_e, p) => { clearTimeout(timer); resolve(p); });
+      wc.sendInputEvent({ type: 'mouseMove', x, y });
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'right', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'right', clickCount: 1 });
+    });
+  };
 
   // 右键图片：真 params 里是 image，模板只有「复制图片」，点了剪贴板里有 image/png
   clipboard.clear();
@@ -101,6 +103,7 @@ async function checkRealPage() {
 }
 
 app.whenReady().then(async () => {
+  setTimeout(() => done(1, 'check-page-menu FAILED: 30 秒内没跑完'), 30000).unref();
   checkTemplates();
   await checkRealPage();
   done(0, 'check-page-menu: ok');
