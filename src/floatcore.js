@@ -12,9 +12,8 @@ const { textKey, VIEW_MAX } = require('./trstore');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
-const SLOW_GAP = 2000; // 更早没翻的用免费服务商在后台慢慢补：每条之间隔 2 秒
 const PER_MINUTE = 20;
-const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（只在用免费服务商时，见 maxParallel）
+const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（只在用免费服务商时，见 maxParallel）；后台补翻也算在这 3 条里
 const BUSY_RETRY = 700; // 对方说忙：700 毫秒后再来
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
@@ -99,8 +98,7 @@ class FloatCore {
     this.queue = []; // { accId, h, auto }
     this.running = false; // 有没有正在翻的
     this.active = 0; // 正在翻几条
-    this.slowTimer = null;
-    this.slowReady = false;
+    this.slowRun = new Set(); // 正在翻的后台补翻（各带一个 AbortController，新消息、用户点的要位置时让出来）
     this.retryTimer = null;
     this.vq = []; // 等着转文字的语音（单独一条道）
     this.vrunning = false;
@@ -123,6 +121,7 @@ class FloatCore {
     if (this.deps.store) this.deps.store.forgetAccount(accId);
     this.queue = this.queue.filter((q) => q.accId !== accId);
     this.vq = this.vq.filter((q) => q.accId !== accId);
+    for (const job of this.slowRun) if (job.accId === accId) job.ctl.abort(); // 删号：正在后台补翻的也停下
   }
 
   // 网页号页面重新加载了：之前连续读不到语音的记录清掉，新语音再自动去读
@@ -371,13 +370,16 @@ class FloatCore {
   }
 
   // 切到一个对话、打开自动翻译时，这次读到的客户消息（最后 40 条）里还没翻的：
-  // 最后 5 条照常自动翻（默认服务商，算额度）；更早的用免费的智谱或混元在后台慢慢补，最新的先翻，
+  // 最后 5 条照常自动翻（默认服务商，算额度）；更早的用免费的智谱或混元在后台补，最新的先翻，
   // 不算自动翻译的额度（shen 2026-10-29「之前的消息自动用智谱或者混元，免费的慢慢翻完」）。
+  // 最后 5 条里因为每分钟 20 条的上限没排上的，也交给后台补（不然一直停在「翻译」按钮）。
   // 以前翻过、存着的不算在里面；同一次运行里切走再切回也会补（hs 是这次读到的，不只是第一次见到的）
   catchUp(accId, st, hs, opts, recent = st.recent) {
     const todo = hs.slice(-KEEP_VIEW).map((h) => st.items.get(h)).filter((it) => it && (it.text || isVoice(it)) && it.state === 'manual');
-    for (const item of todo.slice(-BACKFILL)) this.queueAuto(accId, st, item, opts, recent);
-    for (const item of todo.slice(0, -BACKFILL).reverse()) this.queueSlow(accId, item, recent);
+    const last = todo.slice(-BACKFILL);
+    for (const item of last) this.queueAuto(accId, st, item, opts, recent);
+    const capped = st.paused === 'minute' ? last.filter((it) => it.state === 'manual') : [];
+    for (const item of [...todo.slice(0, -BACKFILL), ...capped].reverse()) this.queueSlow(accId, item, recent);
   }
 
   // 语音转文字要花钱：更早的语音不在后台补，留着「转文字」按钮
@@ -504,33 +506,42 @@ class FloatCore {
   }
 
   // 从队列里取下一条开始翻，直到占满能同时翻的条数。
-  // 后台慢慢补翻的排在最后，一次只翻一条：别的都翻完了、隔一会儿（SLOW_GAP）才翻下一条，隔的时候来了别的先翻别的
+  // 新消息、用户点的、最近 5 条（非后台的）先取，最多 maxParallel() 条；
+  // 后台补翻用免费服务商自己的通道，和别的加起来最多 3 条，不隔时间；
+  // 位置都被后台补翻占着时来了别的：让出一条后台补翻（取消它，放回队列前面，等会儿再翻）
   pump() {
     const max = this.maxParallel();
-    while (this.active < max) {
+    for (;;) {
       const now = Date.now();
-      const next = this.queue.find((q) => !q.slow && !q.taken && !(q.after > now));
+      const fg = this.active - this.slowRun.size;
+      const next = fg < max ? this.queue.find((q) => !q.slow && !q.taken && !(q.after > now)) : null;
       if (next) {
-        this.stopSlowGap();
+        if (this.active >= MAX_PARALLEL) this.yieldSlow();
+        if (this.active >= MAX_PARALLEL) return; // 让出来的那条还在收尾：它结束时会再来
         this.start(next);
         continue;
       }
       // 刚才说忙的那条：到时间再来
-      const later = this.queue.filter((q) => !q.slow && !q.taken).map((q) => q.after);
-      if (later.length) {
-        if (!this.retryTimer) this.retryTimer = setTimeout(() => { this.retryTimer = null; this.pump(); }, Math.max(0, Math.min(...later) - now));
-        return;
-      }
-      if (this.active > 0) return;
+      const later = this.queue.filter((q) => !q.slow && !q.taken && q.after > now).map((q) => q.after);
+      if (later.length && !this.retryTimer) this.retryTimer = setTimeout(() => { this.retryTimer = null; this.pump(); }, Math.max(0, Math.min(...later) - now));
+      if (this.active >= MAX_PARALLEL) return;
       const slow = this.queue.find((q) => q.slow && !q.taken);
       if (!slow) return;
-      if (!this.slowReady) {
-        if (!this.slowTimer) this.slowTimer = setTimeout(() => { this.slowTimer = null; this.slowReady = true; this.pump(); }, this.deps.slowGap ?? SLOW_GAP);
-        return;
-      }
-      this.slowReady = false;
       this.start(slow);
     }
+  }
+
+  // 让出一条正在翻的后台补翻：最后开始的那条（它最晚翻完）
+  yieldSlow() {
+    const jobs = [...this.slowRun].filter((j) => !j.yielded);
+    const job = jobs[jobs.length - 1];
+    if (!job) return;
+    job.yielded = true;
+    job.ctl.abort();
+    // 取消的那条要等通道收尾才真的空出来；先算它已经让出，不然新的要等它
+    this.slowRun.delete(job);
+    this.active -= 1;
+    job.released = true;
   }
 
   // 转文字的那条道：一次一条。下载、解码、转写都在这里等，不挡文字翻译；转出来的文字回到翻译队列
@@ -584,18 +595,18 @@ class FloatCore {
     }
   }
 
-  stopSlowGap() {
-    if (this.slowTimer) { clearTimeout(this.slowTimer); this.slowTimer = null; }
-    this.slowReady = false;
-  }
-
   start(job) {
     job.taken = true;
+    job.yielded = false;
+    job.released = false;
     this.active += 1;
     this.running = true;
+    if (job.slow) { job.ctl = new AbortController(); this.slowRun.add(job); }
     this.run(job).catch(() => {}).finally(() => {
       job.taken = false;
-      this.active -= 1;
+      if (job.slow) this.slowRun.delete(job);
+      if (!job.released) this.active -= 1;
+      job.released = false;
       this.running = this.active > 0;
       this.pump();
     });
@@ -620,7 +631,13 @@ class FloatCore {
       return;
     }
     let r;
-    try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+    try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow, ...(job.slow ? { signal: job.ctl.signal } : {}) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+    if (job.yielded && !(r && r.text)) {
+      // 给新消息、用户点的让了位置：回到后台队列最前面，照旧显示「翻译」
+      if (this.queue.includes(job)) { item.state = 'queued'; item.bg = true; this.queue.splice(this.queue.indexOf(job), 1); this.queue.unshift(job); }
+      this.onChange(job.accId);
+      return;
+    }
     if (r && r.kind === 'busy') {
       // 用户自己在翻、或付费的那条通道正忙：等一下再来（之前翻好的译文还在，状态先回到排队）
       if (this.queue.includes(job)) { item.state = 'queued'; job.after = Date.now() + BUSY_RETRY; }
