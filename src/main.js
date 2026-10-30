@@ -1533,6 +1533,8 @@ async function onNetworkChange() {
   const tr = trIpc.translateSession(false); // 翻译可能跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
+  // 等着自动重翻的、停着的后台补翻：换了线路马上再试（刚掉线那一下不试，试了也是白白用掉一次）
+  if (trIpc.floatCore && electronNet.isOnline()) trIpc.floatCore.netChanged();
   reconnectStuck();
   directTz.sync().catch(() => {});
   // 轻量号要等心跳发现旧连接断了才进入“重连中”，30 秒后再补一次
