@@ -22,9 +22,12 @@ function sixDigits() {
 
 const codeHash = (purpose, email, code) => sha256hex(`${purpose}:${email}:${code}`);
 
-// 每个 IP 每小时最多要 20 次码（查不到的邮箱也算），在查人之前调
+// 每个 IP 每小时最多要 50 次码（查不到的邮箱也算），在查人之前调。
+// 登录成功时退回一次：一个办公室几十台电脑共用出口 IP，不会被前面的人用光
+const CODE_IP_LIMIT = 50;
+const codeIpKey = (request) => `code:ip:${clientIp(request)}`;
 export async function limitCodeIp(request, db) {
-  await rateLimit(db, `code:ip:${clientIp(request)}`, 20, HOUR, tooFast);
+  await rateLimit(db, codeIpKey(request), CODE_IP_LIMIT, HOUR, tooFast);
 }
 
 // 给 email 发一个新码。调用前已经确认这个邮箱可以收码。发不出去抛 503，并删掉刚生成的码
@@ -68,6 +71,6 @@ export async function consumeCode(request, env, email, code, purpose) {
   // 只有真的删掉了这一行才算：同一个码不能用两次
   const del = await db.prepare('DELETE FROM login_codes WHERE email = ? AND purpose = ? AND code_hash = ?').bind(email, purpose, want).run();
   if (del.meta.changes !== 1) return false;
-  await refundRate(db, [ipKey]);
+  await refundRate(db, [ipKey, codeIpKey(request)]);
   return true;
 }

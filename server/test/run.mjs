@@ -186,7 +186,7 @@ await test('后台要码：陌生邮箱 404 不发信；格式不对 400；不�
   assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, headers: { 'x-waswitch-admin': '' } })).status, 403);
   assert.equal(mail.sent.length, before);
 });
-await test('要码限速：同一邮箱 60 秒 1 次（带 retry_after_s），1 小时 5 次；同一 IP 1 小时 20 次', async () => {
+await test('要码限速：同一邮箱 60 秒 1 次（带 retry_after_s），1 小时 5 次；同一 IP 1 小时 50 次，登录成功的不占', async () => {
   resetLimits();
   assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } })).status, 200);
   const r = await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
@@ -201,8 +201,14 @@ await test('要码限速：同一邮箱 60 秒 1 次（带 retry_after_s），1 
   db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:mail1:%'").run();
   assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '2.2.3.1' })).status, 429, '1 小时 5 次');
   resetLimits();
-  for (let i = 0; i < 20; i += 1) await call('POST', '/api/admin/code', { body: { email: `x${i}@example.com` }, ip: '1.1.1.1' });
-  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '1.1.1.1' })).status, 429, '同一 IP 1 小时 20 次');
+  // 同一个办公室：60 个人先后要码并登录成功，都不被挡
+  for (let i = 0; i < 60; i += 1) {
+    db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:mail%'").run();
+    assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '1.1.1.2' })).status, 200, `第 ${i + 1} 个`);
+    assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: lastCode('boss@example.com') }, ip: '1.1.1.2' })).status, 200);
+  }
+  for (let i = 0; i < 50; i += 1) await call('POST', '/api/admin/code', { body: { email: `x${i}@example.com` }, ip: '1.1.1.1' });
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '1.1.1.1' })).status, 429, '同一 IP 1 小时 50 次');
   resetLimits();
 });
 await test('验证时同一 IP 10 分钟最多 10 次', async () => {
