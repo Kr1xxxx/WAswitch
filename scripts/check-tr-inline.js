@@ -179,8 +179,13 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     check(one >= 0 && (await trOf('IN1')) === ANSWER[1], '同一条消息里多出来的旧块被拿掉，只留一块译文');
 
     // 4. 工作台的翻译页只留回复框；关掉工作台也照样放译文
-    const dock = await shellC.evaluate("({ items: document.querySelectorAll('.dk-item').length, compose: !!document.querySelector('.dk-compose') })");
-    check(dock.items === 0 && dock.compose, `翻译页不再列消息（${dock.items} 条），回复框还在`);
+    const dock = await shellC.evaluate(`(() => {
+      const hgt = (q) => { const e = document.querySelector(q); return e ? Math.round(e.getBoundingClientRect().height) : 0; };
+      return { items: document.querySelectorAll('.dk-item').length, list: !!document.querySelector('.dk-listbox'), compose: !!document.querySelector('.dk-compose'), host: hgt('.dk-host'), inBox: hgt('.dk-compose .dk-in'), outBox: hgt('.dk-compose .dk-out') };
+    })()`);
+    check(dock.items === 0 && !dock.list && dock.compose, `翻译页不再列消息（${dock.items} 条），回复框还在`);
+    // 只剩两个框：平分整页高度（各占三成以上，两个差不多高）
+    check(dock.inBox > dock.host * 0.3 && dock.outBox > dock.host * 0.3 && Math.abs(dock.inBox - dock.outBox) < 24, `翻译页的两个框撑满整页（页 ${dock.host}，上 ${dock.inBox}，下 ${dock.outBox}）`);
     await shot('shell-dock', shellC);
     if (process.env.SHOT_DIR) {
       await shellC.evaluate("settingsTab = 'translate'; window.wa.showPage('settings')");

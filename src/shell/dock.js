@@ -589,8 +589,18 @@ function dockPillSync(box) {
   box.append(play ? fxPlay(pill, 'fx-fade') : pill);
 }
 
+// 自动翻译暂停的提示：消息列表底部和“译文在消息下面”时的两个框上面都用
+function dockPausedHint() {
+  const st = dk.st;
+  if (st.paused === 'day') return h('p', { class: 'hint dk-hint' }, `今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`);
+  if (st.paused === 'minute') return h('p', { class: 'hint dk-hint' }, '一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。');
+  return null;
+}
+
 function dockIncoming() {
   const st = dk.st;
+  // 译文显示在聊天里消息下面（设置 › 翻译）：不列消息，翻译页只有回复的两个框（shen 2026-11-02）
+  if (st.inline) return dockPausedHint();
   const list = h('div', { class: 'dk-list' });
   const box = h('div', { class: 'dk-listbox' }, list);
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
@@ -609,7 +619,6 @@ function dockIncoming() {
   else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
-  else if (st.inline) { /* 译文显示在聊天里消息下面（设置 › 翻译）：这里不再列一遍，只留回复框 */ }
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
   else st.items.forEach((it, i) => {
     const last = i === st.items.length - 1;
@@ -618,8 +627,7 @@ function dockIncoming() {
     if (last) fx(`dk-last:${st.accountId}|${st.title || ''}`, it.h, row, 'fx-in', false);
     add(row);
   });
-  if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
-  else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
+  add(dockPausedHint());
   dockPillSync(box);
   return box;
 }
@@ -790,11 +798,12 @@ function dockRenderBody(force) {
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动
     dockPillSync(list);
+    root.classList.toggle('dk-inline', !!st.inline);
     root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
     dockScrollRestore(mark);
     return;
   }
-  const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: st.inline ? 'dk dk-inline' : 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
   dockScrollRestore(mark);
