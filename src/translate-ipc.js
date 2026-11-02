@@ -371,12 +371,24 @@ function setupTranslateIpc(ctx) {
       return m ? m[1].trim() : '';
     } catch { return ''; }
   };
+  // 颜色有浅、深两套：WhatsApp 是浅色主题用 light（Radix 浅色色阶），深色主题用 dark（Radix 深色色阶，只给这一块用）。字号、圆角两套一样
   let inlineLookCache = null;
-  const inlineLook = () => inlineLookCache || (inlineLookCache = {
-    fsS: cssVar('fonts/fonts.css', 'fs-s') || 'inherit', rS: cssVar('tokens.css', 'r-s') || '0',
-    text: RADIX.hex('slate', 11), strong: RADIX.hex('slate', 12), line: RADIX.hex('slate', 6), bad: RADIX.hex('red', 11),
-    btn: RADIX.hex('slate', 4), btnHover: RADIX.hex('slate', 5), focus: RADIX.hex('blue', 8),
-  });
+  const inlineLook = () => {
+    if (inlineLookCache) return inlineLookCache;
+    const base = { fsS: cssVar('fonts/fonts.css', 'fs-s') || 'inherit', rS: cssVar('tokens.css', 'r-s') || '0' };
+    return (inlineLookCache = {
+      light: {
+        ...base,
+        text: RADIX.hex('slate', 11), strong: RADIX.hex('slate', 12), line: RADIX.hex('slate', 6), bad: RADIX.hex('red', 11),
+        btn: RADIX.hex('slate', 4), btnHover: RADIX.hex('slate', 5), focus: RADIX.hex('blue', 8),
+      },
+      dark: {
+        ...base,
+        text: RADIX.hexDark('slate', 11), strong: RADIX.hexDark('slate', 12), line: RADIX.hexDark('slate-a', 6), bad: RADIX.hexDark('red', 11),
+        btn: RADIX.hexDark('slate-a', 4), btnHover: RADIX.hexDark('slate-a', 5), focus: RADIX.hexDark('blue', 8),
+      },
+    });
+  };
   // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
   function inlineEntry(it) {
     const voice = typeof it.voice === 'number' && !it.text;

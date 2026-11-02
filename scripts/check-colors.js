@@ -23,10 +23,10 @@ function pkgScale(file, name) {
 }
 if (!fs.existsSync(PKG)) bad.push('找不到 node_modules/@radix-ui/colors，先 npm ci');
 else {
-  for (const [theme, scales] of [['light', R.light]]) {
+  for (const [theme, scales] of [['light', R.light], ['dark', R.dark]]) {
     for (const [name, steps] of Object.entries(scales)) {
       const base = name.endsWith('-a') ? name.slice(0, -2) : name;
-      const file = `${base}${name.endsWith('-a') ? '-alpha' : ''}.css`;
+      const file = `${base}${theme === 'dark' ? '-dark' : ''}${name.endsWith('-a') ? '-alpha' : ''}.css`;
       const want = pkgScale(file, name);
       if (!want) { bad.push(`@radix-ui/colors 里没有 ${file}`); continue; }
       steps.forEach((v, i) => { if (String(v).toLowerCase() !== want[i]) bad.push(`radix.js ${theme} ${name} ${i + 1} 是 ${v}，Radix 是 ${want[i]}`); });

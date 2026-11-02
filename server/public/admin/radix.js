@@ -26,6 +26,15 @@
     'white-a': ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.1)', 'rgba(255,255,255,0.15)', 'rgba(255,255,255,0.2)', 'rgba(255,255,255,0.3)', 'rgba(255,255,255,0.4)', 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.6)', 'rgba(255,255,255,0.7)', 'rgba(255,255,255,0.8)', 'rgba(255,255,255,0.9)', 'rgba(255,255,255,0.95)'],
   };
 
+  // 深色色阶（Radix 3.0.0 的 *-dark.css、*-dark-alpha.css）：只给放进 WhatsApp 页面里的译文块用，WhatsApp 自己是深色主题时换这一套。
+  // 软件自己的界面只有浅色，不用这里的值；只有 src/translate-ipc.js 的 inlineLook 可以取（scripts/check-agents-md.js 会查）。
+  const dark = {
+    'slate': ['#111113', '#18191b', '#212225', '#272a2d', '#2e3135', '#363a3f', '#43484e', '#5a6169', '#696e77', '#777b84', '#b0b4ba', '#edeef0'],
+    'slate-a': ['#00000000', '#d8f4f609', '#ddeaf814', '#d3edf81d', '#d9edfe25', '#d6ebfd30', '#d9edff40', '#d9edff5d', '#dfebfd6d', '#e5edfd7b', '#f1f7feb5', '#fcfdffef'],
+    'red': ['#191111', '#201314', '#3b1219', '#500f1c', '#611623', '#72232d', '#8c333a', '#b54548', '#e5484d', '#ec5d5e', '#ff9592', '#ffd1d9'],
+    'blue': ['#0d1520', '#111927', '#0d2847', '#003362', '#004074', '#104d87', '#205d9e', '#2870bd', '#0090ff', '#3b9eff', '#70b8ff', '#c2e6ff'],
+  };
+
   // 白：面板底色、实色按钮上的字（Radix 里实色 9 号配白字）
   const WHITE = '#ffffff';
   // 透明：Electron 透明窗口的底色
@@ -44,6 +53,12 @@
     if (!v) throw new Error(`没有这个颜色：${family} ${step}`);
     return v;
   };
+  // 深色色阶里的值，只给 inlineLook 用，用法同 hex
+  const hexDark = (family, step) => {
+    const v = dark[family] && dark[family][step - 1];
+    if (!v) throw new Error(`没有这个深色：${family} ${step}`);
+    return v;
+  };
   // 账号颜色归一：新颜色原样返回，旧颜色换成新的，别的返回 ''（调用方自己挑默认）
   function accountColor(c) {
     const k = String(c || '').toLowerCase();
@@ -56,7 +71,7 @@
     return i < 0 ? 'slate' : ACCOUNT[i][0];
   }
 
-  const api = { light, WHITE, TRANSPARENT, ACCOUNT, ACCOUNT_COLORS, LEGACY, AVATAR_COLORS, hex, accountColor, accountFamily };
+  const api = { light, dark, WHITE, TRANSPARENT, ACCOUNT, ACCOUNT_COLORS, LEGACY, AVATAR_COLORS, hex, hexDark, accountColor, accountFamily };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.RADIX = Object.freeze(api);
 })(typeof window !== 'undefined' ? window : globalThis);

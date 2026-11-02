@@ -490,10 +490,11 @@ async function waitChatChange(wc, ms = 2000) {
 // 设置里选了「译文显示在消息下面」：在当前打开的对话里，客户消息的气泡里、原文下面放一块译文（shen 2026-10-30）。
 // 这是唯一改页面的地方：只加带 data-wasw-tr 的块，文字一律 textContent；同一块内容没变就不动，不在的、不要的拿掉。
 // list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字 }]，空数组 = 全部拿掉。
-// look：颜色（主进程按 Radix 色阶给）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
+// look：{ light, dark } 两套颜色（主进程按 Radix 色阶给）：WhatsApp 是浅色主题用 light，深色主题用 dark，跟着原文的字色选（见 PAINT_CODE 里的 tone）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
 // 原来停在最下面的，放完还停在最下面（气泡变高了不让最新的消息被挤到下面看不见）
 const TR_SPACER = 64; // 译文末尾留出 WhatsApp 右下角时间的位置（px）
-// 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给
+// 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给。
+// 颜色有浅、深两套（PAINT_CODE 里按 WhatsApp 原文的字色选一套，只换这一段样式文字）：深色那套是 Radix 的深色色阶，只给这一块用，软件自己的界面不做深色
 const TR_CSS = (K) => [
   `[data-wasw-tr] { --hair: 1px; --fs-s: ${K.fsS}; --r-s: ${K.rS}; display: block; margin-top: 6px; padding-top: 6px; border-top: var(--hair) solid ${K.line}; color: ${K.text}; font-size: inherit; line-height: inherit; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }`,
   '@media (min-resolution: 2dppx) { [data-wasw-tr] { --hair: .5px; } }',
@@ -506,7 +507,7 @@ const TR_CSS = (K) => [
 ].join('\n');
 const PAINT_CODE = (list, look) => `(() => {
   const L = ${JSON.stringify(list)};
-  const CSS_TEXT = ${JSON.stringify(TR_CSS(look))};
+  const CSS_BY_TONE = ${JSON.stringify({ light: TR_CSS((look && look.light) || {}), dark: TR_CSS((look && look.dark) || {}) })};
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, voice: SELECTORS.voiceMark })};
   const w = window.__wsTr || (window.__wsTr = { clicks: [] });
   const clicks = w.clicks.splice(0, 50);
@@ -514,6 +515,27 @@ const PAINT_CODE = (list, look) => `(() => {
   const mine = [...document.querySelectorAll('[data-wasw-tr]')];
   const want = new Map();
   if (main) for (const e of L) if (e && typeof e.id === 'string' && e.id) want.set(e.id, e);
+  // WhatsApp 现在是不是深色主题：看第一条要放译文的消息，它正文的字色亮就是深色（WhatsApp 让字和气泡底色反差够大：深色主题浅字，浅色主题深字）。
+  // 一条都读不到时沿用上一次的；换主题后下一次放译文（最多 2 秒）就换过来
+  const luma = (c) => {
+    if (!/^rgb/.test(c)) return null;
+    const n = (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+    if (n.length < 3 || n.some((v) => !(v >= 0))) return null;
+    const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(n[0]) + 0.7152 * f(n[1]) + 0.0722 * f(n[2]);
+  };
+  let tone = w.tone || 'light';
+  if (main) for (const e of want.values()) {
+    const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
+    if (!msg) continue;
+    let el = null;
+    for (const sel of S.body) { for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip) && !b.closest('[data-wasw-tr]')) { el = b; break; } if (el) break; }
+    if (!el) el = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+    const l = luma(getComputedStyle(el).color);
+    if (l !== null) { tone = l > 0.4 ? 'dark' : 'light'; break; }
+  }
+  w.tone = tone;
+  const CSS_TEXT = CSS_BY_TONE[tone];
   let style = document.querySelector('style[data-wasw-style]');
   if (!want.size && !L.length) { if (style) style.remove(); }
   else if (!style || style.textContent !== CSS_TEXT) {
