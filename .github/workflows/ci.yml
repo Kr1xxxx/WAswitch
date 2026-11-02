@@ -289,9 +289,9 @@ jobs:
       # 和发版一样：MCP 不进安装包，只带它的校验值
       - name: 打包 MCP 模块
         run: npm run build:mcp
-      # 没有代码签名证书：不自动找签名证书。CI 的包不发给任何人，不压缩省约 1 分钟；冒烟用的是解开的 win-unpacked，发版照常压缩
+      # 没有代码签名证书：不自动找签名证书。CI 的包不发给任何人，不压缩省约 1 分钟；冒烟用的是解开的 win-unpacked，发版照常压缩。PowerShell 会把没加引号的 -c.xxx 拆成两段，所以要引号
       - name: 打包（Windows 安装包）
-        run: npx electron-builder --win nsis --publish never -c.compression=store
+        run: npx electron-builder --win nsis --publish never '--config.compression=store'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: 生成了自动更新需要的文件
