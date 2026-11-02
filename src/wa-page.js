@@ -496,27 +496,34 @@ const PAINT_CODE = (list, look) => `(() => {
     const m = n.parentElement && n.parentElement.closest('[data-id]');
     if (!main || !m || !main.contains(n) || !want.has(m.getAttribute('data-id'))) { n.remove(); changed = true; }
   }
-  // 译文放哪：{ parent, after }。有正文的放在正文块里（末尾）。没有正文（语音）：放在气泡里播放条那一层的后面（时间的上面）。
+  // 译文放哪：{ parent, after }。有正文的放在正文块里（末尾）。没有正文（语音）：放在气泡里播放条那一层的下面（时间在播放条那一层里面的话，就在时间下面）。
   // 真 WhatsApp 的气泡里第一个子元素常常不是内容：气泡尾巴的小图标（宽 8px）、读屏用的隐藏发件人标签，放进去会一字一行，所以先跳过它们
-  const decor = (c) => {
+  const decor = (c, sized) => {
     if (c.hasAttribute('data-icon') || c.getAttribute('aria-hidden') === 'true' || c.hasAttribute('data-wasw-tr')) return true;
     if (getComputedStyle(c).position === 'absolute') return true;
-    const r = c.getBoundingClientRect();
-    if (r.width <= 2 || r.height <= 2) return true;
+    if (sized) {
+      const r = c.getBoundingClientRect();
+      if (r.width <= 2 || r.height <= 2) return true;
+    }
     return !c.textContent.trim() && !c.querySelector('button, [role], [data-icon], canvas, svg, img, audio');
   };
+  const flexRow = (el) => { const cs = getComputedStyle(el); return cs.display.includes('flex') && cs.flexDirection.startsWith('row'); };
   const anchorOf = (msg) => {
     for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return { parent: b, after: null };
     const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
     const mark = [...bub.querySelectorAll(S.voice)].find((x) => !x.closest('[data-wasw-tr]'));
-    const kids = [...bub.children].filter((c) => !decor(c));
-    const parent = (mark && kids.find((c) => c.contains(mark))) || kids[0] || bub;
+    // 页面没排版（宽 0，比如页面被隐藏）时不看尺寸，只看标记
+    const sized = bub.getBoundingClientRect().width > 0;
+    const kids = [...bub.children].filter((c) => !decor(c, sized));
+    let parent = (mark && kids.find((c) => c.contains(mark))) || kids[0] || bub;
     let after = null;
     if (mark && parent !== mark && parent.contains(mark)) {
       let row = mark;
       while (row.parentElement && row.parentElement !== parent) row = row.parentElement;
       if (row.parentElement === parent) after = row;
     }
+    // 放的位置是横向排的（播放条和别的元素并排）：译文放在这一行的下面，不插进中间
+    while (parent !== bub && parent.parentElement && flexRow(parent)) { after = parent; parent = parent.parentElement; }
     return { parent, after };
   };
   const stop = (ev) => { ev.stopPropagation(); };

@@ -5,7 +5,7 @@
 //   2. 放好以后页面不再被改（没有来回改、没有一直重读重翻），读到的原文不带译文（不重翻）
 //   3. 翻译失败的那条显示原因和「重试」，在页面里点「重试」后换成译文
 //   4. 右侧工作台的翻译页不再列消息，只留回复框；关掉工作台也照样放译文
-//   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条下面、时间上面
+//   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条那一层的下面
 //   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点；密钥没填：只有「去填密钥」，点了打开设置里这个服务商的表单
 //   5. 设置换成「右侧工作台」：页面里的译文全部拿掉，翻译页重新列出消息；换回来又放上
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
@@ -46,6 +46,8 @@ const TAIL = '<span aria-hidden="true" data-icon="tail-in" class="tail"><svg vie
 const LABEL = '<span class="sender-label" aria-label="Emma Schneider:"></span>';
 const realText = (id, time, text, tail) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${tail ? TAIL : ''}${LABEL}<div class="bubble"><div class="copyable-text" data-pre-plain-text="[${time}, 30/10/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">${time}</div></div></div></div></div>`;
 const realVoice = (id, time, tail) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${tail ? TAIL : ''}${LABEL}<div class="bubble"><div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:07</span></div><div class="meta">${time}</div></div></div></div></div>`;
+// 播放条直接是气泡里的一个横向排的块（没有外层容器）：译文不能插进播放按钮和波形中间
+const flatVoice = (id, time) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${LABEL}<div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:09</span></div></div></div></div>`;
 const filler = Array.from({ length: 24 }, (_, i) => msgOut(`OLD${i}`, '09:0' + (i % 10), `Older note ${i}`)).join('');
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title>
 <style>body{margin:0;font:14px sans-serif} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -162,7 +164,8 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     if (!atBottom) console.log(await pageC.evaluate("(() => { const s = document.querySelector('.scroll'); return JSON.stringify({ sh: s.scrollHeight, ch: s.clientHeight, st: s.scrollTop, trs: [...document.querySelectorAll('[data-wasw-tr]')].map((n) => n.closest('[data-id]').getAttribute('data-id').split('_').pop() + ':' + n.textContent.slice(0, 10)) }); })()"));
     await shot('inline-1');
 
-    // 2. 放好以后页面不再被改，也不重翻
+    // 2. 放好以后页面不再被改，也不重翻（语音那条要先有结果：假页面里读不到语音，会从「转文字中」变成「重试」）
+    await waitFor(async () => /重试/.test((await trOf('V1')) || ''), 15000);
     const before = calls.length;
     await pageC.evaluate(`(() => { window.__muts = 0; new MutationObserver((r) => { window.__muts += r.length; }).observe(document.querySelector('#main'), { childList: true, subtree: true, characterData: true }); return 1; })()`);
     await sleep(5000);
@@ -202,9 +205,22 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     })()`);
     check(v1 >= 0 && !!vp, '语音消息下面有转文字的按钮或结果');
     check(!!vp && vp.notDecor && vp.inBubble && vp.wide >= 100, `语音的译文不在尾巴或发件人标签里，宽度正常（宽 ${vp && vp.wide}）`);
-    check(!!vp && vp.afterRow && vp.beforeTime && vp.below, '语音的译文在播放条下面、时间上面');
+    check(!!vp && vp.afterRow && vp.beforeTime && vp.below, '语音的译文在播放条那一层的下面');
     if (vp && !(vp.afterRow && vp.beforeTime && vp.below)) console.log(JSON.stringify(vp), await pageC.evaluate("document.querySelector('[data-id$=\"_V1\"]').outerHTML"));
     await shot('inline-voice');
+    await pageC.evaluate(`(() => {
+      document.querySelector('[role="application"]').insertAdjacentHTML('beforeend', ${JSON.stringify(flatVoice('V2', '10:08'))});
+      const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
+      return 1;
+    })()`);
+    const v2 = await waitFor(async () => (await trOf('V2')) !== null, 10000);
+    const fp = await pageC.evaluate(`(() => {
+      const m = document.querySelector('[data-id$="_V2"]');
+      const n = m.querySelector('[data-wasw-tr]');
+      const row = m.querySelector('.voice-row');
+      return n ? { outside: !row.contains(n), after: n.previousElementSibling === row, wide: Math.round(n.getBoundingClientRect().width) } : null;
+    })()`);
+    check(v2 >= 0 && !!fp && fp.outside && fp.after && fp.wide >= 100, `播放条是横向排的块时，译文放在它下面，不插进中间（宽 ${fp && fp.wide}）`);
 
     // 3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点
     failAll = true;
