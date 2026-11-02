@@ -371,7 +371,7 @@ function setupTranslateIpc(ctx) {
       return m ? m[1].trim() : '';
     } catch { return ''; }
   };
-  // 颜色有浅、深两套：WhatsApp 是浅色主题用 light（Radix 浅色色阶），深色主题用 dark（Radix 深色色阶，只给这一块用）。字号、圆角两套一样
+  // 颜色有浅、深两套：WhatsApp 是浅色主题用 light（Radix 浅色色阶），深色主题用 dark（Radix 深色色阶，只给这一块用；译文字用 12 号，和 WhatsApp 深色下的正文一样白）。字号、圆角两套一样
   let inlineLookCache = null;
   const inlineLook = () => {
     if (inlineLookCache) return inlineLookCache;
@@ -384,7 +384,7 @@ function setupTranslateIpc(ctx) {
       },
       dark: {
         ...base,
-        text: RADIX.hexDark('slate', 11), strong: RADIX.hexDark('slate', 12), line: RADIX.hexDark('slate-a', 6), bad: RADIX.hexDark('red', 11),
+        text: RADIX.hexDark('slate', 12), strong: RADIX.hexDark('slate', 12), line: RADIX.hexDark('slate-a', 6), bad: RADIX.hexDark('red', 11),
         btn: RADIX.hexDark('slate-a', 4), btnHover: RADIX.hexDark('slate-a', 5), focus: RADIX.hexDark('blue', 8),
       },
     });
