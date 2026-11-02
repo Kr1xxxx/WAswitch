@@ -1,16 +1,22 @@
--- 登录：员工用登录名和密码登录 WAswitch；老板和主管用同一套账号登录后台网页。
--- 登录名统一存小写，比较时也不分大小写。
-ALTER TABLE users ADD COLUMN login_name TEXT COLLATE NOCASE;
-ALTER TABLE users ADD COLUMN pass_hash TEXT;        -- PBKDF2-SHA256 结果，十六进制
-ALTER TABLE users ADD COLUMN pass_salt TEXT;        -- 16 字节随机盐，十六进制
-ALTER TABLE users ADD COLUMN pass_iter INTEGER;     -- 迭代次数，登录时按当前设置自动升级
-ALTER TABLE users ADD COLUMN pass_changed_at INTEGER;
-CREATE UNIQUE INDEX users_login_name ON users(login_name);
+-- 登录：员工用工作邮箱收验证码登录 WAswitch；老板和主管用同样的方式登录后台网页。没有密码。
+-- 员工的邮箱就是已有的 users.email（不分大小写，唯一）。
 
--- 退出登录或被重置密码的时间。重新登录时清空
+-- 退出登录或被管理员「让他重新登录」的时间。重新登录时清空
 ALTER TABLE devices ADD COLUMN logged_out_at INTEGER;
 
--- 后台网页的会话：库里只存令牌的 SHA-256，12 小时过期
+-- 验证码：同一个邮箱同一用途只留最新一个，库里只存哈希
+CREATE TABLE login_codes (
+  email TEXT NOT NULL COLLATE NOCASE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('device', 'admin')),  -- 两种码互相不通用
+  code_hash TEXT NOT NULL,                  -- SHA-256(purpose:email:code)
+  expires_at INTEGER NOT NULL,              -- 10 分钟
+  attempts INTEGER NOT NULL DEFAULT 0,      -- 试满 5 次作废
+  sent_at INTEGER NOT NULL,
+  PRIMARY KEY (email, purpose)
+);
+CREATE INDEX login_codes_expires ON login_codes(expires_at);
+
+-- 后台网页的会话：库里只存令牌的 SHA-256，7 天过期
 CREATE TABLE admin_sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),

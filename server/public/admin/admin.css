@@ -47,10 +47,15 @@ form.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin
 .field > span { font-size: var(--fs-s); color: var(--muted); white-space: nowrap; }
 .field.inline { flex-direction: row; align-items: center; gap: 8px; }
 .field.inline > span { font-size: inherit; color: inherit; }
-form.auth { display: flex; flex-direction: column; gap: 12px; max-width: 320px; margin: 48px auto; padding: 24px; background: var(--card); border: var(--hair) solid var(--line); border-radius: var(--r-l); }
-form.auth p { margin: 0; }
-form.auth .btn { margin: 0; }
-form.auth .btn.link { align-self: flex-start; }
+div.auth { display: flex; flex-direction: column; gap: 12px; max-width: 360px; margin: 48px auto; padding: 24px; background: var(--card); border: var(--hair) solid var(--line); border-radius: var(--r-l); }
+div.auth p { margin: 0; }
+div.auth .btn { margin: 0; }
+form.pair { display: flex; gap: 8px; align-items: flex-end; }
+form.pair .field { flex: 1; min-width: 0; }
+form.pair .field input { width: 100%; }
+form.pair .btn { padding: 5px 12px; }
+button.btn:disabled { color: var(--muted); cursor: default; }
+button.btn:disabled:hover { background: var(--card); }
 .device { white-space: normal; }
 .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .card { background: var(--card); border: var(--hair) solid var(--line); border-radius: var(--r-l); padding: 10px 14px; min-width: 120px; }

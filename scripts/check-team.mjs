@@ -13,15 +13,23 @@ const require = createRequire(import.meta.url);
 const { TeamSync } = require('../src/team/index.js');
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-// ---- 后台：内存数据库；老板用初始化口令建账号，再用会话令牌调后台接口 ----
+// ---- 后台：内存数据库；发信换成假的，老板用 OWNER_EMAIL 收码登录后台 ----
 const db = fakeD1(path.join(root, 'server/migrations'));
-const env = { DB: db, SETUP_CODE: 'check-team-setup-code', PASS_ITER: '10000', ASSETS: { fetch: async () => new Response('') } };
-const setup = await worker.fetch(new Request('https://team.example.com/api/admin/setup', {
-  method: 'POST', headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' },
-  body: JSON.stringify({ code: env.SETUP_CODE, name: '老板', login: 'boss', password: 'boss password 1' }),
+const env = { DB: db, OWNER_EMAIL: 'boss@example.com', RESEND_API_KEY: 're_test', ASSETS: { fetch: async () => new Response('') } };
+const mails = [];
+globalThis.fetch = async (url, opts) => {
+  assert.equal(url, 'https://api.resend.com/emails');
+  mails.push(JSON.parse(opts.body));
+  return new Response('{}', { headers: { 'content-type': 'application/json' } });
+};
+const adminReq = (p, body, token) => worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
+  method: 'POST', body: JSON.stringify(body),
+  headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1', ...(token ? { authorization: `Bearer ${token}` } : {}) },
 }), env, {});
-const bossToken = (await setup.json()).token;
-assert.ok(bossToken, '初始化老板账号');
+await adminReq('code', { email: 'boss@example.com' });
+const bossCode = /验证码 (\d{6})/.exec(mails.at(-1).text)[1];
+const bossToken = (await (await adminReq('session', { email: 'boss@example.com', code: bossCode })).json()).token;
+assert.ok(bossToken, '老板登录后台');
 async function boss(method, p, body) {
   const res = await worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
     method, body: body === undefined ? undefined : JSON.stringify(body),
@@ -74,7 +82,7 @@ async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${na
 console.log('团队模式端到端自检');
 
 const me = await boss('GET', 'me');
-const agent = await boss('POST', 'users', { name: '坐席A', login_name: 'anna', password: 'anna password 1' });
+const agent = await boss('POST', 'users', { name: '坐席A', email: 'anna@example.com' });
 const code = async () => (await boss('POST', `users/${agent.id}/enroll-code`)).code;
 const A = machine('a', [acc('101', '一号'), acc('102', '二号'), acc('103', '三号'), acc('104', '私人号')]);
 assert.equal(me.user.role, 'owner');

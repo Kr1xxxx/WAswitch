@@ -2,8 +2,8 @@
 // 规则见设计文档：只收白名单字段；只有显式 403 {revoked:true} 才让客户端停号。
 import { uploadChats } from './crm.js';
 import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE, rateLimit, loginPolicy } from './util.js';
-import { normalizeLogin, verifyPassword, hashPassword, passIter } from './password.js';
-import { audit, refundRate } from './util.js';
+import { audit, normalizeEmail } from './util.js';
+import { limitCodeIp, issueCode, consumeCode } from './code.js';
 
 export const PROTOCOL = 1;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
@@ -197,41 +197,33 @@ async function sync(request, env) {
 }
 
 
-// ---------- 登录 ----------
-const LOGIN_LIMIT = 10; // 同一 IP、同一登录名各自每 10 分钟最多试 10 次
-const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const clientIp = (request) => request.headers.get('cf-connecting-ip') || 'unknown';
+// ---------- 登录（邮箱验证码） ----------
 
-// 设备和后台共用：限速、查人、验密码。成功返回用户行，失败抛 400 / 429
-export async function checkLogin(request, env, body, kind) {
+// 要码：邮箱查不到时明说（404），员工打错邮箱能马上知道；停用的人不发信
+async function requestCode(request, env) {
   const db = env.DB;
-  const ipKey = `login:ip:${clientIp(request)}`;
-  await rateLimit(db, ipKey, LOGIN_LIMIT, LOGIN_WINDOW_MS);
-  const name = normalizeLogin(body.login);
-  const nameKey = `login:name:${name || '-'}`;
-  await rateLimit(db, nameKey, LOGIN_LIMIT, LOGIN_WINDOW_MS);
-  const user = name ? await db.prepare(`SELECT id, name, role, group_id, disabled_at, login_name, pass_hash, pass_salt, pass_iter
-    FROM users WHERE login_name = ?`).bind(name).first() : null;
-  const ok = await verifyPassword(body.password, user, env);
-  if (!ok) {
-    await audit(db, user ? user.id : '', `${kind}.login_fail`, name.slice(0, 32), '');
-    throw new HttpError(400, '账号或密码不对');
-  }
-  await refundRate(db, [ipKey, nameKey]);
-  // 迭代次数和当前设置不一样时，顺手按新设置重算（密码本身不变）
-  if (user.pass_iter !== passIter(env)) {
-    const h = await hashPassword(body.password, env);
-    await db.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, pass_iter = ? WHERE id = ? AND pass_hash = ?')
-      .bind(h.pass_hash, h.pass_salt, h.pass_iter, user.id, user.pass_hash).run();
-  }
-  return user;
+  const body = await readJson(request);
+  checkProtocol(body);
+  const email = normalizeEmail(body.email);
+  if (!email) return fail(400, '邮箱格式不对');
+  await limitCodeIp(request, db);
+  const user = await db.prepare('SELECT id, disabled_at FROM users WHERE email = ?').bind(email).first();
+  if (!user) return fail(404, '这个邮箱还没加入团队，请找管理员', { unknown: true });
+  if (user.disabled_at) return fail(403, '这个账号已停用', { disabled: true });
+  return json(await issueCode(env, email, 'device'));
 }
 
 async function login(request, env) {
   const db = env.DB;
   const body = await readJson(request);
   checkProtocol(body);
-  const user = await checkLogin(request, env, body, 'device');
+  const email = normalizeEmail(body.email);
+  const ok = await consumeCode(request, env, email, body.code, 'device');
+  const user = ok ? await db.prepare('SELECT id, name, disabled_at FROM users WHERE email = ?').bind(email).first() : null;
+  if (!user) {
+    await audit(db, '', 'device.login_fail', email.slice(0, 120), '');
+    return fail(400, '验证码不对或已过期');
+  }
   if (user.disabled_at) return fail(403, '这个账号已停用', { disabled: true });
   const d = body.device || {};
   const info = [str(d.name, 40) || '未命名电脑', str(d.app_version, 20), oneOf(d.platform, PLATFORMS, '')];
@@ -274,6 +266,7 @@ export async function handleDevice(request, env, path) {
     return json({ v: PROTOCOL, login: await loginPolicy(env.DB) });
   }
   if (request.method !== 'POST') return fail(405, '只支持 POST');
+  if (path === '/api/device/code') return requestCode(request, env);
   if (path === '/api/device/login') return login(request, env);
   if (path === '/api/device/logout') return logout(request, env);
   if (path === '/api/device/enroll') return enroll(request, env);

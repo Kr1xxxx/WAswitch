@@ -1,7 +1,8 @@
 {
   // WAswitch 团队后台。部署：Cloudflare Workers Builds 连 GitHub，只从 main 分支部署，根目录 server。
-  // 必须在控制台放的 secret：SETUP_CODE（初始化口令，至少 12 位）。
-  // 可选：ACCESS_TEAM_DOMAIN、ACCESS_AUD（再加一道 Cloudflare Access）；PASS_ITER（密码哈希次数，默认 100000）。
+  // 在控制台放的一律用 Secret 类型（普通变量每次部署会被这个文件覆盖）：
+  //   RESEND_API_KEY（必须，发验证码邮件）、OWNER_EMAIL（必须，老板邮箱）、MAIL_FROM（可选，发件人）
+  //   ACCESS_TEAM_DOMAIN、ACCESS_AUD（可选，再加一道 Cloudflare Access）
   "name": "waswitch-team",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",

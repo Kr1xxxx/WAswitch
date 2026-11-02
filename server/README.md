@@ -1,37 +1,38 @@
 # WAswitch 团队后台
 
-Cloudflare Worker + D1。老板和主管在 `/admin/` 用登录名和密码登录后台网页；员工在 WAswitch 里用自己的登录名和密码登录，软件通过 `/api/device/*` 同步。
+Cloudflare Worker + D1。老板和主管在 `/admin/` 填邮箱收验证码登录后台网页；员工在 WAswitch 里用自己的工作邮箱收验证码登录，软件通过 `/api/device/*` 同步。没有密码。
 不上传聊天内容（聊天同步到来财另说，见下面）、通讯录、代理地址和密码，也不采集员工活动。
 
 ## 登录怎么工作
 
-- 每个人一个登录名（小写字母、数字和 `. _ -`，2–32 位）和密码（至少 8 位）。密码只存 PBKDF2-SHA256 哈希（16 字节随机盐，默认 100,000 次）。
-- 软件登录：`POST /api/device/login`，换一个设备令牌（库里只存 SHA-256）。带上次的 `device_id` 且是本人的、没被停用，就沿用这台电脑，团队号的坐席不丢。退出登录（`POST /api/device/logout`）或管理员重置密码后，令牌失效（401）。
-- 后台网页登录：`POST /api/admin/session`，换一个 12 小时的会话令牌，网页放在 `sessionStorage`，每个请求带 `Authorization: Bearer`。只有老板和主管能登录后台。
+- 每个人在后台有名字和工作邮箱。没填邮箱的人登录不了。
+- 要码：软件 `POST /api/device/code`，后台网页 `POST /api/admin/code`。6 位数字，10 分钟有效，最多试 5 次，用一次就作废；库里只存哈希，同一个邮箱同一用途只留最新一个。软件的码和后台的码互相不通用。
+- 邮箱查不到时明说（软件 404「这个邮箱还没加入团队」，后台 404「这个邮箱没有后台权限」），员工打错邮箱能马上知道；代价是能试出哪些邮箱是员工，靠限速挡住。
+- 限速：同一邮箱 60 秒 1 次、1 小时 5 次；同一 IP 1 小时最多要 20 次码；验证时同一 IP 10 分钟 10 次。码和邮件正文不写日志，操作记录只记邮箱和结果。
+- 软件登录：`POST /api/device/login`，换一个设备令牌（库里只存 SHA-256）。带上次的 `device_id` 且是本人的、没被停用，就沿用这台电脑，团队号的坐席不丢；带的是本人被停用的电脑，回 403 `revoked`。退出登录（`POST /api/device/logout`）或管理员点「让他重新登录」后，令牌失效（401）。
+- 后台网页登录：`POST /api/admin/session`，换一个 7 天的会话令牌，网页放 `localStorage`，每个请求带 `Authorization: Bearer`。只有老板、主管和 `OWNER_EMAIL` 能登录后台。`OWNER_EMAIL` 一定是老板：第一次登录时自动建档，以后登录时也会确保是老板、没被停用。老板换邮箱或进不去，改这个 secret 就行。
 - 登录策略在后台 › 设置 › 登录：不用登录 / 提示登录（默认）/ 必须登录。软件每次同步都会拿到最新的，改了立刻生效，不用发版。没登录时也可以 `GET /api/device/policy` 查。
-- 限速：同一个 IP、同一个登录名，10 分钟内各最多错 10 次（成功的不算）。失败只记登录名，不记密码。
-- 初始化和找回：Worker 的 secret `SETUP_CODE`（至少 12 位）。还没有老板账号时，打开后台网页就是「初始化」，填口令建老板账号；以后忘了老板密码，在登录页点「用初始化口令重置老板密码」。没设 `SETUP_CODE` 时这两样都用不了。
-- 可选：再加一道 Cloudflare Access。在 Worker 里设了 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 后，设备接口以外的所有地址都要先过 Access，再要后台密码。只设了一个或设错时，后台一律拒绝。
+- 发信在 `src/mail.js`（现在用 Resend），以后换渠道只改这个文件。
+- 可选：再加一道 Cloudflare Access。在 Worker 里设了 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 后，设备接口以外的所有地址都要先过 Access，再要邮箱验证码。只设了一个或设错时，后台一律拒绝。
 
 ## 本地自检
 
 ```
-node server/test/run.mjs        # 后台接口
+node server/test/run.mjs        # 后台接口（发信是假的）
 node scripts/check-team.mjs     # WAswitch 同步模块对着后台跑一遍
 ```
 
 ## 部署（老板做，一次）
 
-D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 4 步：
+D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 5 步：
 
 1. Cloudflare 控制台 › Workers & Pages › Create › Import a repository，选这个仓库（第一次会让你给 Cloudflare 的 GitHub App 授权，只勾这个仓库），Root directory 填 `server`，Production branch 选 `main`，关掉非 main 分支的构建，部署。
 2. 这个 Worker › Settings › Domains & Routes › Add › Custom domain，填 `wa.laicrm.com`（`workers.dev` 和预览网址已在配置里关掉）。
-3. 同一页 Variables and Secrets › Add，类型选 Secret，名字 `SETUP_CODE`，值自己想一串长一点的口令（至少 12 位）记好，不要发给任何人。
-4. 打开 https://wa.laicrm.com/admin/ ，填 `SETUP_CODE` 建自己的老板账号；再到「人员与电脑」给每个员工建账号（登录名 + 初始密码），把账号密码发给他们。
+3. 登录 resend.com（没有就注册），Domains › Add Domain 填 `laicrm.com`，按提示把 DNS 加到 Cloudflare，等它变成 Verified；然后 API Keys › Create，权限选 Sending access，复制出来。如果 Resend 里已经验证过别的域名，就用那个，下一步多加一个 `MAIL_FROM`（比如 `WAswitch <no-reply@你的域名>`）。
+4. Worker › Settings › Variables and Secrets › Add，类型都选 **Secret**：`RESEND_API_KEY` 粘上一步的 key；`OWNER_EMAIL` 填你自己的邮箱。key 不要发到聊天里。
+5. 打开 https://wa.laicrm.com/admin/ ，填你的邮箱收码登录；到「人员与电脑」给每个员工建账号（名字 + 工作邮箱）。先拿自己和一个员工的邮箱各收一次码，确认没进垃圾箱。
 
 以后加新的迁移：`npx wrangler d1 migrations apply waswitch-team --remote`（`d1_migrations` 表里记着已经跑过的）。
-
-如果登录时报「超出 CPU 时间」（免费版每个请求 10 ms CPU，密码哈希偶尔会超）：在 Worker 里加变量 `PASS_ITER`，比如 `50000`（最少 10000）。已有的密码在各自下次登录成功时自动换成新次数。如果设了以后还是有人登不进（旧密码按 100,000 次验证，仍然超时），由老板在后台给他重置密码；老板自己登不进就用 `SETUP_CODE` 在登录页重置。
 
 ## 聊天同步到来财（第 2 步）
 

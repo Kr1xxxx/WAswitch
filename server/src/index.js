@@ -1,6 +1,6 @@
 // WAswitch 团队后台 Worker 入口。默认拒绝：
 // - /api/device/*：设备令牌（登录、看策略这两个不要令牌）
-// - /api/admin/session、/api/admin/setup：不要会话（登录、初始化）
+// - /api/admin/code、/api/admin/session：不要会话（要验证码、登录）
 // - 其它 /api/admin/*：后台会话
 // - /admin/*：静态页面，里面没有数据，直接给
 // 配了 Cloudflare Access（ACCESS_TEAM_DOMAIN 或 ACCESS_AUD 任何一个）时，设备接口以外的所有地址还要先过 Access。
@@ -40,7 +40,7 @@ export default {
       if (path.startsWith('/api/device/')) return withHeaders(await handleDevice(request, env, path));
       // 只配了一半或配错也算配了：一律拒绝，不悄悄退回只靠密码
       if ((env.ACCESS_TEAM_DOMAIN || env.ACCESS_AUD) && !(await verifyAccess(request, env))) return withHeaders(fail(403, '请先通过 Cloudflare Access 登录'));
-      if (path === '/api/admin/session' || path === '/api/admin/setup') return withHeaders(await handleOpenAdmin(request, env, path));
+      if (path === '/api/admin/code' || path === '/api/admin/session') return withHeaders(await handleOpenAdmin(request, env, path));
       if (path.startsWith('/api/admin/')) {
         const user = await resolveSession(request, env.DB);
         return withHeaders(await handleAdmin(request, env, path, user));
@@ -71,7 +71,7 @@ export default {
 
 export const isCleanupSlot = (ms) => { const d = new Date(ms); return d.getUTCHours() === 19 && d.getUTCMinutes() < 30; };
 
-// 状态变化记录留 30 天，操作记录留 180 天，过期的登记码、限速记录和后台会话
+// 状态变化记录留 30 天，操作记录留 180 天，过期的登记码、限速记录、后台会话和验证码
 export async function cleanup(db) {
   const t = Date.now();
   await db.batch([
@@ -80,5 +80,6 @@ export async function cleanup(db) {
     db.prepare('DELETE FROM enroll_codes WHERE expires_at < ?').bind(t - 864e5),
     db.prepare('DELETE FROM rate_limits WHERE window_start < ?').bind(t - 864e5),
     db.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').bind(t),
+    db.prepare('DELETE FROM login_codes WHERE expires_at < ?').bind(t),
   ]);
 }

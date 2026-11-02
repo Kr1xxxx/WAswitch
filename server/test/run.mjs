@@ -17,7 +17,18 @@ const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusL
 const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
 const other = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 let certFetches = 0;
-globalThis.fetch = async (url) => {
+// 假的 Resend：记下发出去的信，从正文里取码
+const mail = { sent: [], mode: 'ok' };
+const lastCode = (to) => { const m = [...mail.sent].reverse().find((x) => x.to[0] === to); return m && /验证码 (\d{6})/.exec(m.text)[1]; };
+globalThis.fetch = async (url, opts = {}) => {
+  if (url === 'https://api.resend.com/emails') {
+    assert.equal(opts.redirect, 'error');
+    assert.equal(opts.headers.authorization, `Bearer ${env.RESEND_API_KEY}`);
+    if (mail.mode === 'down') throw new TypeError('fetch failed');
+    if (mail.mode === '500') return new Response('{"message":"x"}', { status: 500 });
+    mail.sent.push(JSON.parse(opts.body));
+    return new Response('{"id":"m1"}', { headers: { 'content-type': 'application/json' } });
+  }
   assert.equal(url, `https://${DOMAIN}/cdn-cgi/access/certs`);
   certFetches += 1;
   return new Response(JSON.stringify({ keys: [{ ...pub, kid: 'k1' }] }), { headers: { 'content-type': 'application/json' } });
@@ -31,9 +42,7 @@ async function jwt(email, { aud = AUD, iss = `https://${DOMAIN}`, exp = Math.flo
 }
 
 const db = fakeD1(path.join(here, '../migrations'));
-const env = { DB: db, SYNC_INTERVAL_S: '120', ASSETS: { fetch: async () => new Response('<html>admin</html>', { headers: { 'content-type': 'text/html' } }) } };
-const PW = 'correct horse 1';
-const SETUP = 'test-setup-code-0123';
+const env = { DB: db, SYNC_INTERVAL_S: '120', RESEND_API_KEY: 're_test_key', OWNER_EMAIL: ' Boss@Example.com ', ASSETS: { fetch: async () => new Response('<html>admin</html>', { headers: { 'content-type': 'text/html' } }) } };
 
 async function call(method, p, { token, body, jwtFor, headers = {}, rawJwt, ip } = {}) {
   const h = { ...headers };
@@ -49,22 +58,37 @@ async function call(method, p, { token, body, jwtFor, headers = {}, rawJwt, ip }
   try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, headers: res.headers };
 }
-// 后台：按登录名登录一次，之后带会话令牌
+// 限速记录清掉（测试里同一个邮箱要码很多次）
+const resetLimits = () => db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:%' OR key LIKE 'verify:%'").run();
+// 后台：要码、收码、换会话，之后带会话令牌
 const sessions = new Map();
-async function sessionFor(login, password = PW) {
-  if (!sessions.has(login)) {
-    const r = await call('POST', '/api/admin/session', { body: { login, password } });
-    assert.equal(r.status, 200, `${login} 登录后台：${JSON.stringify(r.data)}`);
-    sessions.set(login, r.data.token);
-  }
-  return sessions.get(login);
+async function adminLogin(email) {
+  resetLimits();
+  const c = await call('POST', '/api/admin/code', { body: { email } });
+  assert.equal(c.status, 200, `${email} 要后台验证码：${JSON.stringify(c.data)}`);
+  const r = await call('POST', '/api/admin/session', { body: { email, code: lastCode(email) } });
+  assert.equal(r.status, 200, `${email} 登录后台：${JSON.stringify(r.data)}`);
+  return r.data.token;
 }
-const admin = (login) => {
-  const go = async (method, p, body) => call(method, `/api/admin/${p}`, { token: await sessionFor(login), body });
+async function sessionFor(email) {
+  if (!sessions.has(email)) sessions.set(email, await adminLogin(email));
+  return sessions.get(email);
+}
+const admin = (email) => {
+  const go = async (method, p, body) => call(method, `/api/admin/${p}`, { token: await sessionFor(email), body });
   return { get: (p) => go('GET', p), post: (p, body = {}) => go('POST', p, body), patch: (p, body) => go('PATCH', p, body), put: (p, body) => go('PUT', p, body), del: (p) => go('DELETE', p) };
 };
 const sync = (token, body) => call('POST', '/api/device/sync', { token, body: { v: 1, now: Date.now(), cursor: 0, ...body } });
-const devLogin = (login, password, extra = {}) => call('POST', '/api/device/login', { body: { v: 1, login, password, device: { name: '笔记本', app_version: '1.0.5', platform: 'mac' }, ...extra }, ip: extra.ip });
+const DEVICE = { name: '笔记本', app_version: '1.0.5', platform: 'mac' };
+const devCode = (email, ip) => call('POST', '/api/device/code', { body: { v: 1, email }, ip });
+const devLoginCode = (email, code, extra = {}) => call('POST', '/api/device/login', { body: { v: 1, email, code, device: DEVICE, ...extra }, ip: extra.ip });
+// 软件登录一次：要码、取码、登录
+async function devLogin(email, extra = {}) {
+  resetLimits();
+  const c = await devCode(email);
+  if (c.status !== 200) return c;
+  return devLoginCode(email, lastCode(email), extra);
+}
 let passed = 0;
 async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
 
@@ -78,88 +102,159 @@ await test('没登录：管理接口 401；后台页面直接给（里面没有�
   assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
   assert.equal(page.headers.get('access-control-allow-origin'), null);
   assert.equal((await call('GET', '/anything')).status, 404);
+  assert.equal((await call('POST', '/api/admin/setup', { body: {} })).status, 401, '初始化接口已经没有了');
 });
 await test('绕路径：点段被规范化后仍要会话；编码斜杠和重复斜杠直接 404', async () => {
   assert.equal((await call('GET', '/api/device/%2e%2e/admin/me')).status, 401);
   assert.equal((await call('GET', '/api/device%2f..%2fadmin/me')).status, 404);
   assert.equal((await call('GET', '/api//admin/me')).status, 404);
 });
-await test('初始化：没设 SETUP_CODE 一律拒绝', async () => {
-  assert.deepEqual((await call('GET', '/api/admin/setup')).data, { enabled: false, needed: true });
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: '', login: 'boss', password: PW } })).status, 403);
-  env.SETUP_CODE = 'short';
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: 'short', login: 'boss', password: PW } })).status, 403, '太短的口令不算设置了');
-  env.SETUP_CODE = SETUP;
-});
-await test('初始化：口令不对、登录名不合格、密码太短都拒绝；不带自定义头拒绝', async () => {
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: 'wrong-code-000000', login: 'boss', password: PW } })).status, 400);
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: '老板', password: PW } })).status, 400);
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'boss', password: 'short' } })).status, 400);
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'boss', password: PW }, headers: { 'x-waswitch-admin': '' } })).status, 403);
-  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM users').get().n, 0);
-  const fails = db.raw.prepare("SELECT detail FROM audit_log WHERE action = 'admin.setup_fail'").all();
-  assert.ok(fails.length >= 1 && !JSON.stringify(fails).includes('wrong-code'), '记失败，不记口令');
-});
 let ownerId;
-await test('初始化：建出老板并直接登录；库里只有哈希；之后只能用口令重置老板密码', async () => {
-  const r = await call('POST', '/api/admin/setup', { body: { code: SETUP, name: '老板', login: ' Boss ', password: 'first password' } });
+await test('老板邮箱（OWNER_EMAIL）第一次登录后台：收码、建出老板；码和正文只在邮件里', async () => {
+  const c = await call('POST', '/api/admin/code', { body: { email: 'BOSS@example.com' } });
+  assert.deepEqual([c.status, c.data], [200, { ok: true, resend_after_s: 60 }]);
+  const m = mail.sent.at(-1);
+  assert.deepEqual(m.to, ['boss@example.com']);
+  assert.equal(m.from, 'WAswitch <no-reply@laicrm.com>');
+  assert.match(m.subject, /^WAswitch 验证码 \d{6}$/);
+  const code = lastCode('boss@example.com');
+  assert.equal(m.text, `验证码 ${code}，10 分钟内有效。不是你本人操作，可以不理会。`);
+  const row = db.raw.prepare('SELECT * FROM login_codes').get();
+  assert.ok(!JSON.stringify(row).includes(code), '库里只有哈希');
+  assert.equal(row.expires_at - row.sent_at, 10 * 60 * 1000);
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM users').get().n, 0, '要码不建人');
+  const r = await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code } });
   assert.equal(r.status, 200);
-  assert.equal(r.data.created, true);
-  const row = db.raw.prepare('SELECT * FROM users').get();
-  ownerId = row.id;
-  assert.deepEqual([row.role, row.login_name, row.pass_iter], ['owner', 'boss', 100000]);
-  assert.equal(row.pass_hash.length, 64);
-  assert.ok(!JSON.stringify(row).includes('first password'));
-  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).data.user.role, 'owner');
-  assert.equal((await call('GET', '/api/admin/setup')).data.needed, false);
-  // 再用口令：不会多建一个老板，而是重置这个老板的密码，旧会话失效
-  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, name: 'x', login: 'someone', password: PW } })).status, 400);
-  const again = await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'BOSS', password: PW } });
-  assert.equal(again.status, 200);
-  assert.equal(again.data.created, false);
-  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner'").get().n, 1);
-  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 401);
-  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'boss', password: 'first password' } })).status, 400);
+  assert.ok(r.data.expires_at - Date.now() > 6.9 * 864e5 && r.data.expires_at - Date.now() <= 7 * 864e5, '会话 7 天');
+  const me = (await call('GET', '/api/admin/me', { token: r.data.token })).data.user;
+  assert.deepEqual([me.role, me.name, me.email], ['owner', '老板', 'boss@example.com']);
+  ownerId = me.id;
+  assert.ok(!JSON.stringify(db.raw.prepare('SELECT * FROM audit_log').all()).includes(code), '操作记录里没有码');
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code } })).status, 400, '同一个码只能用一次');
+  sessions.set('boss@example.com', r.data.token);
 });
-await test('初始化：两个请求同时到只建出一个老板', async () => {
-  const fresh = fakeD1(path.join(here, '../migrations'));
-  const e2 = { ...env, DB: fresh };
-  const req = (login) => worker.fetch(new Request('https://team.example.com/api/admin/setup', { method: 'POST', headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' }, body: JSON.stringify({ code: SETUP, login, password: PW }) }), e2, {});
-  const rs = await Promise.all([req('boss1'), req('boss2')]);
-  assert.equal(fresh.raw.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner'").get().n, 1);
-  assert.deepEqual(rs.map((r) => r.status).sort(), [200, 400]);
+await test('老板邮箱：被改成别的角色或停用后，用老板邮箱登录又变回老板', async () => {
+  db.raw.prepare("UPDATE users SET role = 'agent', disabled_at = 1 WHERE id = ?").run(ownerId);
+  const tok = await adminLogin('boss@example.com');
+  assert.equal((await call('GET', '/api/admin/me', { token: tok })).data.user.role, 'owner');
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM users').get().n, 1);
+  sessions.set('boss@example.com', tok);
 });
-const boss = admin('boss');
-await test('后台登录：错的密码和不存在的登录名回一样的话；退出后会话失效；过期的会话失效', async () => {
-  const bad = await call('POST', '/api/admin/session', { body: { login: 'boss', password: 'nope nope' } });
-  const none = await call('POST', '/api/admin/session', { body: { login: 'ghost', password: 'nope nope' } });
-  assert.deepEqual([bad.status, none.status], [400, 400]);
-  assert.equal(bad.data.error, none.data.error);
-  const r = await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } });
-  assert.equal(r.status, 200);
-  assert.ok(r.data.expires_at - Date.now() > 11.9 * 3600e3 && r.data.expires_at - Date.now() <= 12 * 3600e3);
-  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 200);
-  assert.equal((await call('DELETE', '/api/admin/session', { token: r.data.token })).status, 200);
-  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 401);
-  const r2 = await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } });
+const boss = admin('boss@example.com');
+await test('验证码：错 5 次后对的码也不行；过期不行；没要过不行；不是 6 位数字不行；错误都是同一句话', async () => {
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  const good = lastCode('boss@example.com');
+  const bad = good === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 5; i += 1) {
+    const r = await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: bad }, ip: `4.4.4.${i}` });
+    assert.deepEqual([r.status, r.data.error], [400, '验证码不对或已过期']);
+  }
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: good }, ip: '4.4.5.1' })).status, 400, '试满 5 次作废');
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  db.raw.prepare('UPDATE login_codes SET expires_at = ?').run(Date.now() - 1);
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: lastCode('boss@example.com') } })).status, 400, '过期');
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'nobody@example.com', code: '123456' } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: 123456 } })).status, 400);
+  const fails = JSON.stringify(db.raw.prepare("SELECT * FROM audit_log WHERE action = 'admin.login_fail'").all());
+  assert.ok(fails.includes('boss@example.com') && !fails.includes(good));
+});
+await test('验证码：新码一出旧码作废；并发用同一个码只有一个成功', async () => {
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  const first = lastCode('boss@example.com');
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  const second = lastCode('boss@example.com');
+  if (first !== second) assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: first } })).status, 400);
+  const rs = await Promise.all([1, 2, 3].map((i) => call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: second }, ip: `3.3.3.${i}` })));
+  assert.equal(rs.filter((r) => r.status === 200).length, 1);
+});
+await test('验证码是 6 位均匀数字', async () => {
+  const seen = new Set();
+  for (let i = 0; i < 30; i += 1) { resetLimits(); await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } }); seen.add(lastCode('boss@example.com')); }
+  assert.ok([...seen].every((c) => /^\d{6}$/.test(c)));
+  assert.ok(seen.size > 25);
+});
+await test('后台要码：陌生邮箱 404 不发信；格式不对 400；不带自定义头 403', async () => {
+  resetLimits();
+  const before = mail.sent.length;
+  const r = await call('POST', '/api/admin/code', { body: { email: 'stranger@example.com' } });
+  assert.deepEqual([r.status, r.data.error], [404, '这个邮箱没有后台权限']);
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'not-an-email' } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, headers: { 'x-waswitch-admin': '' } })).status, 403);
+  assert.equal(mail.sent.length, before);
+});
+await test('要码限速：同一邮箱 60 秒 1 次（带 retry_after_s），1 小时 5 次；同一 IP 1 小时 20 次', async () => {
+  resetLimits();
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } })).status, 200);
+  const r = await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  assert.equal(r.status, 429);
+  assert.ok(r.data.retry_after_s > 50 && r.data.retry_after_s <= 60);
+  assert.match(r.data.error, /^太频繁了，请 \d+ 秒后再试$/);
+  resetLimits();
+  for (let i = 0; i < 5; i += 1) {
+    db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:mail1:%'").run();
+    assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: `2.2.2.${i}` })).status, 200);
+  }
+  db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:mail1:%'").run();
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '2.2.3.1' })).status, 429, '1 小时 5 次');
+  resetLimits();
+  for (let i = 0; i < 20; i += 1) await call('POST', '/api/admin/code', { body: { email: `x${i}@example.com` }, ip: '1.1.1.1' });
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' }, ip: '1.1.1.1' })).status, 429, '同一 IP 1 小时 20 次');
+  resetLimits();
+});
+await test('验证时同一 IP 10 分钟最多 10 次', async () => {
+  resetLimits();
+  for (let i = 0; i < 10; i += 1) await call('POST', '/api/admin/session', { body: { email: `y${i}@example.com`, code: '123456' }, ip: '9.8.7.6' });
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: '123456' }, ip: '9.8.7.6' })).status, 429);
+  resetLimits();
+});
+await test('发信失败：Resend 报错或连不上时 503，刚生成的码删掉；没配 RESEND_API_KEY 也是 503', async () => {
+  for (const mode of ['500', 'down']) {
+    resetLimits();
+    db.raw.prepare('DELETE FROM login_codes').run();
+    mail.mode = mode;
+    const r = await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+    assert.deepEqual([r.status, r.data.error], [503, '验证码发不出去，请稍后再试']);
+    assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM login_codes').get().n, 0, mode);
+  }
+  mail.mode = 'ok';
+  const key = env.RESEND_API_KEY; delete env.RESEND_API_KEY;
+  resetLimits();
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } })).status, 503);
+  env.RESEND_API_KEY = key;
+  env.MAIL_FROM = 'Team <team@example.com>';
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } });
+  assert.equal(mail.sent.at(-1).from, 'Team <team@example.com>');
+  delete env.MAIL_FROM;
+  resetLimits();
+});
+await test('后台退出后会话失效；过期的会话失效；库里不存明文令牌', async () => {
+  const tok = await adminLogin('boss@example.com');
+  assert.equal((await call('DELETE', '/api/admin/session', { token: tok })).status, 200);
+  assert.equal((await call('GET', '/api/admin/me', { token: tok })).status, 401);
+  const tok2 = await adminLogin('boss@example.com');
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = ?').get(tok2).n, 0);
   db.raw.prepare('UPDATE admin_sessions SET expires_at = ?').run(Date.now() - 1);
-  assert.equal((await call('GET', '/api/admin/me', { token: r2.data.token })).status, 401);
-  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = ?').get(r2.data.token)?.n, 0, '库里不存明文令牌');
+  assert.equal((await call('GET', '/api/admin/me', { token: tok2 })).status, 401);
   db.raw.prepare('DELETE FROM admin_sessions').run();
   sessions.clear();
 });
 await test('改数据的请求不带自定义头就拒绝', async () => {
-  const r = await call('POST', '/api/admin/groups', { token: await sessionFor('boss'), body: { name: 'x' }, headers: { 'x-waswitch-admin': '' } });
+  const r = await call('POST', '/api/admin/groups', { token: await sessionFor('boss@example.com'), body: { name: 'x' }, headers: { 'x-waswitch-admin': '' } });
   assert.equal(r.status, 403);
 });
 await test('配了 Cloudflare Access 时两道都要过；只配一半一律拒绝；设备接口不受影响', async () => {
-  const tok = await sessionFor('boss');
+  const tok = await sessionFor('boss@example.com');
   Object.assign(env, { ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: AUD });
   assert.equal((await call('GET', '/api/admin/me', { token: tok })).status, 403, '只有会话');
   assert.equal((await call('GET', '/api/admin/me', { jwtFor: 'boss@example.com' })).status, 401, '只有 Access');
   assert.equal((await call('GET', '/api/admin/me', { token: tok, jwtFor: 'boss@example.com' })).status, 200);
   assert.equal((await call('GET', '/admin/')).status, 403);
-  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } })).status, 403);
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'boss@example.com' } })).status, 403);
   for (const bad of [await jwt('boss@example.com', { aud: 'x' }), await jwt('boss@example.com', { iss: 'https://evil.cloudflareaccess.com' }),
     await jwt('boss@example.com', { exp: 1 }), await jwt('boss@example.com', { key: other.privateKey })]) {
     assert.equal((await call('GET', '/api/admin/me', { token: tok, rawJwt: bad })).status, 403);
@@ -175,31 +270,37 @@ await test('配了 Cloudflare Access 时两道都要过；只配一半一律拒�
 });
 
 let gA, gB, sup, agentA, agentB;
-await test('建组、主管、坐席：要填登录名和初始密码；主管只能加本组坐席', async () => {
+await test('建组、主管、坐席：要填名字和邮箱；主管只能加本组坐席', async () => {
   gA = (await boss.post('groups', { name: 'A 组' })).data.id;
   gB = (await boss.post('groups', { name: 'B 组' })).data.id;
-  sup = (await boss.post('users', { name: '主管甲', login_name: 'Sup', password: PW, role: 'supervisor', group_id: gA })).data.id;
+  sup = (await boss.post('users', { name: '主管甲', email: ' Sup@Example.com', role: 'supervisor', group_id: gA })).data.id;
   assert.ok(sup);
-  assert.equal((await boss.post('users', { name: '没登录名', password: PW, role: 'supervisor', group_id: gA })).status, 400);
-  assert.equal((await boss.post('users', { name: '密码太短', login_name: 'short', password: '1234567' })).status, 400);
-  assert.equal((await boss.post('users', { name: '重名', login_name: 'SUP', password: PW })).status, 409);
-  assert.equal((await boss.post('users', { name: '没组主管', login_name: 'nogroup', password: PW, role: 'supervisor' })).status, 400);
-  const s = admin('sup');
-  assert.equal((await s.post('users', { name: '想当主管', login_name: 'x1', password: PW, role: 'supervisor' })).status, 403);
-  agentA = (await s.post('users', { name: '坐席A', login_name: 'anna', password: PW, group_id: gB })).data.id; // group_id 被忽略，强制本组
-  agentB = (await boss.post('users', { name: '坐席B', login_name: 'ben', password: PW, group_id: gB })).data.id;
+  assert.equal(db.raw.prepare('SELECT email FROM users WHERE id = ?').get(sup).email, 'sup@example.com');
+  assert.equal((await boss.post('users', { name: '没邮箱', role: 'agent' })).status, 400);
+  assert.equal((await boss.post('users', { name: '坏邮箱', email: 'nope' })).status, 400);
+  assert.equal((await boss.post('users', { name: '重名', email: 'SUP@example.com' })).status, 409);
+  assert.equal((await boss.post('users', { name: '没组主管', email: 'nogroup@example.com', role: 'supervisor' })).status, 400);
+  const s = admin('sup@example.com');
+  assert.equal((await s.post('users', { name: '想当主管', email: 'x1@example.com', role: 'supervisor' })).status, 403);
+  agentA = (await s.post('users', { name: '坐席A', email: 'anna@example.com', group_id: gB })).data.id; // group_id 被忽略，强制本组
+  agentB = (await boss.post('users', { name: '坐席B', email: 'ben@example.com', group_id: gB })).data.id;
   const list = (await s.get('users')).data.users;
   assert.deepEqual(list.map((u) => u.name).sort(), ['主管甲', '坐席A'].sort());
-  assert.ok(list.every((u) => u.has_password === 1 && !('pass_hash' in u) && !('pass_salt' in u)), '密码哈希不发给网页');
 });
-await test('坐席不能登录后台', async () => {
-  const r = await call('POST', '/api/admin/session', { body: { login: 'anna', password: PW } });
-  assert.equal(r.status, 403);
+await test('坐席拿不到后台验证码；设备码不能登后台，后台码也不能登软件', async () => {
+  resetLimits();
+  assert.equal((await call('POST', '/api/admin/code', { body: { email: 'anna@example.com' } })).status, 404);
+  assert.equal((await devCode('sup@example.com')).status, 200);
+  assert.equal((await call('POST', '/api/admin/session', { body: { email: 'sup@example.com', code: lastCode('sup@example.com') } })).status, 400);
+  resetLimits();
+  await call('POST', '/api/admin/code', { body: { email: 'sup@example.com' } });
+  assert.equal((await devLoginCode('sup@example.com', lastCode('sup@example.com'))).status, 400);
+  db.raw.prepare('DELETE FROM login_codes').run();
 });
 
 let codeA, tokA, devA, acc1, acc2;
 await test('登记码只能用一次；登记时带上本机账号', async () => {
-  codeA = (await admin('sup').post(`users/${agentA}/enroll-code`)).data.code;
+  codeA = (await admin('sup@example.com').post(`users/${agentA}/enroll-code`)).data.code;
   assert.match(codeA, /^[A-Z2-9]{5}-[A-Z2-9]{5}$/);
   const body = { v: 1, code: codeA.toLowerCase(), device: { name: '前台电脑', app_version: '0.4.0', platform: 'win' },
     accounts: [{ local_id: '1700000000001', name: '美国号', color: '#25d366', mode: 'web' }, { local_id: '1700000000002', name: '小号', mode: 'lite' }, { local_id: '../x', name: '坏的' }] };
@@ -253,7 +354,7 @@ await test('换人：原电脑收到显式隐藏，新电脑收到显示', async
   tokB = r.data.token; devB = r.data.device_id;
   const first = await sync(tokA, {});
   const cursorA = first.data.cursor;
-  assert.equal((await admin('sup').post(`accounts/${acc1}/assign`, { device_id: devB })).status, 200);
+  assert.equal((await admin('sup@example.com').post(`accounts/${acc1}/assign`, { device_id: devB })).status, 200);
   const a = await sync(tokA, { cursor: cursorA });
   assert.deepEqual(a.data.seats.map((s) => [s.team_id, s.visible]), [[acc1, false]]);
   const b = await sync(tokB, {});
@@ -272,7 +373,7 @@ await test('改账号名称后，持有它的电脑拿到新名称；备注只�
 });
 await test('同步到 CRM 的开关：只有老板能开，随坐席下发', async () => {
   const before = (await sync(tokB, {})).data.cursor;
-  assert.equal((await admin('sup').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
+  assert.equal((await admin('sup@example.com').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
   assert.equal((await boss.patch(`accounts/${acc1}`, { crm_sync: true })).status, 200);
   const r = await sync(tokB, { cursor: before });
   assert.equal(r.data.seats[0].crm_sync, true);
@@ -394,7 +495,7 @@ await test('CRM：关掉同步时，没推出去的聊天一起删；超过 7 �
   Object.assign(env, { CRM_PUSH: '0' });
 });
 await test('主管看不到别组的号，也不能分配', async () => {
-  const s = admin('sup');
+  const s = admin('sup@example.com');
   await boss.patch(`accounts/${acc2}`, { group_id: gB });
   const ov = (await s.get('overview')).data.accounts.map((a) => a.id);
   assert.ok(ov.includes(acc1) && !ov.includes(acc2));
@@ -422,7 +523,7 @@ await test('收回后才能删除记录；只有老板能删；删除是软删�
   const offlineCursor = (await sync(tokB, {})).data.cursor; // 电脑 B 之后一直离线
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 400);
   await boss.post(`accounts/${acc1}/unassign`);
-  assert.equal((await admin('sup').del(`accounts/${acc1}`)).status, 403);
+  assert.equal((await admin('sup@example.com').del(`accounts/${acc1}`)).status, 403);
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 200);
   assert.ok(!(await boss.get('overview')).data.accounts.some((a) => a.id === acc1));
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 404);
@@ -450,15 +551,15 @@ await test('登记接口按 IP 限速', async () => {
 });
 await test('操作记录：老板看全部，主管只看自己的', async () => {
   const all = (await boss.get('audit')).data.entries;
-  const mine = (await admin('sup').get('audit')).data.entries;
+  const mine = (await admin('sup@example.com').get('audit')).data.entries;
   assert.ok(all.length > mine.length && mine.length > 0);
   assert.ok(mine.every((e) => e.actor_id === sup));
 });
-// ---- 登录 ----
+// ---- 软件登录 ----
 await test('登录策略：默认提示登录；不要令牌；只有老板能改；同步和登录都带上', async () => {
   assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'optional' });
   assert.equal((await call('POST', '/api/device/policy', { body: {} })).status, 405);
-  assert.equal((await admin('sup').put('settings', { login_policy: 'required' })).status, 403);
+  assert.equal((await admin('sup@example.com').put('settings', { login_policy: 'required' })).status, 403);
   assert.equal((await boss.put('settings', { login_policy: 'always' })).status, 400);
   for (const p of ['required', 'off', 'optional']) {
     assert.equal((await boss.put('settings', { login_policy: p })).status, 200);
@@ -469,8 +570,22 @@ await test('登录策略：默认提示登录；不要令牌；只有老板能�
   assert.deepEqual((await sync(tokA, {})).data.user, { name: '坐席A' });
 });
 let loginDev, loginTok;
-await test('软件登录：成功拿到令牌和人名；错的密码、不存在的账号回同一句话；失败只记登录名', async () => {
-  const r = await devLogin('ANNA', PW);
+await test('软件要码：成功；邮箱查不到 404 unknown；格式不对 400；协议版本不对 426', async () => {
+  resetLimits();
+  const before = mail.sent.length;
+  assert.deepEqual((await devCode('nobody@example.com')).data, { error: '这个邮箱还没加入团队，请找管理员', unknown: true });
+  assert.equal((await devCode('nobody@example.com')).status, 404);
+  assert.equal((await devCode('bad')).status, 400);
+  assert.equal((await call('POST', '/api/device/code', { body: { v: 9, email: 'anna@example.com' } })).status, 426);
+  assert.equal(mail.sent.length, before);
+  const r = await devCode(' ANNA@example.com ');
+  assert.deepEqual([r.status, r.data], [200, { ok: true, resend_after_s: 60 }]);
+  assert.deepEqual(mail.sent.at(-1).to, ['anna@example.com']);
+});
+await test('软件登录：成功拿到令牌和人名；码不对回「验证码不对或已过期」；失败只记邮箱', async () => {
+  const bad = await devLoginCode('anna@example.com', '999999' === lastCode('anna@example.com') ? '888888' : '999999');
+  assert.deepEqual([bad.status, bad.data.error], [400, '验证码不对或已过期']);
+  const r = await devLoginCode('anna@example.com', lastCode('anna@example.com'));
   assert.equal(r.status, 200);
   assert.deepEqual(r.data.user, { name: '坐席A' });
   assert.equal(r.data.login, 'optional');
@@ -480,104 +595,88 @@ await test('软件登录：成功拿到令牌和人名；错的密码、不存�
   assert.deepEqual([row.name, row.platform, row.app_version], ['笔记本', 'mac', '1.0.5']);
   assert.notEqual(row.token_hash, loginTok);
   assert.equal((await sync(loginTok, {})).status, 200);
-  const bad = await devLogin('anna', 'wrong password', { ip: '7.7.7.1' });
-  const none = await devLogin('nobody', 'wrong password', { ip: '7.7.7.1' });
-  assert.deepEqual([bad.status, none.status, bad.data.error], [400, 400, '账号或密码不对']);
-  assert.equal(none.data.error, bad.data.error);
-  assert.equal((await call('POST', '/api/device/login', { body: { v: 99, login: 'anna', password: PW } })).status, 426);
+  assert.equal((await call('POST', '/api/device/login', { body: { v: 99, email: 'anna@example.com', code: '123456' } })).status, 426);
   const log = JSON.stringify(db.raw.prepare("SELECT * FROM audit_log WHERE action = 'device.login_fail'").all());
-  assert.ok(log.includes('anna') && !log.includes('wrong password'));
+  assert.ok(log.includes('anna@example.com'));
 });
 await test('软件登录：带上次的设备号且是本人的就沿用（坐席不丢），旧令牌作废；别人的设备号就新建', async () => {
-  const r = await devLogin('anna', PW, { device_id: devB });
+  const r = await devLogin('anna@example.com', { device_id: devB });
   assert.equal(r.data.device_id, devB);
   assert.equal((await sync(tokB, {})).status, 401, '旧令牌作废');
   tokB = r.data.token;
   assert.equal((await sync(tokB, {})).status, 200);
-  const other = await devLogin('ben', PW, { device_id: devB });
+  const other = await devLogin('ben@example.com', { device_id: devB });
   assert.notEqual(other.data.device_id, devB);
   assert.equal((await sync(tokB, {})).status, 200, '别人登录不影响这台');
   assert.equal(db.raw.prepare('SELECT user_id FROM devices WHERE id = ?').get(other.data.device_id).user_id, agentB);
 });
-await test('软件登录：被停用的电脑带着设备号登录回 403 revoked；被停用的人回 403 disabled', async () => {
+await test('停用：被停用的电脑带着设备号登录回 403 revoked；停用的人要码 403 disabled 且不发信；要了码再被停用，登录也 403', async () => {
   await boss.post(`devices/${devB}/revoke`);
-  const r = await devLogin('anna', PW, { device_id: devB });
+  const r = await devLogin('anna@example.com', { device_id: devB });
   assert.deepEqual([r.status, r.data.revoked, r.data.device_id], [403, true, devB]);
   await boss.post(`devices/${devB}/restore`);
+  resetLimits();
+  assert.equal((await devCode('ben@example.com')).status, 200);
+  const code = lastCode('ben@example.com');
   await boss.patch(`users/${agentB}`, { disabled: true });
-  const d = await devLogin('ben', PW);
+  const before = mail.sent.length;
+  resetLimits();
+  const d = await devCode('ben@example.com');
   assert.deepEqual([d.status, d.data.disabled, d.data.error], [403, true, '这个账号已停用']);
-  const wrong = await devLogin('ben', 'not the password', { ip: '7.7.7.2' });
-  assert.equal(wrong.status, 400, '密码不对时不透露账号被停用');
+  assert.equal(mail.sent.length, before);
+  const l = await devLoginCode('ben@example.com', code);
+  assert.deepEqual([l.status, l.data.disabled], [403, true]);
   await boss.patch(`users/${agentB}`, { disabled: false });
 });
 await test('退出登录：令牌失效（401，不是 403），设备记录和坐席留着，后台看得出已退出', async () => {
-  const r = await devLogin('anna', PW);
+  const r = await devLogin('anna@example.com');
   assert.equal((await call('POST', '/api/device/logout', { token: r.data.token, body: {} })).status, 200);
   const s = await sync(r.data.token, {});
   assert.equal(s.status, 401);
   assert.equal(s.data.revoked, undefined);
   const d = (await boss.get('users')).data.devices.find((x) => x.id === r.data.device_id);
   assert.ok(d.logged_out_at > 0);
-  const back = await devLogin('anna', PW, { device_id: r.data.device_id });
+  const back = await devLogin('anna@example.com', { device_id: r.data.device_id });
   assert.equal(back.data.device_id, r.data.device_id);
   assert.equal((await boss.get('users')).data.devices.find((x) => x.id === r.data.device_id).logged_out_at, null);
 });
-await test('重置密码：这个人所有电脑的令牌和后台会话都失效；旧密码不能用；主管只能重置本组坐席', async () => {
-  assert.equal((await admin('sup').post(`users/${agentB}/password`, { password: 'new password 2' })).status, 403);
-  assert.equal((await admin('sup').post(`users/${agentA}/password`, { password: 'short' })).status, 400);
+await test('让他重新登录：这个人所有电脑的令牌和后台会话都作废；主管只能对本组坐席', async () => {
+  assert.equal((await admin('sup@example.com').post(`users/${agentB}/signout`)).status, 403);
   assert.equal((await sync(tokB, {})).status, 200);
-  assert.equal((await admin('sup').post(`users/${agentA}/password`, { password: 'new password 2' })).status, 200);
+  assert.equal((await admin('sup@example.com').post(`users/${agentA}/signout`)).status, 200);
   assert.equal((await sync(tokB, {})).status, 401);
   assert.equal((await sync(loginTok, {})).status, 401);
-  assert.equal((await sync(tokA, {})).status, 401, '用登记码登记的电脑也失效');
-  assert.equal((await devLogin('anna', PW, { ip: '7.7.7.3' })).status, 400);
-  const r = await devLogin('anna', 'new password 2', { device_id: devB });
-  tokB = r.data.token;
-  tokA = (await devLogin('anna', 'new password 2', { device_id: devA })).data.token;
+  assert.equal((await sync(tokA, {})).status, 401, '用登记码登记的电脑也作废');
+  tokB = (await devLogin('anna@example.com', { device_id: devB })).data.token;
+  tokA = (await devLogin('anna@example.com', { device_id: devA })).data.token;
   assert.equal((await sync(tokA, {})).status, 200);
-  // 主管自己的后台会话
-  const supTok = await sessionFor('sup');
-  await boss.post(`users/${sup}/password`, { password: 'sup password 2' });
+  const supTok = await sessionFor('sup@example.com');
+  assert.equal((await boss.post(`users/${sup}/signout`)).status, 200);
   assert.equal((await call('GET', '/api/admin/me', { token: supTok })).status, 401);
-  sessions.delete('sup');
-  await sessionFor('sup', 'sup password 2');
+  sessions.delete('sup@example.com');
 });
-await test('改登录名：重名 409，格式不对 400；改了以后用新名字登录', async () => {
-  assert.equal((await boss.patch(`users/${agentA}`, { login_name: 'BEN' })).status, 409);
-  assert.equal((await boss.patch(`users/${agentA}`, { login_name: 'a' })).status, 400);
-  assert.equal((await admin('sup').patch(`users/${agentA}`, { login_name: 'anna.k' })).status, 200);
-  assert.equal((await devLogin('anna.k', 'new password 2', { device_id: devB })).status, 200);
-});
-await test('登录限速：同一个登录名 10 分钟最多错 10 次（换 IP 也不行），同一个 IP 也是；成功的登录不占额度', async () => {
-  db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'login:%'").run();
-  for (let i = 0; i < 15; i += 1) assert.equal((await devLogin('ben', PW)).status, 200, '同一个 IP 成功登录很多次');
-  for (let i = 0; i < 10; i += 1) assert.equal((await devLogin('ben', 'bad password', { ip: `8.8.8.${i}` })).status, 400);
-  assert.equal((await devLogin('ben', PW, { ip: '8.8.9.1' })).status, 429, '密码对也先挡住');
-  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'ben', password: PW }, ip: '8.8.9.2' })).status, 429, '后台登录同一个额度');
-  for (let i = 0; i < 10; i += 1) await devLogin(`nobody${i}`, 'bad password', { ip: '6.6.6.6' });
-  assert.equal((await devLogin('anna.k', 'new password 2', { ip: '6.6.6.6' })).status, 429);
-  // 并发：先计数再验密码，同时打 20 个也最多 10 个进得去
-  const rs = await Promise.all(Array.from({ length: 20 }, (_, i) => devLogin('boss', 'bad password', { ip: `5.5.5.${i}` })));
-  assert.equal(rs.filter((r) => r.status === 400).length, 10);
-  db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'login:%'").run();
-});
-await test('改了 PASS_ITER：下次登录时自动按新次数重算，密码不变', async () => {
-  env.PASS_ITER = '20000';
-  assert.equal((await devLogin('ben', PW)).status, 200);
-  assert.equal(db.raw.prepare('SELECT pass_iter FROM users WHERE id = ?').get(agentB).pass_iter, 20000);
-  delete env.PASS_ITER;
-  assert.equal((await devLogin('ben', PW)).status, 200);
-  assert.equal(db.raw.prepare('SELECT pass_iter FROM users WHERE id = ?').get(agentB).pass_iter, 100000);
+await test('改邮箱：主管能改本组坐席的；重名 409，格式不对 400；改了以后用新邮箱登录，旧邮箱查不到', async () => {
+  assert.equal((await boss.patch(`users/${agentA}`, { email: 'BEN@example.com' })).status, 409);
+  assert.equal((await boss.patch(`users/${agentA}`, { email: 'nope' })).status, 400);
+  assert.equal((await admin('sup@example.com').patch(`users/${agentA}`, { email: 'anna.k@example.com' })).status, 200);
+  resetLimits();
+  assert.equal((await devCode('anna@example.com')).status, 404);
+  assert.equal((await devLogin('anna.k@example.com', { device_id: devB })).status, 200);
+  assert.equal((await boss.patch(`users/${agentB}`, { email: '' })).status, 200, '清空邮箱 = 这个人登录不了');
+  resetLimits();
+  assert.equal((await devCode('ben@example.com')).status, 404);
+  await boss.patch(`users/${agentB}`, { email: 'ben@example.com' });
 });
 await test('定时任务只有一个（每 30 分钟）；每天 UTC 19:00 那次清理过期会话和旧记录，其它时候不清', async () => {
   const cfg = JSON.parse(fs.readFileSync(path.join(here, '../wrangler.jsonc'), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
   assert.deepEqual(cfg.triggers.crons, ['*/30 * * * *']);
   db.raw.prepare("INSERT INTO admin_sessions (token_hash, user_id, created_at, expires_at) VALUES ('old', ?, 0, 1)").run(ownerId);
+  db.raw.prepare("INSERT INTO login_codes (email, purpose, code_hash, expires_at, sent_at) VALUES ('old@example.com', 'device', 'x', 1, 0)").run();
   await worker.scheduled({ cron: '*/30 * * * *', scheduledTime: Date.UTC(2026, 10, 2, 19, 30) }, env);
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = 'old'").get().n, 1);
   await worker.scheduled({ cron: '*/30 * * * *', scheduledTime: Date.UTC(2026, 10, 2, 19, 0) }, env);
   assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = 'old'").get().n, 0);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM login_codes WHERE email = 'old@example.com'").get().n, 0);
 });
 await test('每日清理任务能跑', async () => {
   await worker.scheduled({}, env);

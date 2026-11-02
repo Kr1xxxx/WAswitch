@@ -16,10 +16,10 @@ let me = null;
 let tab = 'overview';
 let timer = null;
 
-// 会话令牌放 sessionStorage：关掉浏览器标签就要重新登录；不用 cookie
+// 会话令牌放 localStorage（7 天有效，省得每次打开都收一封信）；不用 cookie
 const TOKEN_KEY = 'waswitch-admin-token';
-function getToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } }
-function setToken(t) { try { if (t) sessionStorage.setItem(TOKEN_KEY, t); else sessionStorage.removeItem(TOKEN_KEY); } catch { /* 存不了就只在这一页有效 */ } }
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } }
+function setToken(t) { try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* 存不了就只在这一页有效 */ } }
 let memToken = getToken();
 const token = () => memToken;
 function saveToken(t) { memToken = t || ''; setToken(memToken); }
@@ -66,7 +66,7 @@ async function api(method, path, body) {
   });
   let data = {};
   try { data = await res.json(); } catch { /* 非 JSON（比如 Access 登录页） */ }
-  if (res.status === 401 && path !== 'session' && path !== 'setup') { saveToken(''); throw new NeedLogin(data.error || '请先登录'); }
+  if (res.status === 401 && path !== 'session' && path !== 'code') { saveToken(''); throw new NeedLogin(data.error || '请先登录'); }
   if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
   return data;
 }
@@ -74,48 +74,52 @@ async function act(fn, okText) {
   try { await fn(); if (okText) toast(okText); await render(); } catch (e) { if (e instanceof NeedLogin) render(); else toast(e.message); }
 }
 
-// ---------- 登录和初始化 ----------
+// ---------- 登录（邮箱验证码） ----------
 const field = (label, input) => el('label', { class: 'field' }, el('span', {}, label), input);
+let lastEmail = '';
+try { lastEmail = localStorage.getItem('waswitch-admin-email') || ''; } catch { /* 没有就空着 */ }
 
+// 两个表单：邮箱框回车 = 获取验证码，验证码框回车 = 登录（都是浏览器原生提交，输入法选字时的回车不会提交）
 function loginView(note = '') {
-  const login = el('input', { autocomplete: 'username', maxlength: 32, required: true, autocapitalize: 'off', spellcheck: 'false' });
-  const pass = el('input', { type: 'password', autocomplete: 'current-password', maxlength: 128, required: true });
+  const email = el('input', { type: 'email', autocomplete: 'email', maxlength: 254, required: true, value: lastEmail, spellcheck: 'false' });
+  const send = el('button', { class: 'btn', type: 'submit' }, '获取验证码');
+  const code = el('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, pattern: '[0-9]{6}', required: true });
+  const sent = el('p', { class: 'muted', hidden: true });
   const err = el('p', { class: 'bad', hidden: !note }, note);
-  const form = el('form', { class: 'auth', onsubmit: async (e) => {
+  const showErr = (m) => { err.textContent = m; err.hidden = false; };
+  let tick = null;
+  function countdown(n) {
+    clearInterval(tick);
+    send.disabled = true;
+    const show = () => { send.textContent = `${n} 秒后重新获取`; };
+    show();
+    tick = setInterval(() => { n -= 1; if (n > 0) show(); else { clearInterval(tick); send.disabled = false; send.textContent = '获取验证码'; } }, 1000);
+  }
+  const askForm = el('form', { class: 'pair', onsubmit: async (e) => {
     e.preventDefault();
     err.hidden = true;
     try {
-      const r = await api('POST', 'session', { login: login.value, password: pass.value });
-      saveToken(r.token);
-      render();
-    } catch (x) { err.textContent = x.message; err.hidden = false; pass.select(); }
-  } }, el('h1', {}, '登录团队后台'), field('登录名', login), field('密码', pass), err,
-  el('button', { class: 'btn primary', type: 'submit' }, '登录'),
-  btn('用初始化口令重置老板密码', () => showAuth(setupView(false)), 'link'));
-  return [form, login];
-}
-
-// first = true：还没有老板账号，建一个；false：用口令重置老板的密码
-function setupView(first) {
-  const code = el('input', { type: 'password', autocomplete: 'off', required: true });
-  const name = first ? el('input', { maxlength: 40, value: '老板' }) : null;
-  const login = el('input', { autocomplete: 'username', maxlength: 32, required: true, autocapitalize: 'off', spellcheck: 'false' });
-  const pass = el('input', { type: 'password', autocomplete: 'new-password', minlength: 8, maxlength: 128, required: true });
-  const err = el('p', { class: 'bad', hidden: true });
-  const form = el('form', { class: 'auth', onsubmit: async (e) => {
+      const r = await api('POST', 'code', { email: email.value });
+      lastEmail = email.value.trim().toLowerCase();
+      try { localStorage.setItem('waswitch-admin-email', lastEmail); } catch { /* 下次手填 */ }
+      sent.textContent = `已发到 ${lastEmail}`;
+      sent.hidden = false;
+      countdown(r.resend_after_s || 60);
+      code.focus();
+    } catch (x) { showErr(x.message); }
+  } }, field('邮箱', email), send);
+  const loginForm = el('form', { class: 'pair', onsubmit: async (e) => {
     e.preventDefault();
     err.hidden = true;
     try {
-      const r = await api('POST', 'setup', { code: code.value, name: name ? name.value : undefined, login: login.value, password: pass.value });
+      const r = await api('POST', 'session', { email: email.value, code: code.value });
+      clearInterval(tick);
       saveToken(r.token);
-      toast(r.created ? '已建好老板账号' : '密码已重置');
       render();
-    } catch (x) { err.textContent = x.message; err.hidden = false; }
-  } }, el('h1', {}, first ? '初始化团队后台' : '重置老板密码'), field('初始化口令', code), name ? field('名字', name) : null,
-  field('登录名', login), field(first ? '密码' : '新密码', pass), err,
-  el('button', { class: 'btn primary', type: 'submit' }, first ? '建老板账号' : '重置'),
-  first ? null : btn('返回登录', () => showAuth(loginView()), 'link'));
-  return [form, code];
+    } catch (x) { showErr(x.message); code.value = ''; code.focus(); }
+  } }, field('验证码', code), el('button', { class: 'btn primary', type: 'submit' }, '登录'));
+  const box = el('div', { class: 'auth' }, el('h1', {}, '登录团队后台'), askForm, sent, loginForm, err);
+  return [box, lastEmail ? send : email];
 }
 
 function showAuth([form, focus]) {
@@ -127,9 +131,7 @@ function showAuth([form, focus]) {
 }
 
 async function authPage(note) {
-  let state = { needed: false };
-  try { state = await api('GET', 'setup'); } catch { /* 拿不到就按要登录处理 */ }
-  showAuth(state.needed ? setupView(true) : loginView(note));
+  showAuth(loginView(note));
 }
 
 async function logout() {
@@ -284,21 +286,13 @@ function deviceLine(d, now) {
         : btn('确认收回', () => confirm('确认让这台电脑停止并隐藏这些号？') && act(() => api('POST', `devices/${d.id}/confirm-hides`), '已确认'))) : null);
 }
 
-// 重置密码、改登录名：在列表上方打开一个小表单
-function userForm(box, u, kind) {
-  const input = kind === 'password'
-    ? el('input', { type: 'text', autocomplete: 'off', minlength: 8, maxlength: 128, required: true, placeholder: '新密码' })
-    : el('input', { value: u.login_name || '', maxlength: 32, required: true, autocapitalize: 'off', spellcheck: 'false', placeholder: '登录名' });
+// 改邮箱：在列表上方打开一个小表单
+function emailForm(box, u) {
+  const input = el('input', { type: 'email', value: u.email || '', maxlength: 254, spellcheck: 'false', placeholder: '邮箱' });
   const form = el('form', { class: 'row', onsubmit: (e) => {
     e.preventDefault();
-    act(async () => {
-      if (kind === 'password') {
-        const r = await api('POST', `users/${u.id}/password`, { password: input.value });
-        if (r.self) { saveToken(''); }
-      } else await api('PATCH', `users/${u.id}`, { login_name: input.value });
-      box.replaceChildren();
-    }, kind === 'password' ? '密码已重置' : '已保存');
-  } }, el('b', {}, kind === 'password' ? `给 ${u.name} 设新密码` : `${u.name} 的登录名`), input,
+    act(async () => { await api('PATCH', `users/${u.id}`, { email: input.value }); box.replaceChildren(); }, '已保存');
+  } }, el('b', {}, `${u.name} 的邮箱`), input,
   el('button', { class: 'btn primary', type: 'submit' }, '保存'), btn('取消', () => box.replaceChildren()));
   box.replaceChildren(form);
   input.focus();
@@ -310,26 +304,25 @@ async function peoplePage() {
   const owner = me.user.role === 'owner';
   const groups = new Map(me.groups.map((g) => [g.id, g.name]));
   const name = el('input', { placeholder: '名字', maxlength: 40, required: true });
-  const login = el('input', { placeholder: '登录名', maxlength: 32, required: true, autocapitalize: 'off', spellcheck: 'false' });
-  const pass = el('input', { placeholder: '初始密码', autocomplete: 'off', minlength: 8, maxlength: 128, required: true });
+  const email = el('input', { type: 'email', placeholder: '工作邮箱', maxlength: 254, required: true, spellcheck: 'false', size: 28 });
   const role = owner ? el('select', {}, ['agent', 'supervisor', 'owner'].map((r) => el('option', { value: r }, ROLE_TEXT[r]))) : null;
   const group = owner ? el('select', {}, el('option', { value: '' }, '不分组'), me.groups.map((g) => el('option', { value: g.id }, g.name))) : null;
   const add = el('form', { class: 'row', onsubmit: (e) => {
     e.preventDefault();
-    act(() => api('POST', 'users', { name: name.value, login_name: login.value, password: pass.value, role: role ? role.value : 'agent', group_id: group ? group.value : undefined }), '已添加');
-  } }, name, login, pass, role, group, el('button', { class: 'btn primary', type: 'submit' }, '添加'));
+    act(() => api('POST', 'users', { name: name.value, email: email.value, role: role ? role.value : 'agent', group_id: group ? group.value : undefined }), '已添加');
+  } }, name, email, role, group, el('button', { class: 'btn primary', type: 'submit' }, '添加'));
 
   const box = el('div');
   const rows = data.users.map((u) => {
     const devs = data.devices.filter((d) => d.user_id === u.id);
     return el('tr', {},
       el('td', {}, u.name, u.disabled_at ? el('span', { class: 'bad' }, '（已停用）') : null,
-        el('div', { class: u.login_name && u.has_password ? 'muted' : 'warn' }, u.login_name ? (u.has_password ? u.login_name : `${u.login_name}，没有密码`) : '没有登录名')),
+        el('div', { class: u.email ? 'muted' : 'warn' }, u.email || '没填邮箱')),
       el('td', {}, ROLE_TEXT[u.role], u.group_id ? el('div', { class: 'muted' }, groups.get(u.group_id) || '') : null),
       el('td', {}, devs.length ? devs.map((d) => deviceLine(d, now)) : el('span', { class: 'muted' }, '还没登录过')),
       el('td', {},
-        btn('重置密码', () => userForm(box, u, 'password')),
-        btn('改登录名', () => userForm(box, u, 'login')),
+        btn('让他重新登录', () => act(async () => { const r = await api('POST', `users/${u.id}/signout`); if (r.self) saveToken(''); }, '已让他重新登录')),
+        btn('改邮箱', () => emailForm(box, u)),
         u.id === me.user.id ? null : btn(u.disabled_at ? '启用' : '停用', () => act(() => api('PATCH', `users/${u.id}`, { disabled: !u.disabled_at }), '已保存'), u.disabled_at ? '' : 'danger')));
   });
   return [el('h2', {}, '添加人员'), add, el('h2', {}, '人员和电脑'), box,

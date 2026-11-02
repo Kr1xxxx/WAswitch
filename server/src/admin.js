@@ -1,10 +1,8 @@
 // 管理后台接口。进来之前 index.js 已经按后台会话查到了人（session.js 的 resolveSession），坐席进不来。
 // 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组。
 import { pushReady } from './crm.js';
-import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit, loginPolicy, POLICIES } from './util.js';
-import { normalizeLogin, checkPassword, hashPassword, passwordStmts } from './password.js';
-
-const LOGIN_RULE = '登录名只能用小写字母、数字和 . _ -，2 到 32 位';
+import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit, loginPolicy, POLICIES, normalizeEmail } from './util.js';
+import { signOutStmts } from './session.js';
 
 const CODE_TTL_MS = 15 * 60 * 1000;
 const ONLINE_MS = 6 * 60 * 1000;
@@ -53,7 +51,7 @@ async function events(db, user, accountId) {
   return json({ events: rows.results });
 }
 
-const USER_COLS = 'id, name, email, login_name, pass_hash IS NOT NULL AS has_password, pass_changed_at, role, group_id, disabled_at, created_at';
+const USER_COLS = 'id, name, email, role, group_id, disabled_at, created_at';
 
 async function listUsers(db, user) {
   const users = await (isOwner(user)
@@ -79,46 +77,40 @@ async function auditList(db, user, url) {
 
 // ---------- 人 ----------
 
-async function createUser(db, user, body, env) {
+async function createUser(db, user, body) {
   const name = str(body.name, 40);
   if (!name) return fail(400, '请填写名字');
-  const login = normalizeLogin(body.login_name);
-  if (!login) return fail(400, LOGIN_RULE);
+  const email = normalizeEmail(body.email);
+  if (!email) return fail(400, '请填写正确的邮箱（用来收验证码登录）');
   const role = oneOf(body.role, ['owner', 'supervisor', 'agent'], 'agent');
   let groupId = str(body.group_id, 36) || null;
-  const email = str(body.email, 120).toLowerCase() || null;
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(400, '邮箱格式不对');
   if (!isOwner(user)) {
     need(role === 'agent', '主管只能添加坐席');
     groupId = user.group_id;
   }
   if (role === 'supervisor' && !groupId) return fail(400, '主管要选一个组');
   if (groupId) found(await db.prepare('SELECT id FROM groups WHERE id = ?').bind(groupId).first(), '没有这个组');
-  const h = await hashPassword(checkPassword(body.password), env);
   const id = uuid();
-  const t = now();
   try {
-    await db.prepare(`INSERT INTO users (id, name, email, login_name, pass_hash, pass_salt, pass_iter, pass_changed_at, role, group_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, name, email, login, h.pass_hash, h.pass_salt, h.pass_iter, t, role, groupId, t).run();
+    await db.prepare('INSERT INTO users (id, name, email, role, group_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, name, email, role, groupId, now()).run();
   } catch (e) {
-    if (/UNIQUE/i.test(e.message)) return fail(409, /login_name/i.test(e.message) ? '这个登录名已经有人用了' : '这个邮箱已经有人用了');
+    if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
     throw e;
   }
-  await audit(db, user.id, 'user.create', id, { name, login_name: login, role, group_id: groupId });
+  await audit(db, user.id, 'user.create', id, { name, email, role, group_id: groupId });
   return json({ id });
 }
 
-// 重置密码：这个人所有电脑回到登录页，后台会话也一起失效
-async function resetPassword(db, user, id, body, env) {
+// 让他重新登录：这个人所有电脑回到登录页，后台会话也一起作废。可以撤回（再登录一次就好），不用确认
+async function signOutUser(db, user, id) {
   const u = await targetUser(db, user, id);
-  const h = await hashPassword(checkPassword(body.password), env);
-  await db.batch(passwordStmts(db, u.id, h, now()));
-  await audit(db, user.id, 'user.password', id);
+  await db.batch(signOutStmts(db, u.id, now()));
+  await audit(db, user.id, 'user.signout', id);
   return json({ ok: true, self: u.id === user.id });
 }
 
 async function targetUser(db, user, id) {
-  const u = found(await db.prepare('SELECT id, name, email, login_name, role, group_id, disabled_at FROM users WHERE id = ?').bind(id).first(), '没有这个人');
+  const u = found(await db.prepare('SELECT id, name, email, role, group_id, disabled_at FROM users WHERE id = ?').bind(id).first(), '没有这个人');
   if (!isOwner(user)) need(u.role === 'agent' && u.group_id === user.group_id);
   return u;
 }
@@ -132,10 +124,12 @@ async function updateUser(db, user, id, body) {
     need(u.id !== user.id, '不能停用自己');
     sets.push('disabled_at = ?'); vals.push(body.disabled ? now() : null);
   }
-  if (body.login_name !== undefined) {
-    const l = normalizeLogin(body.login_name);
-    if (!l) return fail(400, LOGIN_RULE);
-    sets.push('login_name = ?'); vals.push(l);
+  // 主管也能改本组坐席的邮箱（员工换邮箱时用）。清空 = 这个人登录不了
+  if (body.email !== undefined) {
+    const raw = str(body.email, 254);
+    const e = raw ? normalizeEmail(raw) : null;
+    if (raw && !e) return fail(400, '邮箱格式不对');
+    sets.push('email = ?'); vals.push(e);
   }
   if (isOwner(user)) {
     if (body.role !== undefined) {
@@ -148,11 +142,6 @@ async function updateUser(db, user, id, body) {
       const g = str(body.group_id, 36) || null;
       if (g) found(await db.prepare('SELECT id FROM groups WHERE id = ?').bind(g).first(), '没有这个组');
       sets.push('group_id = ?'); vals.push(g);
-    }
-    if (body.email !== undefined) {
-      const e = str(body.email, 120).toLowerCase() || null;
-      if (e && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return fail(400, '邮箱格式不对');
-      sets.push('email = ?'); vals.push(e);
     }
   }
   if (!sets.length) return json({ ok: true });
@@ -179,7 +168,7 @@ async function updateUser(db, user, id, body) {
     after = await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND ${valid}
       RETURNING role, group_id, email`).bind(...vals, id, ...guardVals).first();
   } catch (e) {
-    if (/UNIQUE/i.test(e.message)) return fail(409, /login_name/i.test(e.message) ? '这个登录名已经有人用了' : '这个邮箱已经有人用了');
+    if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
     throw e;
   }
   if (!after) return isOwner(user)
@@ -349,7 +338,7 @@ async function updateSettings(db, user, body) {
 
 // ---------- 路由 ----------
 
-// user：index.js 按会话查到的人 { id, name, login_name, role, group_id }
+// user：index.js 按会话查到的人 { id, name, email, role, group_id }
 export async function handleAdmin(request, env, path, user) {
   const db = env.DB;
   if (!user || !['owner', 'supervisor'].includes(user.role)) throw new HttpError(403, '这个账号没有后台权限');
@@ -371,9 +360,9 @@ export async function handleAdmin(request, env, path, user) {
     case 'POST accounts/:id/unassign': return unassignAccount(db, user, id);
     case 'DELETE accounts/:id': return deleteAccount(db, user, id);
     case 'GET users': return listUsers(db, user);
-    case 'POST users': return createUser(db, user, body, env);
+    case 'POST users': return createUser(db, user, body);
     case 'PATCH users/:id': return updateUser(db, user, id, body);
-    case 'POST users/:id/password': return resetPassword(db, user, id, body, env);
+    case 'POST users/:id/signout': return signOutUser(db, user, id);
     case 'POST users/:id/enroll-code': return enrollCode(db, user, id);
     case 'PATCH devices/:id': return renameDevice(db, user, id, body);
     case 'POST devices/:id/revoke': return setDeviceRevoked(db, user, id, true);

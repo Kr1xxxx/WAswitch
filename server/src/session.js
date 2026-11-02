@@ -1,12 +1,12 @@
-// 后台网页登录：老板和主管用登录名和密码换一个会话令牌（12 小时），网页放 sessionStorage，每个请求带 Authorization: Bearer。
+// 后台网页登录：老板和主管填邮箱收验证码，换一个 7 天的会话令牌。网页放 localStorage，每个请求带 Authorization: Bearer。
 // 不用 cookie，所以没有跨站请求伪造的问题。
-// 初始化和找回：Worker 的 secret SETUP_CODE。还没有带密码的老板时用它建老板；以后用它重置老板的密码。
-import { json, fail, now, uuid, randomToken, sha256hex, readJson, HttpError, str, audit, rateLimit } from './util.js';
-import { normalizeLogin, checkPassword, hashPassword, passwordStmts, sameBytes } from './password.js';
-import { checkLogin } from './device.js';
+// 老板邮箱是 Worker 的 secret OWNER_EMAIL：这个邮箱一定是老板，第一次登录时建档；老板进不去时改这个 secret 就行。
+import { json, fail, now, uuid, randomToken, sha256hex, readJson, HttpError, audit, normalizeEmail } from './util.js';
+import { limitCodeIp, issueCode, consumeCode } from './code.js';
 
-export const SESSION_MS = 12 * 60 * 60 * 1000;
+export const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const ADMIN_ROLES = ['owner', 'supervisor'];
+const ownerEmail = (env) => normalizeEmail(env.OWNER_EMAIL);
 
 function bearer(request) {
   const m = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.get('authorization') || '');
@@ -17,7 +17,7 @@ function bearer(request) {
 export async function resolveSession(request, db) {
   const token = bearer(request);
   if (!token) throw new HttpError(401, '请先登录');
-  const row = await db.prepare(`SELECT u.id, u.name, u.login_name, u.role, u.group_id, u.disabled_at FROM admin_sessions s JOIN users u ON u.id = s.user_id
+  const row = await db.prepare(`SELECT u.id, u.name, u.email, u.role, u.group_id, u.disabled_at FROM admin_sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`).bind(await sha256hex(token), now()).first();
   if (!row) throw new HttpError(401, '登录已过期，请重新登录');
   if (row.disabled_at || !ADMIN_ROLES.includes(row.role)) throw new HttpError(403, '这个账号没有后台权限');
@@ -26,21 +26,48 @@ export async function resolveSession(request, db) {
   return user;
 }
 
-async function newSession(db, userId) {
-  const token = randomToken(32);
+// 这个邮箱能不能登录后台：老板邮箱，或者没停用的老板、主管
+async function mayAdmin(db, env, email) {
+  if (email === ownerEmail(env)) return true;
+  const u = await db.prepare('SELECT role, disabled_at FROM users WHERE email = ?').bind(email).first();
+  return !!(u && !u.disabled_at && ADMIN_ROLES.includes(u.role));
+}
+
+async function requestCode(request, env) {
+  const db = env.DB;
+  const body = await readJson(request);
+  const email = normalizeEmail(body.email);
+  if (!email) return fail(400, '邮箱格式不对');
+  await limitCodeIp(request, db);
+  if (!(await mayAdmin(db, env, email))) return fail(404, '这个邮箱没有后台权限');
+  return json(await issueCode(env, email, 'admin'));
+}
+
+// 老板邮箱登录：没有就建，有就确保是老板、没停用
+async function ensureOwner(db, email) {
   const t = now();
-  await db.prepare('INSERT INTO admin_sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-    .bind(await sha256hex(token), userId, t, t + SESSION_MS).run();
-  return { token, expires_at: t + SESSION_MS };
+  await db.prepare("INSERT INTO users (id, name, email, role, created_at) VALUES (?, '老板', ?, 'owner', ?) ON CONFLICT(email) DO NOTHING").bind(uuid(), email, t).run();
+  const u = await db.prepare("UPDATE users SET role = 'owner', disabled_at = NULL WHERE email = ? RETURNING id, role, disabled_at").bind(email).first();
+  return u;
 }
 
 async function login(request, env) {
   const db = env.DB;
   const body = await readJson(request);
-  const user = await checkLogin(request, env, body, 'admin');
-  if (user.disabled_at || !ADMIN_ROLES.includes(user.role)) return fail(403, '这个账号没有后台权限');
+  const email = normalizeEmail(body.email);
+  if (!(await consumeCode(request, env, email, body.code, 'admin'))) {
+    await audit(db, '', 'admin.login_fail', email.slice(0, 120), '');
+    return fail(400, '验证码不对或已过期');
+  }
+  const user = email === ownerEmail(env) ? await ensureOwner(db, email)
+    : await db.prepare('SELECT id, role, disabled_at FROM users WHERE email = ?').bind(email).first();
+  if (!user || user.disabled_at || !ADMIN_ROLES.includes(user.role)) return fail(403, '这个邮箱没有后台权限');
+  const token = randomToken(32);
+  const t = now();
+  await db.prepare('INSERT INTO admin_sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+    .bind(await sha256hex(token), user.id, t, t + SESSION_MS).run();
   await audit(db, user.id, 'admin.login', user.id);
-  return json(await newSession(db, user.id));
+  return json({ token, expires_at: t + SESSION_MS });
 }
 
 async function logout(request, env) {
@@ -49,73 +76,22 @@ async function logout(request, env) {
   return json({ ok: true });
 }
 
-// ---------- 初始化和找回 ----------
-
-const setupCode = (env) => (typeof env.SETUP_CODE === 'string' && env.SETUP_CODE.length >= 12 ? env.SETUP_CODE : '');
-const hasOwner = async (db) => !!(await db.prepare("SELECT 1 AS x FROM users WHERE role = 'owner' AND pass_hash IS NOT NULL AND disabled_at IS NULL").first());
-
-async function setupState(env) {
-  return json({ enabled: !!setupCode(env), needed: !(await hasOwner(env.DB)) });
+// 让这个人重新登录：所有电脑的令牌换成随机值、删掉后台会话
+export function signOutStmts(db, userId, t) {
+  return [
+    db.prepare('UPDATE devices SET token_hash = lower(hex(randomblob(32))), logged_out_at = ? WHERE user_id = ? AND logged_out_at IS NULL').bind(t, userId),
+    db.prepare('DELETE FROM admin_sessions WHERE user_id = ?').bind(userId),
+  ];
 }
 
-async function codeMatches(env, given) {
-  const want = setupCode(env);
-  if (!want || typeof given !== 'string') return false;
-  // 先各自哈希再比，长度不同也不提前返回
-  const a = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(given)));
-  const b = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(want)));
-  return sameBytes(a, b);
-}
-
-async function setup(request, env) {
-  const db = env.DB;
-  if (!setupCode(env)) return fail(403, '还没有设置初始化口令 SETUP_CODE');
-  await rateLimit(db, `setup:${request.headers.get('cf-connecting-ip') || 'unknown'}`, 10, 10 * 60 * 1000);
-  const body = await readJson(request);
-  if (!(await codeMatches(env, body.code))) {
-    await audit(db, '', 'admin.setup_fail', '');
-    return fail(400, '初始化口令不对');
-  }
-  const login = normalizeLogin(body.login);
-  if (!login) return fail(400, '登录名只能用小写字母、数字和 . _ -，2 到 32 位');
-  const h = await hashPassword(checkPassword(body.password), env);
-  const t = now();
-  if (!(await hasOwner(db))) {
-    const name = str(body.name, 40) || '老板';
-    const id = uuid();
-    // 两个初始化请求同时到：只有一个能建出来
-    let r;
-    try {
-      r = await db.prepare(`INSERT INTO users (id, name, role, login_name, pass_hash, pass_salt, pass_iter, pass_changed_at, created_at)
-        SELECT ?, ?, 'owner', ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner' AND pass_hash IS NOT NULL AND disabled_at IS NULL)`)
-        .bind(id, name, login, h.pass_hash, h.pass_salt, h.pass_iter, t, t).run();
-    } catch (e) {
-      if (/UNIQUE/i.test(e.message)) return fail(409, '这个登录名已经有人用了');
-      throw e;
-    }
-    if (r.meta.changes !== 1) return fail(409, '已经初始化过了，请刷新');
-    await audit(db, id, 'admin.setup', id);
-    return json({ ok: true, created: true, ...(await newSession(db, id)) });
-  }
-  // 已经有老板：只能重置老板的密码
-  const owner = await db.prepare("SELECT id FROM users WHERE login_name = ? AND role = 'owner' AND disabled_at IS NULL").bind(login).first();
-  if (!owner) return fail(400, '没有这个老板账号');
-  await db.batch(passwordStmts(db, owner.id, h, t));
-  await audit(db, owner.id, 'admin.setup_reset', owner.id);
-  return json({ ok: true, created: false, ...(await newSession(db, owner.id)) });
-}
-
-// 不需要会话的两个后台接口
+// 不需要会话的两个后台接口：要码、换会话（退出也在这里）
 export async function handleOpenAdmin(request, env, path) {
   const m = request.method;
   if (m !== 'GET' && request.headers.get('x-waswitch-admin') !== '1') return fail(403, '缺少请求头');
+  if (path === '/api/admin/code' && m === 'POST') return requestCode(request, env);
   if (path === '/api/admin/session') {
     if (m === 'POST') return login(request, env);
     if (m === 'DELETE') return logout(request, env);
-  }
-  if (path === '/api/admin/setup') {
-    if (m === 'GET') return setupState(env);
-    if (m === 'POST') return setup(request, env);
   }
   return fail(405, '不支持这个方法');
 }
