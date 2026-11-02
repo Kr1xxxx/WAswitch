@@ -654,6 +654,9 @@ function setupTranslateIpc(ctx) {
     if (kept && kept.src === 'detected') return { lang: kept.lang, from: 'detected', name: '' };
     return { lang: (acc && cfg.accountLang[acc.id]) || '英语', from: 'default', name: '' };
   }
+  // 每算一次状态编一个号：界面里 invoke 拿回来的状态可能比之后推来的晚到（dock:get 的回复排在 dock:state 后面），
+  // 界面按号认先后，旧的不盖新的。不然先拿到的「正在读」盖掉了刚推来的「没打开对话」，主进程看状态没变不再推，翻译页就一直停在「正在读」
+  let floatSeq = 0;
   function floatState() {
     const cfg = ctx.translator.load();
     const acc = findAcc(ctx.activeId);
@@ -663,6 +666,7 @@ function setupTranslateIpc(ctx) {
     const inMode = floatInMode();
     const out = outTarget(acc, v);
     return {
+      seq: ++floatSeq,
       accountId: acc ? acc.id : '',
       accountName: acc ? acc.name : '',
       lite: !!(acc && isLite(acc)),

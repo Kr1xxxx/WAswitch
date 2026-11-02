@@ -3,6 +3,7 @@
 // 运行：node scripts/check-mcp-module.js（npm run check:mcp 会一起跑）
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
@@ -10,6 +11,8 @@ const { McpModule, loadExpected, BRIDGE_ARG } = require('../src/mcp-module');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 // 在 Electron 里 'electron' 是内置模块；这里用普通 Node 跑，下载到临时目录的文件要能找到仓库里的 electron 包
 process.env.NODE_PATH = path.join(__dirname, '..', 'node_modules');
@@ -38,7 +41,7 @@ async function checkBundle(bundle, tmp) {
   check(typeof mod.setupMcp === 'function' && mod.BRIDGE_ARG === BRIDGE_ARG, '打包文件导出 setupMcp');
   // 用打包文件里的服务端跑一遍：工具列表、调用
   const dataDir = fs.mkdtempSync(path.join(tmp, 'data-'));
-  fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ enabled: true, port: 39000 + Math.floor(Math.random() * 900) }));
+  fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ enabled: true, port: await freePort() }));
   const ctl = new mod.McpController({ dataDir, version: 'test', hooks });
   await ctl.init();
   const st = ctl.status();
