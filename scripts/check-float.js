@@ -2,7 +2,7 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, fromLite, hashOf, msgHash } = require('../src/floatcore');
+const { FloatCore, inlineEntry, fromLite, hashOf, msgHash } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 消息编号带上对话（真 WhatsApp 的消息编号各不相同；按消息编号认消息，不同对话不能撞号）
@@ -1549,18 +1549,43 @@ async function noWordsGist() {
   assert.deepStrictEqual(sent, ['And ok…'], '时间、编号不翻，存过的不再翻');
   const items = fc.viewOf('G').items;
   assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), [['done', '谢谢，请发送发票'], ['done', '已付\n【要点】我自己写的'], ['skip', ''], ['skip', ''], ['done', '译:And ok…']]);
+  // 中文原文不翻（shen 2026-11-02）：不自动翻、不占额度、不给「翻译」按钮；自己发的也不翻；其他语言照常
+  {
+    const sent2 = [];
+    const f2 = new FloatCore({ translate: async (text) => { sent2.push(text); return { text: `译:${text}`, warn: [] }; } });
+    const c2 = '888@c.us';
+    const zh = [msg(1, false, c2, '好的，我明天付款'), msg(2, false, c2, '好'), msg(3, false, c2, 'ok 好的'), msg(4, false, c2, 'Hola, ¿cuánto cuesta?'),
+      msg(5, true, c2, 'Hello, the price is 10 EUR'), msg(6, false, c2, 'Mi pedido de 订单 12345'), msg(7, false, c2, 'こんにちは、ありがとう')];
+    f2.ingest('Z', { title: 'z', msgs: zh }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert.deepStrictEqual(sent2, ['Hola, ¿cuánto cuesta?', 'Mi pedido de 订单 12345', 'こんにちは、ありがとう'], '中文和自己发的不翻，其他语言照常翻');
+    const zi = f2.viewOf('Z').items;
+    assert.deepStrictEqual(zi.slice(0, 3).map((x) => x.state), ['skip', 'skip', 'skip']);
+    assert(!f2.manual('Z', zi[0].h), '中文消息没有翻译按钮');
+    // 中文夹英文行业词、型号还是中文（汉字数不少于外文单词数）；外文夹一两个汉字照常翻；链接里的英文不算
+    const { isChinese } = require('../src/langdetect');
+    for (const t of ['请发 invoice 给我', 'iPhone 15 Pro Max 有货吗', '订单号 ABC12345 已发', '價格多少？', '看这个 https://x.com/lace-front-wig 好看吗']) assert(isChinese(t), t);
+    for (const t of ['Mi pedido de 订单 12345', 'Please send the invoice', 'こんにちは', '안녕하세요', '12345']) assert(!isChinese(t), t);
+    // 消息下面：中文不翻的不显示翻译按钮；语音转出来的中文要把转出来的字显示出来
+    assert.strictEqual(inlineEntry(zi[0]), null);
+    assert.deepStrictEqual(inlineEntry({ state: 'skip', voice: 5, text: '好的，我明天付款' }), { k: 'done', t: '好的，我明天付款' });
+    assert.strictEqual(inlineEntry({ state: 'skip', voice: 5, text: '' }), null);
+    // 往上翻时看到的中文旧消息也一样
+    const hs = f2.history('Z', [msg(20, false, c2, '谢谢你')]);
+    assert.strictEqual([...hs.values()][0].state, 'skip');
+  }
   // 不翻的：点不了翻译、改不了
   assert(!fc.manual('G', items[2].h));
   assert(!fc.edit('G', items[2].h, 'x'));
   // 用户自己的「收到」模式要要点：存着的要点不删；客户原文里本来就有【要点】也不删
   let keep = true;
   const fc2 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  store.put('G', ck, '客户写的【要点】', { tr: '客户\n【要点】原文就有' });
+  store.put('G', ck, 'The client wrote this【要点】', { tr: '客户\n【要点】原文就有' });
   fc2.ingest('G', { title: 'g', msgs: [msg(1, false, chat, 'Thanks, please send the invoice')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc2.viewOf('G').items[0].tr, '谢谢，请发送发票\n\n【要点】客户要求发送发票');
   keep = false;
   const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
+  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, 'The client wrote this【要点】')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc3.viewOf('G').items.at(-1).tr, '客户\n【要点】原文就有');
   fs.rmSync(dir, { recursive: true, force: true });
 }

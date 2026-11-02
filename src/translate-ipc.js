@@ -8,7 +8,7 @@ const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { needsKey, extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
-const { FloatCore, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
+const { FloatCore, inlineEntry, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
 const RADIX = require('./colors/radix');
 const webVoice = require('./web-voice');
 const { detectLang } = require('./langdetect');
@@ -389,19 +389,6 @@ function setupTranslateIpc(ctx) {
       },
     });
   };
-  // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
-  function inlineEntry(it) {
-    const voice = typeof it.voice === 'number' && !it.text;
-    if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
-    // 已经有译文、正在纠错或纠错失败：气泡里照旧显示原来的译文（纠错的进度和报错在编辑小窗里）
-    if (it.tr && ['queued', 'running', 'error', 'wait'].includes(it.state)) return { k: 'done', t: it.tr };
-    if (it.state === 'skip') return null;
-    if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
-    if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
-    if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
-    const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
-    return { k: 'manual', b: label };
-  }
   function inlineList(r) {
     if (!inlineOn()) return [];
     const items = new Map(floatCore.viewOf(r.accId).items.map((it) => [it.h, it]));

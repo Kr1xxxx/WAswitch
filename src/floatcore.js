@@ -9,6 +9,7 @@
 // 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
 const crypto = require('crypto');
 const { textKey, cleanVia, VIEW_MAX } = require('./trstore');
+const { isChinese } = require('./langdetect');
 const TrInfo = require('./shell/tr-info');
 
 const KEEP_PER_ACCOUNT = 200;
@@ -68,6 +69,8 @@ function viaOf(rec) {
 
 // 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
 const noWords = (text) => !/\p{L}/u.test(String(text));
+// 不用翻的：没有字（时间、编号、号码、表情），或原文已经是中文（shen 2026-11-02「中文不翻译」）。状态 skip：不翻、不占额度、不显示翻译按钮，只显示原文
+const noTr = (text) => noWords(text) || isChinese(text);
 // 骨架：同一条消息两次读到的文字骨架一样，差的只是显示格式（方向符、空格、连字符、引号、表情、问号感叹号、大小写），译文照用。
 // 留字母、数字、货币和数学符号、%；两个数字中间的 - . , : / 也留（1.5 和 15、5:30 和 53:0 不是一回事），各种连字符先归成一种
 const skel = (t) => {
@@ -120,6 +123,21 @@ function fromLite(view, jid) {
   const number = String(jid).endsWith('@s.whatsapp.net') ? `+${user}` : '';
   // 轻量号拿到的总是对话里最新的那些（不跟着滑动变），算停在最下面
   return { ok: true, title: view.title || (listed && listed.name) || number, msgs, bottom: true };
+}
+
+// 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
+function inlineEntry(it) {
+  const voice = typeof it.voice === 'number' && !it.text;
+  if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
+  // 已经有译文、正在纠错或纠错失败：气泡里照旧显示原来的译文（纠错的进度和报错在编辑小窗里）
+  if (it.tr && ['queued', 'running', 'error', 'wait'].includes(it.state)) return { k: 'done', t: it.tr };
+  // skip（不翻）：语音转出来的是中文时，直接显示转出来的字（花了转写的钱，不能看不到）；别的不显示
+  if (it.state === 'skip') return typeof it.voice === 'number' && String(it.text || '').trim() ? { k: 'done', t: it.text } : null;
+  if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
+  if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
+  if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
+  const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
+  return { k: 'manual', b: label };
 }
 
 class FloatCore {
@@ -337,14 +355,14 @@ class FloatCore {
           // 转过、还没翻成的：用存着的文字照常翻，不再转；以前没听出话的显示原因，用户点「重试」才再转
           const heard = this.deps.store && this.deps.store.getHeard ? this.deps.store.getHeard(accId, item.ck, item.k) : null;
           if (heard !== null && !heard.trim()) Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
-          else if (heard !== null) Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+          else if (heard !== null) Object.assign(item, { text: heard, state: noTr(heard) ? 'skip' : 'manual' });
         }
         st.items.set(h, item);
         fresh.push(item);
         continue;
       }
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
-      const skip = noWords(item.text);
+      const skip = noTr(item.text);
       let saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
       if (!skip && saved) look.hit += 1;
       if (!skip && !saved && this.deps.store) {
@@ -757,7 +775,7 @@ class FloatCore {
         }
         item.text = v.text.trim().slice(0, 4000);
         heard(item.text); // 先存转出来的文字：翻译失败、重启后不再重转
-        if (noWords(item.text)) { item.state = 'skip'; this.onChange(job.accId); continue; }
+        if (noTr(item.text)) { item.state = 'skip'; this.onChange(job.accId); continue; }
         // 回到翻译队列：用户点的排最前
         item.state = 'queued';
         if (job.manual) this.queue.unshift(job); else this.queue.push(job);
@@ -956,11 +974,11 @@ class FloatCore {
       }
       const heard = store && store.getHeard ? store.getHeard(accId, item.ck, item.k) : null;
       if (heard !== null && !heard.trim()) return Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
-      if (heard !== null) return Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+      if (heard !== null) return Object.assign(item, { text: heard, state: noTr(heard) ? 'skip' : 'manual' });
       if (item.voice > VOICE_MAX_S) item.note = 'long';
       return item;
     }
-    if (noWords(item.text)) { item.state = 'skip'; return item; }
+    if (noTr(item.text)) { item.state = 'skip'; return item; }
     const saved = store ? store.get(accId, item.ck, item.text) || this.sameMessage(accId, item, views) : null;
     if (saved) Object.assign(item, { state: 'done', tr: saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
     return item;
@@ -982,4 +1000,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
+module.exports = { FloatCore, inlineEntry, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
