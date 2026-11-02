@@ -378,12 +378,13 @@ function setupTranslateIpc(ctx) {
     text: RADIX.hex('slate', 11), strong: RADIX.hex('slate', 12), line: RADIX.hex('slate', 6), bad: RADIX.hex('red', 11),
     btn: RADIX.hex('slate', 4), btnHover: RADIX.hex('slate', 5), focus: RADIX.hex('blue', 8),
   });
-  // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| manual（「翻译」按钮）；不用翻的（skip）不显示
+  // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
   function inlineEntry(it) {
     const voice = typeof it.voice === 'number' && !it.text;
     if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
     if (it.state === 'skip') return null;
     if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
+    if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
     if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
     const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
     return { k: 'manual', b: label };
@@ -400,13 +401,20 @@ function setupTranslateIpc(ctx) {
       const h = msgHash(r.accId, m.id);
       const it = items.get(h);
       const e = it ? inlineEntry(it) : null;
-      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '' });
+      // c：这条消息的按钮被点过几次。点了马上又失败（没密钥、额度用完）时文字不变，靠它让页面把按钮重画成能点的
+      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0 });
     }
     return out;
   }
+  const inlineClicks = new Map();
   function inlineSoon() {
     if (inlineTimer) return;
     inlineTimer = setTimeout(() => { inlineTimer = null; inlinePaint(); }, 30);
+  }
+  // 「去填密钥」：打开 设置 › 翻译 里这个服务商的表单（界面那边的 trOpenKey）
+  function inlineOpenKey(pid) {
+    const wc = ctx.shellView && ctx.shellView.webContents;
+    if (wc && !wc.isDestroyed() && typeof pid === 'string' && pid) wc.send('tr:open-key', { pid });
   }
   function inlineLiteClear(accId) {
     const wc = ctx.shellView && ctx.shellView.webContents;
@@ -428,7 +436,17 @@ function setupTranslateIpc(ctx) {
     try { clicks = await waPage.paintTranslations(r.wc, list, inlineLook()); } finally { inlineBusy = false; }
     // 点了气泡里的「翻译」「重试」：只认当前号、这次放出去的消息
     const sent = new Set(list.map((e) => e.h));
-    for (const h of new Set(clicks)) if (sent.has(h) && r.accId === ctx.activeId) readerItem(h);
+    let clicked = false;
+    for (const h of new Set(clicks)) {
+      if (!sent.has(h) || r.accId !== ctx.activeId) continue;
+      if (inlineClicks.size > 500) inlineClicks.clear();
+      inlineClicks.set(h, (inlineClicks.get(h) || 0) + 1);
+      clicked = true;
+      const e = list.find((x) => x.h === h);
+      if (e && e.k === 'key') inlineOpenKey(e.p);
+      else readerItem(h);
+    }
+    if (clicked) inlineAgain = true;
     if (inlineAgain) { inlineAgain = false; inlineSoon(); }
   }
   // 换成「右侧工作台」：所有网页号页面里放的译文都拿掉，轻量聊天页也清掉

@@ -461,7 +461,7 @@ const TR_CSS = (K) => [
 const PAINT_CODE = (list, look) => `(() => {
   const L = ${JSON.stringify(list)};
   const CSS_TEXT = ${JSON.stringify(TR_CSS(look))};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, voice: SELECTORS.voiceMark })};
   const w = window.__wsTr || (window.__wsTr = { clicks: [] });
   const clicks = w.clicks.splice(0, 50);
   const main = document.querySelector(S.main);
@@ -496,11 +496,28 @@ const PAINT_CODE = (list, look) => `(() => {
     const m = n.parentElement && n.parentElement.closest('[data-id]');
     if (!main || !m || !main.contains(n) || !want.has(m.getAttribute('data-id'))) { n.remove(); changed = true; }
   }
+  // 译文放哪：{ parent, after }。有正文的放在正文块里（末尾）。没有正文（语音）：放在气泡里播放条那一层的后面（时间的上面）。
+  // 真 WhatsApp 的气泡里第一个子元素常常不是内容：气泡尾巴的小图标（宽 8px）、读屏用的隐藏发件人标签，放进去会一字一行，所以先跳过它们
+  const decor = (c) => {
+    if (c.hasAttribute('data-icon') || c.getAttribute('aria-hidden') === 'true' || c.hasAttribute('data-wasw-tr')) return true;
+    if (getComputedStyle(c).position === 'absolute') return true;
+    const r = c.getBoundingClientRect();
+    if (r.width <= 2 || r.height <= 2) return true;
+    return !c.textContent.trim() && !c.querySelector('button, [role], [data-icon], canvas, svg, img, audio');
+  };
   const anchorOf = (msg) => {
-    for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return b;
-    // 没有正文（语音）：放在气泡里
+    for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return { parent: b, after: null };
     const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
-    return bub.firstElementChild || bub;
+    const mark = [...bub.querySelectorAll(S.voice)].find((x) => !x.closest('[data-wasw-tr]'));
+    const kids = [...bub.children].filter((c) => !decor(c));
+    const parent = (mark && kids.find((c) => c.contains(mark))) || kids[0] || bub;
+    let after = null;
+    if (mark && parent !== mark && parent.contains(mark)) {
+      let row = mark;
+      while (row.parentElement && row.parentElement !== parent) row = row.parentElement;
+      if (row.parentElement === parent) after = row;
+    }
+    return { parent, after };
   };
   const stop = (ev) => { ev.stopPropagation(); };
   const button = (label, h) => {
@@ -524,10 +541,10 @@ const PAINT_CODE = (list, look) => `(() => {
     if (!msg) continue;
     const anchor = anchorOf(msg);
     let node = null;
-    for (const c of anchor.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
+    for (const c of anchor.parent.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
     // WhatsApp 换了正文块（比如展开「阅读更多」后重建）时，旧块可能还挂在这条消息的别处：只留一块
     for (const x of msg.querySelectorAll('[data-wasw-tr]')) if (x !== node) { x.remove(); changed = true; }
-    const sig = [e.k, e.t, e.b, e.h].join('|');
+    const sig = [e.k, e.t, e.b, e.h, e.c || 0].join('|');
     if (node && node.getAttribute('data-sig') === sig) continue;
     if (!node) {
       node = document.createElement('div');
@@ -548,7 +565,7 @@ const PAINT_CODE = (list, look) => `(() => {
     pad.setAttribute('data-wasw-pad', '');
     kids.push(pad);
     node.replaceChildren(...kids);
-    if (!node.parentElement) anchor.appendChild(node);
+    if (!node.parentElement) { if (anchor.after) anchor.after.after(node); else anchor.parent.appendChild(node); }
     changed = true;
   }
   if (changed && sc && bottom) {

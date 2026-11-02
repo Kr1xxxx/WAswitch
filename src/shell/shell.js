@@ -875,6 +875,8 @@ window.wa.onPanelChanged(async () => {
   const list = $panel.querySelector('.pn-list');
   if (list) list.replaceChildren(...customerItems());
 });
+// 网页号气泡里点了「去填密钥」（主进程转来）：打开这个服务商的密钥表单
+window.wa.onTrOpenKey(({ pid } = {}) => { if (typeof pid === 'string' && pid) trOpenKey(pid); });
 // 导入结果：新加几条，已经有的、内容不全的各跳过几条
 const importSay = (r, unit) => `导入了 ${r.added} ${unit}${r.dup ? `，${r.dup} ${unit}已经有了` : ''}${r.bad ? `，${r.bad} ${unit}内容不全跳过` : ''}`;
 function panelSay(msg, bad = false) { pn.msg = msg; pn.bad = bad; renderPanel(true); }

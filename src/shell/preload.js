@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('wa', {
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
   // 轻量号：每条收到的消息下面显示的译文（设置里选了「消息下面」时）
   onLiteTr: (cb) => ipcRenderer.on('lite:tr', (_e, d) => cb(d)),
+  // 网页号气泡里的「去填密钥」：主进程叫界面打开这个服务商的密钥表单
+  onTrOpenKey: (cb) => ipcRenderer.on('tr:open-key', (_e, d) => cb(d)),
   // 语音转文字：主进程把下载好的语音给界面解码（见 shell/voice.js）
   onVoiceDecode: (cb) => ipcRenderer.on('voice:decode', (_e, req) => cb(req)),
   voiceDecoded: (n, r) => ipcRenderer.send('voice:decoded', n, r),

@@ -5,6 +5,8 @@
 //   2. 放好以后页面不再被改（没有来回改、没有一直重读重翻），读到的原文不带译文（不重翻）
 //   3. 翻译失败的那条显示原因和「重试」，在页面里点「重试」后换成译文
 //   4. 右侧工作台的翻译页不再列消息，只留回复框；关掉工作台也照样放译文
+//   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条下面、时间上面
+//   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点；密钥没填：只有「去填密钥」，点了打开设置里这个服务商的表单
 //   5. 设置换成「右侧工作台」：页面里的译文全部拿掉，翻译页重新列出消息；换回来又放上
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
 const { spawn, execFileSync } = require('child_process');
@@ -38,11 +40,19 @@ async function cdp(wsUrl) {
 // 假对话：三条客户消息（第 3 条第一次翻译会失败）、一条自己发的、一条只有数字的。聊天区能滚动，打开时停在最下面
 const msgIn = (id, time, text) => `<div role="row"><div data-id="false_4915111111111@c.us_${id}" class="message-in"><div><div class="copyable-text" data-pre-plain-text="[${time}, 30/10/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">${time}</div></div></div></div>`;
 const msgOut = (id, time, text) => `<div role="row"><div data-id="true_4915111111111@c.us_${id}" class="message-out"><div><div class="copyable-text" data-pre-plain-text="[${time}, 30/10/2026] Ich: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">${time}</div></div></div></div>`;
-const filler = Array.from({ length: 12 }, (_, i) => msgOut(`OLD${i}`, '09:0' + (i % 10), `Older note ${i}`)).join('');
+// 更像真 WhatsApp 的结构：data-id 在最外层；.message-in 里第一个是气泡尾巴的小图标（只有一组消息的第一条才有），
+// 然后是读屏用的隐藏发件人标签，最后才是气泡本身。语音没有 .copyable-text，播放条下面是时间
+const TAIL = '<span aria-hidden="true" data-icon="tail-in" class="tail"><svg viewBox="0 0 8 13" width="8" height="13"><path d="M5.188 0H0v11.193l6.467-8.625C7.526 1.156 6.958 0 5.188 0z"></path></svg></span>';
+const LABEL = '<span class="sender-label" aria-label="Emma Schneider:"></span>';
+const realText = (id, time, text, tail) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${tail ? TAIL : ''}${LABEL}<div class="bubble"><div class="copyable-text" data-pre-plain-text="[${time}, 30/10/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">${time}</div></div></div></div></div>`;
+const realVoice = (id, time, tail) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${tail ? TAIL : ''}${LABEL}<div class="bubble"><div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:07</span></div><div class="meta">${time}</div></div></div></div></div>`;
+const filler = Array.from({ length: 24 }, (_, i) => msgOut(`OLD${i}`, '09:0' + (i % 10), `Older note ${i}`)).join('');
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title>
 <style>body{margin:0;font:14px sans-serif} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
 .scroll{flex:1;overflow-y:auto} .message-in,.message-out{margin:6px 20px;max-width:60%;padding:6px 8px}
-.message-out{margin-left:auto} .meta{text-align:right}</style></head><body>
+.message-out{margin-left:auto} .meta{text-align:right}
+.message-in{position:relative;width:fit-content} .tail{position:absolute;top:0;left:-8px;width:8px;height:13px;display:block}
+.sender-label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)} .bubble{padding:0} .voice-row{display:flex;align-items:center;gap:8px;width:260px} .wave{flex:1;height:4px;background:#999}</style></head><body>
 <div id="app"><div id="side"><div contenteditable="true" role="textbox" aria-label="Search"></div><div id="pane-side"><div role="grid" aria-label="Chat list"><div role="row"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div>
 <div id="main"><header><span dir="auto" title="Emma Schneider">Emma Schneider</span></header><div class="scroll"><div role="application">
 ${filler}
@@ -51,6 +61,8 @@ ${msgOut('OUT1', '10:02', 'Yes, it is in stock.')}
 ${msgIn('IN2', '10:03', 'Super, und Nummer 2 in Naturschwarz?')}
 ${msgIn('NUM', '10:04', '12345')}
 ${msgIn('IN3', '10:05', 'Kann ich Nummer 3 mit PayPal bezahlen?')}
+${realVoice('V1', '10:06', true)}
+${realText('R1', '10:07', 'Und Nummer 1 in Rot?', true)}
 </div></div><footer><div contenteditable="true"></div></footer></div></div>
 <script>const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;</script>
 </body></html>`;
@@ -71,6 +83,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   // 假翻译服务：按消息里的「Nummer N」回中文；第 3 条第一次回 500
   const calls = [];
   let fail3 = true;
+  let failAll = false;
   const trServer = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -80,6 +93,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
       // 带着上下文（前面几条）：要翻的那条在最后
       const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
       calls.push(n || '?');
+      if (failAll) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"busy"}}'); return; }
       if (n === '3' && fail3) { fail3 = false; res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"busy"}}'); return; }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: ANSWER[n] || '（看不懂）' } }] }));
@@ -145,6 +159,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     check(t3 >= 0, '翻译失败的第 3 条显示原因和「重试」');
     const atBottom = await pageC.evaluate("(() => { const s = document.querySelector('.scroll'); return s.scrollHeight - s.clientHeight - s.scrollTop <= 2; })()");
     check(atBottom, '原来停在最下面，放好译文后还在最下面');
+    if (!atBottom) console.log(await pageC.evaluate("(() => { const s = document.querySelector('.scroll'); return JSON.stringify({ sh: s.scrollHeight, ch: s.clientHeight, st: s.scrollTop, trs: [...document.querySelectorAll('[data-wasw-tr]')].map((n) => n.closest('[data-id]').getAttribute('data-id').split('_').pop() + ':' + n.textContent.slice(0, 10)) }); })()"));
     await shot('inline-1');
 
     // 2. 放好以后页面不再被改，也不重翻
@@ -159,6 +174,87 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     await pageC.evaluate(`document.querySelector('[data-id$="_IN3"] [data-wasw-tr] button').click()`);
     const tr3 = await waitFor(async () => (await trOf('IN3')) === ANSWER[3], 10000);
     check(tr3 >= 0, `点「重试」后第 3 条换成了译文（${tr3} 毫秒）`);
+
+    // 3b. 更像真 WhatsApp 的结构：文字（带尾巴）、语音（带尾巴和隐藏发件人标签）
+    const rt1 = await waitFor(async () => (await trOf('R1')) === ANSWER[1], 10000);
+    const rp = await pageC.evaluate(`(() => {
+      const m = document.querySelector('[data-id$="_R1"]');
+      const n = m.querySelector('[data-wasw-tr]');
+      return { inBody: !!n && n.parentElement === m.querySelector('.copyable-text[data-pre-plain-text]'), tail: !!n && !!n.closest('.tail') };
+    })()`);
+    check(rt1 >= 0 && rp.inBody && !rp.tail, '带尾巴的文字消息，译文在气泡的正文块里');
+    const v1 = await waitFor(async () => (await trOf('V1')) !== null, 10000);
+    const vp = await pageC.evaluate(`(() => {
+      const m = document.querySelector('[data-id$="_V1"]');
+      const n = m.querySelector('[data-wasw-tr]');
+      if (!n) return null;
+      const r = n.getBoundingClientRect();
+      const prev = n.previousElementSibling;
+      const next = n.nextElementSibling;
+      return {
+        notDecor: !n.closest('.tail') && !n.closest('.sender-label'),
+        wide: Math.round(r.width),
+        inBubble: !!n.closest('.bubble'),
+        afterRow: !!prev && prev.classList.contains('voice-row'),
+        beforeTime: !!next && next.classList.contains('meta'),
+        below: r.top >= m.querySelector('.voice-row').getBoundingClientRect().bottom - 1,
+      };
+    })()`);
+    check(v1 >= 0 && !!vp, '语音消息下面有转文字的按钮或结果');
+    check(!!vp && vp.notDecor && vp.inBubble && vp.wide >= 100, `语音的译文不在尾巴或发件人标签里，宽度正常（宽 ${vp && vp.wide}）`);
+    check(!!vp && vp.afterRow && vp.beforeTime && vp.below, '语音的译文在播放条下面、时间上面');
+    if (vp && !(vp.afterRow && vp.beforeTime && vp.below)) console.log(JSON.stringify(vp), await pageC.evaluate("document.querySelector('[data-id$=\"_V1\"]').outerHTML"));
+    await shot('inline-voice');
+
+    // 3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点
+    failAll = true;
+    await pageC.evaluate(`(() => {
+      const app = document.querySelector('[role="application"]');
+      app.insertAdjacentHTML('beforeend', ${JSON.stringify(msgIn('IN5', '10:08', 'Und Nummer 2 in Grau?'))});
+      const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
+      return 1;
+    })()`);
+    const e5 = await waitFor(async () => /重试/.test((await trOf('IN5')) || ''), 15000);
+    check(e5 >= 0, '翻译失败的第 5 条显示原因和「重试」');
+    const before5 = calls.length;
+    await pageC.evaluate(`document.querySelector('[data-id$="_IN5"] [data-wasw-tr] button').click()`);
+    const again = await waitFor(async () => calls.length > before5, 8000);
+    check(again >= 0, '点「重试」后真的又翻了一次');
+    const live = await waitFor(() => pageC.evaluate(`(() => { const b = document.querySelector('[data-id$="_IN5"] [data-wasw-tr] button'); return !!b && !b.disabled; })()`), 6000);
+    check(live >= 0, '又马上失败（文字一样）后，「重试」按钮重新能点');
+    failAll = false;
+    await pageC.evaluate(`document.querySelector('[data-id$="_IN5"] [data-wasw-tr] button').click()`);
+    const ok5 = await waitFor(async () => (await trOf('IN5')) === ANSWER[2], 10000);
+    check(ok5 >= 0, `服务恢复后再点「重试」，第 5 条换成了译文（${ok5} 毫秒）`);
+
+    // 3d. 默认服务商没填密钥：只有「去填密钥」，没有红字和「重试」；点了打开设置里这个服务商的表单；换回有密钥的服务商后自动补上
+    const saved = await shellC.evaluate("window.wa.trProviderSave({ preset: 'zhipu', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' })");
+    check(!!saved && saved.ok === true && !!saved.id, '加了一个没填密钥的智谱');
+    const localId = await shellC.evaluate("window.wa.trConfig().then((r) => r.config.primaryId)");
+    await shellC.evaluate(`window.wa.trRoles(${JSON.stringify(saved.id)}, '', '')`);
+    await pageC.evaluate(`(() => {
+      const app = document.querySelector('[role="application"]');
+      app.insertAdjacentHTML('beforeend', ${JSON.stringify(msgIn('IN6', '10:10', 'Und Nummer 1 in Blond?'))});
+      const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
+      return 1;
+    })()`);
+    const k6 = await waitFor(async () => (await trOf('IN6')) !== null, 10000);
+    const kp = await pageC.evaluate(`(() => {
+      const n = document.querySelector('[data-id$="_IN6"] [data-wasw-tr]');
+      return n ? { text: n.textContent, bad: !!n.querySelector('[data-wasw-bad]'), btns: [...n.querySelectorAll('button')].map((b) => b.textContent) } : null;
+    })()`);
+    check(k6 >= 0 && !!kp && kp.btns.length === 1 && kp.btns[0] === '去填密钥' && !kp.bad && !/还没填密钥|重试/.test(kp.text), `没填密钥时只有「去填密钥」按钮（${kp && kp.text}）`);
+    await shot('inline-nokey');
+    await pageC.evaluate(`document.querySelector('[data-id$="_IN6"] [data-wasw-tr] button').click()`);
+    const opened = await waitFor(() => shellC.evaluate("s.page === 'settings' && settingsTab === 'translate' && !!document.querySelector('input[type=password][aria-label^=\"智谱\"]')"), 6000);
+    check(opened >= 0, '点「去填密钥」打开了设置里智谱的密钥表单');
+    if (opened < 0) console.log(await shellC.evaluate("JSON.stringify({ page: s.page, tab: settingsTab })"));
+    const stillLive = await waitFor(() => pageC.evaluate(`(() => { const b = document.querySelector('[data-id$="_IN6"] [data-wasw-tr] button'); return !!b && !b.disabled; })()`), 5000);
+    check(stillLive >= 0, '点过「去填密钥」后按钮还能再点');
+    await shellC.evaluate("window.wa.showPage('account')");
+    await shellC.evaluate(`window.wa.trRoles(${JSON.stringify(localId)}, '', '')`);
+    const fixed6 = await waitFor(async () => (await trOf('IN6')) === ANSWER[1], 10000);
+    check(fixed6 >= 0, `默认服务商换成能用的后，第 6 条自动补上了译文（${fixed6} 毫秒）`);
 
     // 只选中译文：不出「翻译」按钮（选中原文照常出）
     const { SELECTION_CODE } = require('../src/wa-page');

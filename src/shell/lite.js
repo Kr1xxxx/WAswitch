@@ -82,7 +82,7 @@ function makeLitePage(id) {
     list.scrollTop = top;
   }
 
-  // 一条消息下面的译文：done 译文；busy 翻译中；error 原因 + 重试；manual「翻译」按钮（点了和工作台里点一样）
+  // 一条消息下面的译文：done 译文；busy 翻译中；error 原因 + 重试；key「去填密钥」；manual「翻译」按钮（点了和工作台里点一样）
   function trLine(m) {
     const e = !m.me && trs.get(String(m.id));
     if (!e) return null;
@@ -90,6 +90,8 @@ function makeLitePage(id) {
     if (e.k === 'done') return h('div', { class: 'lite-tr' }, e.t);
     if (e.k === 'busy') return h('div', { class: 'lite-tr' }, e.t);
     if (e.k === 'error') return h('div', { class: 'lite-tr' }, h('span', { class: 'bad' }, e.t), ' ', btn(e.b));
+    // 密钥没填或不对：重试没用，直接去填（打开 设置 › 翻译 里这个服务商的表单）
+    if (e.k === 'key') return h('div', { class: 'lite-tr' }, h('button', { class: 'lite-tr-btn', type: 'button', onclick: () => trOpenKey(e.p) }, e.b));
     return h('div', { class: 'lite-tr' }, btn(e.b));
   }
 
@@ -224,7 +226,7 @@ function makeLitePage(id) {
   // 主进程发来这个号当前对话的译文（list 为空 = 拿掉）。内容没变不重画
   function setTr(list) {
     const next = new Map((Array.isArray(list) ? list : []).filter((e) => e && typeof e.id === 'string').map((e) => [e.id, e]));
-    const key = [...next.values()].map((e) => [e.id, e.k, e.t, e.b].join('\u0001')).join('\u0002');
+    const key = [...next.values()].map((e) => [e.id, e.k, e.t, e.b, e.p].join('\u0001')).join('\u0002');
     if (key === trKey) return;
     trs = next;
     trKey = key;
