@@ -532,7 +532,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'你好'}]})}];
   q=await t9.test(dr.id); assert(q.ok); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'ZH-HANS');
   fs.rmSync(d9,{recursive:true,force:true});
-  // DeepL 每个使用者每月 10 万字符（可改）：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥、加第二个 DeepL 都接着算
+  // DeepL 每个使用者每月 10 万字符（固定，不能改）：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥、加第二个 DeepL 都接着算
   const d10=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   let now10=new Date(2026,9,28,12).getTime();
   const t10=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
@@ -540,7 +540,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   const did10=t10.saveProvider({preset:'deepl',key:'k1:fx'}).id;
   t10.setRoles({primaryId:did10,fallbackId:zid10});
   const use10=(id=did10)=>t10.publicConfig().providers.find(p=>p.id===id).usage;
-  assert.deepEqual(use10(),{used:0,cap:100000}); assert.equal(t10.publicConfig().deeplCap,100000);
+  assert.deepEqual(use10(),{used:0,cap:100000}); assert(!('deeplCap' in t10.publicConfig()),'上限不再是设置');
   assert(!('usage' in t10.publicConfig().providers.find(p=>p.id===zid10)));
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
   q=await t10.translate({text:'你好😀',mode:{prompt:'p'},target:'英语'}); assert.equal(q.text,'Hello');
@@ -559,30 +559,25 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(q.kind,'quota'); assert(q.error.includes('10 万'),q.error);
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
   q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi'); assert.equal(use10().used,100000,'正好用满还能翻');
-  // 上限可改：DeepL 表单里保存，或单独改；填错不改
-  assert(t10.setDeeplCap(500).error); assert(t10.setDeeplCap('x').error); assert.equal(t10.publicConfig().deeplCap,100000);
-  assert(t10.setDeeplCap(200000).ok); assert.equal(use10().cap,200000);
-  t10.saveProvider({id:did10,preset:'deepl',monthCap:150000}); assert.equal(use10().cap,150000);
-  assert(t10.saveProvider({id:did10,preset:'deepl',name:'改名',monthCap:500}).error,'上限填错整个不存'); assert.equal(t10.provider(did10).name,'DeepL'); assert.equal(use10().cap,150000);
-  t10.saveProvider({id:zid10,preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',monthCap:5000}); assert.equal(use10().cap,150000,'别的服务商不改上限');
-  t10.setDeeplCap(100000);
+  // 上限固定：没有改上限的入口，表单里传 monthCap 也不起作用
+  assert.equal(typeof t10.setDeeplCap,'undefined'); assert.equal(typeof t10.validCap,'undefined');
+  t10.saveProvider({id:did10,preset:'deepl',monthCap:250000}); assert.equal(use10().cap,100000,'表单传上限不生效');
+  assert(!('deeplCap' in t10.load()));
   calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
-  t10.setDeeplCap(250000);
-  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi','调高上限后又能翻');
-  t10.setDeeplCap(15000);
-  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert(q.error.includes('15000 字符'),q.error);
+  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert(q.error.includes('10 万字符'),'用满后不能再翻：'+q.error);
   now10=new Date(2026,10,1,0,5).getTime();
   assert.equal(use10().used,0,'11 月 1 号清零');
   const raw10=JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'));
-  assert.equal(raw10.deeplCap,15000); assert.equal(raw10.deeplUsage.month,'2026-10');
+  assert(!('deeplCap' in raw10)); assert.equal(raw10.deeplUsage.month,'2026-10');
   assert(!JSON.stringify(raw10).includes('k1:fx'),'不存明文密钥');
   // 重新读文件后用量和上限还在；#216 那版按密钥分开记的，同一个月合起来
   t10.load().deeplUsage={month:'2026-11',chars:42}; t10.save();
   const t10b=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,42); assert.equal(t10b.publicConfig().deeplCap,15000);
-  fs.writeFileSync(path.join(d10,'translate.json'),JSON.stringify({...raw10,deeplCap:'oops',deeplUsage:{aaaaaaaaaaaaaaaa:{month:'2026-10',chars:9},bbbbbbbbbbbbbbbb:{month:'2026-11',chars:5},cccccccccccccccc:{month:'2026-11',chars:7}}}));
+  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,42); assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.cap,100000);
+  fs.writeFileSync(path.join(d10,'translate.json'),JSON.stringify({...raw10,deeplCap:15000,deeplUsage:{aaaaaaaaaaaaaaaa:{month:'2026-10',chars:9},bbbbbbbbbbbbbbbb:{month:'2026-11',chars:5},cccccccccccccccc:{month:'2026-11',chars:7}}}));
   const t10c=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.used,12); assert.equal(t10c.publicConfig().deeplCap,100000);
+  assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.used,12); assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.cap,100000,'旧文件里自定义的上限被丢掉，仍是 10 万');
+  assert(!('deeplCap' in JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'))),'旧上限已从文件里清掉');
   fs.rmSync(d10,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
@@ -596,6 +591,18 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
   t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
   fs.rmSync(d7,{recursive:true,force:true});
+  // 译文显示位置默认「消息下面」：新装是 inline；1.0.4 存下的值升级时一次性改成 inline，之后用户自己选的 panel 保留
+  const dPl=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  let tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'inline'); // 新装
+  fs.writeFileSync(path.join(dPl,'translate.json'),JSON.stringify({seeded:true,seedVer:3,termsDefaultOn:true,autoDefaultOn:true,trPlace:'panel'}));
+  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'inline'); // 升级：旧的 panel 改成 inline
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dPl,'translate.json'),'utf8')).trPlaceInlineDefault,true);
+  tPl.setFloat({place:'panel'});
+  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'panel'); // 用户自己改的不再覆盖
+  fs.rmSync(dPl,{recursive:true,force:true});
   // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置和 DeepL 用量共用一份
   const dLn=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   const hangs=[];

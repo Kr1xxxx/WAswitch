@@ -38,12 +38,9 @@ const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
 const TR_PLACES = ['inline', 'panel']; // 收到的消息的译文：消息下面 | 右侧工作台
-// DeepL 每个使用者（这台电脑上的这个软件）每月最多翻多少字符：默认 10 万，可以在 DeepL 的设置里改（shen 2026-10-28）。
+// DeepL 每个使用者（这台电脑上的这个软件）每月最多翻 10 万字符，固定，设置里不能改（shen 2026-11-02）。
 // 换密钥也接着算，每月 1 号清零
 const DEEPL_MONTH_CAP = 100000;
-const DEEPL_CAP_MIN = 1000;
-const DEEPL_CAP_MAX = 1e9;
-const CAP_ERR = `每月上限填 ${DEEPL_CAP_MIN} 到 ${DEEPL_CAP_MAX} 之间的数`;
 const monthKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const deeplChars = (text) => [...text].length;
 // 100000 -> 「10 万」，12345 -> 「12345 」
@@ -376,6 +373,8 @@ class Translator {
       accountAuto: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
       // 收到的消息的译文显示在哪：inline = 聊天里消息下面（默认，shen 2026-10-30），panel = 右侧工作台的翻译页
       trPlace: 'inline',
+      // 1.0.5 起默认「消息下面」：升级时把 1.0.4 存下的值一次性改成 inline，之后用户自己选的 panel 保留
+      trPlaceInlineDefault: false,
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
@@ -389,7 +388,7 @@ class Translator {
       // 自动翻译改成默认开之后迁移过一次老设置
       autoDefaultOn: false,
       // DeepL 这个月用了多少字符（所有 DeepL 密钥合起来算）
-      deeplUsage: { month: '', chars: 0 }, deeplCap: DEEPL_MONTH_CAP };
+      deeplUsage: { month: '', chars: 0 } };
     let migrated = false;
     try {
       if (fs.existsSync(this.file)) {
@@ -430,7 +429,8 @@ class Translator {
           // 迁移过之后存的 false 才是用户自己关的；没存过 = 默认开
           base.wigTerms = !base.termsDefaultOn || raw.wigTerms !== false;
           base.lashTerms = !base.termsDefaultOn || raw.lashTerms !== false;
-          base.deeplCap = clampNum(raw.deeplCap, DEEPL_CAP_MIN, DEEPL_CAP_MAX, DEEPL_MONTH_CAP);
+          // 老版本可以自己改上限，现在固定 10 万：存着的自定义值丢掉，重新写一遍文件
+          if ('deeplCap' in raw) migrated = true;
           const du = raw.deeplUsage;
           if (du && typeof du === 'object') {
             if (/^\d{4}-\d{2}$/.test(du.month)) base.deeplUsage = { month: du.month, chars: clampNum(du.chars, 0, 1e9, 0) };
@@ -444,7 +444,8 @@ class Translator {
             }
           }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
-          if (TR_PLACES.includes(raw.trPlace)) base.trPlace = raw.trPlace;
+          base.trPlaceInlineDefault = raw.trPlaceInlineDefault === true;
+          if (TR_PLACES.includes(raw.trPlace) && base.trPlaceInlineDefault) base.trPlace = raw.trPlace;
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
               if (CHAT_KEY.test(k) && v && LANGS.includes(v.lang) && ['manual', 'detected'].includes(v.src)) base.chatLang[k] = { lang: v.lang, src: v.src, at: Number(v.at) || 0 };
@@ -469,6 +470,7 @@ class Translator {
     }
     if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
     if (!base.termsDefaultOn) { base.termsDefaultOn = true; migrated = true; }
+    if (!base.trPlaceInlineDefault) { base.trPlace = 'inline'; base.trPlaceInlineDefault = true; migrated = true; }
     if (migrated) { try { this.save(); } catch {} }
     return base;
   }
@@ -541,16 +543,6 @@ class Translator {
     const u = this.load().deeplUsage;
     return u.month === monthKey(this.now()) ? u.chars : 0;
   }
-  validCap(n) {
-    const v = Number(n);
-    return Number.isFinite(v) && v >= DEEPL_CAP_MIN && v <= DEEPL_CAP_MAX;
-  }
-  setDeeplCap(n) {
-    if (!this.validCap(n)) return { error: CAP_ERR };
-    this.load().deeplCap = Math.round(Number(n));
-    this.save();
-    return { ok: true };
-  }
   addDeeplUsage(n) {
     this.load().deeplUsage = { month: monthKey(this.now()), chars: this.deeplUsed() + n };
     this.save();
@@ -561,7 +553,7 @@ class Translator {
     const c = this.load();
     return {
       providers: c.providers.map(({ keyEnc, ...p }) => ({ ...p, hasKey: !!keyEnc,
-        ...(p.preset === 'deepl' ? { usage: { used: this.deeplUsed(), cap: c.deeplCap } } : {}) })),
+        ...(p.preset === 'deepl' ? { usage: { used: this.deeplUsed(), cap: DEEPL_MONTH_CAP } } : {}) })),
       primaryId: c.primaryId,
       fallbackId: c.fallbackId,
       fixId: c.fixId,
@@ -574,7 +566,6 @@ class Translator {
       trPlace: c.trPlace,
       rolePrompt: c.rolePrompt,
       wigTerms: c.wigTerms !== false,
-      deeplCap: c.deeplCap,
       wigList: WIG_TERMS.map(([zh, en]) => ({ zh, en })),
       lashTerms: c.lashTerms !== false,
       lashList: LASH_TERMS.map(([zh, en]) => ({ zh, en })),
@@ -596,8 +587,6 @@ class Translator {
     if (!model && !deepl) return { error: '请填模型名' };
     if (PRESETS[preset].models && !PRESETS[preset].models.includes(model)) return { error: `${PRESETS[preset].name}只能选 ${PRESETS[preset].models.join('、')}` };
     const newKey = typeof data.key === 'string' ? data.key.trim().slice(0, 500) : '';
-    const hasCap = deepl && data.monthCap !== undefined && data.monthCap !== '';
-    if (hasCap && !this.validCap(data.monthCap)) return { error: CAP_ERR };
     if (newKey && !canEncrypt(this.deps.safeStorage)) return { error: '这台电脑不支持加密保存，不能保存密钥' };
     let p = typeof data.id === 'string' ? c.providers.find((x) => x.id === data.id) : null;
     if (!p) {
@@ -615,8 +604,6 @@ class Translator {
       p.keyTail = newKey.slice(-4);
     }
     if (!c.primaryId || !this.provider(c.primaryId)) c.primaryId = p.id;
-    // DeepL 表单里的「每月上限」（整个软件一个上限，不分密钥）
-    if (hasCap) this.setDeeplCap(data.monthCap);
     this.save();
     return { ok: true, id: p.id };
   }
@@ -851,8 +838,7 @@ class Translator {
     const to = DEEPL_LANGS[target];
     if (!to) throw { kind: 'lang', text: `DeepL 不支持翻成${target}，请换别的服务商` };
     const n = deeplChars(text);
-    const cap = this.load().deeplCap;
-    if (this.deeplUsed() + n > cap) throw { kind: 'quota', text: `DeepL 本月 ${capText(cap)}字符已用完，下月 1 号恢复` };
+    if (this.deeplUsed() + n > DEEPL_MONTH_CAP) throw { kind: 'quota', text: `DeepL 本月 ${capText(DEEPL_MONTH_CAP)}字符已用完，下月 1 号恢复` };
     const body = { text: [text], target_lang: to[1], preserve_formatting: true };
     if (DEEPL_LANGS[source]) body.source_lang = DEEPL_LANGS[source][0];
     const ctx = deeplContext(context);

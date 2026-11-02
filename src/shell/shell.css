@@ -664,10 +664,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tr-krow .title { display: flex; align-items: center; }
 .tr-krow .desc { font-size: var(--fs-s); line-height: 1.6; color: var(--muted); }
 .tr-krow input { width: 240px; height: 32px; box-sizing: border-box; border: var(--hair) solid var(--field); border-radius: var(--r-m); padding: 0 12px; font-size: var(--fs-m); background: var(--white); }
-.tr-krow:has(> .tr-cap) { flex-wrap: wrap; row-gap: 8px; }
-.tr-cap { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--fs-s); color: var(--muted); }
-.tr-krow > .tr-cap { flex-basis: 100%; }
-.tr-cap input.tr-cap-in, .tr-krow input.tr-cap-in { width: 112px; height: 28px; box-sizing: border-box; border: var(--hair) solid var(--field); border-radius: var(--r-m); padding: 0 10px; font-size: var(--fs-s); background: var(--white); }
 
 /* 报错原话：默认收起，点“详细信息”展开 */
 .err-raw { margin-top: 6px; font-size: var(--fs-s); color: var(--muted); text-align: left; }
