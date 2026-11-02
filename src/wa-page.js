@@ -488,6 +488,9 @@ const PAINT_CODE = (list, look) => `(() => {
     bottom = cs.flexDirection === 'column-reverse' ? Math.abs(el.scrollTop) <= 120 : el.scrollHeight - el.clientHeight - el.scrollTop <= 120;
     break;
   }
+  // 点过的消息这次不在列表里（已经滚出最近读到的范围）：主进程不会处理，按钮恢复能点
+  const listed = new Set(L.map((e) => e && e.h));
+  for (const h of clicks) if (!listed.has(h)) for (const b of document.querySelectorAll('[data-wasw-tr] button[data-h="' + CSS.escape(h) + '"]')) b.disabled = false;
   let changed = false;
   for (const n of mine) {
     const m = n.parentElement && n.parentElement.closest('[data-id]');
@@ -504,6 +507,7 @@ const PAINT_CODE = (list, look) => `(() => {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = label;
+    b.setAttribute('data-h', h);
     b.addEventListener('mousedown', stop);
     b.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -521,6 +525,8 @@ const PAINT_CODE = (list, look) => `(() => {
     const anchor = anchorOf(msg);
     let node = null;
     for (const c of anchor.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
+    // WhatsApp 换了正文块（比如展开「阅读更多」后重建）时，旧块可能还挂在这条消息的别处：只留一块
+    for (const x of msg.querySelectorAll('[data-wasw-tr]')) if (x !== node) { x.remove(); changed = true; }
     const sig = [e.k, e.t, e.b, e.h].join('|');
     if (node && node.getAttribute('data-sig') === sig) continue;
     if (!node) {
@@ -777,6 +783,9 @@ const SELECTION_CODE = `(() => {
   const r = sel.getRangeAt(0);
   const inMain = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !!el && !!main && main.contains(el) && !el.closest('footer') && !el.isContentEditable; };
   if (!inMain(r.startContainer) || !inMain(r.endContainer)) return null;
+  // 只选中了软件加在气泡里的译文（data-wasw-tr）：不出「翻译」按钮
+  const inTr = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !!el && !!el.closest('[data-wasw-tr]'); };
+  if (inTr(r.startContainer) && inTr(r.endContainer)) return null;
   let rootNode = r.commonAncestorContainer;
   if (rootNode.nodeType !== 1) rootNode = rootNode.parentElement;
   const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);

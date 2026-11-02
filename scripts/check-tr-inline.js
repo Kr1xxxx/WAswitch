@@ -160,6 +160,24 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     const tr3 = await waitFor(async () => (await trOf('IN3')) === ANSWER[3], 10000);
     check(tr3 >= 0, `点「重试」后第 3 条换成了译文（${tr3} 毫秒）`);
 
+    // 只选中译文：不出「翻译」按钮（选中原文照常出）
+    const { SELECTION_CODE } = require('../src/wa-page');
+    const selOn = (sel) => pageC.evaluate(`(() => {
+      const el = document.querySelector('[data-id$="_IN1"] ${sel}');
+      const r = document.createRange(); r.selectNodeContents(el);
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      const v = ${SELECTION_CODE};
+      s.removeAllRanges();
+      return v && v.text;
+    })()`);
+    check((await selOn('[data-wasw-tr]')) === null, '只选中译文时不出「翻译」按钮');
+    check((await selOn('span.selectable-text')) === 'Guten Tag, ist Nummer 1 noch lieferbar?', '选中原文照常出「翻译」按钮');
+
+    // 同一条消息里多出一块（WhatsApp 重建了正文块、旧块还挂着）：只留一块
+    await pageC.evaluate(`(() => { const m = document.querySelector('[data-id$="_IN1"]'); const x = document.createElement('div'); x.setAttribute('data-wasw-tr', ''); x.textContent = 'old'; m.firstElementChild.appendChild(x); return 1; })()`);
+    const one = await waitFor(() => pageC.evaluate(`document.querySelectorAll('[data-id$="_IN1"] [data-wasw-tr]').length === 1`), 6000);
+    check(one >= 0 && (await trOf('IN1')) === ANSWER[1], '同一条消息里多出来的旧块被拿掉，只留一块译文');
+
     // 4. 工作台的翻译页只留回复框；关掉工作台也照样放译文
     const dock = await shellC.evaluate("({ items: document.querySelectorAll('.dk-item').length, compose: !!document.querySelector('.dk-compose') })");
     check(dock.items === 0 && dock.compose, `翻译页不再列消息（${dock.items} 条），回复框还在`);
