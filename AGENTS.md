@@ -1,6 +1,6 @@
 # AGENTS.md
 
-给改这个仓库的 AI（Codex、Claude 等）和人看。改任何界面之前先读完这一页：界面包括 `src/shell`、`src/popup`、`src/seltr`、`src/mcp/settings.html`、悬浮翻译窗、安装包图（`build/art`）和团队后台 `server/public/admin`。
+给改这个仓库的 AI（Codex、Claude 等）和人看。改任何界面之前先读完这一页：界面包括 `src/shell`、`src/popup`、`src/seltr`、`src/mcp/settings.html`、悬浮翻译窗、网页号气泡里的译文块（`src/wa-page.js` 的 `TR_CSS`）、安装包图（`build/art`）和团队后台 `server/public/admin`。
 
 规则来自产品负责人 shen（2026-10-28）。CI 会查其中能自动查的部分，查不到的靠你自己对照。和这里冲突的旧代码，改到哪里顺手改对。
 

@@ -3,6 +3,8 @@
 //
 // 规则（经 shen 同意）：只在隔离环境（isolated world）里只读检查，不在页面自己的环境里运行脚本，
 // 不修改页面。掉线检测不读聊天内容；MCP 第二层只在用户确认后读对话列表（预览默认不读）和当前打开对话的消息（read_messages）。
+// 唯一的例外（shen 2026-10-30 选的）：设置里「译文显示在消息下面」时，paintTranslations 在客户消息的气泡里、原文下面
+// 加一块译文（带 data-wasw-tr，只用 textContent），换成「右侧工作台」就全部拿掉。别的地方仍然只读。
 
 const ISOLATED_WORLD = 1001; // 固定的隔离环境编号，和页面自己的脚本互不可见
 
@@ -41,7 +43,8 @@ const SELECTORS = {
   // 认不出方向时再看：只有自己发的消息才带发送状态的勾（单勾、双勾、发送中的钟）
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
-  messageSkip: '[role="button"], .quoted-mention',
+  // 软件自己加在气泡里的译文（data-wasw-tr，见 paintTranslations）也跳过，不当成消息文字
+  messageSkip: '[role="button"], .quoted-mention, [data-wasw-tr]',
   // 语音气泡：播放按钮、语音图标或语音滑条（引用块里的不算）
   voiceMark: '[data-icon="audio-play"], [data-icon="audio-pause"], [data-icon*="ptt" i], [data-icon*="audio-download" i], [aria-label*="voice message" i], [aria-label*="语音"]',
 };
@@ -310,8 +313,10 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
   const msgs = [];
   let size = 0;
   // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
-  for (const { n, id: rawId, out } of top.slice(-${max}).reverse()) {
+  for (const { n, id: rawId, rawId: domId, out } of top.slice(-${max}).reverse()) {
     const id = rawId.slice(0, 300);
+    // 页面上真正的 data-id（新格式没有 true_/false_ 前缀时和 id 不一样）：在消息下面显示译文时按它找气泡
+    const raw = domId && domId !== rawId ? { raw: domId.slice(0, 300) } : {};
     const r = textOf(n);
     const text = r.text.slice(0, 4000);
     if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
@@ -320,7 +325,7 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
     const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
     const voice = !out && /^(true|false)_/.test(rawId) && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
-    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0 } : { id, out, text, t: r.t });
+    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw });
   }
   msgs.reverse();
   // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
@@ -360,7 +365,8 @@ async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}) }));
+      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
+        ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
     return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
   } catch {
     return { ok: false, why: 'error' };
@@ -383,7 +389,15 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
     w.hit = () => { w.seq += 1; if (!w.t && w.waiters.length) w.t = setTimeout(fire, 40); };
     // 输入框（footer）和顶部（header，“正在输入…”“在线”）的变化不算：打字时不跟着一直读
     const outside = (n) => { const el = n && (n.nodeType === 1 ? n : n.parentElement); return !el || !el.closest('header, footer'); };
-    w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target))) w.hit(); });
+    // 软件自己加的译文（data-wasw-tr）增删、改字也不算，不然每放一次译文就又读一次
+    const isTr = (n) => n.nodeType === 1 && n.hasAttribute('data-wasw-tr');
+    const ours = (r) => {
+      const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+      if (el && el.closest('[data-wasw-tr]')) return true;
+      const nodes = [...r.addedNodes, ...r.removedNodes];
+      return nodes.length > 0 && nodes.every(isTr);
+    };
+    w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target) && !ours(r))) w.hit(); });
     // #main 换了（切对话、关掉对话）：看它的父元素有没有增删子元素
     w.outer = new MutationObserver(() => { if (document.querySelector(SEL) !== w.main) { w.bind(); w.hit(); } });
     w.bind = () => {
@@ -424,6 +438,127 @@ async function waitChatChange(wc, ms = 2000) {
     return false;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// 设置里选了「译文显示在消息下面」：在当前打开的对话里，客户消息的气泡里、原文下面放一块译文（shen 2026-10-30）。
+// 这是唯一改页面的地方：只加带 data-wasw-tr 的块，文字一律 textContent；同一块内容没变就不动，不在的、不要的拿掉。
+// list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字 }]，空数组 = 全部拿掉。
+// look：颜色（主进程按 Radix 色阶给）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
+// 原来停在最下面的，放完还停在最下面（气泡变高了不让最新的消息被挤到下面看不见）
+const TR_SPACER = 64; // 译文末尾留出 WhatsApp 右下角时间的位置（px）
+// 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给
+const TR_CSS = (K) => [
+  `[data-wasw-tr] { --hair: 1px; --fs-s: ${K.fsS}; --r-s: ${K.rS}; display: block; margin-top: 6px; padding-top: 6px; border-top: var(--hair) solid ${K.line}; color: ${K.text}; font-size: inherit; line-height: inherit; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }`,
+  '@media (min-resolution: 2dppx) { [data-wasw-tr] { --hair: .5px; } }',
+  `[data-wasw-tr] [data-wasw-bad] { color: ${K.bad}; }`,
+  `[data-wasw-tr] button { font-family: inherit; font-size: var(--fs-s); line-height: 16px; padding: 2px 8px; margin: 0; border: 0; border-radius: var(--r-s); cursor: pointer; vertical-align: baseline; white-space: nowrap; background: ${K.btn}; color: ${K.strong}; }`,
+  `[data-wasw-tr] button:hover { background: ${K.btnHover}; }`,
+  `[data-wasw-tr] button:focus-visible { outline: 2px solid ${K.focus}; }`,
+  '[data-wasw-tr] button:disabled { cursor: default; }',
+  `[data-wasw-tr] [data-wasw-pad] { display: inline-block; width: ${TR_SPACER}px; height: 1px; }`,
+].join('\n');
+const PAINT_CODE = (list, look) => `(() => {
+  const L = ${JSON.stringify(list)};
+  const CSS_TEXT = ${JSON.stringify(TR_CSS(look))};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn })};
+  const w = window.__wsTr || (window.__wsTr = { clicks: [] });
+  const clicks = w.clicks.splice(0, 50);
+  const main = document.querySelector(S.main);
+  const mine = [...document.querySelectorAll('[data-wasw-tr]')];
+  const want = new Map();
+  if (main) for (const e of L) if (e && typeof e.id === 'string' && e.id) want.set(e.id, e);
+  let style = document.querySelector('style[data-wasw-style]');
+  if (!want.size && !L.length) { if (style) style.remove(); }
+  else if (!style || style.textContent !== CSS_TEXT) {
+    if (!style) { style = document.createElement('style'); style.setAttribute('data-wasw-style', ''); }
+    style.textContent = CSS_TEXT;
+    if (!style.parentElement) (document.head || document.documentElement).appendChild(style);
+  }
+  // 找最后一条消息外面能滚动的那层，记下离底部多远（和读消息时的算法一样）
+  let sc = null;
+  let bottom = false;
+  const msgs = main ? main.querySelectorAll('[data-id]') : [];
+  const last = msgs.length ? msgs[msgs.length - 1] : null;
+  for (let el = last && last.parentElement; el && el !== main; el = el.parentElement) {
+    if (el.scrollHeight <= el.clientHeight + 4) continue;
+    const cs = getComputedStyle(el);
+    if (cs.overflowY !== 'auto' && cs.overflowY !== 'scroll') continue;
+    sc = el;
+    bottom = cs.flexDirection === 'column-reverse' ? Math.abs(el.scrollTop) <= 120 : el.scrollHeight - el.clientHeight - el.scrollTop <= 120;
+    break;
+  }
+  let changed = false;
+  for (const n of mine) {
+    const m = n.parentElement && n.parentElement.closest('[data-id]');
+    if (!main || !m || !main.contains(n) || !want.has(m.getAttribute('data-id'))) { n.remove(); changed = true; }
+  }
+  const anchorOf = (msg) => {
+    for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return b;
+    // 没有正文（语音）：放在气泡里
+    const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+    return bub.firstElementChild || bub;
+  };
+  const stop = (ev) => { ev.stopPropagation(); };
+  const button = (label, h) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.addEventListener('mousedown', stop);
+    b.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (b.disabled) return;
+      b.disabled = true;
+      if (w.clicks.length < 50) w.clicks.push(h);
+      if (window.__wsChatWatch) window.__wsChatWatch.hit();
+    });
+    return b;
+  };
+  for (const e of want.values()) {
+    const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
+    if (!msg) continue;
+    const anchor = anchorOf(msg);
+    let node = null;
+    for (const c of anchor.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
+    const sig = [e.k, e.t, e.b, e.h].join('|');
+    if (node && node.getAttribute('data-sig') === sig) continue;
+    if (!node) {
+      node = document.createElement('div');
+      node.setAttribute('data-wasw-tr', '');
+      node.setAttribute('dir', 'auto');
+    }
+    node.setAttribute('data-sig', sig);
+    const kids = [];
+    if (e.k === 'done' || e.k === 'busy') kids.push(String(e.t || ''));
+    else if (e.k === 'error') {
+      const s = document.createElement('span');
+      s.setAttribute('data-wasw-bad', '');
+      s.textContent = String(e.t || '');
+      kids.push(s, ' ', button(String(e.b || ''), e.h));
+    } else kids.push(button(String(e.b || ''), e.h));
+    const pad = document.createElement('span');
+    pad.setAttribute('aria-hidden', 'true');
+    pad.setAttribute('data-wasw-pad', '');
+    kids.push(pad);
+    node.replaceChildren(...kids);
+    if (!node.parentElement) anchor.appendChild(node);
+    changed = true;
+  }
+  if (changed && sc && bottom) {
+    if (getComputedStyle(sc).flexDirection === 'column-reverse') sc.scrollTop = 0;
+    else sc.scrollTop = sc.scrollHeight;
+  }
+  return clicks;
+})()`;
+
+async function paintTranslations(wc, list, look) {
+  if (!wc || wc.isDestroyed() || wc.isLoading()) return [];
+  try {
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 60) : [], look || {}) }]);
+    return Array.isArray(r) ? r.filter((h) => typeof h === 'string' && /^[0-9a-f]{16}$/.test(h)) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -679,5 +814,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 
