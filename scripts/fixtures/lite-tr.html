@@ -4,10 +4,12 @@
 <link rel="stylesheet" href="../../src/fonts/fonts.css">
 <link rel="stylesheet" href="../../src/tokens.css">
 <link rel="stylesheet" href="../../src/shell/shell.css">
+<link rel="stylesheet" href="../../src/seltr/card.css">
 <style>body { margin: 0; } #host { position: fixed; inset: 0; display: flex; }</style>
 </head><body><div id="host"></div>
 <!-- 只加载软件界面里的轻量模式聊天页（src/shell/lite.js）和真的样式，给「译文显示在消息下面」的自检用（scripts/check-lite-tr.js）。
-     h()、segs()、rawDetail() 和 window.wa 是最小的替身；点了气泡里的按钮记在 window.__items。 -->
+     h()、segs()、rawDetail()、icon() 和 window.wa 是最小的替身；点了气泡里的按钮记在 window.__items。
+     编辑小窗：window.__entries[h] 是主进程 FloatCore.entry 的替身，保存、纠错、建议记在 window.__calls。 -->
 <script>
   function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
@@ -24,13 +26,21 @@
   }
   function segs(...a) { return a.filter(Boolean); }
   function rawDetail(t) { return h('span', null, t); }
+  function icon() { const s = document.createElement('span'); s.setAttribute('aria-hidden', 'true'); s.style.cssText = 'display:block;width:14px;height:14px'; return s; }
+  function trOpenKey(pid) { window.__calls.push(['key', pid]); }
+  window.__entries = {};
+  window.__calls = [];
   window.__items = [];
   window.wa = {
     liteSend: async () => ({}), liteOpen: () => {}, openLink: () => {}, retry: () => {},
     onLiteFill: () => {}, liteFilled: () => {},
     onLiteTr: (cb) => { window.__liteTr = cb; },
-    dockItem: (h) => { window.__items.push(h); return Promise.resolve({ ok: true }); },
+    dockItem: (h, fix) => { if (fix) window.__calls.push(['fix', h]); else window.__items.push(h); return Promise.resolve({ ok: true }); },
+    trItem: async (acc, h) => (window.__entries[h] ? { ...window.__entries[h] } : null),
+    dockEdit: async (acc, h, text) => { window.__calls.push(['edit', h, text]); if (window.__entries[h]) Object.assign(window.__entries[h], { tr: text, edited: true }); return true; },
+    dockSuggest: async (acc, h, take) => { window.__calls.push(['take', h, take]); return true; },
   };
 </script>
+<script src="../../src/seltr/trcard.js"></script>
 <script src="../../src/shell/lite.js"></script>
 </body></html>

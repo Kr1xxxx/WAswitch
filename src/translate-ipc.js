@@ -353,7 +353,7 @@ function setupTranslateIpc(ctx) {
     floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
     // 有没有免费的智谱、混元（自动重翻只用它们，见 slowTranslate）
     floatCore.deps.hasFree = () => !!(ctx.translator.raceSet().length || ctx.translator.freeProvider());
-    floatCore.onChange = (accId) => { if (accId === ctx.activeId) { pushFloat(); inlineSoon(); } };
+    floatCore.onChange = (accId) => { if (accId === ctx.activeId) { pushFloat(); inlineSoon(); trEditSync(); } };
   }
 
   // ---- 译文显示在消息下面（shen 2026-10-30）----
@@ -393,6 +393,8 @@ function setupTranslateIpc(ctx) {
   function inlineEntry(it) {
     const voice = typeof it.voice === 'number' && !it.text;
     if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
+    // 已经有译文、正在纠错或纠错失败：气泡里照旧显示原来的译文（纠错的进度和报错在编辑小窗里）
+    if (it.tr && ['queued', 'running', 'error', 'wait'].includes(it.state)) return { k: 'done', t: it.tr };
     if (it.state === 'skip') return null;
     if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
     if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
@@ -415,7 +417,7 @@ function setupTranslateIpc(ctx) {
       if (it) done.add(h);
       const e = it ? inlineEntry(it) : null;
       // c：这条消息的按钮被点过几次。点了马上又失败（没密钥、额度用完）时文字不变，靠它让页面把按钮重画成能点的
-      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0 });
+      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0, o: trOpenOf(r.accId, h, e) });
     }
     // 往上翻聊天记录时屏幕上看得到的更早的客户消息（不在翻译栏里）：存过的显示译文，没翻过的给「翻译」按钮（见 FloatCore.history）
     if (Array.isArray(r.vis) && r.vis.length) {
@@ -429,12 +431,86 @@ function setupTranslateIpc(ctx) {
         const it = hist.get(h);
         // 排着后台补翻、等着自动重翻的（翻译栏里显示「翻译」）一样显示按钮
         const e = it ? inlineEntry((it.state === 'queued' && it.bg) || it.state === 'wait' ? { ...it, state: 'manual' } : it) : null;
-        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0 });
+        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0, o: trOpenOf(r.accId, h, e) });
       }
     }
     return out;
   }
   const inlineClicks = new Map();
+
+  // ---- 气泡译文的编辑小窗（点译文末尾的小铅笔，shen 2026-11-02）----
+  // 网页号：小窗放在选中文字翻译的那个小视图里（sel-translate.js 的 openTr，不放进 WhatsApp 页面，页面会抢键盘）；
+  // 轻量号：shell 自己画（lite.js），数据走 tr:item 和工作台同样的 dock:edit / dock:item / dock:suggest。
+  // 改了没保存就收起：不弹确认，改的字记着（每条一份，最多 50 条，软件开着期间），下次打开同一条还在；这条译文被换掉了就不再用
+  let selTr = null; // main.js 建好后给（useSelTr）
+  const trDrafts = new Map(); // `${accId}:${h}` -> { base: 当时的译文, text }
+  const trDraftKey = (accId, h) => `${accId}:${h}`;
+  function trDraftOf(accId, h, tr) {
+    const d = trDrafts.get(trDraftKey(accId, h));
+    if (!d) return '';
+    if (d.base !== tr) { trDrafts.delete(trDraftKey(accId, h)); return ''; }
+    return d.text;
+  }
+  function trDraftSet(accId, h, text) {
+    const e = floatCore && floatCore.entry(accId, h);
+    const k = trDraftKey(accId, h);
+    trDrafts.delete(k);
+    if (!e || typeof text !== 'string' || text === e.tr) return;
+    trDrafts.set(k, { base: e.tr, text: text.slice(0, 4000) });
+    while (trDrafts.size > 50) trDrafts.delete(trDrafts.keys().next().value);
+  }
+  // 小窗开着的那条（网页号）：消息下面的铅笔保持显示
+  function trOpenOf(accId, h, e) {
+    const s = selTr && selTr.shown;
+    return s && s.mode === 'tr' && s.id === accId && s.h === h && e.k === 'done' ? 1 : 0;
+  }
+  // 小窗要的：这条现在的状态（只认当前号）
+  const trEntry = (accId, h) => (floatCore && accId === ctx.activeId && typeof h === 'string' ? floatCore.entry(accId, h) : null);
+  // 保存：文字和译文一样就不用存
+  function trSave(accId, h, text) {
+    const e = trEntry(accId, h);
+    if (!e || typeof text !== 'string' || !text.trim()) return false;
+    if (text === e.tr) return true;
+    const ok = floatCore.edit(accId, h, text);
+    if (ok) trDrafts.delete(trDraftKey(accId, h));
+    return ok;
+  }
+  // 纠错：框里改了先保存（这时结果按「改过的」处理，只给建议）
+  function trFix(accId, h, text) {
+    const e = trEntry(accId, h);
+    if (!e || !e.orig) return false;
+    if (typeof text === 'string' && text.trim() && text !== e.tr && !trSave(accId, h, text)) return false;
+    const ok = floatCore.manual(accId, h, true);
+    pushFloat();
+    return ok;
+  }
+  // 网页号的小窗开着时：状态变了就推过去；这条不在了（换了对话、被挤出去）就收起
+  function trEditSync() {
+    const s = selTr && selTr.shown;
+    if (!s || s.mode !== 'tr') return;
+    if (s.id !== ctx.activeId) { selTr.hideTr(); return; }
+    selTr.updateTr(trEntry(s.id, s.h));
+  }
+  // 点了网页号气泡里的铅笔：hit = { h, rect, top }
+  function trOpenWeb(r, hit, list) {
+    if (!selTr || r.accId !== ctx.activeId || !hit || !list.some((x) => x.h === hit.h && x.k === 'done')) return;
+    const entry = trEntry(r.accId, hit.h);
+    if (!entry || !entry.tr) return;
+    selTr.openTr({ id: r.accId, wc: r.wc, h: hit.h, rect: hit.rect, top: hit.top, entry, draft: trDraftOf(r.accId, hit.h, entry.tr) })
+      .then((opened) => { if (opened) inlineSoon(); });
+  }
+  // sel-translate.js 用（只认当前号）
+  const trEdit = {
+    save: (id, h, text) => trSave(id, h, text),
+    fix: (id, h, text) => trFix(id, h, text),
+    take: (id, h, yes) => (trEntry(id, h) ? floatCore.suggestion(id, h, yes === true) : false),
+    draft: (id, h, text) => { if (findAcc(id)) trDraftSet(id, h, text); },
+    key: (id, h) => { const e = floatCore && floatCore.entry(id, h); if (e && e.errPid) inlineOpenKey(e.errPid); },
+    closed: () => inlineSoon(), // 铅笔不用再常亮
+  };
+  // 轻量号：小窗要的这条现在的状态 + 上次没保存的字（草稿表在 shell 里，这里不给）
+  handleShell('tr:item', ({ accountId, h } = {}) => trEntry(accountId, h));
+
   function inlineSoon() {
     if (inlineTimer) return;
     inlineTimer = setTimeout(() => { inlineTimer = null; inlinePaint(); }, 30);
@@ -461,7 +537,9 @@ function setupTranslateIpc(ctx) {
     if (!r.wc || r.wc.isDestroyed()) return;
     inlineBusy = true;
     let clicks = [];
-    try { clicks = await waPage.paintTranslations(r.wc, list, inlineLook()); } finally { inlineBusy = false; }
+    let edit = null;
+    try { ({ clicks, edit } = await waPage.paintTranslations(r.wc, list, inlineLook())); } finally { inlineBusy = false; }
+    if (edit) trOpenWeb(r, edit, list);
     // 点了气泡里的「翻译」「重试」：只认当前号、这次放出去的消息
     const sent = new Set(list.map((e) => e.h));
     let clicked = false;
@@ -483,6 +561,7 @@ function setupTranslateIpc(ctx) {
       const wc = view && view.webContents;
       if (wc && !wc.isDestroyed()) waPage.paintTranslations(wc, [], inlineLook());
     }
+    if (selTr) selTr.hideTr();
     const wc = ctx.shellView && ctx.shellView.webContents;
     if (wc && !wc.isDestroyed()) wc.send('lite:tr', { accountId: '', list: [] });
   }
@@ -732,6 +811,11 @@ function setupTranslateIpc(ctx) {
     // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatCore() { return floatCore; },
+    // 选中文字翻译的小视图（sel-translate.js）：编辑小窗也放在它里面
+    useSelTr(s) { selTr = s; },
+    trEdit,
+    // 当前网页号松开鼠标（可能刚点了铅笔）：马上放一次译文，不等读页面那一轮
+    inlineNudge() { if (inlineOn() && inlineRead && !inlineRead.lite && inlineRead.accId === ctx.activeId) inlineSoon(); },
     get trStore() { return trStore; },
     get drafts() { return drafts; },
     // 删号：这个号的草稿一起删

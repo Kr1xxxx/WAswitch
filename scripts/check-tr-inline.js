@@ -318,6 +318,85 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
       check(!!lBad && same(nums(lBad.color), hexNums(RADIX.hex('red', 11))), `浅色：报错红字变回 red 11（${lBad && lBad.color}）`);
     }
 
+    // 3f. 气泡译文末尾的小铅笔：点了在页面外面的小视图里弹编辑小窗，改、保存、纠错
+    const pencilOf = (id) => pageC.evaluate(`(() => { const b = document.querySelector('[data-id$="_${id}"] [data-wasw-tr] button[data-wasw-edit]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, vis: getComputedStyle(b).visibility, exp: b.getAttribute('aria-expanded') }; })()`);
+    check(!!(await pencilOf('IN1')) && !(await pencilOf('V1')), '有译文的消息有小铅笔，语音报错的没有');
+    check((await pencilOf('IN1')).vis === 'hidden', '鼠标不在消息上时铅笔不显示');
+    const mouse = async (c, type, x, y) => c.send('Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
+    const clickAt = async (c, x, y) => { await mouse(c, 'mouseMoved', x, y); await mouse(c, 'mousePressed', x, y); await mouse(c, 'mouseReleased', x, y); };
+    let pe = await pencilOf('IN1');
+    await mouse(pageC, 'mouseMoved', pe.x, pe.y);
+    check((await pencilOf('IN1')).vis === 'visible', '鼠标移到消息上，铅笔出现');
+    const seltrC = async () => { const t = (await list()).find((x) => x.url.includes('seltr/index.html')); return t ? cdp(t.webSocketDebuggerUrl) : null; };
+    const t0e = Date.now();
+    await clickAt(pageC, pe.x, pe.y);
+    let sc = null;
+    await waitFor(async () => { sc = sc || (await seltrC()); return !!sc && !!(await sc.evaluate("!!document.querySelector('.tc textarea')")); }, 5000);
+    const card = () => sc.evaluate(`(() => { const ta = document.querySelector('.tc textarea'); return ta ? { text: ta.value, focus: document.hasFocus() && document.activeElement === ta, btns: [...document.querySelectorAll('.tc-foot button')].map((b) => b.textContent), info: (document.querySelector('.tc-info') || {}).textContent || '' } : null; })()`);
+    const openOk = await waitFor(async () => (await pencilOf('IN1')).exp === 'true' && (await card())?.text === ANSWER[1], 3000);
+    check(!!sc && openOk >= 0, `点铅笔弹出编辑小窗，框里是译文（${Date.now() - t0e} 毫秒）`);
+    const fc = await waitFor(async () => (await card())?.focus, 2000);
+    check(fc >= 0, '小窗打开后光标在框里');
+    let cd = await card();
+    check(!!cd && JSON.stringify(cd.btns) === JSON.stringify(['纠错', '保存']) && /翻译时间/.test(cd.info) && /模型本地测试 test/.test(cd.info), `小窗里有翻译信息和「纠错」「保存」（${cd && cd.info}）`);
+    // 打字进了小窗，没进 WhatsApp 的输入框
+    await sc.send('Input.insertText', { text: '（改）' });
+    cd = await card();
+    const compose = await pageC.evaluate("document.querySelector('footer [contenteditable]').textContent");
+    check(!!cd && cd.text.endsWith('（改）') && compose === '', '打字进了小窗，没进 WhatsApp 的输入框');
+    // 点聊天别处：收起，改的字记着
+    await clickAt(pageC, 400, 60);
+    const closed = await waitFor(async () => (await pencilOf('IN1')).exp === 'false', 3000);
+    check(closed >= 0, '点页面别处收起小窗');
+    await sleep(700);
+    pe = await pencilOf('IN1');
+    await mouse(pageC, 'mouseMoved', pe.x, pe.y);
+    await clickAt(pageC, pe.x, pe.y);
+    const kept = await waitFor(async () => (await card())?.text === `${ANSWER[1]}（改）` && (await pencilOf('IN1')).exp === 'true', 3000);
+    check(kept >= 0, '改了没保存收起，再打开改的字还在');
+    // 再点同一个铅笔：收起，不重开
+    await clickAt(pageC, pe.x, pe.y);
+    await sleep(1200);
+    check((await pencilOf('IN1')).exp === 'false', '再点同一个铅笔收起，不重开');
+    // 再打开，按 Enter 保存：气泡里换成新译文，小窗收起
+    await sleep(700);
+    await mouse(pageC, 'mouseMoved', pe.x, pe.y);
+    await clickAt(pageC, pe.x, pe.y);
+    await waitFor(async () => (await card())?.focus && (await pencilOf('IN1')).exp === 'true', 3000);
+    await sc.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await sc.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    const sv = await waitFor(async () => (await trOf('IN1')) === `${ANSWER[1]}（改）` && (await pencilOf('IN1')).exp === 'false', 4000);
+    check(sv >= 0, '按 Enter 保存：气泡里换成新译文，小窗收起');
+    // 改过的再纠错：出纠错建议，采用后换上
+    await sleep(700);
+    pe = await pencilOf('IN1');
+    await mouse(pageC, 'mouseMoved', pe.x, pe.y);
+    await clickAt(pageC, pe.x, pe.y);
+    const re = await waitFor(async () => /已手动修改/.test((await card())?.info || '') && (await pencilOf('IN1')).exp === 'true', 3000);
+    if (re < 0) console.log('reopen', JSON.stringify(await pencilOf('IN1')), JSON.stringify(pe));
+    check(/已手动修改/.test((await card())?.info || ''), '手动改过的小窗里标「已手动修改」');
+    const beforeFix = calls.length;
+    await sc.evaluate("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '纠错').click()");
+    const sg = await waitFor(async () => JSON.stringify((await card())?.btns) === JSON.stringify(['不用', '采用']), 8000);
+    check(sg >= 0 && calls.length > beforeFix && (await trOf('IN1')) === `${ANSWER[1]}（改）`, '改过的再纠错：出纠错建议（不用、采用），气泡里先不换');
+    if (sg < 0) console.log(JSON.stringify(await card()), calls.length - beforeFix, await trOf('IN1'), await sc.evaluate('document.body.innerHTML.slice(0, 1500)'));
+    await sc.evaluate("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '采用').click()");
+    const took = await waitFor(async () => (await trOf('IN1')) === ANSWER[1] && (await pencilOf('IN1')).exp === 'false', 4000);
+    check(took >= 0, '点「采用」：气泡里换成纠错后的译文，小窗收起');
+    // 没改过的纠错：直接换上，标「已纠错」
+    await sleep(700);
+    await mouse(pageC, 'mouseMoved', pe.x, pe.y);
+    await clickAt(pageC, pe.x, pe.y);
+    await waitFor(async () => !!(await card()) && (await pencilOf('IN1')).exp === 'true', 3000);
+    await sc.evaluate("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '纠错').click()");
+    const fx = await waitFor(async () => /已纠错/.test((await card())?.info || '') && /纠错时间/.test((await card())?.info || ''), 8000);
+    check(fx >= 0 && (await trOf('IN1')) === ANSWER[1], '没改过的纠错：直接换上，小窗里标「已纠错」「纠错时间」');
+    // 滚轮：收起
+    await pageC.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: pe.x, y: pe.y, deltaX: 0, deltaY: -100 });
+    const wh = await waitFor(async () => (await pencilOf('IN1')).exp === 'false', 3000);
+    check(wh >= 0, '在聊天里滚动，小窗收起');
+    if (sc) sc.close();
+
     // 只选中译文：不出「翻译」按钮（选中原文照常出）
     const { SELECTION_CODE } = require('../src/wa-page');
     const selOn = (sel) => pageC.evaluate(`(() => {

@@ -54,6 +54,7 @@ const ICONS = {
   swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
   voice: '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
+  edit: '<path d="M5 19h3.6L18.8 8.8a2.3 2.3 0 0 0-3.6-3.6L5 15.4z"/><path d="M13.6 6.8l3.6 3.6"/>',
 };
 
 function icon(name, size = 16) {
