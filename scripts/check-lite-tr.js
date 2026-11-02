@@ -60,6 +60,39 @@ app.whenReady().then(async () => {
     await page("window.__mark = document.querySelectorAll('.lite-msg')[0]; true");
     await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list)} })`);
     check(await page("document.querySelectorAll('.lite-msg')[0] === window.__mark"), '内容没变时不重画');
+    // 点了「重试」马上又失败（比如没填密钥）：译文和之前一样，按钮也要换回能点的
+    check(await page("[...document.querySelectorAll('.lite-msg')].slice(3, 5).every((m) => !m.querySelector('.lite-tr-btn').disabled)"), '马上又失败的「重试」「翻译」，按钮换回能点');
+    // 只有译文变了：不重建整列，别的消息的节点原样留着
+    const list2 = list.map((e) => (e.id === 'M3' ? { ...e, k: 'done', t: '寄到慕尼黑要多久？' } : e));
+    await page("window.__texts = [...document.querySelectorAll('.lite-msg .text')]; true");
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list2)} })`);
+    check((await trs())[2] === '寄到慕尼黑要多久？', '第 3 条翻好了，译文换上');
+    check(await page("[...document.querySelectorAll('.lite-msg .text')].every((t, i) => t === window.__texts[i])"), '只换变了的译文，原文的节点没重建');
+    // 用户选着第 1 条的原文（要复制）时来了新译文：选区还在，译文先不换，选区没了再补上
+    const sel = "(() => { const t = document.querySelectorAll('.lite-msg .text')[0]; const r = document.createRange(); r.selectNodeContents(t); const s = getSelection(); s.removeAllRanges(); s.addRange(r); return s.toString(); })()";
+    await page("document.getElementById('host').style.userSelect = 'text'"); // 真界面里 #content 是 user-select: text
+    check((await page(sel)).startsWith('Hallo!'), '选中第 1 条的原文');
+    const list3 = list2.map((e) => (e.id === 'M4' ? { ...e, k: 'done', t: '可以用 PayPal 付款吗？', b: '' } : e));
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list3)} })`);
+    check((await page('getSelection().toString()')).startsWith('Hallo!'), '选着字时来了新译文：选区还在，Ctrl+C 能复制');
+    check((await trs())[3] === '翻译服务太忙 重试', '选着字时译文先不换');
+    await page('getSelection().removeAllRanges()');
+    await new Promise((r) => setTimeout(r, 100));
+    check((await trs())[3] === '可以用 PayPal 付款吗？', '选区没了以后，压着的译文补上');
+    // 选着不放超过 15 秒：不用等下一次来信，到时间就把压着的译文换上（选区还在）
+    await page(`(() => {
+      window.__timers = []; window.__realSet = window.setTimeout; window.__realNow = Date.now;
+      window.setTimeout = (fn, ms) => { window.__timers.push([fn, ms]); return window.__timers.length; };
+      const t = document.querySelectorAll('.lite-msg .text')[0]; const r = document.createRange(); r.selectNodeContents(t); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      return true; })()`);
+    const list4 = list3.map((e) => (e.id === 'M5' ? { ...e, k: 'done', t: '请把目录发给我。', b: '' } : e));
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
+    check((await trs())[4] === '翻译', '选着字时（计时前）译文先不换');
+    check(await page('window.__timers.some(([, ms]) => ms === 15000)'), '开始压的时候定了 15 秒的计时');
+    await page("(() => { const t0 = Date.now(); Date.now = () => t0 + 16000; for (const [fn, ms] of window.__timers) if (ms === 15000) fn(); Date.now = window.__realNow; window.setTimeout = window.__realSet; return true; })()");
+    check((await trs())[4] === '请把目录发给我。', '15 秒到了，没有新来信也把压着的译文换上');
+    check((await page('getSelection().toString()')).startsWith('Hallo!'), '到时间换译文时选区还在');
+    await page('getSelection().removeAllRanges()');
     await page("window.__liteTr({ accountId: 'other', list: [] })");
     check((await trs())[0] === '你好！这款假发有 24 英寸的吗？', '别的号的消息不影响这个号');
     await page("window.__liteTr({ accountId: '', list: [] })");
