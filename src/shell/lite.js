@@ -93,14 +93,14 @@ function makeLitePage(id) {
 
   // 一条消息下面的译文：done 译文；busy 翻译中；error 原因 + 重试；key「去填密钥」；manual「翻译」按钮（点了和工作台里点一样）
   const trSig = (e) => (e ? [e.k, e.t, e.b, e.p].join('\u0001') : '');
-  function trLine(id, me) {
-    const e = !me && trs.get(String(id));
+  function trLine(mid, me) {
+    const e = !me && trs.get(String(mid));
     if (!e) return null;
     const btn = (label) => h('button', {
       class: 'lite-tr-btn', type: 'button',
-      onclick: (ev) => { ev.currentTarget.disabled = true; clicked.add(String(id)); window.wa.dockItem(e.h); },
+      onclick: (ev) => { ev.currentTarget.disabled = true; clicked.add(String(mid)); window.wa.dockItem(e.h); },
     }, label);
-    if (e.k === 'done') return h('div', { class: 'lite-tr' }, e.t);
+    if (e.k === 'done') return h('div', { class: 'lite-tr' }, e.t, liteTrPencil(id, String(mid), e.h));
     if (e.k === 'busy') return h('div', { class: 'lite-tr' }, e.t);
     if (e.k === 'error') return h('div', { class: 'lite-tr' }, h('span', { class: 'bad' }, e.t), ' ', btn(e.b));
     // 密钥没填或不对：重试没用，直接去填（打开 设置 › 翻译 里这个服务商的表单）
@@ -146,6 +146,7 @@ function makeLitePage(id) {
     }
     if (fromMain) clicked.clear();
     if (nearBottom) msgs.scrollTop = msgs.scrollHeight;
+    liteTrPlace(id); // 编辑小窗开着：译文块换了，重新找位置（这条不在了就收起）
   }
   const trFlush = () => { if (trHold && !msgsSelected()) patchTrs(); };
 
@@ -177,6 +178,7 @@ function makeLitePage(id) {
     }));
     if (!items.length) msgs.append(h('div', { class: 'lite-none' }, '这个对话在本机还没有消息记录。'));
     if (switched || nearBottom) msgs.scrollTop = msgs.scrollHeight;
+    if (switched) liteTrHide(); else liteTrPlace(id);
   }
 
   async function send() {
@@ -221,6 +223,9 @@ function makeLitePage(id) {
   // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
   msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
   msgs.addEventListener('scroll', liteSelHide, { passive: true });
+  // 编辑小窗不跟着滚动走：用户滚动聊天就收起（改的字记着）。自己补译文时把列表拉到底不算
+  msgs.addEventListener('wheel', () => liteTrHide(), { passive: true });
+  msgs.addEventListener('keydown', (e) => { if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(e.key) && !liteTrBox?.wrap.contains(e.target)) liteTrHide(); });
 
   // 没连上时盖在聊天页上面的提示（连接中、扫码、二维码过期）
   function drawStatus(acc, lite) {
@@ -297,12 +302,146 @@ function makeLitePage(id) {
     patchTrs(true);
   }
 
-  return { el, update, fill, setTr, trFlush };
+  return { el, msgs, update, fill, setTr, trFlush };
 }
 
 window.wa.onLiteTr(({ accountId, list } = {}) => {
   for (const [id, p] of litePages) if (!accountId || id === accountId) p.setTr(accountId ? list : []);
+  liteTrRefresh(accountId);
 });
+
+// ---- 气泡译文的编辑小窗（点译文末尾的小铅笔；样子和网页号的一样，共用 seltr/trcard.js）----
+// 放在这条译文下面，左边对齐；下面放不下就放到这条消息上面。改了没保存就收起：不弹确认，改的字记着（每条一份，最多 50 条），下次打开还在
+let liteTrBox = null; // { wrap, card }
+let liteTr = null; // { acc, mid, h, st }
+let liteTrLast = null; // 最近一次收起的 { acc, h, at }：按下铅笔时先收起了，接着的点击当作「再点一次 = 收起」
+const liteTrDrafts = new Map(); // `${acc}:${h}` -> { base, text }
+function liteTrPencil(acc, mid, hash) {
+  const open = !!liteTr && liteTr.acc === acc && liteTr.h === hash;
+  return h('button', {
+    class: 'lite-tr-edit', type: 'button', 'aria-label': '编辑译文', 'aria-haspopup': 'dialog', 'aria-expanded': open ? 'true' : 'false',
+    onmousedown: (e) => e.preventDefault(), // 不把选区点没
+    onclick: () => liteTrOpen(acc, mid, hash),
+  }, icon('edit', 14));
+}
+function liteTrMsg() {
+  const p = liteTr && litePages.get(liteTr.acc);
+  return p ? p.msgs.querySelector(`:scope > .lite-msg[data-id="${CSS.escape(liteTr.mid)}"]`) : null;
+}
+function liteTrExpanded(on) {
+  const m = liteTrMsg();
+  const b = m && m.querySelector(':scope > .lite-tr .lite-tr-edit');
+  if (b) b.setAttribute('aria-expanded', on ? 'true' : 'false');
+}
+function liteTrHide() {
+  if (!liteTr) return;
+  liteTrExpanded(false);
+  liteTrLast = { acc: liteTr.acc, h: liteTr.h, at: Date.now() };
+  liteTr = null;
+  if (liteTrBox) { liteTrBox.wrap.hidden = true; liteTrBox.card.reset(); }
+}
+function liteTrPlace(acc) {
+  if (!liteTr || !liteTrBox || (acc && acc !== liteTr.acc)) return;
+  const m = liteTrMsg();
+  const blk = m && m.querySelector(':scope > .lite-tr');
+  const p = litePages.get(liteTr.acc);
+  if (!blk || !blk.querySelector('.lite-tr-edit') || !p || !p.el.isConnected) { liteTrHide(); return; }
+  liteTrExpanded(true);
+  const { wrap } = liteTrBox;
+  const area = p.msgs.getBoundingClientRect();
+  const r = blk.getBoundingClientRect();
+  const bw = wrap.offsetWidth;
+  const bh = wrap.offsetHeight;
+  let top = r.bottom + 4;
+  if (top + bh > area.bottom) top = m.getBoundingClientRect().top - 4 - bh;
+  top = Math.max(area.top, Math.min(area.bottom - bh, top));
+  const left = Math.max(area.left, Math.min(area.right - bw, r.left));
+  Object.assign(wrap.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px` });
+}
+const liteTrKey = (acc, h) => `${acc}:${h}`;
+async function liteTrOpen(acc, mid, hash) {
+  const last = liteTrLast;
+  if (liteTr && liteTr.acc === acc && liteTr.h === hash) { liteTrHide(); return; }
+  if (last && last.acc === acc && last.h === hash && Date.now() - last.at < 600) { liteTrLast = null; return; }
+  liteTrHide();
+  liteSelHide();
+  const cur = { acc, mid, h: hash };
+  liteTr = cur;
+  let st = null;
+  try { st = await window.wa.trItem(acc, hash); } catch { st = null; }
+  if (liteTr !== cur) return;
+  if (!st || !st.tr) { liteTr = null; return; }
+  if (!liteTrBox) {
+    const card = window.TrCard({
+      save: async (text) => { const cur = liteTr; if ((await liteTrSave(text)) && liteTr === cur) liteTrHide(); },
+      fix: (text) => liteTrFix(text),
+      take: (yes) => liteTrTake(yes),
+      draft: (text) => liteTrDraft(text),
+      key: (pid) => { liteTrHide(); trOpenKey(pid); },
+      resized: () => requestAnimationFrame(() => liteTrPlace()),
+    });
+    const wrap = h('div', { class: 'sel-pop', hidden: true }, card.root);
+    document.body.append(wrap);
+    liteTrBox = { wrap, card };
+  }
+  const d = liteTrDrafts.get(liteTrKey(acc, hash));
+  if (d && d.base !== st.tr) liteTrDrafts.delete(liteTrKey(acc, hash));
+  cur.st = st;
+  liteTrBox.card.reset();
+  liteTrBox.card.set({ ...st, draft: d && d.base === st.tr ? d.text : '' });
+  liteTrBox.wrap.hidden = false;
+  liteTrPlace();
+  // 选着消息里的字时不抢焦点（焦点进框会把选区弄没，Ctrl+C 复制不到）；点进框里再改
+  const sel = document.getSelection();
+  const p = litePages.get(acc);
+  if (!(sel && !sel.isCollapsed && p && p.msgs.contains(sel.anchorNode))) liteTrBox.card.focus();
+}
+// 主进程来信（译文、纠错状态变了）：重新取这条的状态；不在了就收起
+async function liteTrRefresh(acc) {
+  const cur = liteTr;
+  if (!cur || !cur.st || (acc && acc !== cur.acc)) return;
+  let st = null;
+  try { st = await window.wa.trItem(cur.acc, cur.h); } catch { st = null; }
+  if (liteTr !== cur) return;
+  if (!st || !st.tr) { liteTrHide(); return; }
+  cur.st = st;
+  liteTrBox.card.set(st);
+  liteTrPlace();
+}
+function liteTrDraft(text) {
+  if (!liteTr || !liteTr.st) return;
+  const k = liteTrKey(liteTr.acc, liteTr.h);
+  liteTrDrafts.delete(k);
+  if (text === liteTr.st.tr) return;
+  liteTrDrafts.set(k, { base: liteTr.st.tr, text: String(text).slice(0, 4000) });
+  while (liteTrDrafts.size > 50) liteTrDrafts.delete(liteTrDrafts.keys().next().value);
+}
+async function liteTrSave(text) {
+  const cur = liteTr;
+  if (!cur || !String(text).trim()) return false;
+  const ok = text === cur.st.tr ? true : await window.wa.dockEdit(cur.acc, cur.h, text);
+  if (ok) liteTrDrafts.delete(liteTrKey(cur.acc, cur.h));
+  return ok;
+}
+async function liteTrFix(text) {
+  const cur = liteTr;
+  if (!cur || !cur.st.orig) return;
+  // 框里改了先保存（结果按「改过的」处理，只给建议）
+  if (String(text).trim() && text !== cur.st.tr && !(await liteTrSave(text))) return;
+  await window.wa.dockItem(cur.h, true);
+  liteTrRefresh(cur.acc);
+}
+async function liteTrTake(yes) {
+  const cur = liteTr;
+  if (!cur) return;
+  const ok = await window.wa.dockSuggest(cur.acc, cur.h, yes === true);
+  if (ok && yes === true && liteTr === cur) liteTrHide();
+  else liteTrRefresh(cur.acc);
+}
+// 点到小窗外面（同一个铅笔也算，见 liteTrLast）、改窗口大小、换号、锁定、离开账号页就收起
+document.addEventListener('mousedown', (e) => { if (liteTr && liteTrBox && !liteTrBox.wrap.contains(e.target)) liteTrHide(); }, true);
+window.addEventListener('resize', () => liteTrHide());
+if (window.wa.onState) window.wa.onState((st) => { if (liteTr && (!st || st.locked || st.page !== 'account' || st.activeId !== liteTr.acc)) liteTrHide(); });
 
 // ---- 选中文字后的「翻译」小按钮和悬浮译文窗（轻量号的聊天页是软件自己的界面，直接画在这里；样子和网页号的一样，共用 seltr/card.js） ----
 // 放在选区最后一行下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐

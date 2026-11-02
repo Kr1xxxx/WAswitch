@@ -1453,6 +1453,35 @@ async function scrolledHistory() {
     assert.deepStrictEqual(sent[sent.length - 1], { text: 'frage 8', ctx: ['frage 0', 'frage 1', 'frage 2', 'frage 3', 'frage 4', 'frage 5', 'frage 6', 'frage 7'] });
     assert.strictEqual(st(8).state, 'done');
     assert.strictEqual(store.get('H', ck, 'frage 8').tr, '译:frage 8', '点过的存盘');
+    // 气泡译文的编辑小窗：往上翻看到的旧消息也能改、纠错、采用建议，entry 能找到（不带 data-id）
+    const h8 = msgHash('H', old[8].id);
+    const e8 = fc.entry('H', h8);
+    assert.strictEqual(e8.tr, '译:frage 8');
+    assert.strictEqual(e8.orig, true);
+    assert(Array.isArray(e8.rows) && e8.rows[0][0] === '翻译时间', '有翻译信息');
+    assert(!JSON.stringify(e8).includes('@c.us'), 'entry 不带 data-id');
+    assert.strictEqual(fc.entry('H', 'ffffffffffffffff'), null);
+    assert(fc.edit('H', h8, '改:8'), '旧消息能改');
+    assert.strictEqual(fc.entry('H', h8).edited, true);
+    assert.strictEqual(store.get('H', ck, 'frage 8').tr, '改:8', '改的存盘');
+    assert(fc.manual('H', h8, true));
+    assert(['queued', 'running'].includes(fc.entry('H', h8).state), '纠错中');
+    await sleep(20);
+    assert.strictEqual(fc.entry('H', h8).suggest, '译:frage 8', '改过的再纠错只给建议');
+    assert.strictEqual(fc.entry('H', h8).tr, '改:8');
+    assert(fc.suggestion('H', h8, true), '旧消息能采用建议');
+    assert.strictEqual(fc.entry('H', h8).tr, '译:frage 8');
+    assert.strictEqual(fc.entry('H', h8).fixed, true);
+    // 纠错失败：原来的译文还在（消息下面照旧显示译文，见 translate-ipc.js 的 inlineEntry），entry 带报错
+    fail = true;
+    fc.manual('H', h8, true);
+    await sleep(20);
+    assert.strictEqual(fc.entry('H', h8).state, 'error');
+    assert.strictEqual(fc.entry('H', h8).tr, '译:frage 8');
+    assert.strictEqual(fc.entry('H', h8).errPid, 'zp');
+    fail = false;
+    fc.retryKeyErrors({ dailyCap: 500, match: () => true });
+    assert.strictEqual(fc.entry('H', h8).state, 'done');
     // 密钥问题失败的：填好后退回按钮，不自动重翻
     fail = true;
     fc.manual('H', msgHash('H', old[9].id));

@@ -3065,7 +3065,10 @@ const selTr = createSelTranslate({
   translate: (text) => trIpc.selTranslate(text),
   copy: (text) => copyText(text),
   focus: () => focusActive(),
+  mouseUp: (id) => { if (id === activeId) trIpc.inlineNudge(); },
+  trEdit: trIpc.trEdit,
 });
+trIpc.useSelTr(selTr);
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);
 onShell('collapse', () => toggleSide());

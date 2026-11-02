@@ -489,8 +489,10 @@ async function waitChatChange(wc, ms = 2000) {
 
 // 设置里选了「译文显示在消息下面」：在当前打开的对话里，客户消息的气泡里、原文下面放一块译文（shen 2026-10-30）。
 // 这是唯一改页面的地方：只加带 data-wasw-tr 的块，文字一律 textContent；同一块内容没变就不动，不在的、不要的拿掉。
-// list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字 }]，空数组 = 全部拿掉。
+// list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字, o: 1 = 这条的编辑小窗开着 }]，空数组 = 全部拿掉。
 // look：{ light, dark } 两套颜色（主进程按 Radix 色阶给）：WhatsApp 是浅色主题用 light，深色主题用 dark，跟着原文的字色选（见 PAINT_CODE 里的 tone）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
+// 译文（done）末尾有一个小铅笔：点了同样先记下 { h, rect: 译文块的位置, top: 气泡上沿 }，下一次放译文时带回去，主进程弹编辑小窗。
+// 返回 { clicks: [hash], edit: { h, rect, top } | null }
 // 原来停在最下面的，放完还停在最下面（气泡变高了不让最新的消息被挤到下面看不见）
 const TR_SPACER = 64; // 译文末尾留出 WhatsApp 右下角时间的位置（px）
 // 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给。
@@ -503,6 +505,11 @@ const TR_CSS = (K) => [
   `[data-wasw-tr] button:hover { background: ${K.btnHover}; }`,
   `[data-wasw-tr] button:focus-visible { outline: 2px solid ${K.focus}; }`,
   '[data-wasw-tr] button:disabled { cursor: default; }',
+  // 译文末尾的小铅笔（点了弹编辑小窗）：平时藏着但占着位置（译文不跳），鼠标移到这条消息上、键盘移到它上面、它的小窗开着时显示。颜色只用 look 里的
+  `[data-wasw-tr] button[data-wasw-edit] { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 0 0 4px; padding: 0; vertical-align: -5px; background: transparent; color: ${K.text}; visibility: hidden; }`,
+  `[data-wasw-tr] button[data-wasw-edit]:hover { background: ${K.btnHover}; color: ${K.strong}; }`,
+  '[data-id]:hover [data-wasw-tr] button[data-wasw-edit], [data-wasw-tr] button[data-wasw-edit]:focus-visible, [data-wasw-tr] button[data-wasw-edit][aria-expanded="true"] { visibility: visible; }',
+  '[data-wasw-tr] button[data-wasw-edit] svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }',
   `[data-wasw-tr] [data-wasw-pad] { display: inline-block; width: ${TR_SPACER}px; height: 1px; }`,
 ].join('\n');
 const PAINT_CODE = (list, look) => `(() => {
@@ -511,12 +518,14 @@ const PAINT_CODE = (list, look) => `(() => {
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, voice: SELECTORS.voiceMark })};
   const w = window.__wsTr || (window.__wsTr = { clicks: [] });
   const clicks = w.clicks.splice(0, 50);
+  const edit = w.edit || null;
+  w.edit = null;
   const main = document.querySelector(S.main);
   const mine = [...document.querySelectorAll('[data-wasw-tr]')];
   const want = new Map();
   if (main) for (const e of L) if (e && typeof e.id === 'string' && e.id) want.set(e.id, e);
-  // WhatsApp 现在是不是深色主题：看第一条要放译文的消息，它正文的字色亮就是深色（WhatsApp 让字和气泡底色反差够大：深色主题浅字，浅色主题深字）。
-  // 一条都读不到时沿用上一次的；换主题后下一次放译文（最多 2 秒）就换过来
+  // WhatsApp 现在是不是深色主题：看前几条（最多 5 条）要放译文的消息，正文的字色亮就是深色（WhatsApp 让字和气泡底色反差够大：深色主题浅字，浅色主题深字），按多数定；
+  // 只认有正文块的（撤回、系统提示这类的灰字不算）。一条正文都没有时看第一条的气泡；一样多或都读不到时沿用上一次的。换主题后下一次放译文（约 2 秒）就换过来
   const luma = (c) => {
     if (!/^rgb/.test(c)) return null;
     const n = (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
@@ -525,15 +534,22 @@ const PAINT_CODE = (list, look) => `(() => {
     return 0.2126 * f(n[0]) + 0.7152 * f(n[1]) + 0.0722 * f(n[2]);
   };
   let tone = w.tone || 'light';
+  let darkN = 0;
+  let lightN = 0;
+  let firstBubble = null;
   if (main) for (const e of want.values()) {
+    if (darkN + lightN >= 5) break;
     const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
     if (!msg) continue;
     let el = null;
     for (const sel of S.body) { for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip) && !b.closest('[data-wasw-tr]')) { el = b; break; } if (el) break; }
-    if (!el) el = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+    if (!el) { if (!firstBubble) firstBubble = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg; continue; }
     const l = luma(getComputedStyle(el).color);
-    if (l !== null) { tone = l > 0.4 ? 'dark' : 'light'; break; }
+    if (l === null) continue;
+    if (l > 0.4) darkN += 1; else lightN += 1;
   }
+  if (!darkN && !lightN && firstBubble) { const l = luma(getComputedStyle(firstBubble).color); if (l !== null) (l > 0.4 ? darkN += 1 : lightN += 1); }
+  if (darkN !== lightN) tone = darkN > lightN ? 'dark' : 'light';
   w.tone = tone;
   const CSS_TEXT = CSS_BY_TONE[tone];
   let style = document.querySelector('style[data-wasw-style]');
@@ -617,6 +633,42 @@ const PAINT_CODE = (list, look) => `(() => {
     });
     return b;
   };
+  // 小铅笔：点了记下这条译文块和气泡的位置（页面 CSS 像素），叫醒读页面那边
+  const NS = 'http://www.w3.org/2000/svg';
+  const pencil = (h, open) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('data-wasw-edit', '');
+    b.setAttribute('data-h', h);
+    b.setAttribute('aria-label', '编辑译文');
+    b.setAttribute('aria-haspopup', 'dialog');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of ['M5 19h3.6L18.8 8.8a2.3 2.3 0 0 0-3.6-3.6L5 15.4z', 'M13.6 6.8l3.6 3.6']) {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      svg.append(p);
+    }
+    b.append(svg);
+    // 按下时不让 WhatsApp 和浏览器处理（不把选区点没）
+    b.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+    b.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const blk = b.closest('[data-wasw-tr]');
+      const msg = b.closest('[data-id]');
+      if (!blk || !msg) return;
+      const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+      const r = blk.getBoundingClientRect();
+      w.edit = { h, rect: { x: r.left, y: r.top, w: r.width, h: r.height }, top: bub.getBoundingClientRect().top };
+      if (window.__wsChatWatch) window.__wsChatWatch.hit();
+    });
+    return b;
+  };
   for (const e of want.values()) {
     const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
     if (!msg) continue;
@@ -625,7 +677,7 @@ const PAINT_CODE = (list, look) => `(() => {
     for (const c of anchor.parent.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
     // WhatsApp 换了正文块（比如展开「阅读更多」后重建）时，旧块可能还挂在这条消息的别处：只留一块
     for (const x of msg.querySelectorAll('[data-wasw-tr]')) if (x !== node) { x.remove(); changed = true; }
-    const sig = [e.k, e.t, e.b, e.h, e.c || 0].join('|');
+    const sig = [e.k, e.t, e.b, e.h, e.c || 0, e.o ? 1 : 0].join('|');
     if (node && node.getAttribute('data-sig') === sig) continue;
     if (!node) {
       node = document.createElement('div');
@@ -634,7 +686,8 @@ const PAINT_CODE = (list, look) => `(() => {
     }
     node.setAttribute('data-sig', sig);
     const kids = [];
-    if (e.k === 'done' || e.k === 'busy') kids.push(String(e.t || ''));
+    if (e.k === 'done') kids.push(String(e.t || ''), pencil(e.h, !!e.o));
+    else if (e.k === 'busy') kids.push(String(e.t || ''));
     else if (e.k === 'error') {
       const s = document.createElement('span');
       s.setAttribute('data-wasw-bad', '');
@@ -657,16 +710,25 @@ const PAINT_CODE = (list, look) => `(() => {
     const d = pin.m.getBoundingClientRect().top - pin.y;
     if (Math.abs(d) >= 1) sc.scrollTop += d;
   }
-  return clicks;
+  return { clicks, edit };
 })()`;
 
+const HASH = /^[0-9a-f]{16}$/;
 async function paintTranslations(wc, list, look) {
-  if (!wc || wc.isDestroyed() || wc.isLoading()) return [];
+  const none = { clicks: [], edit: null };
+  if (!wc || wc.isDestroyed() || wc.isLoading()) return none;
   try {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 100) : [], look || {}) }]);
-    return Array.isArray(r) ? r.filter((h) => typeof h === 'string' && /^[0-9a-f]{16}$/.test(h)) : [];
+    if (!r || typeof r !== 'object') return none;
+    const clicks = Array.isArray(r.clicks) ? r.clicks.filter((h) => typeof h === 'string' && HASH.test(h)) : [];
+    const e = r.edit;
+    const num = (v) => (Number.isFinite(v) ? v : 0);
+    const edit = e && typeof e === 'object' && typeof e.h === 'string' && HASH.test(e.h) && e.rect && typeof e.rect === 'object'
+      ? { h: e.h, rect: { x: num(e.rect.x), y: num(e.rect.y), w: num(e.rect.w), h: num(e.rect.h) }, top: num(e.top) }
+      : null;
+    return { clicks, edit };
   } catch {
-    return [];
+    return none;
   }
 }
 
