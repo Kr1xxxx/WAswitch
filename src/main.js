@@ -2962,7 +2962,8 @@ async function insertText(accountId, text) {
   if (after) return after;
   if (focus !== 'compose') return 'focus';
   const view = views.get(accountId);
-  await clipboard.writeText(text.slice(0, 4000)); // 剪贴板接口是异步的：写完再贴
+  // 剪贴板是异步的，别的程序占着时可能悄悄写不进去：写完读回来确认（和复制按钮同一套），没写上就不贴，免得把剪贴板里的旧内容贴进客户的输入框
+  if (!(await copyText(text))) return 'clip';
   if (insertBlocked(accountId)) return 'changed';
   view.webContents.focus();
   view.webContents.paste();
