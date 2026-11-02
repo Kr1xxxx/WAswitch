@@ -591,6 +591,18 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
   t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
   fs.rmSync(d7,{recursive:true,force:true});
+  // 译文显示位置默认「消息下面」：新装是 inline；1.0.4 存下的值升级时一次性改成 inline，之后用户自己选的 panel 保留
+  const dPl=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  let tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'inline'); // 新装
+  fs.writeFileSync(path.join(dPl,'translate.json'),JSON.stringify({seeded:true,seedVer:3,termsDefaultOn:true,autoDefaultOn:true,trPlace:'panel'}));
+  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'inline'); // 升级：旧的 panel 改成 inline
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dPl,'translate.json'),'utf8')).trPlaceInlineDefault,true);
+  tPl.setFloat({place:'panel'});
+  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  assert.equal(tPl.publicConfig().trPlace,'panel'); // 用户自己改的不再覆盖
+  fs.rmSync(dPl,{recursive:true,force:true});
   // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置和 DeepL 用量共用一份
   const dLn=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   const hangs=[];

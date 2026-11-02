@@ -373,6 +373,8 @@ class Translator {
       accountAuto: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
       // 收到的消息的译文显示在哪：inline = 聊天里消息下面（默认，shen 2026-10-30），panel = 右侧工作台的翻译页
       trPlace: 'inline',
+      // 1.0.5 起默认「消息下面」：升级时把 1.0.4 存下的值一次性改成 inline，之后用户自己选的 panel 保留
+      trPlaceInlineDefault: false,
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
@@ -442,7 +444,8 @@ class Translator {
             }
           }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
-          if (TR_PLACES.includes(raw.trPlace)) base.trPlace = raw.trPlace;
+          base.trPlaceInlineDefault = raw.trPlaceInlineDefault === true;
+          if (TR_PLACES.includes(raw.trPlace) && base.trPlaceInlineDefault) base.trPlace = raw.trPlace;
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
               if (CHAT_KEY.test(k) && v && LANGS.includes(v.lang) && ['manual', 'detected'].includes(v.src)) base.chatLang[k] = { lang: v.lang, src: v.src, at: Number(v.at) || 0 };
@@ -467,6 +470,7 @@ class Translator {
     }
     if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
     if (!base.termsDefaultOn) { base.termsDefaultOn = true; migrated = true; }
+    if (!base.trPlaceInlineDefault) { base.trPlace = 'inline'; base.trPlaceInlineDefault = true; migrated = true; }
     if (migrated) { try { this.save(); } catch {} }
     return base;
   }
