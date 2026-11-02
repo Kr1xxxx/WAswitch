@@ -24,6 +24,7 @@ const dk = {
   msg: '',
   bad: false,
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
+  listStale: 0, // 用户选着消息列表里的字，列表重画先压着：压了多久（开始压的时间，0 = 没压）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
   openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文完全隐藏
@@ -699,8 +700,7 @@ function dockField(box, getText, hint) {
   const copyBtn = h('button', { class: 'dk-tool', title: '复制', 'aria-label': '复制', onclick: async () => {
     const text = getText();
     if (!text) return;
-    await window.wa.panelCopy(text);
-    copyFlash(copyBtn);
+    if (await window.wa.panelCopy(text)) copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
     h('div', { class: 'dk-tools' }, copyBtn, typeof hint === 'string' ? h('span', { class: 'dk-keyhint' }, hint) : hint || null)));
@@ -774,6 +774,14 @@ function dockRender(force = false) {
     if (btn) btn.focus({ preventScroll: true });
   }
 }
+const LIST_STALE_MS = 15000;
+function dockListSelected() {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+  const box = $panel.querySelector('.dk-listbox');
+  return !!box && box.contains(sel.anchorNode) && box.contains(sel.focusNode);
+}
+document.addEventListener('selectionchange', () => { if (dk.listStale && !dockListSelected()) dockRender(false); });
 function dockRenderBody(force) {
   dockSyncTabTools();
   const host = $panel.querySelector('.dk-host');
@@ -791,6 +799,13 @@ function dockRenderBody(force) {
     return;
   }
   const root = host.querySelector('.dk');
+  // 用户在消息列表里选着字（要复制译文）：列表重画会把选区弄没，这次先不画，选区没了（selectionchange）再补画；
+  // 选着不放超过 LIST_STALE_MS 也画一次，免得新消息一直不出来
+  if (root && !force && !dk.redraw && dockListSelected()) {
+    if (!dk.listStale) dk.listStale = Date.now();
+    if (Date.now() - dk.listStale < LIST_STALE_MS) return;
+  }
+  dk.listStale = 0;
   const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
