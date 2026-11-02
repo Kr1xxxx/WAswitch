@@ -62,6 +62,7 @@ function makeLitePage(id) {
   const painted = new Map();
   const clicked = new Set();
   let trHold = 0;
+  let trHoldTimer = null;
   let trMain = false; // 压着的这段时间里主进程来过信（点过的灰按钮要换回能点的）
 
   function rememberDraft() {
@@ -113,13 +114,19 @@ function makeLitePage(id) {
 
   // 只换变了的译文：消息没变时不重建整列，原文、选区、滚动位置都不动
   function patchTrs(fromMain = false) {
+    if (fromMain) trMain = true; // 对话没开着也记下，下次画的时候点过的灰按钮才会换回能点
     if (!lastView || !openJid || lastView.jid !== openJid || conv.hidden) return;
-    if (fromMain) trMain = true;
     if (msgsSelected()) {
-      if (!trHold) trHold = Date.now();
+      if (!trHold) {
+        trHold = Date.now();
+        // 压到时间就画一次，不用等下一次来信（选着不放也一样）
+        trHoldTimer = setTimeout(() => { trHoldTimer = null; patchTrs(); }, LITE_TR_HOLD_MS);
+      }
       if (Date.now() - trHold < LITE_TR_HOLD_MS) return;
     }
     trHold = 0;
+    clearTimeout(trHoldTimer);
+    trHoldTimer = null;
     fromMain = trMain;
     trMain = false;
     const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
@@ -155,6 +162,8 @@ function makeLitePage(id) {
     painted.clear();
     clicked.clear();
     trHold = 0;
+    clearTimeout(trHoldTimer);
+    trHoldTimer = null;
     trMain = false;
     msgs.replaceChildren(...items.map((m) => {
       painted.set(String(m.id), m.me ? '' : trSig(trs.get(String(m.id))));
