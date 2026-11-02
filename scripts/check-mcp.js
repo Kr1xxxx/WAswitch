@@ -6,6 +6,7 @@
 // 运行：npm run check:mcp
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const http = require('http');
 const { McpController } = require('../src/mcp/server');
@@ -13,6 +14,8 @@ const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
 const { ToolListChangedNotificationSchema } = require('@modelcontextprotocol/sdk/types.js');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -97,7 +100,7 @@ const json = (res) => JSON.parse(res.content[0].text);
 
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-mcp-'));
-  const port = 40000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: false, port }));
   const hooks = fakeHooks();
   const ctl = new McpController({ dataDir: dir, version: '0.0.0-test', hooks });

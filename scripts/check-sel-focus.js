@@ -39,7 +39,19 @@ app.whenReady().then(async () => {
 
   const select = (id) => wc.executeJavaScript(`(() => { const t = document.getElementById('${id}').firstChild; const r = document.createRange(); r.selectNodeContents(t); const s = getSelection(); s.removeAllRanges(); s.addRange(r); return s.toString(); })()`);
   const click = (w, type) => w.sendInputEvent({ type, x: 300, y: 60, button: 'left', clickCount: 1 });
-  const pick = async (id) => { click(wc, 'mouseDown'); const t = await select(id); click(wc, 'mouseUp'); await wait(800); return t; };
+  // 像用户那样先按下再选字。sendInputEvent 和 executeJavaScript 走两条路，按下可能比选字晚到页面，把刚选好的字点没（CI 上偶尔这样）：
+  // 页面里数着收到几次按下，等按下到了再选
+  await wc.executeJavaScript("window.__downs = 0; document.addEventListener('mousedown', () => { window.__downs += 1; }, true); 1");
+  const downs = () => wc.executeJavaScript('window.__downs');
+  const pick = async (id) => {
+    const n = await downs();
+    click(wc, 'mouseDown');
+    for (let i = 0; i < 100 && await downs() === n; i += 1) await wait(10);
+    const t = await select(id);
+    click(wc, 'mouseUp');
+    await wait(800);
+    return t;
+  };
   // Ctrl+C 做的事：对有键盘焦点的页面执行复制
   const copyNow = async () => { await clipboard.writeText('(空)'); const f = webContents.getFocusedWebContents(); if (f) f.copy(); await wait(300); return clipboard.readText(); };
   const overlay = () => webContents.getAllWebContents().find((w) => /seltr[\\/]index\.html/.test(w.getURL()));

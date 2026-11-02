@@ -30,7 +30,10 @@ const SELECTORS = {
   chatMain: '#main',
   // 对话下方写消息的输入框。“放进输入框”只在焦点在这里时才粘贴
   composeBox: ['#main footer [contenteditable="true"]'],
-  chatTitle: ['#main header span[title]', '#main header [title]', '#main header span[dir="auto"]'],
+  // 顶栏的对话名字：名字那个 span 在前，下面一行（「在线」「正在输入…」「最后上线时间」「点击这里查看联系人信息」）在后。
+  // 新版的名字 span 可能没有 title、下面那行却有，只找 span[title] 会读到下面那行，一会儿一变（shen 2026-11-02「一会会自动重新翻译一遍」），
+  // 所以第一条按页面顺序取第一个带 title 或 dir="auto" 的 span（querySelector 一组选择器时按页面顺序返回）
+  chatTitle: ['#main header span[title], #main header span[dir="auto"]', '#main header [title]'],
   // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
   message: '[data-id]',
   // 消息正文：带 data-pre-plain-text 的 copyable-text 里的 selectable-text。

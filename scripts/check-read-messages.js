@@ -5,9 +5,12 @@
 // 运行：xvfb-run -a npx electron --no-sandbox scripts/check-read-messages.js
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const { app, BrowserWindow } = require('electron');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 let failures = 0;
 const say = (s) => fs.writeSync(2, `${s}\n`); // app.exit 时 stdout 可能丢，写 stderr
@@ -94,7 +97,7 @@ async function main() {
     readMessages: (id, opts) => { state.readCalls.push({ id, ...opts }); return reader.readMessages(id, opts); },
   };
 
-  const port = 40000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: false, port }));
   const ctl = new McpController({ dataDir: dir, version: '0.0.0-test', hooks });
   await ctl.init();

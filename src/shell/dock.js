@@ -213,7 +213,10 @@ function dockWait(ms) {
 }
 if (window.wa.onTrWait) window.wa.onTrWait((w) => { if (w && w.lane === 'dock') dockWait(Number(w.ms) || 0); });
 
-window.wa.onDock((st) => {
+// 比手上的旧（主进程先算的）：不要。invoke 的回复可能比之后推来的状态晚到，见 translate-ipc.js 的 floatSeq
+const dockStale = (st) => !!(st && dk.st && st.seq < dk.st.seq);
+function dockOnState(st) {
+  if (dockStale(st)) return;
   const fresh = dockHasNew(dk.st, st); // 和上一次的状态比（换号时 dockAdopt 会清掉）
   dockAdopt(st);
   if (fresh) dk.pill = true;
@@ -221,9 +224,10 @@ window.wa.onDock((st) => {
   dockCountUnread();
   if (dockVisible()) dockRender(false);
   if (before !== dk.unread && s) refreshPanelHead();
-});
+}
+window.wa.onDock(dockOnState);
 async function dockFetch() {
-  try { const st = await window.wa.dockGet(); if (st) { dockAdopt(st); dockCountUnread(); } } catch {}
+  try { const st = await window.wa.dockGet(); if (st && !dockStale(st)) { dockAdopt(st); dockCountUnread(); } } catch {}
   dockRender(true);
 }
 
@@ -326,7 +330,7 @@ function dockLangBar() {
   const setTarget = async (lang) => {
     lt.tgt = ''; lt.swapped = false;
     const next = await window.wa.dockLang(st.accountId, st.title, lang);
-    if (next) dockAdopt(next);
+    if (next && !dockStale(next)) dockAdopt(next);
     dockRender(true);
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
