@@ -10,6 +10,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   if (k === 'dockLang') return async () => window.__dock || null;
   if (k === 'panelData') return async () => ({ replies: [], customers: [] });
   if (k === 'panelTab') return (tab) => { (window.__panelTabs = window.__panelTabs || []).push(tab); };
+  if (k === 'panelCopy') return async (t) => { (window.__copies = window.__copies || []).push(t); return window.__copyOk !== false; };
   if (k === 'panelInsert') return async () => window.__insertResult || null;
   if (k === 'trPage') return async (a) => { (window.__trCalls = window.__trCalls || []).push(a); return window.__trPage ? window.__trPage(a) : null; };
   return async () => null;

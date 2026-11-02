@@ -47,7 +47,7 @@ function quietKey(ev) {
 //   viewOf(id) -> 账号页面的 WebContentsView
 //   readSelection(wc) -> wa-page.js 的 readSelection
 //   translate(text) -> Promise<{ text } | { error }>
-//   copy(text)
+//   copy(text) -> Promise<boolean>（真的写进剪贴板了才是 true）
 //   focus() -> 键盘焦点还给当前账号页面
 // 退出软件拆视图时 view.webContents 可能已经是 undefined：一律先看它还在不在
 const wcOk = (v) => !!v && !!v.webContents && !v.webContents.isDestroyed();
@@ -70,6 +70,20 @@ function createSelTranslate(deps) {
     view.setBackgroundColor(RADIX.TRANSPARENT);
     view.setVisible(false);
     deps.lockLocalPage(view.webContents);
+    // 键盘焦点只在用户点这个小视图时才留在它上面。新建的视图一开始加载（以及有时重新显示）时 Chromium 会把焦点给它，
+    // 这时按 Ctrl+C 复制的是小视图，聊天里选中的字复制不到：不是点出来的焦点，马上还给账号页面
+    const own = view.webContents;
+    let giveBackTimer = null;
+    let lastDown = 0; // 用户在小视图上按下鼠标的时间；点击时焦点事件和按下事件同一毫秒到，先后不定
+    own.on('focus', () => {
+      const focusAt = Date.now();
+      clearTimeout(giveBackTimer);
+      giveBackTimer = setTimeout(() => {
+        giveBackTimer = null;
+        if (!own.isDestroyed() && own.isFocused() && lastDown < focusAt - 100) deps.focus();
+      }, 50);
+    });
+    own.on('before-mouse-event', (_e, ev) => { if (ev.type === 'mouseDown') lastDown = Date.now(); });
     view.webContents.loadFile(path.join(__dirname, 'seltr', 'index.html'));
     deps.win().contentView.addChildView(view);
     return view;
@@ -216,11 +230,15 @@ function createSelTranslate(deps) {
   // 只接受这个小视图自己发来的
   const fromView = (e) => alive() && e.sender === view.webContents;
   ipcMain.on('seltr:ready', (e) => { if (fromView(e)) { ready = true; push(); } });
-  ipcMain.on('seltr:go', (e) => { if (fromView(e) && shown && shown.mode === 'button') translate(); });
-  ipcMain.on('seltr:retry', (e) => { if (fromView(e) && shown && shown.mode === 'card' && shown.st && shown.st.error) translate(); });
-  ipcMain.on('seltr:copy', (e, text) => {
-    if (!fromView(e) || !shown || !shown.st || typeof text !== 'string' || text !== shown.st.text) return;
-    deps.copy(text);
+  // 点了按钮（翻译、重试、复制）后焦点还给聊天页：聊天里的选区还在，Ctrl+C 照常复制，打字回到 WhatsApp
+  const giveBack = () => { if (alive() && view.webContents.isFocused()) deps.focus(); };
+  ipcMain.on('seltr:go', (e) => { if (fromView(e) && shown && shown.mode === 'button') { giveBack(); translate(); } });
+  ipcMain.on('seltr:retry', (e) => { if (fromView(e) && shown && shown.mode === 'card' && shown.st && shown.st.error) { giveBack(); translate(); } });
+  // 返回有没有真的复制上：译文窗只在成功时显示「已复制」
+  ipcMain.handle('seltr:copy', async (e, text) => {
+    if (!fromView(e) || !shown || !shown.st || typeof text !== 'string' || text !== shown.st.text) return false;
+    giveBack();
+    return (await deps.copy(text)) === true;
   });
   ipcMain.on('seltr:size', (e, h) => {
     if (!fromView(e) || !shown || shown.mode !== 'card' || !Number.isFinite(h)) return;

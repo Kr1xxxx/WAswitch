@@ -945,7 +945,7 @@ function replyItems() {
     h('span', { class: 'x' }, r.text),
     h('span', { class: 'acts' },
       h('button', { class: 'pn-btn primary', title: '贴进当前聊天框（会覆盖剪贴板），不会自动发送', onclick: () => panelInsert(r.text) }, '插入'),
-      h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(r.text); copyFlash(b); } }, '复制'),
+      h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; if (await window.wa.panelCopy(r.text)) copyFlash(b); } }, '复制'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...r }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.replyDelete(r.id); pn.msg = ''; renderPanel(true); } }, '删除'))));
 }
@@ -965,7 +965,7 @@ function customerItems() {
     c.note ? h('span', { class: 'x' }, c.note) : null,
     c.followUpAt ? h('span', { class: `pn-due${c.followUpAt < now ? ' late' : ''}` }, `下次跟进：${fmtDue(c.followUpAt)}${c.followUpAt < now ? '（已到）' : ''}`) : null,
     h('span', { class: 'acts' },
-      c.phone ? h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; await window.wa.panelCopy(c.phone); copyFlash(b); } }, '复制电话') : null,
+      c.phone ? h('button', { class: 'pn-btn', onclick: async (e) => { const b = e.currentTarget; if (await window.wa.panelCopy(c.phone)) copyFlash(b); } }, '复制电话') : null,
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = { ...c }; renderPanel(true); } }, '编辑'),
       h('button', { class: 'pn-btn', onclick: async () => { pn.data = await window.wa.custDelete(c.id); pn.msg = ''; renderPanel(true); } }, '删除'))));
 }

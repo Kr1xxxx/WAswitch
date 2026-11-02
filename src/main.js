@@ -17,6 +17,7 @@ const { writeJsonAtomic, writeJsonQuiet, hasBrokenBackup } = require('./atomic')
 const fingerprint = require('./fingerprint');
 const proxy = require('./proxy');
 const errtext = require('./errtext');
+const copyText = require('./copy-text').makeCopyText(clipboard);
 const { addMenuTemplate } = require('./add-menu');
 const { pageMenuTemplate } = require('./page-menu');
 const ports = require('./ports');
@@ -2940,7 +2941,8 @@ handleShell('cust:delete', (id) => {
   }
   return panelData();
 });
-handleShell('panel:copy', (text) => { if (typeof text === 'string') clipboard.writeText(text.slice(0, 4000)); return true; });
+// 返回有没有真的写进剪贴板：界面只在成功时打对勾
+handleShell('panel:copy', (text) => copyText(text));
 // 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
 // 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里。
 // 焦点不在对话下方的输入框（比如在搜索框）就不贴，返回 'focus' 让用户先点一下输入框
@@ -3060,7 +3062,7 @@ const selTr = createSelTranslate({
   viewOf: (id) => views.get(id) || null,
   readSelection: (wc) => waPage.readSelection(wc),
   translate: (text) => trIpc.selTranslate(text),
-  copy: (text) => clipboard.writeText(text),
+  copy: (text) => copyText(text),
   focus: () => focusActive(),
 });
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----

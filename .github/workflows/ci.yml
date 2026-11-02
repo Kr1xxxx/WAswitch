@@ -74,6 +74,12 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-container-layout.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
+      - name: 选中文字后小视图不抢键盘焦点（第一次 Ctrl+C 就复制得到）、译文窗复制
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-sel-focus.js
+      - name: 复制按钮确认写进剪贴板才打对勾（写不进去重试）
+        run: node scripts/check-copy-text.js
+      - name: 工作台选着译文时列表重画不弄没选区
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-select.js
       - name: 翻译页 ⇄（没翻过先认原文语言）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-tp-swap.js
       - name: 翻译页重翻、补翻、纠错时转圈可取消
