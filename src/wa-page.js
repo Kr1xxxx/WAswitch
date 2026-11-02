@@ -534,6 +534,12 @@ const PAINT_CODE = (list, look) => `(() => {
     bottom = cs.flexDirection === 'column-reverse' ? Math.abs(el.scrollTop) <= 120 : el.scrollHeight - el.clientHeight - el.scrollTop <= 120;
     break;
   }
+  // 往上翻着看（不在最下面）：记下屏幕上第一条消息的位置，放完译文后把它挪回原处，正在看的内容不跟着跳
+  let pin = null;
+  if (sc && !bottom) {
+    const top = sc.getBoundingClientRect().top;
+    for (const m of msgs) { const r = m.getBoundingClientRect(); if (r.height && r.bottom > top) { pin = { m, y: r.top }; break; } }
+  }
   // 点过的消息这次不在列表里（已经滚出最近读到的范围）：主进程不会处理，按钮恢复能点
   const listed = new Set(L.map((e) => e && e.h));
   for (const h of clicks) if (!listed.has(h)) for (const b of document.querySelectorAll('[data-wasw-tr] button[data-h="' + CSS.escape(h) + '"]')) b.disabled = false;
@@ -624,6 +630,10 @@ const PAINT_CODE = (list, look) => `(() => {
   if (changed && sc && bottom) {
     if (getComputedStyle(sc).flexDirection === 'column-reverse') sc.scrollTop = 0;
     else sc.scrollTop = sc.scrollHeight;
+  } else if (changed && pin && pin.m.isConnected) {
+    // 浏览器自己的滚动锚定已经补过的话，这里量出来差 0，不会补两次
+    const d = pin.m.getBoundingClientRect().top - pin.y;
+    if (Math.abs(d) >= 1) sc.scrollTop += d;
   }
   return clicks;
 })()`;

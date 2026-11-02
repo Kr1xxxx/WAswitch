@@ -418,7 +418,7 @@ function setupTranslateIpc(ctx) {
         const it = hist.get(h);
         // 排着后台补翻、等着自动重翻的（翻译栏里显示「翻译」）一样显示按钮
         const e = it ? inlineEntry((it.state === 'queued' && it.bg) || it.state === 'wait' ? { ...it, state: 'manual' } : it) : null;
-        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '' });
+        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0 });
       }
     }
     return out;

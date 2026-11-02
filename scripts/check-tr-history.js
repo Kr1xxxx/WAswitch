@@ -4,6 +4,7 @@
 //   2. 往上翻到最上面：以前存过译文的旧消息直接显示译文，没翻过的显示「翻译」按钮，不自动调翻译
 //   3. 点旧消息的「翻译」：翻好放在下面，上下文是它前面的消息（不是对话最新的）
 //   4. 回到最下面：新来的客户消息照常自动翻
+//   5. 停在中间往上翻（滚动层不做滚动锚定）：放上译文、按钮后正在看的消息不跳
 // 用真的软件 + 本地假 web.whatsapp.com + 假翻译服务（OpenAI 兼容接口，本机地址不用密钥），不连外网、不用付费模型。
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-history.js
 const { spawn, execFileSync } = require('child_process');
@@ -43,7 +44,7 @@ const textOf = (i) => `Frage Nummer ${i}: Haben Sie Perücken in Farbe ${i}?`;
 const msgIn = (i) => `<div role="row"><div data-id="false_${CHAT}_IN${i}" class="message-in"><div><div class="copyable-text" data-pre-plain-text="[10:${String(i % 60).padStart(2, '0')}, 30/10/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${textOf(i)}</span></span></div></div><div class="meta">10:${String(i % 60).padStart(2, '0')}</div></div></div></div>`;
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title>
 <style>body{margin:0;font:14px sans-serif} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
-.scroll{flex:1;overflow-y:auto} .message-in,.message-out{margin:6px 20px;max-width:60%;padding:6px 8px} .meta{text-align:right}</style></head><body>
+.scroll{flex:1;overflow-y:auto;overflow-anchor:none} .message-in,.message-out{margin:6px 20px;max-width:60%;padding:6px 8px} .meta{text-align:right}</style></head><body>
 <div id="app"><div id="side"><div id="pane-side"><div role="grid" aria-label="Chat list"><div role="row"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div>
 <div id="main"><header><span dir="auto" title="Emma Schneider">Emma Schneider</span></header><div class="scroll"><div role="application">
 ${Array.from({ length: N }, (_, i) => msgIn(i)).join('\n')}
@@ -186,6 +187,23 @@ const answer = (n) => `译文 ${n}`;
     // 写盘隔 1 秒合并一次
     const t6 = await waitFor(async () => { const rec = new TrStore(path.join(dir, 'translations')).get('1', ck, textOf(pick)); return !!rec && rec.tr === answer(pick); }, 5000);
     check(t6 >= 0, '点过的旧消息的译文存进了本机');
+    // 6. 往上翻又加载出 60 条更早的（WhatsApp 往上翻时就是这样往上面加），停在中间看：放好以后看的那条不跳
+    await pageC.evaluate(`(() => {
+      const s = document.querySelector('.scroll');
+      const app = document.querySelector('[role="application"]');
+      const h0 = s.scrollHeight;
+      app.insertAdjacentHTML('afterbegin', ${JSON.stringify(Array.from({ length: 60 }, (_, i) => msgIn(100 + i)).join(''))});
+      s.scrollTop += s.scrollHeight - h0;
+      const t = document.querySelector('[data-id$="_IN130"]');
+      s.scrollTop += t.getBoundingClientRect().top - s.getBoundingClientRect().top;
+      return 1;
+    })()`);
+    const y0 = await pageC.evaluate(`document.querySelector('[data-id$="_IN130"]').getBoundingClientRect().top`);
+    const t7 = await waitFor(async () => (await trOf(125)) !== null && (await trOf(131)) !== null, 8000);
+    check(t7 >= 0, '中间新加载出来的旧消息也放上了「翻译」按钮');
+    await sleep(1500);
+    const y1 = await pageC.evaluate(`document.querySelector('[data-id$="_IN130"]').getBoundingClientRect().top`);
+    check(Math.abs(y1 - y0) < 2, `上面的消息放上按钮后，正在看的消息没有跳（移动了 ${Math.round(y1 - y0)} 像素）`);
     console.log('调翻译的顺序', calls.map((c) => c.n).join(' '));
     pageC.close();
   } finally {
