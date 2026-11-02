@@ -597,6 +597,7 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-edited { font-size: var(--fs-s); color: var(--amber-11); background: var(--amber-3); border-radius: var(--r-s); padding: 0 6px; }
 .dk-edited[hidden] { display: none; }
 /* 译文在消息下面时翻译页只有回复：两个框平分整页高度，不再限四行 */
+.dk-inline > .dk-hint { padding: 6px 10px 0; }
 .dk-inline .dk-compose { flex: 1; min-height: 0; border-top: 0; padding-top: 4px; }
 .dk-inline .dk-compose .dk-card { flex: 1 1 0; min-height: 96px; display: flex; flex-direction: column; }
 .dk-inline .dk-compose .dk-field { flex: 1; min-height: 0; }

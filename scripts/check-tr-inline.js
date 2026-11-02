@@ -186,6 +186,9 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     check(dock.items === 0 && !dock.list && dock.compose, `翻译页不再列消息（${dock.items} 条），回复框还在`);
     // 只剩两个框：平分整页高度（各占三成以上，两个差不多高）
     check(dock.inBox > dock.host * 0.3 && dock.outBox > dock.host * 0.3 && Math.abs(dock.inBox - dock.outBox) < 24, `翻译页的两个框撑满整页（页 ${dock.host}，上 ${dock.inBox}，下 ${dock.outBox}）`);
+    // 认不出消息时两个框上面照样说原因（只改一下画面用的状态，下次读对话会改回来）
+    const why = await shellC.evaluate("(() => { const r = dk.st.readable; dk.st.readable = 'unreadable'; dockRender(true); const t = (document.querySelector('.dk-inline > .dk-hint') || {}).textContent || ''; dk.st.readable = r; dockRender(true); return t; })()");
+    check(/认不出消息/.test(why), `认不出消息时翻译页说原因（${why}）`);
     await shot('shell-dock', shellC);
     if (process.env.SHOT_DIR) {
       await shellC.evaluate("settingsTab = 'translate'; window.wa.showPage('settings')");

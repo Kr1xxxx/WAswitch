@@ -600,7 +600,12 @@ function dockPausedHint() {
 function dockIncoming() {
   const st = dk.st;
   // 译文显示在聊天里消息下面（设置 › 翻译）：不列消息，翻译页只有回复的两个框（shen 2026-11-02）
-  if (st.inline) return dockPausedHint();
+  // 扫码和认不出消息照样提示：气泡里没有译文时，用户在这里能看到原因
+  if (st.inline) {
+    if (st.readable === 'qr') return h('p', { class: 'hint dk-hint' }, '扫码登录后可用。');
+    if (st.readable === 'unreadable') return h('p', { class: 'hint dk-hint bad' }, '打开的聊天里认不出消息（可能是 WhatsApp 改版了）。');
+    return dockPausedHint();
+  }
   const list = h('div', { class: 'dk-list' });
   const box = h('div', { class: 'dk-listbox' }, list);
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
