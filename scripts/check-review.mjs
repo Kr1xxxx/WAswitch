@@ -51,7 +51,7 @@ async function fixture() {
   }
   const admin = (method, route, body) => handleAdmin(new Request(`https://team.example/api/admin/${route}`, {
     method, headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' }, body: JSON.stringify(body),
-  }), { DB: db }, `/api/admin/${route}`, { email: 'owner@example.com' });
+  }), { DB: db }, `/api/admin/${route}`, { id: owner, name: 'Owner', role: 'owner', group_id: null });
   const sync = async (device, cursor = 0, status = []) => {
     const res = await handleDevice(new Request('https://team.example/api/device/sync', {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${device.token}` }, body: JSON.stringify({ v: 1, cursor, status }),
@@ -227,7 +227,7 @@ try {
     let requests = 0;
     const team = new TeamSync({ dir: tmp(), safeStorage: weak, hooks: {}, platform: 'linux', fetchImpl: async () => { requests++; throw Error('network'); } });
     if (process.platform === 'linux') {
-      assert((await team.login({ login: 'emma', password: 'correct-horse-1' })).error.includes('加密'));
+      assert((await team.login({ email: 'emma@example.com', code: '246810' })).error.includes('加密'));
       assert.equal(requests, 0);
       // 与应用使用同一检查函数的真实 proxy 模块。
       const weakProxy = { exports: {} };

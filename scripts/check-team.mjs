@@ -14,82 +14,33 @@ const { TeamSync, TEAM_SERVER, GRACE_MS } = require('../src/team/index.js');
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SERVER = 'https://team.example.com';
 
-// ---- 后台：内存数据库 + 假的 Access ----
-const DOMAIN = 'acme.cloudflareaccess.com';
-const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
-const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
-globalThis.fetch = async () => new Response(JSON.stringify({ keys: [{ ...pub, kid: 'k1' }] }), { headers: { 'content-type': 'application/json' } });
-const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-async function jwt(email) {
-  const head = enc({ alg: 'RS256', kid: 'k1' });
-  const body = enc({ email, aud: ['aud'], iss: `https://${DOMAIN}`, exp: Math.floor(Date.now() / 1000) + 600 });
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, new TextEncoder().encode(`${head}.${body}`));
-  return `${head}.${body}.${Buffer.from(sig).toString('base64url')}`;
-}
+// ---- 后台：内存数据库；发信换成假的（从信里取码），老板用 OWNER_EMAIL 收码登录后台 ----
 const db = fakeD1(path.join(root, 'server/migrations'));
-const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: 'aud', OWNER_EMAIL: 'boss@example.com', ASSETS: { fetch: async () => new Response('') } };
+const env = { DB: db, OWNER_EMAIL: 'boss@example.com', RESEND_API_KEY: 're_test', ASSETS: { fetch: async () => new Response('') } };
+const mails = [];
+const mail = { mode: 'ok' };
+globalThis.fetch = async (url, opts) => {
+  assert.equal(url, 'https://api.resend.com/emails');
+  if (mail.mode === '500') return new Response('{"message":"x"}', { status: 500 });
+  mails.push(JSON.parse(opts.body));
+  return new Response('{}', { headers: { 'content-type': 'application/json' } });
+};
+const lastCode = (to) => { const m = [...mails].reverse().find((x) => x.to[0] === to); return m && /验证码 (\d{6})/.exec(m.text)[1]; };
+// 测试里同一个邮箱要码很多次：清掉限速记录（60 秒重发间隔、每小时次数）
+const resetLimits = () => db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'code:%' OR key LIKE 'verify:%' OR key LIKE 'login:%'").run();
+const adminReq = (p, body, token) => worker.fetch(new Request(`${SERVER}/api/admin/${p}`, {
+  method: 'POST', body: JSON.stringify(body),
+  headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+}), env, {});
+await adminReq('code', { email: 'boss@example.com' });
+const bossToken = (await (await adminReq('session', { email: 'boss@example.com', code: lastCode('boss@example.com') })).json()).token;
+assert.ok(bossToken, '老板登录后台');
 async function boss(method, p, body) {
   const res = await worker.fetch(new Request(`${SERVER}/api/admin/${p}`, {
     method, body: body === undefined ? undefined : JSON.stringify(body),
-    headers: { 'cf-access-jwt-assertion': await jwt('boss@example.com'), 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${bossToken}`, 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   }), env, {});
   return res.json();
-}
-
-// ---- 登录接口（policy / login / logout）的替身 ----
-// 接口按 /mnt/project-files/plans/repo-private/login-plan.md 的约定；后台这部分（L1）合并后换成真的 Worker。
-// 设备和令牌仍然由真的 Worker 发（用登记码），坐席、停用、同步都走真的代码。
-const shim = { policy: 'optional', users: new Map(), devices: new Map(), dead: new Set(), mail: new Map(), codes: new Map(), down503: false };
-let ipSeq = 0;
-async function shimFetch(url, opts) {
-  const p = new URL(url).pathname;
-  const auth = (opts.headers && opts.headers.authorization) || '';
-  const token = auth.replace(/^Bearer /, '');
-  const json = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
-  if (p === '/api/device/policy') { assert.equal(opts.method, 'GET'); assert.ok(!auth); return json(200, { v: 1, login: shim.policy }); }
-  if (p === '/api/device/code') {
-    const b = JSON.parse(opts.body);
-    const u = shim.users.get(String(b.email));
-    if (!u) return json(404, { unknown: true, error: '这个邮箱还没加入团队，请找管理员' });
-    if (u.disabled) return json(403, { disabled: true, error: '这个账号已停用' });
-    const last = shim.codes.get(b.email);
-    if (last && clock.t - last.sentAt < 60_000) return json(429, { retry_after_s: Math.ceil((60_000 - (clock.t - last.sentAt)) / 1000) });
-    if (shim.down503) return json(503, { error: '验证码发不出去，请稍后再试' });
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    shim.codes.set(b.email, { code, sentAt: clock.t, expires: clock.t + 10 * 60_000 });
-    shim.mail.set(b.email, code); // 假的发信：测试从这里取码
-    return json(200, { ok: true, resend_after_s: 60 });
-  }
-  if (p === '/api/device/login') {
-    const b = JSON.parse(opts.body);
-    const u = shim.users.get(String(b.email));
-    const c = shim.codes.get(String(b.email));
-    if (!u || !c || c.code !== b.code || clock.t > c.expires) return json(400, { error: '验证码不对或已过期' });
-    shim.codes.delete(b.email);
-    if (u.disabled) return json(403, { disabled: true, error: '这个账号已停用' });
-    const old = b.device_id && shim.devices.get(b.device_id);
-    if (old && old.userId === u.id && old.revoked) return json(403, { revoked: true, device_id: b.device_id, error: '这台电脑已被管理员停用' });
-    let deviceId; let tok;
-    if (old && old.userId === u.id && !old.revoked) {
-      deviceId = b.device_id; tok = old.token; shim.dead.delete(tok);
-    } else {
-      const code = (await boss('POST', `users/${u.id}/enroll-code`)).code;
-      ipSeq += 1;
-      const r = await worker.fetch(new Request(`${SERVER}/api/device/enroll`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': `10.0.0.${ipSeq}` }, body: JSON.stringify({ v: 1, code, device: b.device, accounts: [] }) }), env, {});
-      const d = await r.json();
-      deviceId = d.device_id; tok = d.token;
-      shim.devices.set(deviceId, { userId: u.id, token: tok });
-    }
-    return json(200, { device_id: deviceId, token: tok, user: { name: u.name }, allow_private: true, login: shim.policy });
-  }
-  if (p.startsWith('/api/device/') && shim.dead.has(token)) return json(401, { error: '设备令牌无效' });
-  if (p === '/api/device/logout') { shim.dead.add(token); return json(200, { ok: true }); }
-  const res = await worker.fetch(new Request(url, opts), env, {});
-  if (p !== '/api/device/sync' || res.status !== 200) return res;
-  const d = await res.json();
-  const dev = [...shim.devices.values()].find((x) => x.token === token);
-  const u = dev && [...shim.users.values()].find((x) => x.id === dev.userId);
-  return json(200, { ...d, login: shim.policy, user: { name: u ? u.name : '' } });
 }
 
 // 网络开关：模拟断网、401、HTML 错误页等
@@ -105,8 +56,9 @@ async function fetchImpl(url, opts) {
   if (net === '403other') return new Response('{"revoked":true,"device_id":"00000000-0000-0000-0000-000000000000"}', { status: 403, headers: { 'content-type': 'application/json' } });
   if (net === 'html') return new Response('<html>Access login</html>', { status: 200, headers: { 'content-type': 'text/html' } });
   if (opts.body && url.endsWith('/sync')) sent.push(JSON.parse(opts.body));
-  return shimFetch(url, opts);
+  return worker.fetch(new Request(url, opts), env, {});
 }
+const setPolicy = (login) => boss('PUT', 'settings', { login_policy: login });
 
 // ---- 一台模拟的 WAswitch ----
 const fakeSafe = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`enc:${t}`), decryptString: (b) => b.toString().replace(/^enc:/, '') };
@@ -138,16 +90,15 @@ console.log('团队模式端到端自检');
 
 const me = await boss('GET', 'me');
 assert.equal(me.user.role, 'owner');
-const userA = await boss('POST', 'users', { name: 'Emma Schulz' });
-const userB = await boss('POST', 'users', { name: 'Lucas Martin' });
-shim.users.set('emma@example.com', { id: userA.id, name: 'Emma Schulz' });
-shim.users.set('lucas@example.com', { id: userB.id, name: 'Lucas Martin' });
-// 要码、从假邮箱里取码、登录。每次先把时钟拨过 60 秒的重发间隔
+const userA = await boss('POST', 'users', { name: 'Emma Schulz', email: 'emma@example.com' });
+const userB = await boss('POST', 'users', { name: 'Lucas Martin', email: 'lucas@example.com' });
+assert.ok(userA.id && userB.id, '后台加人');
+// 要码、从假邮箱里取码、登录。每次先清掉限速记录
 async function signIn(m, email) {
-  clock.t += 61_000;
+  resetLimits();
   const r = await m.team.requestCode({ email });
   if (!r.ok) return r;
-  return m.team.login({ email, code: shim.mail.get(email.trim().toLowerCase()) });
+  return m.team.login({ email, code: lastCode(email.trim().toLowerCase()) });
 }
 const A = machine('a', [acc('101', '一号'), acc('102', '二号'), acc('103', '三号'), acc('104', '私人号')]);
 
@@ -161,7 +112,7 @@ await test('后台地址写死；没登录时是 none，策略默认 off，不�
   assert.equal(A.team.isParked(A.accounts[3]), false);
 });
 await test('问策略：不带令牌；required 且没登录就锁，所有号都停着', async () => {
-  shim.policy = 'required';
+  await setPolicy('required');
   assert.deepEqual(await A.team.fetchPolicy(), { ok: true, policy: 'required' });
   assert.equal(A.team.locked(), true);
   assert.ok(A.accounts.every((a) => A.team.isParked(a)));
@@ -169,24 +120,25 @@ await test('问策略：不带令牌；required 且没登录就锁，所有号�
   assert.equal((await A.team.fetchPolicy()).offline, true);
   assert.equal(A.team.policy(), 'required', '连不上时用上次记下的');
   net = 'ok';
-  shim.policy = 'optional';
+  await setPolicy('optional');
   await A.team.fetchPolicy();
   assert.equal(A.team.locked(), false);
 });
 await test('要验证码：没加入团队、停用、太频繁、发不出去、连不上，都只给一句话', async () => {
   assert.deepEqual(await A.team.requestCode({ email: 'nobody@example.com' }), { error: '这个邮箱还没加入团队，请找管理员' });
   assert.deepEqual(await A.team.requestCode({ email: 'not-an-email' }), { error: '邮箱格式不对' });
-  shim.users.get('lucas@example.com').disabled = true;
+  await boss('PATCH', `users/${userB.id}`, { disabled: true });
   assert.deepEqual(await A.team.requestCode({ email: 'lucas@example.com' }), { error: '这个账号已停用' });
-  shim.users.get('lucas@example.com').disabled = false;
-  clock.t += 61_000;
+  await boss('PATCH', `users/${userB.id}`, { disabled: false });
+  resetLimits();
   assert.deepEqual(await A.team.requestCode({ email: ' Emma@Example.com ' }), { ok: true, resendAfterS: 60 });
-  clock.t += 20_000;
-  assert.deepEqual(await A.team.requestCode({ email: 'emma@example.com' }), { error: '太频繁了，请 40 秒后再试', retryAfterS: 40 });
-  clock.t += 61_000;
-  shim.down503 = true;
+  const busy = await A.team.requestCode({ email: 'emma@example.com' });
+  assert.match(busy.error, /^太频繁了，请 \d+ 秒后再试$/);
+  assert.ok(busy.retryAfterS > 0 && busy.retryAfterS <= 60);
+  resetLimits();
+  mail.mode = '500';
   assert.deepEqual(await A.team.requestCode({ email: 'emma@example.com' }), { error: '验证码发不出去，请稍后再试' });
-  shim.down503 = false;
+  mail.mode = 'ok';
   net = 'down';
   const r = await A.team.requestCode({ email: 'emma@example.com' });
   net = 'ok';
@@ -194,16 +146,16 @@ await test('要验证码：没加入团队、停用、太频繁、发不出去�
   assert.equal(r.offline, true);
 });
 await test('登录失败：码不对、过期、账号停用、连不上，都不存令牌', async () => {
-  clock.t += 61_000;
+  resetLimits();
   await A.team.requestCode({ email: 'emma@example.com' });
-  const good = shim.mail.get('emma@example.com');
+  const good = lastCode('emma@example.com');
   const wrong = good === '000000' ? '111111' : '000000';
   assert.deepEqual(await A.team.login({ email: 'emma@example.com', code: wrong }), { error: '验证码不对或已过期', badCode: true });
   assert.deepEqual(await A.team.login({ email: 'emma@example.com', code: '12ab' }), { error: '验证码不对或已过期', badCode: true });
-  clock.t += 61_000;
+  resetLimits();
   await A.team.requestCode({ email: 'emma@example.com' });
-  clock.t += 11 * 60_000;
-  assert.deepEqual(await A.team.login({ email: 'emma@example.com', code: shim.mail.get('emma@example.com') }), { error: '验证码不对或已过期', badCode: true }, '过期');
+  db.raw.prepare('UPDATE login_codes SET expires_at = 0').run();
+  assert.deepEqual(await A.team.login({ email: 'emma@example.com', code: lastCode('emma@example.com') }), { error: '验证码不对或已过期', badCode: true }, '过期');
   net = 'down';
   const r = await A.team.login({ email: 'emma@example.com', code: '123456' });
   net = 'ok';
@@ -233,12 +185,12 @@ await test('登录成功：令牌加密存盘，记下名字和策略', async ()
 await test('同步：上传内容只有白名单字段，不含代理和密码；同步顺便刷新策略', async () => {
   sent.length = 0;
   A.accounts[0].unread = 2;
-  shim.policy = 'required';
+  await setPolicy('required');
   assert.deepEqual(await A.team.syncNow(), { ok: true });
   assert.equal(A.team.policy(), 'required');
   assert.equal(A.team.locked(), false, '登录着就不锁');
   const body = JSON.stringify(sent);
-  for (const bad of ['SECRETPASS', '127.0.0.1:7891', '私人号', 'last_active', 'unread_since', shim.mail.get('emma@example.com')]) assert.ok(!body.includes(bad), `不该上传 ${bad}`);
+  for (const bad of ['SECRETPASS', '127.0.0.1:7891', '私人号', 'last_active', 'unread_since', lastCode('emma@example.com')]) assert.ok(!body.includes(bad), `不该上传 ${bad}`);
   assert.equal(sent[0].status.length, 3);
   assert.deepEqual(Object.keys(sent[0].status[0]).sort(), ['exit_changed', 'exit_country', 'exit_ip', 'proxy_ms', 'proxy_ok', 'state', 'team_id', 'unread']);
   const ov = await boss('GET', 'overview');
@@ -271,7 +223,7 @@ await test('断网、不带 revoked 的 403、别人的 revoked、HTML 页面：
   assert.equal(sent[0].events.length, 4); // 离线期间的事件补报
   assert.equal(A.team.failures, 0);
 });
-await test('必须登录时连不上后台：7 天内照常用，超过 7 天才锁；一连上自动解锁，不用重新输密码', async () => {
+await test('必须登录时连不上后台：7 天内照常用，超过 7 天才锁；一连上自动解锁，不用重新登录', async () => {
   net = 'down';
   clock.t += GRACE_MS - 60_000;
   await A.team.syncNow();
@@ -395,12 +347,12 @@ await test('停用电脑（403 revoked）：变成“已停用”，必须登录
   assert.ok(A.log.includes('park:103'));
   assert.ok(A.accounts.every((a) => A.team.isParked(a)));
   assert.equal(A.accounts[2].teamHidden, false, '只是停着，不算收回');
-  shim.policy = 'optional';
+  await setPolicy('optional');
   await A.team.fetchPolicy();
   assert.equal(A.team.locked(), false);
   assert.equal(A.team.isParked(A.accounts[2]), true, '提示登录时团队号照样停着');
   assert.equal(A.team.isParked(A.accounts[3]), false, '私人号照常');
-  shim.policy = 'required';
+  await setPolicy('required');
   await A.team.fetchPolicy();
   await boss('POST', `devices/${devA.id}/restore`);
   A.log.length = 0;
@@ -437,7 +389,8 @@ await test('退出登录：令牌在后台作废、本机删掉；团队号停�
   const tokenBefore = A.team.tokenPlain();
   A.log.length = 0;
   assert.deepEqual(await A.team.logout(), { ok: true });
-  assert.ok(shim.dead.has(tokenBefore));
+  const old = await worker.fetch(new Request(`${SERVER}/api/device/sync`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${tokenBefore}` }, body: JSON.stringify({ v: 1 }) }), env, {});
+  assert.equal(old.status, 401, '旧令牌在后台作废');
   assert.equal(A.team.loginState(), 'none');
   assert.equal(A.team.locked(), true);
   assert.ok(A.log.includes('park:103'));
@@ -452,11 +405,11 @@ await test('退出登录：令牌在后台作废、本机删掉；团队号停�
 await test('本机的设备被停用后再登录：说明已停用，device_id 留着不换', async () => {
   await A.team.logout();
   const dev = A.team.state.deviceId;
-  shim.devices.get(dev).revoked = true;
+  await boss('POST', `devices/${dev}/revoke`);
   assert.deepEqual(await signIn(A, 'emma@example.com'), { error: '这台电脑已被管理员停用', disabled: true });
   assert.equal(A.team.state.deviceId, dev, 'device_id 没丢');
   assert.equal(A.team.loginState(), 'none');
-  shim.devices.get(dev).revoked = false;
+  await boss('POST', `devices/${dev}/restore`);
 });
 await test('换人登录：新设备，本机原来的团队号先收起，等后台分配', async () => {
   const dev = A.team.state.deviceId;
