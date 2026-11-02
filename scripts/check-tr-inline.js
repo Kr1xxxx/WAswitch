@@ -7,6 +7,7 @@
 //   4. 右侧工作台的翻译页不再列消息，只留回复框；关掉工作台也照样放译文
 //   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条那一层的下面
 //   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点；密钥没填：只有「去填密钥」，点了打开设置里这个服务商的表单
+//   3e. WhatsApp 换成深色主题（假页面里深色字、深色气泡）：译文块换成 Radix 深色色阶，对比度够；换回浅色后 3 秒内变回来，而且还是原来那个节点
 //   5. 设置换成「右侧工作台」：页面里的译文全部拿掉，翻译页重新列出消息；换回来又放上
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
 const { spawn, execFileSync } = require('child_process');
@@ -50,7 +51,7 @@ const realVoice = (id, time, tail) => `<div role="row"><div tabindex="-1" data-i
 const flatVoice = (id, time) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${LABEL}<div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:09</span></div></div></div></div>`;
 const filler = Array.from({ length: 24 }, (_, i) => msgOut(`OLD${i}`, '09:0' + (i % 10), `Older note ${i}`)).join('');
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title>
-<style>body{margin:0;font:14px sans-serif} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
+<style>body{margin:0;font:14px sans-serif;background:#fff;color:#111b21} .message-in{background:#fff} body.dark{background:#0b141a;color:#e9edef} body.dark .message-in{background:#202c33} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
 .scroll{flex:1;overflow-y:auto} .message-in,.message-out{margin:6px 20px;max-width:60%;padding:6px 8px}
 .message-out{margin-left:auto} .meta{text-align:right}
 .message-in{position:relative;width:fit-content} .tail{position:absolute;top:0;left:-8px;width:8px;height:13px;display:block}
@@ -271,6 +272,51 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     await shellC.evaluate(`window.wa.trRoles(${JSON.stringify(localId)}, '', '')`);
     const fixed6 = await waitFor(async () => (await trOf('IN6')) === ANSWER[1], 10000);
     check(fixed6 >= 0, `默认服务商换成能用的后，第 6 条自动补上了译文（${fixed6} 毫秒）`);
+
+    // 3e. WhatsApp 换成深色主题：译文块换成 Radix 深色色阶（唯一的深色例外，只给气泡里的译文块），换回浅色后变回来，不重建
+    {
+      const RADIX = require('../src/colors/radix.js');
+      const nums = (c) => (String(c).match(/[\d.]+/g) || []).map(Number);
+      const hexNums = (h) => { const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i.exec(h); return [1, 2, 3].map((i) => parseInt(m[i], 16)).concat(m[4] ? [+(parseInt(m[4], 16) / 255).toFixed(3)] : []); };
+      const same = (got, want) => got.length >= 3 && want.every((v, i) => Math.abs((got[i] === undefined ? 1 : got[i]) - v) < (i === 3 ? 0.01 : 1.01));
+      const lum = (rgb) => { const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]); };
+      const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+      const look = (id, sel) => pageC.evaluate(`(() => { const n = document.querySelector('[data-id$="_${id}"] [data-wasw-tr]'); const t = n && ${sel}; return t ? { color: getComputedStyle(t).color, bg: getComputedStyle(t).backgroundColor, line: getComputedStyle(n).borderTopColor } : null; })()`);
+      // 一条报错的消息（红字 + 重试按钮）
+      failAll = true;
+      await pageC.evaluate(`(() => {
+        document.querySelector('[role="application"]').insertAdjacentHTML('beforeend', ${JSON.stringify(msgIn('IN7', '10:11', 'Und Nummer 3 in Weiß?'))});
+        const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
+        return 1;
+      })()`);
+      await waitFor(async () => /重试/.test((await trOf('IN7')) || ''), 15000);
+      failAll = false;
+      const lightText = await look('IN1', 'n');
+      check(!!lightText && same(nums(lightText.color), hexNums(RADIX.hex('slate', 11))), `浅色主题：译文字是 Radix slate 11（${lightText && lightText.color}）`);
+      await shot('inline-light');
+      await pageC.evaluate(`(() => { window.__n1 = document.querySelector('[data-id$="_IN1"] [data-wasw-tr]'); document.body.classList.add('dark'); return 1; })()`);
+      const dk = await waitFor(async () => { const l = await look('IN1', 'n'); return !!l && same(nums(l.color), hexNums(RADIX.hexDark('slate', 11))); }, 3000);
+      check(dk >= 0, `WhatsApp 换成深色后，译文字换成 Radix slate-dark 11（${dk} 毫秒）`);
+      const dText = await look('IN1', 'n');
+      const dBad = await look('IN7', "n.querySelector('[data-wasw-bad]')");
+      const dBtn = await look('IN7', "n.querySelector('button')");
+      const dLine = await look('IN7', 'n');
+      check(!!dBad && same(nums(dBad.color), hexNums(RADIX.hexDark('red', 11))), `深色：报错红字是 red-dark 11（${dBad && dBad.color}）`);
+      check(!!dBtn && same(nums(dBtn.bg), hexNums(RADIX.hexDark('slate-a', 4))), `深色：按钮底是 slate-dark-a 4（${dBtn && dBtn.bg}）`);
+      check(!!dBtn && same(nums(dBtn.color), hexNums(RADIX.hexDark('slate', 12))), `深色：按钮上的字是 slate-dark 12（${dBtn && dBtn.color}）`);
+      check(!!dLine && same(nums(dLine.line), hexNums(RADIX.hexDark('slate-a', 6))), `深色：分隔线是 slate-dark-a 6（${dLine && dLine.line}）`);
+      const bubble = hexNums('#202c33');
+      check(!!dText && contrast(nums(dText.color).slice(0, 3), bubble) >= 4.5, `深色：译文字和气泡底色的对比度 ${dText && contrast(nums(dText.color).slice(0, 3), bubble).toFixed(1)}（要 4.5 以上）`);
+      check(!!dBad && contrast(nums(dBad.color).slice(0, 3), bubble) >= 4.5, `深色：红字和气泡底色的对比度 ${dBad && contrast(nums(dBad.color).slice(0, 3), bubble).toFixed(1)}（要 4.5 以上）`);
+      await shot('inline-dark');
+      await pageC.evaluate("document.body.classList.remove('dark')");
+      const lt = await waitFor(async () => { const l = await look('IN1', 'n'); return !!l && same(nums(l.color), hexNums(RADIX.hex('slate', 11))); }, 3000);
+      check(lt >= 0, `WhatsApp 换回浅色后，译文字变回 slate 11（${lt} 毫秒）`);
+      const keep = await pageC.evaluate(`window.__n1 === document.querySelector('[data-id$="_IN1"] [data-wasw-tr]') && window.__n1.isConnected`);
+      check(keep, '换主题没有重建译文块（还是同一个节点）');
+      const lBad = await look('IN7', "n.querySelector('[data-wasw-bad]')");
+      check(!!lBad && same(nums(lBad.color), hexNums(RADIX.hex('red', 11))), `浅色：报错红字变回 red 11（${lBad && lBad.color}）`);
+    }
 
     // 只选中译文：不出「翻译」按钮（选中原文照常出）
     const { SELECTION_CODE } = require('../src/wa-page');

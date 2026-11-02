@@ -2,6 +2,7 @@
 // 1. AGENTS.md 里写到的 CSS 变量（`--x` 或 var(--x)）在 src/ 或团队后台的样式里都有定义，规则和代码不脱节；
 // 2. AGENTS.md 里写到的 npm run 命令在 package.json 里都有；
 // 3. 不做深色模式（shen 2026-10-28）：除了下面几个老文件，界面代码里不许出现跟系统深色走的写法。
+//    唯一例外（2026-11-02）：放进 WhatsApp 页面里的译文块跟 WhatsApp 的主题走，Radix 深色色阶（hexDark、.dark.）只许在 radix.js、translate-ipc.js 里取。
 const fs = require('fs');
 const path = require('path');
 
@@ -42,11 +43,22 @@ for (const m of doc.matchAll(/npm run ([\w:-]+)/g)) if (!scripts[m[1]]) bad.push
 
 // ---------- 3. 没有新的深色模式 ----------
 const DARK = [/prefers-color-scheme\s*:\s*dark/i, /color-scheme\s*:\s*(?:light\s+)?dark/i, /data-theme/i, /themeSource\s*=\s*['"`](?:dark|system)/, /shouldUseDarkColors/, /radix-dark\.css/];
-for (const f of files) {
-  fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
-    if (DARK.some((re) => re.test(line))) bad.push(`${rel(f)}:${i + 1} 不做深色模式：${line.trim().slice(0, 100)}`);
+// Radix 深色色阶只给 WhatsApp 页面里的译文块用：radix.js 定义（admin 里是它的生成副本），translate-ipc.js 的 inlineLook 取
+const DARK_OK = new Set(['src/colors/radix.js', 'server/public/admin/radix.js', 'src/translate-ipc.js']);
+const RADIX_DARK = [/\bhexDark\b/, /\.dark\b\s*[.\[]/];
+function darkProblems(name, text) {
+  const out = [];
+  text.split('\n').forEach((line, i) => {
+    if (DARK.some((re) => re.test(line))) out.push(`${name}:${i + 1} 不做深色模式：${line.trim().slice(0, 100)}`);
+    else if (!DARK_OK.has(name) && RADIX_DARK.some((re) => re.test(line))) out.push(`${name}:${i + 1} Radix 深色色阶只给 WhatsApp 页面里的译文块用（translate-ipc.js 的 inlineLook）：${line.trim().slice(0, 100)}`);
   });
+  return out;
 }
+for (const f of files) bad.push(...darkProblems(rel(f), fs.readFileSync(f, 'utf8')));
+// 故意违规的样例，确认抓得到
+const sample = ["const c = RADIX.hexDark('slate', 11);", 'const d = RADIX.dark.slate[0];', '@media (prefers-color-scheme: dark) { a { b: c } }'];
+for (const line of sample) if (!darkProblems('src/some-ui.js', line).length) bad.push(`深色检查漏掉了样例：${line}`);
+if (darkProblems('src/translate-ipc.js', sample[0]).length) bad.push('translate-ipc.js 取 hexDark 不该报错');
 
 if (bad.length) {
   console.error('AGENTS.md 检查没过：\n' + bad.map((b) => '  ' + b).join('\n'));

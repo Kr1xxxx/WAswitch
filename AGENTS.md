@@ -10,11 +10,12 @@
 
 - 不写 `@media (prefers-color-scheme: dark)`、`color-scheme: dark`、`data-theme`、`nativeTheme.themeSource = 'dark'`，不生成深色色阶，不加「深色模式」开关。
 - 设计稿、截图、harness 只做浅色一套。
+- **唯一例外**：放进 WhatsApp 页面里的译文块（`src/wa-page.js` 的 `TR_CSS`）跟着 WhatsApp 自己的主题。WhatsApp 是深色时，这一块用 `src/colors/radix.js` 里的 `dark`（Radix 深色色阶，只收这一块用到的 4 个），浅色时和以前一样。判断看原文的字色，不看软件自己的任何设置。软件自己的界面（侧栏、工作台、设置、悬浮窗、轻量号聊天页）仍然只有浅色。`dark` 和 `RADIX.hexDark` 只许 `src/translate-ipc.js` 的 `inlineLook` 取，`check:agents` 会查。
 
 ## 1. 颜色：只用 Radix UI Colors
 
 - 色值的唯一来源是 `src/colors/radix.js`（Radix UI Colors 3.0.0）。`npm run make:colors` 生成 `src/colors/radix.css`。
-- CSS 写变量，比如 `var(--slate-11)`、`var(--green-9)`、`var(--slate-a3)`；JS 写 `RADIX.hex('slate', 11)`、`RADIX.WHITE`、`RADIX.TRANSPARENT`。
+- CSS 写变量，比如 `var(--slate-11)`、`var(--green-9)`、`var(--slate-a3)`；JS 写 `RADIX.hex('slate', 11)`、`RADIX.WHITE`、`RADIX.TRANSPARENT`；`RADIX.hexDark` 见第 0 节的例外。
 - 界面代码里不许直接写颜色：不写 `#hex`、`rgb()`、`hsl()`、颜色名。
 - 按 Radix 的分阶用：1–2 页面底色，3–5 控件底色（3 常态、4 悬停、5 按下或选中），6–8 边框和分割线，9–10 实心色块，11–12 文字（11 次要，12 主要）。
 - 焦点环全软件一种：`outline: 2px solid var(--focus)`（`--focus` = blue 8）。
