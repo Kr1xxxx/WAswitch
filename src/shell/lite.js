@@ -4,6 +4,7 @@
 // 用到 shell.js 里的 h()、icon()（这两个文件共用全局作用域）。
 
 const litePages = new Map(); // 账号 id -> 页面
+const LITE_TR_HOLD_MS = 15000; // 用户选着字时，译文更新最多压这么久
 
 // 秒级时间戳 → 今天显示“14:05”，更早显示“10-21”
 function liteTime(ts) {
@@ -55,6 +56,13 @@ function makeLitePage(id) {
   let trs = new Map();
   let trKey = '';
   let lastView = null;
+  // 译文只换变了的那几条（不重建整列，免得用户选着的字没了）。painted：每条消息现在画着什么；
+  // clicked：点过「重试」「翻译」、按钮还灰着的消息编号，主进程下次来信时一定要换回能点的；
+  // trHold：用户选着消息里的字，译文更新先压着：压了多久（开始压的时间，0 = 没压）
+  const painted = new Map();
+  const clicked = new Set();
+  let trHold = 0;
+  let trMain = false; // 压着的这段时间里主进程来过信（点过的灰按钮要换回能点的）
 
   function rememberDraft() {
     if (openJid) drafts.set(openJid, { text: input.value });
@@ -83,21 +91,60 @@ function makeLitePage(id) {
   }
 
   // 一条消息下面的译文：done 译文；busy 翻译中；error 原因 + 重试；manual「翻译」按钮（点了和工作台里点一样）
-  function trLine(m) {
-    const e = !m.me && trs.get(String(m.id));
+  const trSig = (e) => (e ? [e.k, e.t, e.b].join('\u0001') : '');
+  function trLine(id, me) {
+    const e = !me && trs.get(String(id));
     if (!e) return null;
-    const btn = (label) => h('button', { class: 'lite-tr-btn', type: 'button', onclick: (ev) => { ev.currentTarget.disabled = true; window.wa.dockItem(e.h); } }, label);
+    const btn = (label) => h('button', {
+      class: 'lite-tr-btn', type: 'button',
+      onclick: (ev) => { ev.currentTarget.disabled = true; clicked.add(String(id)); window.wa.dockItem(e.h); },
+    }, label);
     if (e.k === 'done') return h('div', { class: 'lite-tr' }, e.t);
     if (e.k === 'busy') return h('div', { class: 'lite-tr' }, e.t);
     if (e.k === 'error') return h('div', { class: 'lite-tr' }, h('span', { class: 'bad' }, e.t), ' ', btn(e.b));
     return h('div', { class: 'lite-tr' }, btn(e.b));
   }
 
+  // 用户在消息里选着字：重画会把选区弄没（Ctrl+C 复制不到），这次先不画；选区没了（selectionchange）再补
+  function msgsSelected() {
+    const sel = document.getSelection();
+    return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && msgs.contains(sel.anchorNode) && msgs.contains(sel.focusNode);
+  }
+
+  // 只换变了的译文：消息没变时不重建整列，原文、选区、滚动位置都不动
+  function patchTrs(fromMain = false) {
+    if (!lastView || !openJid || lastView.jid !== openJid || conv.hidden) return;
+    if (fromMain) trMain = true;
+    if (msgsSelected()) {
+      if (!trHold) trHold = Date.now();
+      if (Date.now() - trHold < LITE_TR_HOLD_MS) return;
+    }
+    trHold = 0;
+    fromMain = trMain;
+    trMain = false;
+    const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+    for (const el of msgs.querySelectorAll(':scope > .lite-msg[data-id]')) {
+      const id = el.dataset.id;
+      const me = el.classList.contains('me');
+      const sig = me ? '' : trSig(trs.get(id));
+      if (sig === painted.get(id) && !(fromMain && clicked.has(id))) continue;
+      painted.set(id, sig);
+      const old = el.querySelector(':scope > .lite-tr');
+      const next = trLine(id, me);
+      if (old && next) old.replaceWith(next);
+      else if (old) old.remove();
+      else if (next) el.insertBefore(next, el.querySelector(':scope > .time'));
+    }
+    if (fromMain) clicked.clear();
+    if (nearBottom) msgs.scrollTop = msgs.scrollHeight;
+  }
+  const trFlush = () => { if (trHold && !msgsSelected()) patchTrs(); };
+
   function drawMessages(view) {
     lastView = view;
     const items = view.messages || [];
-    const key = `${view.jid}:${items.length}:${items.length ? items[items.length - 1].id : ''}:${trKey}`;
-    if (key === lastMsgKey) return;
+    const key = `${view.jid}:${items.length}:${items.length ? items[items.length - 1].id : ''}`;
+    if (key === lastMsgKey) { patchTrs(); return; } // 消息没变，最多是译文变了
     const switched = !lastMsgKey.startsWith(`${view.jid}:`);
     lastMsgKey = key;
     const nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
@@ -105,11 +152,18 @@ function makeLitePage(id) {
     const bare = /@s\.whatsapp\.net$/.test(view.jid || '') ? `+${view.jid.split('@')[0]}` : '';
     const name = view.title || (chats.find((c) => c.jid === view.jid) || {}).name || bare;
     title.replaceChildren(h('b', { title: name }, name));
-    msgs.replaceChildren(...items.map((m) => h('div', { class: `lite-msg${m.me ? ' me' : ''}` },
-      m.from ? h('small', { class: 'from' }, m.from) : null,
-      h('span', { class: 'text' }, linkify(m.text)),
-      trLine(m),
-      h('small', { class: 'time' }, liteTime(m.ts)))));
+    painted.clear();
+    clicked.clear();
+    trHold = 0;
+    trMain = false;
+    msgs.replaceChildren(...items.map((m) => {
+      painted.set(String(m.id), m.me ? '' : trSig(trs.get(String(m.id))));
+      return h('div', { class: `lite-msg${m.me ? ' me' : ''}`, 'data-id': String(m.id) },
+        m.from ? h('small', { class: 'from' }, m.from) : null,
+        h('span', { class: 'text' }, linkify(m.text)),
+        trLine(m.id, m.me),
+        h('small', { class: 'time' }, liteTime(m.ts)));
+    }));
     if (!items.length) msgs.append(h('div', { class: 'lite-none' }, '这个对话在本机还没有消息记录。'));
     if (switched || nearBottom) msgs.scrollTop = msgs.scrollHeight;
   }
@@ -225,13 +279,14 @@ function makeLitePage(id) {
   function setTr(list) {
     const next = new Map((Array.isArray(list) ? list : []).filter((e) => e && typeof e.id === 'string').map((e) => [e.id, e]));
     const key = [...next.values()].map((e) => [e.id, e.k, e.t, e.b].join('\u0001')).join('\u0002');
-    if (key === trKey) return;
+    // 内容没变也要往下走一次的情况：点过的按钮还灰着（马上失败的重试，译文和之前一样），要换回能点的
+    if (key === trKey && !clicked.size) return;
     trs = next;
     trKey = key;
-    if (lastView && openJid && lastView.jid === openJid && !conv.hidden) drawMessages(lastView);
+    patchTrs(true);
   }
 
-  return { el, update, fill, setTr };
+  return { el, update, fill, setTr, trFlush };
 }
 
 window.wa.onLiteTr(({ accountId, list } = {}) => {
@@ -317,6 +372,7 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('resize', () => { if (liteSel) liteSelHide(); });
 if (window.wa.onState) window.wa.onState((st) => { if (liteSel && (!st || st.locked || st.page !== 'account' || st.activeId !== liteSel.id)) liteSelHide(); });
 document.addEventListener('selectionchange', () => {
+  for (const p of litePages.values()) p.trFlush(); // 选区没了，补上压着没画的译文
   if (!liteSel || liteSel.mode !== 'button') return;
   const sel = document.getSelection();
   if (!sel || sel.isCollapsed) liteSelHide();
