@@ -1386,65 +1386,117 @@ function renderPanel(force = false) {
 }
 
 // ---------- 登录页 ----------
-// 后台要求必须登录时整个软件只有这一页；“提示登录”时多一个“稍后”
-const loginForm = { busy: false, error: '', offline: false };
+// 后台要求必须登录时整个软件只有这一页；“提示登录”时多一个“稍后”。
+// 用工作邮箱收验证码登录：邮箱 + 「获取验证码」，下面验证码 + 登录
+const loginForm = { busy: false, sending: false, error: '', offline: false, retry: '', sentTo: '', until: 0 };
 let loginEl = null;
+let loginTick = null;
 function loginPage() {
   if (!loginEl) {
-    const user = h('input', { type: 'text', autocomplete: 'username', spellcheck: 'false', maxlength: '64', 'aria-label': '账号' });
-    const pass = h('input', { type: 'password', autocomplete: 'current-password', maxlength: '256', 'aria-label': '密码' });
+    const email = h('input', { type: 'email', autocomplete: 'email', spellcheck: 'false', maxlength: '254', 'aria-label': '邮箱' });
+    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', 'aria-label': '验证码' });
     const err = h('div', { class: 'note bad login-err', role: 'alert', hidden: true });
-    const submit = async () => {
-      if (loginForm.busy) return;
-      if (!user.value.trim() || !pass.value) { (user.value.trim() ? pass : user).focus(); return; }
-      loginForm.busy = true; loginForm.error = ''; paint();
+    const sent = h('span', { class: 'hint login-sent', hidden: true });
+    const getCode = h('button', { type: 'button', class: 'btn login-code' });
+    const go = h('button', { type: 'button', class: 'btn primary' }, '登录');
+    const later = h('button', { type: 'button', class: 'btn', onclick: () => window.wa.teamLater() }, '稍后');
+    const fail = (r, again) => {
+      loginForm.error = (r && r.error) || '连不上团队后台';
+      loginForm.offline = !!(r && r.offline);
+      loginForm.retry = loginForm.offline ? again : '';
+    };
+    const requestCode = async () => {
+      if (loginForm.sending || loginForm.busy || Date.now() < loginForm.until) return;
+      if (!email.value.trim()) { email.focus(); return; }
+      loginForm.sending = true; loginForm.error = ''; paint();
       let r;
-      try { r = await window.wa.teamLogin({ login: user.value, password: pass.value }); } catch { r = { error: '连不上团队后台', offline: true }; }
-      loginForm.busy = false;
-      if (r && r.ok) { pass.value = ''; loginForm.error = ''; loginForm.offline = false; } else {
-        loginForm.error = (r && r.error) || '连不上团队后台';
-        loginForm.offline = !!(r && r.offline);
-        if (!loginForm.offline) { pass.select(); pass.focus(); }
+      try { r = await window.wa.teamCode({ email: email.value }); } catch { r = null; }
+      loginForm.sending = false;
+      if (r && r.ok) {
+        loginForm.sentTo = email.value.trim();
+        loginForm.until = Date.now() + r.resendAfterS * 1000;
+        code.value = '';
+        code.focus();
+      } else {
+        fail(r, 'code');
+        if (r && r.retryAfterS) loginForm.until = Date.now() + r.retryAfterS * 1000;
       }
       paint();
     };
-    const onEnter = (e) => {
+    const submit = async () => {
+      if (loginForm.busy) return;
+      if (!email.value.trim()) { email.focus(); return; }
+      if (!/^\d{6}$/.test(code.value)) { code.focus(); return; }
+      loginForm.busy = true; loginForm.error = ''; paint();
+      let r;
+      try { r = await window.wa.teamLogin({ email: email.value, code: code.value }); } catch { r = null; }
+      loginForm.busy = false;
+      if (r && r.ok) { code.value = ''; loginForm.error = ''; loginForm.sentTo = ''; loginForm.until = 0; } else {
+        fail(r, 'login');
+        // 码不对：清空，焦点留在验证码框
+        if (r && r.badCode) { code.value = ''; code.focus(); }
+      }
+      paint();
+    };
+    // 只收数字；填满 6 位自动登录
+    code.addEventListener('input', () => {
+      const digits = code.value.replace(/\D/g, '').slice(0, 6);
+      if (digits !== code.value) code.value = digits;
+      if (digits.length === 6) submit();
+    });
+    email.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
       e.preventDefault();
-      if (e.target === user && !pass.value) pass.focus(); else submit();
-    };
-    user.addEventListener('keydown', onEnter);
-    pass.addEventListener('keydown', onEnter);
-    // 7 天连不上后台而锁住的：“重试”先同步一次（令牌还有效就直接解锁），否则就是再登录一次
+      requestCode();
+    });
+    code.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      submit();
+    });
+    getCode.addEventListener('click', requestCode);
+    go.addEventListener('click', submit);
+    // 「重试」：7 天连不上而锁住的先同步一次（令牌还有效就直接解锁）；其它就是把刚才没成功的那一步再做一次
     const retry = h('button', { type: 'button', class: 'link-btn', onclick: async () => {
-      if ((s.team || {}).login === 'ok') {
+      if (!loginForm.error && (s.team || {}).login === 'ok') {
         loginForm.busy = true; paint();
         try { await window.wa.teamRetry(); } finally { loginForm.busy = false; paint(); }
-      } else submit();
+      } else if (loginForm.retry === 'code') requestCode();
+      else submit();
     } }, '重试');
-    const go = h('button', { type: 'button', class: 'btn primary' }, '登录');
-    go.addEventListener('click', submit);
-    const later = h('button', { type: 'button', class: 'btn', onclick: () => window.wa.teamLater() }, '稍后');
     loginEl = h('div', { class: 'center login-page' }, h('div', { class: 'login-card' },
       h('h1', null, '登录 WAswitch'),
-      h('label', { class: 'field' }, '账号', user),
-      h('label', { class: 'field' }, '密码', pass),
+      h('label', { class: 'field' }, '邮箱', h('div', { class: 'login-row' }, email, getCode)),
+      sent,
+      h('label', { class: 'field' }, '验证码', code),
       err,
       h('div', { class: 'btns' }, go, later)));
     const paint = () => {
       const st = s.team || {};
-      // 不是自己点登录出的错：被停用、7 天连不上，进来就说明为什么
+      if (!email.value && st.email && document.activeElement !== email) email.value = st.email;
+      // 不是自己点出的错：被停用、7 天连不上，进来就说明为什么
       const why = loginForm.error || (st.login === 'disabled' ? '这台电脑已被管理员停用' : st.locked && st.login === 'ok' ? '连不上团队后台' : '');
       const offline = loginForm.error ? loginForm.offline : !!why && st.login === 'ok';
       err.hidden = !why;
       err.replaceChildren(h('span', null, why), offline ? retry : '');
+      const left = Math.ceil((loginForm.until - Date.now()) / 1000);
+      getCode.textContent = loginForm.sending ? '发送中' : left > 0 ? `${left} 秒后重新获取` : '获取验证码';
+      getCode.disabled = loginForm.sending || loginForm.busy || left > 0;
+      sent.hidden = !loginForm.sentTo;
+      sent.textContent = loginForm.sentTo ? `已发到 ${loginForm.sentTo}` : '';
       go.disabled = loginForm.busy;
       go.textContent = loginForm.busy ? '登录中' : '登录';
-      retry.disabled = loginForm.busy;
+      retry.disabled = loginForm.busy || loginForm.sending;
       later.hidden = !!s.loginLocked || st.policy !== 'optional';
+      // 倒计时：每秒刷新按钮，到时停下
+      if (left > 0 && !loginTick) loginTick = setInterval(paint, 1000);
+      if (left <= 0 && loginTick) { clearInterval(loginTick); loginTick = null; }
     };
     loginEl.paint = paint;
-    loginEl.focusFirst = () => requestAnimationFrame(() => { if (!loginEl.contains(document.activeElement)) user.focus(); });
+    loginEl.focusFirst = () => requestAnimationFrame(() => {
+      if (loginEl.contains(document.activeElement)) return;
+      if (email.value) code.focus(); else email.focus();
+    });
   }
   loginEl.paint();
   if (shown !== 'login') loginEl.focusFirst();
@@ -2144,6 +2196,7 @@ function teamPage(t, accounts = []) {
   wrap.append(...kids(
     h('div', { class: 'kv' },
       h('span', null, '登录'), h('span', null, t.userName || '已登录'),
+      ...(t.email ? [h('span', null, '邮箱'), h('span', null, t.email)] : []),
       h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
       h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
       h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),

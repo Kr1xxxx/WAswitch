@@ -29,6 +29,7 @@ const TIMEOUT_MS = 15 * 1000;
 const MAX_EVENTS = 500;
 const MAX_BODY = 1024 * 1024;
 const UUID_RE = /^[0-9a-f-]{36}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LOOPBACK_RE = /^http:\/\/127\.0\.0\.1:\d{2,5}$/; // 只给自检用的本机假后台
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
@@ -103,7 +104,7 @@ class TeamSync {
   // ---------- 本地文件 ----------
   file() { return path.join(this.dir, FILE); }
   load() {
-    const empty = { server: this.server, policy: 'off', deviceId: '', token: '', userName: '', cursor: 0, allowPrivate: true, revoked: false, held: [], events: [], lastOkAt: 0, lastError: '', lastUpload: null };
+    const empty = { server: this.server, policy: 'off', deviceId: '', token: '', userName: '', email: '', cursor: 0, allowPrivate: true, revoked: false, held: [], events: [], lastOkAt: 0, lastError: '', lastUpload: null };
     try {
       const s = JSON.parse(fs.readFileSync(this.file(), 'utf8'));
       // 以前填过别的后台地址（旧版的登记表单）：那边的登录和坐席都不认
@@ -112,6 +113,7 @@ class TeamSync {
         ...empty,
         policy: POLICIES.includes(s.policy) ? s.policy : 'off',
         userName: typeof s.userName === 'string' ? s.userName.slice(0, 40) : '',
+        email: TeamSync.cleanEmail(s.email), // 上次登录用的邮箱（不是密钥）：登录页预先填好
         deviceId: UUID_RE.test(s.deviceId) ? s.deviceId : '',
         token: typeof s.token === 'string' ? s.token : '',
         cursor: Number.isSafeInteger(s.cursor) && s.cursor >= 0 ? s.cursor : 0,
@@ -166,6 +168,7 @@ class TeamSync {
       policy: this.state.policy,
       locked: this.locked(),
       userName: this.state.userName,
+      email: this.state.email,
       allowPrivate: this.state.allowPrivate,
       lastOkAt: this.state.lastOkAt,
       lastError: this.state.lastError,
@@ -243,15 +246,50 @@ class TeamSync {
     return { ok: true, policy: this.state.policy };
   }
 
-  // 员工用账号和密码登录。device_id 带上本机上次的设备：同一个人就沿用（坐席不丢），换人就新建
-  async login({ login, password } = {}) {
+  // 员工用工作邮箱登录：先要验证码（后台发到邮箱），再填码登录
+  static cleanEmail(raw) {
+    const e = String(raw || '').trim().toLowerCase();
+    return e.length <= 254 && EMAIL_RE.test(e) ? e : '';
+  }
+  // 429 带 retry_after_s 时告诉员工等几秒
+  static tooMany(d) {
+    const n = Number.isInteger(d && d.retry_after_s) && d.retry_after_s > 0 ? Math.min(d.retry_after_s, 3600) : 60;
+    return { error: `太频繁了，请 ${n} 秒后再试`, retryAfterS: n };
+  }
+
+  async requestCode({ email } = {}) {
     if (!canEncrypt(this.safe)) return { error: '这台电脑不能加密保存登录信息，没法登录' };
-    const name = String(login || '').trim();
-    if (!name || !password) return { error: '请填写账号和密码' };
+    const addr = TeamSync.cleanEmail(email);
+    if (!addr) return { error: '邮箱格式不对' };
+    let r;
+    try { r = await this.post('/api/device/code', { v: PROTOCOL, email: addr }); } catch (e) {
+      return { error: '连不上团队后台', offline: true, detail: errtext.rawOf(e) };
+    }
+    const d = r.data || {};
+    if (r.status === 200 && d.ok === true) {
+      const n = Number.isInteger(d.resend_after_s) && d.resend_after_s > 0 ? Math.min(d.resend_after_s, 600) : 60;
+      return { ok: true, resendAfterS: n };
+    }
+    if (r.status === 404 && d.unknown === true) return { error: '这个邮箱还没加入团队，请找管理员' };
+    if (r.status === 403 && d.disabled === true) return { error: '这个账号已停用' };
+    if (r.status === 429) return TeamSync.tooMany(d);
+    if (r.status === 503) return { error: '验证码发不出去，请稍后再试' };
+    if (r.status === 400) return { error: '邮箱格式不对' };
+    if (r.status === 426) return { error: '这个版本太旧，请更新 WAswitch' };
+    return { error: '连不上团队后台', offline: true, detail: `HTTP ${r.status}` };
+  }
+
+  // device_id 带上本机上次的设备：同一个人就沿用（坐席不丢），换人就新建
+  async login({ email, code } = {}) {
+    if (!canEncrypt(this.safe)) return { error: '这台电脑不能加密保存登录信息，没法登录' };
+    const addr = TeamSync.cleanEmail(email);
+    if (!addr) return { error: '邮箱格式不对' };
+    const pin = String(code || '').trim();
+    if (!/^\d{6}$/.test(pin)) return { error: '验证码不对或已过期', badCode: true };
     let r;
     try {
       r = await this.post('/api/device/login', {
-        v: PROTOCOL, login: name.slice(0, 64), password: String(password).slice(0, 256),
+        v: PROTOCOL, email: addr, code: pin,
         device: { name: { win: 'Windows', mac: 'Mac', linux: 'Linux' }[this.platform] || '', app_version: this.appVersion, platform: this.platform },
         ...(this.state.deviceId ? { device_id: this.state.deviceId } : {}),
       });
@@ -259,11 +297,11 @@ class TeamSync {
       return { error: '连不上团队后台', offline: true, detail: errtext.rawOf(e) };
     }
     const d = r.data || {};
-    if (r.status === 400) return { error: '账号或密码不对' };
+    if (r.status === 400) return { error: '验证码不对或已过期', badCode: true };
     if (r.status === 403 && d.disabled === true) return { error: '这个账号已停用' };
     // 本机上次的设备被管理员停用了：照样留着 device_id（不换新设备绕过停用），告诉员工找管理员
     if (r.status === 403 && d.revoked === true) return { error: '这台电脑已被管理员停用', disabled: true };
-    if (r.status === 429) return { error: '尝试太多次，请 10 分钟后再试' };
+    if (r.status === 429) return TeamSync.tooMany(d);
     if (r.status === 426) return { error: '这个版本太旧，请更新 WAswitch' };
     if (r.status !== 200 || typeof d.token !== 'string' || !d.token || !UUID_RE.test(d.device_id)) {
       return { error: '连不上团队后台', offline: true, detail: `HTTP ${r.status}` };
@@ -278,7 +316,7 @@ class TeamSync {
     this.state = {
       ...this.state, deviceId: d.device_id, token: this.safe.encryptString(d.token).toString('base64'),
       cursor: 0, revoked: false, held: [], events: sameDevice ? this.state.events : [], allowPrivate: d.allow_private !== false,
-      lastError: '', lastErrorDetail: '', lastOkAt: this.now(), userName: '',
+      lastError: '', lastErrorDetail: '', lastOkAt: this.now(), userName: '', email: addr,
     };
     this.setUserName(d.user);
     this.setPolicy(d.login);

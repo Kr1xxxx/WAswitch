@@ -245,15 +245,19 @@
   <section data-shot="login">
     <h2>登录</h2>
     <div class="line" style="align-items: flex-start; gap: 24px">
-      <div class="login-card">
+      <div class="login-card" style="width: 300px">
         <h1>登录 WAswitch</h1>
-        <label class="field">账号<input type="text" value="emma" aria-label="账号"></label>
-        <label class="field">密码<input type="password" value="correct-horse" aria-label="密码"></label>
+        <label class="field">邮箱<div class="login-row"><input type="email" value="emma@example.com" aria-label="邮箱"><button type="button" class="btn login-code">获取验证码</button></div></label>
+        <label class="field">验证码<input type="text" inputmode="numeric" value="" aria-label="验证码"></label>
         <div class="note bad login-err" role="alert"><span>连不上团队后台</span><button type="button" class="link-btn">重试</button></div>
         <div class="btns"><button type="button" class="btn primary">登录</button><button type="button" class="btn">稍后</button></div>
       </div>
-      <div class="login-card" style="width: 240px">
-        <div class="note bad login-err" role="alert"><span>账号或密码不对</span></div>
+      <!-- 发出验证码后：倒计时、已发到。宽度按右侧工作台 380px 减去边距 -->
+      <div class="login-card" style="width: 348px">
+        <label class="field">邮箱<div class="login-row"><input type="email" value="lucas.martin@example.com" aria-label="邮箱"><button type="button" class="btn login-code" disabled>58 秒后重新获取</button></div></label>
+        <span class="hint login-sent">已发到 lucas.martin@example.com</span>
+        <label class="field">验证码<input type="text" inputmode="numeric" value="2468" aria-label="验证码"></label>
+        <div class="note bad login-err" role="alert"><span>验证码不对或已过期</span></div>
         <div class="btns"><button type="button" class="btn primary" disabled>登录中</button></div>
       </div>
     </div>

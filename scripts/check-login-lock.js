@@ -1,9 +1,9 @@
 // 自检：团队后台要求必须登录时，软件锁成登录页。
-// 做法：起一个本机假后台（policy / login / logout / sync），用临时配置启动真的软件
+// 做法：起一个本机假后台（policy / code / login / logout / sync），用临时配置启动真的软件
 // （两个网页版账号，代理指向关着的端口，不联网），通过 CDP 读软件界面：
 //   1) 缓存的策略是 required、没登录：启动后只有登录页，一个账号页面都不建；没有“稍后”；软件更新照常（有更新状态）；
-//   2) 密码不对：只显示一行“账号或密码不对”，还是锁着；
-//   3) 登录成功：解锁，两个账号的页面建起来；设置 › 团队显示名字和“退出登录”，没有后台地址和登记码；
+//   2) 邮箱回车要验证码：按钮倒计时，显示“已发到 …”，焦点到验证码框；填错码自动提交，只显示一行“验证码不对或已过期”，码清空，还锁着；
+//   3) 填对 6 位自动登录成功：解锁，两个账号的页面建起来；设置 › 团队显示名字和“退出登录”，没有后台地址和登记码；
 //   4) 后台说这台电脑被停用（403 revoked）：账号页面全部关掉，回到登录页，说明“这台电脑已被管理员停用”；
 //   5) 策略改成 optional、重新启动：提示登录页有“稍后”，账号照常启动；点“稍后”回到账号页。
 // 900×600 下登录页文字不裁、不换行。
@@ -37,6 +37,7 @@ async function cdp(wsUrl) {
 // ---- 本机假后台 ----
 const DEVICE = '11111111-2222-4333-8444-555555555555';
 const TOKEN = 'T'.repeat(43);
+const CODE = '246810'; // 假后台“发到邮箱”的验证码
 const srv = { policy: 'required', revoked: false, hits: [] };
 const server = http.createServer((req, res) => {
   let body = '';
@@ -46,9 +47,14 @@ const server = http.createServer((req, res) => {
     const json = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
     const authed = req.headers.authorization === `Bearer ${TOKEN}`;
     if (req.url === '/api/device/policy' && req.method === 'GET') return json(200, { v: 1, login: srv.policy });
+    if (req.url === '/api/device/code' && req.method === 'POST') {
+      const b = JSON.parse(body || '{}');
+      if (b.email !== 'emma@example.com') return json(404, { unknown: true });
+      return json(200, { ok: true, resend_after_s: 60 });
+    }
     if (req.url === '/api/device/login' && req.method === 'POST') {
       const b = JSON.parse(body || '{}');
-      if (b.login !== 'emma' || b.password !== 'correct-horse-1') return json(400, { error: '账号或密码不对' });
+      if (b.email !== 'emma@example.com' || b.code !== CODE) return json(400, { error: '验证码不对或已过期' });
       return json(200, { device_id: DEVICE, token: TOKEN, user: { name: 'Emma Schulz' }, allow_private: true, login: srv.policy });
     }
     if (!authed) return json(401, { error: '设备令牌无效' });
@@ -97,14 +103,27 @@ async function launch(profile, teamServer) {
   let failures = 0;
   const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
   const children = [];
-  const state = (shell) => shell.evaluate('JSON.stringify({ page: s && s.page, loginLocked: s && s.loginLocked, accounts: s ? s.accounts.length : -1, update: !!(s && s.update), team: s && s.team && { login: s.team.login, policy: s.team.policy, userName: s.team.userName } })').then(JSON.parse);
+  // shell.js 还没跑完时 s 不存在：返回空对象，waitFor 接着等
+  const state = (shell) => shell.evaluate('JSON.stringify({ page: s && s.page, loginLocked: s && s.loginLocked, accounts: s ? s.accounts.length : -1, update: !!(s && s.update), team: s && s.team && { login: s.team.login, policy: s.team.policy, userName: s.team.userName } })').then(JSON.parse, () => ({}));
   const waitFor = async (fn, ms = 15000) => { for (let t = 0; t < ms; t += 250) { if (await fn()) return true; await sleep(250); } return false; };
-  const typeLogin = (shell, user, pass) => shell.evaluate(`(() => {
-    const [u, p] = document.querySelectorAll('.login-card input');
-    const set = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
-    set(u, ${JSON.stringify(user)}); set(p, ${JSON.stringify(pass)});
-    [...document.querySelectorAll('.login-card button')].find((b) => b.textContent === '登录').click();
+  // 在邮箱框里填好并按回车（要验证码）
+  const askCode = (shell, email) => shell.evaluate(`(() => {
+    const el = document.querySelector('.login-card input[type=email]');
+    el.focus(); el.value = ${JSON.stringify(email)}; el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     return true;
+  })()`);
+  // 在验证码框里填 6 位（填满自动登录）
+  const typeCode = (shell, code) => shell.evaluate(`(() => {
+    const el = document.querySelector('.login-card input[inputmode=numeric]');
+    el.value = ${JSON.stringify(code)}; el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  const codeUi = (shell) => shell.evaluate(`(() => {
+    const card = document.querySelector('.login-card');
+    const sent = card.querySelector('.login-sent');
+    const code = card.querySelector('input[inputmode=numeric]');
+    return { btn: card.querySelector('.login-code').textContent, sent: sent.hidden ? '' : sent.textContent, codeFocused: document.activeElement === code, code: code.value };
   })()`);
   const errText = (shell) => shell.evaluate(`(() => { const e = document.querySelector('.login-err'); return e && !e.hidden ? e.textContent : ''; })()`);
   try {
@@ -128,10 +147,15 @@ async function launch(profile, teamServer) {
       return { title: h1.textContent, oneLine: h1.getClientRects().length === 1 && h1.offsetHeight < 40, btns, clipped, side: document.getElementById('side').textContent, w: innerWidth, h: innerHeight };
     })()`);
     check(ui.title === '登录 WAswitch' && ui.oneLine, `标题「登录 WAswitch」一行显示（${JSON.stringify(ui)}）`);
-    check(ui.btns.join('|') === '登录', '必须登录时没有“稍后”');
+    check(ui.btns.join('|') === '获取验证码|登录', `必须登录时没有“稍后”（${ui.btns.join('|')}）`);
     check(ui.clipped.length === 0, '登录页文字没被裁');
     check(!/Sales/.test(ui.side), '侧栏里没有账号');
-    // 窗口最小 900×600：把软件界面按这个大小排版再量一次
+    // 2) 邮箱回车要验证码
+    await askCode(shell, 'emma@example.com');
+    check(await waitFor(async () => (await codeUi(shell)).sent === '已发到 emma@example.com', 5000), '显示“已发到 emma@example.com”');
+    let cu = await codeUi(shell);
+    check(/^\d+ 秒后重新获取$/.test(cu.btn) && cu.codeFocused, `按钮倒计时，焦点在验证码框（${JSON.stringify(cu)}）`);
+    // 窗口最小 900×600：把软件界面按这个大小排版再量一次（倒计时状态）
     await shell.send('Emulation.setDeviceMetricsOverride', { width: 900, height: 600, deviceScaleFactor: 1, mobile: false });
     await sleep(300);
     const small = await shell.evaluate(`(() => {
@@ -148,13 +172,15 @@ async function launch(profile, teamServer) {
     }
     await shell.send('Emulation.clearDeviceMetricsOverride');
 
-    // 2) 密码不对
-    await typeLogin(shell, 'emma', 'wrong');
-    check(await waitFor(async () => (await errText(shell)) === '账号或密码不对', 5000), `密码不对只显示一行（${await errText(shell)}）`);
-    check((await state(shell)).loginLocked === true, '密码不对还锁着');
+    // 填错码：填满 6 位自动提交
+    await typeCode(shell, '135799');
+    check(await waitFor(async () => (await errText(shell)) === '验证码不对或已过期', 5000), `码不对只显示一行（${await errText(shell)}）`);
+    cu = await codeUi(shell);
+    check(cu.code === '' && cu.codeFocused, `码清空，焦点还在验证码框（${JSON.stringify(cu)}）`);
+    check((await state(shell)).loginLocked === true, '码不对还锁着');
 
-    // 3) 登录成功
-    await typeLogin(shell, 'emma', 'correct-horse-1');
+    // 3) 填对码自动登录
+    await typeCode(shell, CODE);
     check(await waitFor(async () => (await state(shell)).loginLocked === false), '登录成功后解锁');
     st = await state(shell);
     check(st.accounts === 2 && st.page === 'account', `两个账号回来了（${JSON.stringify(st)}）`);

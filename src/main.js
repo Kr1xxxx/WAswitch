@@ -1266,6 +1266,8 @@ function checkOffline() {
 }
 
 function pushState() {
+  // 锁没锁变了（比如 7 天宽限刚到）：马上停号或启动，不等定时器
+  if (team && loginLocked() !== loginWasLocked) setImmediate(checkLoginLock);
   if (loginLocked()) page = 'login';
   else if (page === 'login' && !loginPageWanted()) page = visibleAccounts().length ? 'account' : 'welcome';
   team?.noteChange();
@@ -2732,7 +2734,8 @@ function setupTeam() {
       statusOf: (acc) => teamStatusOf(acc),
       deviceInfo: () => ({ mem_mb: Math.round(memoryManager.totalMB() || 0), low_mem: settings.lowMemoryMode === true }),
       park: (acc) => parkAccount(acc),
-      unpark: (acc) => { unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
+      // 刚解锁（登录成功、恢复）：交给 checkLoginLock 按 2.5 秒错开启动，不在这里一起启动
+      unpark: (acc) => { if (loginWasLocked) return; unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
       createSeat: (seat) => createTeamSeat(seat),
       refresh: () => {
         // 第一次问到后台是“提示登录”：用户在账号页或欢迎页时换成登录页
@@ -2744,7 +2747,7 @@ function setupTeam() {
   });
   loginWasLocked = loginLocked();
   // 必须登录时 7 天宽限是按时间算的：没有任何事件也要定时看一下
-  setInterval(checkLoginLock, 10 * 60 * 1000).unref?.();
+  setInterval(checkLoginLock, 60 * 1000).unref?.();
   crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
   crmTimer = setInterval(() => {
     crmQueue.sweep();
@@ -3165,9 +3168,10 @@ onShell('reload', (id) => {
 });
 onShell('retry', (id) => { if (findAcc(id)) retryNow(id); });
 // 团队模式（设置 › 团队）
-// 登录页和设置 › 团队：登录、退出登录、“稍后”（提示登录时这次不再提示）
-handleShell('team:login', async ({ login, password } = {}) => {
-  const r = await team.login({ login: typeof login === 'string' ? login : '', password: typeof password === 'string' ? password : '' });
+// 登录页和设置 › 团队：要验证码、登录、退出登录、“稍后”（提示登录时这次不再提示）
+handleShell('team:code', async ({ email } = {}) => team.requestCode({ email: typeof email === 'string' ? email : '' }));
+handleShell('team:login', async ({ email, code } = {}) => {
+  const r = await team.login({ email: typeof email === 'string' ? email : '', code: typeof code === 'string' ? code : '' });
   if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
   return r;
 });

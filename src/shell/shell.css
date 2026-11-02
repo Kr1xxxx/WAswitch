@@ -180,6 +180,11 @@ button.chip { border: 0; font: inherit; font-size: var(--fs-s); cursor: pointer;
 .login-card .btns .btn { flex: 1; min-width: 0; white-space: nowrap; }
 .login-err { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; }
 .login-err[hidden] { display: none; }
+.login-row { display: flex; gap: 8px; }
+.login-row input { flex: 1; min-width: 0; }
+.login-row .login-code { flex: none; height: 40px; padding: 0 14px; white-space: nowrap; font-weight: 400; }
+.login-sent { margin-top: -8px; }
+.login-sent[hidden] { display: none; }
 .login-err .link-btn { flex: none; white-space: nowrap; }
 /* 问题页底部折起来的详细信息：问题代码、日志文件夹 */
 .pdetails { font-size: var(--fs-s); color: var(--muted); }
