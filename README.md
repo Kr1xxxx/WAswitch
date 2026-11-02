@@ -4,6 +4,12 @@
 
 维护文档：[问题记录与回归检查](docs/ISSUES.md)（已发现问题、修复依据和防止复发的检查要求）。
 
+## 仓库
+
+源码在私有仓库 `Kr1xxxx/WAswitch-src`。公开的 [`Kr1xxxx/WAswitch`](https://github.com/Kr1xxxx/WAswitch) 只放安装包（Releases）和下载说明，永远不放源码。已装的软件从公开仓库检查更新、下载 MCP 文件，所以这个仓库名和 Releases 里的文件不能动。
+
+发版：给 `v*` 标签后，`.github/workflows/release.yml` 打包并用密钥 `RELEASES_TOKEN`（只能写 `Kr1xxxx/WAswitch` 的 Contents）把安装包和 `latest*.yml` 发到公开仓库，同时把 `build/public-repo/README.md` 和 `docs/clash.md` 同步过去（公开仓库里的 `README.md` 和 `docs/clash.md` 以这里为准，不要在那边改），最后不登录下载一遍确认更新文件能下。
+
 ## 原理
 
 基于 Electron。每个账号加载 `https://web.whatsapp.com`，并使用独立的 session 分区
