@@ -1473,6 +1473,14 @@ async function scrolledHistory() {
     await sleep(20);
     assert.strictEqual(fc.viewOf('H').items.find((x) => x.h === fc2h).tr, '译:frage 11');
     assert(!sent.slice(m).some((x) => x.text === 'frage 11'), '看过的不重翻');
+    // 往上翻时新来的客户消息先在屏幕上见过（还是「翻译」按钮）：回到最下面照常自动翻
+    const newer = msg(500, false, chat, 'frage neu');
+    fc.history('H', [newer]);
+    await sleep(20);
+    assert(!sent.some((x) => x.text === 'frage neu'), '只在屏幕上见过时不翻');
+    fc.ingest('H', { title: 'Emma', msgs: [...old.slice(0, 19), newer], bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert(sent.some((x) => x.text === 'frage neu'), '回到最下面照常自动翻');
     // 最多记 HIST_MAX 条
     const many = Array.from({ length: 200 }, (_, i) => msg(1000 + i, false, '911@c.us', `x ${i}`));
     for (let i = 0; i < many.length; i += 40) fc.history('H', many.slice(i, i + 40));

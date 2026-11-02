@@ -287,7 +287,15 @@ class FloatCore {
       const h = msgHash(accId, m.id);
       let had = st.items.get(h);
       // 往上翻时见过的旧消息（history）这次正常读到了：挪过来接着用，不重翻
-      if (!had && st.hist.has(h)) { had = st.hist.get(h); st.hist.delete(h); had.hist = false; st.items.set(h, had); }
+      if (!had && st.hist.has(h)) {
+        had = st.hist.get(h); st.hist.delete(h); had.hist = false; st.items.set(h, had);
+        // 还没翻的当成新读到的（往上翻时先在屏幕上见过的新消息，回到最下面要照常自动翻）
+        if (had.state === 'manual') {
+          if (!isVoice(had) && String(m.text).trim()) had.text = String(m.text);
+          fresh.push(had);
+          continue;
+        }
+      }
       if (had) {
         st.items.delete(h); st.items.set(h, had); // 又读到了：挪到最后，内存满了先删别的对话的
         // 翻好了的这条，页面上的文字这次和翻译时不一样（显示的格式变了）：按这次的文字也存一份，以后挤出内存、重启都认得
