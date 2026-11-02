@@ -124,6 +124,19 @@ function fromLite(view, jid) {
   return { ok: true, title: view.title || (listed && listed.name) || number, msgs, bottom: true };
 }
 
+// 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
+function inlineEntry(it) {
+  const voice = typeof it.voice === 'number' && !it.text;
+  if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
+  // skip（不翻）：语音转出来的是中文时，直接显示转出来的字（花了转写的钱，不能看不到）；别的不显示
+  if (it.state === 'skip') return typeof it.voice === 'number' && String(it.text || '').trim() ? { k: 'done', t: it.text } : null;
+  if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
+  if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
+  if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
+  const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
+  return { k: 'manual', b: label };
+}
+
 class FloatCore {
   // deps: { translate(text, modeId) -> Promise<result>, now?(), store?: TrStore }
   constructor(deps) {
@@ -970,4 +983,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
+module.exports = { FloatCore, inlineEntry, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };

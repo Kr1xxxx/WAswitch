@@ -58,16 +58,16 @@ function detectLang(text) {
   return best;
 }
 
-// 原文是不是中文（自动翻译用：翻成中文没意义，中文消息不翻）。汉字占字母的一半以上，并且没有假名、韩文
-// 比 detectLang 宽：一两个字（「好」「好的」）也算，中文夹几个英文词（产品名、型号）也算
+// 原文是不是中文（自动翻译用：翻成中文没意义，中文消息不翻）。和工作台回复框的 ReplyLang.isChinese 一个算法：
+// 汉字数不少于外文单词数就算（中文夹几个英文行业词、型号还是中文），链接和邮箱里的英文不算；再加：有假名、韩文的不算
 function isChinese(text) {
-  const t = String(text || '').slice(0, 2000);
-  let letters = 0;
-  for (const ch of t) if (/\p{L}/u.test(ch)) letters += 1;
-  if (!letters) return false;
+  const t = String(text || '').slice(0, 2000)
+    .replace(/(?:https?:\/\/|www\.)[^\s\u3400-\u4dbf\u4e00-\u9fff]+/gi, ' ')
+    .replace(/[^\s\u3400-\u4dbf\u4e00-\u9fff]+@[^\s\u3400-\u4dbf\u4e00-\u9fff]+\.[^\s\u3400-\u4dbf\u4e00-\u9fff]+/g, ' ');
   if (/[぀-ヿ가-힯]/.test(t)) return false;
-  const han = (t.match(/[一-鿿]/g) || []).length;
-  return han > 0 && han / letters >= 0.5;
+  const han = (t.match(/[\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
+  const words = (t.replace(/[\u3400-\u4dbf\u4e00-\u9fff]/g, ' ').match(/\p{L}+/gu) || []).length;
+  return han > 0 && han >= words;
 }
 
 const api = { detectLang, isChinese };
