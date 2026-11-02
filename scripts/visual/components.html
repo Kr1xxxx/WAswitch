@@ -242,5 +242,25 @@
       <div class="tc" role="dialog" aria-label="编辑译文"><div class="tc-field"><textarea aria-label="译文">自然黑色的假发还有货吗？</textarea></div><div class="tc-err"><span>智谱密钥不对</span><button class="tc-btn link" type="button">去填密钥</button></div><div class="tc-info"><span class="tc-tag">已纠错</span><span class="tc-row">纠错时间<b>10:02</b></span><span class="tc-row">用时<b>1.2 秒</b></span><span class="tc-row">模型<b>智谱 glm-4-flash</b></span></div><div class="tc-foot"><button class="tc-btn" type="button">纠错</button><button class="tc-btn primary" disabled type="button">保存</button></div></div>
     </div>
   </section>
+  <section data-shot="login">
+    <h2>登录</h2>
+    <div class="line" style="align-items: flex-start; gap: 24px">
+      <div class="login-card" style="width: 300px">
+        <h1>登录 WAswitch</h1>
+        <label class="field">邮箱<div class="login-row"><input type="email" value="emma@example.com" aria-label="邮箱"><button type="button" class="btn login-code">获取验证码</button></div></label>
+        <label class="field">验证码<input type="text" inputmode="numeric" value="" aria-label="验证码"></label>
+        <div class="note bad login-err" role="alert"><span>连不上团队后台</span><button type="button" class="link-btn">重试</button></div>
+        <div class="btns"><button type="button" class="btn primary">登录</button><button type="button" class="btn">稍后</button></div>
+      </div>
+      <!-- 发出验证码后：倒计时、已发到。宽度按右侧工作台 380px 减去边距 -->
+      <div class="login-card" style="width: 348px">
+        <label class="field">邮箱<div class="login-row"><input type="email" value="lucas.martin@example.com" aria-label="邮箱"><button type="button" class="btn login-code" disabled>58 秒后重新获取</button></div></label>
+        <span class="hint login-sent">已发到 lucas.martin@example.com</span>
+        <label class="field">验证码<input type="text" inputmode="numeric" value="2468" aria-label="验证码"></label>
+        <div class="note bad login-err" role="alert"><span>验证码不对或已过期</span></div>
+        <div class="btns"><button type="button" class="btn primary" disabled>登录中</button></div>
+      </div>
+    </div>
+  </section>
 </body>
 </html>

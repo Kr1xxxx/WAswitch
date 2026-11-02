@@ -22,6 +22,7 @@
     "check:view-race": "node scripts/check-view-race.js",
     "check:write-fail": "node scripts/check-write-fail.js",
     "check:panel-tab": "node scripts/check-panel-tab.js",
+    "check:login-lock": "node scripts/check-login-lock.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
