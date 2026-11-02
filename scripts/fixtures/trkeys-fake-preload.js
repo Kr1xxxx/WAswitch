@@ -9,7 +9,7 @@ const presets = [
 window.__cfg = { providers: [
   { id: 'z', preset: 'zhipu', name: '智谱', baseUrl: presets[1].baseUrl, model: 'glm-4-flash', hasKey: true, keyTail: 'ab12', thinking: 'disabled' },
   { id: 'd', preset: 'deepl', name: 'DeepL', baseUrl: presets[2].baseUrl, model: '', hasKey: false, keyTail: '', thinking: '' },
-], primaryId: 'z', fallbackId: 'd', fixId: 'z', presets, langs: ['英语', '德语', '中文'], deeplCap: 100000, canEncrypt: true, wigTerms: true, lashTerms: true, wigList: [], lashList: [],
+], primaryId: 'z', fallbackId: 'd', fixId: 'z', presets, langs: ['英语', '德语', '中文'], canEncrypt: true, wigTerms: true, lashTerms: true, wigList: [], lashList: [],
   network: { mode: 'system', proxyUrl: '' }, accountLang: {}, accountAuto: {}, dailyCap: 500, dailyCaps: [100, 500, 1000], floatInMode: '', rolePrompt: '' };
 const state = () => ({ config: JSON.parse(JSON.stringify(window.__cfg)), modes: [] });
 window.wa = new Proxy({}, { get: (_t, k) => {
