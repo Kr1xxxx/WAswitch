@@ -227,7 +227,7 @@ try {
     let requests = 0;
     const team = new TeamSync({ dir: tmp(), safeStorage: weak, hooks: {}, platform: 'linux', fetchImpl: async () => { requests++; throw Error('network'); } });
     if (process.platform === 'linux') {
-      assert((await team.enroll({ consent: true, server: 'https://team.example', code: '123' })).error.includes('钥匙环'));
+      assert((await team.login({ login: 'emma', password: 'correct-horse-1' })).error.includes('加密'));
       assert.equal(requests, 0);
       // 与应用使用同一检查函数的真实 proxy 模块。
       const weakProxy = { exports: {} };

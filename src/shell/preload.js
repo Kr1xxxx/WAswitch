@@ -115,7 +115,11 @@ contextBridge.exposeInMainWorld('wa', {
   cacheSize: () => ipcRenderer.invoke('cache:size'),
   clearCache: () => ipcRenderer.invoke('cache:clear'),
   memClean: () => ipcRenderer.invoke('mem:clean'),
-  teamEnroll: (data) => ipcRenderer.invoke('team:enroll', data),
+  teamLogin: (data) => ipcRenderer.invoke('team:login', data),
+  teamLogout: () => ipcRenderer.invoke('team:logout'),
+  teamLater: () => ipcRenderer.send('team:later'),
+  showLogin: () => ipcRenderer.send('team:show-login'),
+  teamRetry: () => ipcRenderer.invoke('team:retry'),
   teamJoin: (localIds) => ipcRenderer.invoke('team:join', { localIds }),
   teamSync: () => ipcRenderer.invoke('team:sync'),
 });

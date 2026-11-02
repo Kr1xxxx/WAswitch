@@ -225,8 +225,8 @@ async function runCheckNow() {
   checkRunning = true; render(true);
   try { checkResult = await window.wa.runCheck(); } finally { checkRunning = false; render(true); }
 }
-// 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
-const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', detail: '', showUpload: false };
+// 团队页：操作结果（状态推送会重画页面，值存在这里不丢）
+const teamForm = { result: '', detail: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
 let memClean = { busy: false, result: '' };
@@ -413,6 +413,12 @@ function renderSide() {
   const mac = s.platform === 'darwin';
   $side.replaceChildren();
   $side.append(h('div', { class: 'win-drag' }));
+  // 锁成登录页：侧栏只留名字和软件更新（更新不看登录）
+  if (s.loginLocked) {
+    $side.append(...kids(h('div', { class: 'head' }, h('span', { class: 'brand' }, 'WAswitch')), h('div', { class: 'grow' }), updateCard()));
+    document.body.classList.toggle('mac', mac);
+    return;
+  }
   if (s.page === 'settings') {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
@@ -488,7 +494,7 @@ const updateReady = () => !!(s.update && s.update.status === 'downloaded');
 // 设置侧栏分组：最上面是快捷设置（不带分组标题），常用设置在前，诊断和其他在后。
 // 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
 function settingsGroups() {
-  const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
+  const showTeam = (s.team && (s.team.joined || s.team.policy !== 'off')) || settingsTab === 'team';
   return [
     ['', [['quick', '快捷设置']]],
     ['分项设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
@@ -1379,6 +1385,72 @@ function renderPanel(force = false) {
   if (tabChanged || editChanged) [...$panel.children].slice(1).forEach((el) => fxPlay(el, 'fx-fade'));
 }
 
+// ---------- 登录页 ----------
+// 后台要求必须登录时整个软件只有这一页；“提示登录”时多一个“稍后”
+const loginForm = { busy: false, error: '', offline: false };
+let loginEl = null;
+function loginPage() {
+  if (!loginEl) {
+    const user = h('input', { type: 'text', autocomplete: 'username', spellcheck: 'false', maxlength: '64', 'aria-label': '账号' });
+    const pass = h('input', { type: 'password', autocomplete: 'current-password', maxlength: '256', 'aria-label': '密码' });
+    const err = h('div', { class: 'note bad login-err', role: 'alert', hidden: true });
+    const submit = async () => {
+      if (loginForm.busy) return;
+      if (!user.value.trim() || !pass.value) { (user.value.trim() ? pass : user).focus(); return; }
+      loginForm.busy = true; loginForm.error = ''; paint();
+      let r;
+      try { r = await window.wa.teamLogin({ login: user.value, password: pass.value }); } catch { r = { error: '连不上团队后台', offline: true }; }
+      loginForm.busy = false;
+      if (r && r.ok) { pass.value = ''; loginForm.error = ''; loginForm.offline = false; } else {
+        loginForm.error = (r && r.error) || '连不上团队后台';
+        loginForm.offline = !!(r && r.offline);
+        if (!loginForm.offline) { pass.select(); pass.focus(); }
+      }
+      paint();
+    };
+    const onEnter = (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (e.target === user && !pass.value) pass.focus(); else submit();
+    };
+    user.addEventListener('keydown', onEnter);
+    pass.addEventListener('keydown', onEnter);
+    // 7 天连不上后台而锁住的：“重试”先同步一次（令牌还有效就直接解锁），否则就是再登录一次
+    const retry = h('button', { type: 'button', class: 'link-btn', onclick: async () => {
+      if ((s.team || {}).login === 'ok') {
+        loginForm.busy = true; paint();
+        try { await window.wa.teamRetry(); } finally { loginForm.busy = false; paint(); }
+      } else submit();
+    } }, '重试');
+    const go = h('button', { type: 'button', class: 'btn primary' }, '登录');
+    go.addEventListener('click', submit);
+    const later = h('button', { type: 'button', class: 'btn', onclick: () => window.wa.teamLater() }, '稍后');
+    loginEl = h('div', { class: 'center login-page' }, h('div', { class: 'login-card' },
+      h('h1', null, '登录 WAswitch'),
+      h('label', { class: 'field' }, '账号', user),
+      h('label', { class: 'field' }, '密码', pass),
+      err,
+      h('div', { class: 'btns' }, go, later)));
+    const paint = () => {
+      const st = s.team || {};
+      // 不是自己点登录出的错：被停用、7 天连不上，进来就说明为什么
+      const why = loginForm.error || (st.login === 'disabled' ? '这台电脑已被管理员停用' : st.locked && st.login === 'ok' ? '连不上团队后台' : '');
+      const offline = loginForm.error ? loginForm.offline : !!why && st.login === 'ok';
+      err.hidden = !why;
+      err.replaceChildren(h('span', null, why), offline ? retry : '');
+      go.disabled = loginForm.busy;
+      go.textContent = loginForm.busy ? '登录中' : '登录';
+      retry.disabled = loginForm.busy;
+      later.hidden = !!s.loginLocked || st.policy !== 'optional';
+    };
+    loginEl.paint = paint;
+    loginEl.focusFirst = () => requestAnimationFrame(() => { if (!loginEl.contains(document.activeElement)) user.focus(); });
+  }
+  loginEl.paint();
+  if (shown !== 'login') loginEl.focusFirst();
+  return loginEl;
+}
+
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), text ? h('small', null, text) : null));
   return h('div', { class: 'center', style: { background: 'var(--white)' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
@@ -1978,7 +2050,7 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
-        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => { settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
+        ...(s.team && s.team.login === 'none' ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => window.wa.showLogin() }, '登录…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹'),
@@ -2056,73 +2128,52 @@ function teamPage(t, accounts = []) {
   const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
   const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: 'var(--fs-s)' } }, x))));
   const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result, teamForm.result.startsWith('✓') ? null : rawDetail(teamForm.detail)) : null;
-  wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '团队'),
-    h('p', { class: 'lead' }, '登记后，管理员可以给你分配账号、查看每个号的状态。')));
+  wrap.append(h('h1', null, '团队'));
+  // 退出登录能撤回（再登录一次就回来），直接退，不弹确认
+  const logout = h('button', { class: 'btn', onclick: async () => { teamForm.result = ''; await window.wa.teamLogout(); render(true); } }, '退出登录');
 
-  if (t.joined && !t.revoked) {
-    const ok = !t.offline && !t.lastError;
+  if (t.login !== 'ok') {
     wrap.append(...kids(
-      h('div', { class: 'kv' },
-        h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: 'var(--fs-s)', wordBreak: 'break-all' } }, t.server),
-        h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
-        h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
-        h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
-      ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
-      t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
-      h('div', { class: 'btns' },
-        morphBtn('teamSync', { idle: '立即同步', busy: '同步中', ok: '已同步', err: '失败' }, async () => {
-          teamForm.result = ''; render(true);
-          const r = await window.wa.teamSync();
-          teamForm.result = r && r.ok ? '' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
-          render(true);
-          return { ok: !!(r && r.ok) };
-        }),
-        h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
-      result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
-    if (t.privateAccounts.length && t.allowPrivate) {
-      wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
-        t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
-          avatarOf(a),
-          h('span', { class: 'meta' }, a.name),
-          h('button', { class: 'btn', onclick: async () => {
-            const r = await window.wa.teamJoin([a.id]);
-            teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功'; teamForm.detail = (r && r.detail) || '';
-            render(true);
-          } }, '加入团队')))));
-    }
-    wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
+      t.login === 'disabled' ? h('div', { class: 'note bad' }, '这台电脑已被管理员停用，团队号已暂停并隐藏（数据还在）。') : null,
+      !t.canEncrypt ? h('div', { class: 'note bad' }, '这台电脑不能加密保存登录信息，没法登录。') : null,
+      t.canEncrypt ? h('div', { class: 'btns' }, h('button', { class: 'btn primary', onclick: () => window.wa.showLogin() }, '登录'), t.login === 'disabled' ? logout : null) : null));
     return wrap;
   }
 
-  if (t.revoked) wrap.append(h('div', { class: 'note bad' }, '这台电脑已被管理员停用，团队号已暂停并隐藏（数据还在）。私人号不受影响。要恢复请找管理员。'));
-  if (!t.canEncrypt) {
-    wrap.append(h('div', { class: 'note bad' }, '这台电脑不支持加密保存，不能登记到团队。'));
-    return wrap;
-  }
-  if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
-  const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
-  const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
+  const ok = !t.offline && !t.lastError;
   wrap.append(...kids(
-    h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
-    h('label', { class: 'field' }, '登记码', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
-    h('label', { class: 'field' }, '电脑名字', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
-    t.privateAccounts.length ? h('div', { class: 'field' }, '加入团队的账号',
-      t.privateAccounts.map((a) => h('label', { class: 'check-row' },
-        h('input', { type: 'checkbox', checked: teamForm.picked.has(a.id), onchange: (e) => { if (e.target.checked) teamForm.picked.add(a.id); else teamForm.picked.delete(a.id); } }),
-        a.name))) : null,
-    h('div', { class: 'box' }, fieldList('登记后会上传', t.uploadFields), fieldList('不会上传', t.neverUpload),
-      h('label', { class: 'check-row' }, consent, '我看过上面的清单，同意上传这些内容')),
-    h('div', { class: 'btns' }, morphBtn('teamEnroll', { idle: '登记', busy: '登记中', err: '失败' }, async () => {
-      teamForm.busy = true; teamForm.result = ''; render(true);
-      const r = await window.wa.teamEnroll({ server: teamForm.server, code: teamForm.code, deviceName: teamForm.deviceName, localIds: [...teamForm.picked], consent: teamForm.consent });
-      teamForm.busy = false;
-      teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功'; teamForm.detail = (r && r.detail) || '';
-      if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
-      render(true);
-      return { ok: !!(r && r.ok) };
-    }, { class: 'btn primary', disabled: !teamForm.consent })),
-    result));
+    h('div', { class: 'kv' },
+      h('span', null, '登录'), h('span', null, t.userName || '已登录'),
+      h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
+      h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
+      h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
+    ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
+    t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
+    h('div', { class: 'btns' },
+      morphBtn('teamSync', { idle: '立即同步', busy: '同步中', ok: '已同步', err: '失败' }, async () => {
+        teamForm.result = ''; render(true);
+        const r = await window.wa.teamSync();
+        teamForm.result = r && r.ok ? '' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
+        render(true);
+        return { ok: !!(r && r.ok) };
+      }),
+      h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容'),
+      logout),
+    result,
+    teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
+  // 把本机的号加入团队：选号，上传清单在下面
+  if (t.privateAccounts.length && t.allowPrivate) {
+    wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
+      t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
+        avatarOf(a),
+        h('span', { class: 'meta' }, a.name),
+        h('button', { class: 'btn', onclick: async () => {
+          const r = await window.wa.teamJoin([a.id]);
+          teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功'; teamForm.detail = (r && r.detail) || '';
+          render(true);
+        } }, '加入团队')))));
+  }
+  wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
   return wrap;
 }
 
@@ -2219,8 +2270,9 @@ function renderLock() {
 }
 
 function render(forceContent = false) {
-  document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
-  document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
+  const narrowSide = s.collapsed && s.page !== 'settings' && !s.loginLocked;
+  document.body.style.setProperty('--side', narrowSide ? '64px' : '200px');
+  document.body.classList.toggle('collapsed', narrowSide);
   const acc = active();
   if (s.page !== 'editor') liveColor = null;
   document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(liveColor || s.editorColor) : 'var(--slate-3)';
@@ -2256,6 +2308,10 @@ function render(forceContent = false) {
     if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
+  } else if (s.page === 'login') {
+    // 同一个元素原地更新：重画时填了一半的账号密码不丢
+    const el = loginPage();
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (acc && !acc.problem && acc.mode === 'lite') {
     // 轻量模式聊天页：同一个元素反复更新，不重建
     const el = litePage(acc, s.lite);

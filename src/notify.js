@@ -419,6 +419,15 @@ class Notifier {
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });
+    if (this.hooks.minimalMenu && this.hooks.minimalMenu()) {
+      this.tray.setContextMenu(Menu.buildFromTemplate([
+        { label: '显示窗口', click: () => this.showWindow() },
+        ...(this.hooks.updateMenu ? this.hooks.updateMenu() : []), // 自动更新不看登录
+        { type: 'separator' },
+        { label: '退出 WAswitch', click: () => this.hooks.quit() },
+      ]));
+      return;
+    }
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示窗口', click: () => this.showWindow() },
       ...(this.hooks.updateMenu ? this.hooks.updateMenu() : []),

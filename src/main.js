@@ -582,7 +582,7 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | overview | translate | welcome
+let page = 'account'; // account | editor | settings | overview | translate | welcome | login
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
@@ -604,6 +604,11 @@ const isLite = (acc) => acc && acc.mode === 'lite';
 // 团队模式（在 app ready 之后创建）。被后台收回、电脑被停用、或后台不允许的私人号都“停着”：不运行、不显示，数据保留
 let team = null;
 const isParked = (acc) => !!(team && acc && team.isParked(acc));
+// 后台要求必须登录、而这台电脑没登录（或被停用、7 天连不上）：所有号停着，只显示登录页。自动更新不看这个
+const loginLocked = () => !!(team && team.locked());
+let loginWasLocked = false;
+let loginPrompted = false; // 后台是“提示登录”时，这次打开软件已经提示过（或点了“稍后”）
+let loginAsked = false; // 用户自己从设置里点了“登录”
 const visibleAccounts = () => accounts.filter((a) => !isParked(a));
 const isParkedId = (id) => accounts.some((a) => a.id === String(id) && isParked(a));
 
@@ -656,6 +661,7 @@ ipcMain.on('popup:act', (e, { uid, action } = {}) => {
 
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  minimalMenu: () => loginLocked(), // 锁成登录页时托盘菜单只留“显示窗口”和“退出”
   readChats: (acc) => readUnreadChats(acc),
   popup,
   openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
@@ -725,7 +731,12 @@ function accountStatus(id) {
   return pendingLoad.has(id) || view.webContents.isLoading() ? 'loading' : 'ready';
 }
 
-const mcpHooks = {
+// 锁成登录页时 MCP 的每个操作都拒绝（号都停着，也不该让 AI 读本机的客户资料和话术）
+const guardMcp = (hooks) => Object.fromEntries(Object.entries(hooks).map(([k, fn]) => [k, typeof fn !== 'function' ? fn : (...args) => {
+  if (loginLocked()) throw new Error('WAswitch 还没登录');
+  return fn(...args);
+}]));
+const mcpHooks = guardMcp({
   listAccounts: () => visibleAccounts().map((a) => ({
     id: a.id,
     name: a.name,
@@ -904,7 +915,7 @@ const mcpHooks = {
   translateModes: () => (modeStore ? modeStore.list() : []),
   // 和面板里点“翻译”走同一条队列（自动翻译正在跑时等它这一条），不带对话上下文
   translate: ({ text, mode, target, source }) => trIpc.userTranslate({ text, mode, target, source }),
-};
+});
 
 // 轻量模式的输入框在软件界面里：请界面填进去，界面回 'ok' | 'not_empty' | 'chat' | 'none'
 const liteFillWaits = new Map();
@@ -1255,6 +1266,8 @@ function checkOffline() {
 }
 
 function pushState() {
+  if (loginLocked()) page = 'login';
+  else if (page === 'login' && !loginPageWanted()) page = visibleAccounts().length ? 'account' : 'welcome';
   team?.noteChange();
   crmReconcile();
   trackNet();
@@ -1273,6 +1286,7 @@ function pushState() {
     mcp: mcpModule ? mcpModule.view() : null,
     collapsed: sideCollapsed(),
     team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
+    loginLocked: loginLocked(),
     locked,
     panelOpen: panelShown(),
     panelTab,
@@ -1816,6 +1830,8 @@ async function createView(acc, loadDelay = 0) {
   ses.setSpellCheckerEnabled(false);
   downloads.setup(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
+  // 等代理的这一会儿号被停了（锁成登录页、被收回）：不再建页面
+  if (isParked(acc)) return;
   // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Windows 可能会下载词典）
   proxyReady.set(acc.id, !applied.error);
   if (!applied.error) applySpellcheck(acc, ses);
@@ -2009,11 +2025,15 @@ function startLite(acc) {
   liteHost.start(acc.id, { proxy: url, key, os: process.platform, crm: crmOn(acc) ? crmQueue.enable(acc.id) : 0 });
 }
 
+// 正在建页面的号：登录解锁和团队“恢复”可能同时要启动同一个号，第二次直接跳过
+const viewStarting = new Set();
 function startAccount(acc, loadDelay = 0) {
   if (isParked(acc)) return Promise.resolve();
   if (acc.teamNeedsProxy) { problems.set(acc.id, { ...TEAM_PROXY_PROBLEM }); return Promise.resolve(); }
   if (isLite(acc)) { startLite(acc); return Promise.resolve(); }
-  return createView(acc, loadDelay);
+  if (viewStarting.has(acc.id)) return Promise.resolve();
+  viewStarting.add(acc.id);
+  return createView(acc, loadDelay).finally(() => viewStarting.delete(acc.id));
 }
 
 // 主进程看到的轻量模式状态 → 侧栏和卡片里的提示
@@ -2285,6 +2305,9 @@ function aiRequestForShell() {
 }
 
 function showPage(next) {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
   page = next === 'account' && !visibleAccounts().length ? 'welcome' : next;
   refresh();
 }
@@ -2292,6 +2315,9 @@ function showPage(next) {
 // prefill：新建账号时预填的名称和地区（MCP 的 add_account 用）
 let editorPrefill = null;
 function openEditor(id, prefill = null) {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
   const acc = accounts.find((a) => a.id === id);
   editorPrefill = acc ? null : prefill;
   editorId = acc ? acc.id : null;
@@ -2645,9 +2671,58 @@ async function crmReadWeb(id, switching) {
 // 每个对话读到过哪些消息（只在内存里）：读不出时间的旧消息不收、跳过的只算一次
 const crmWebReader = new crmWeb.WebReader();
 
+// 后台是“提示登录”、还没登录：这次打开软件提示一次登录页（可以点“稍后”）
+const loginPromptWanted = () => !!team && !loginPrompted && team.policy() === 'optional' && team.loginState() === 'none';
+const loginPageWanted = () => !!team && team.loginState() !== 'ok' && loginAsked;
+// 该提示就提示（每次打开软件最多一次）：之后点“稍后”或去别的页面都算看过了
+function promptLogin() {
+  if (!loginPromptWanted()) return false;
+  loginPrompted = true;
+  loginAsked = true;
+  return true;
+}
+
+// 锁没锁变了：锁上就把所有号停掉（轻量号先写盘，数据都不删），显示登录页；解开就照常启动全部账号
+let loginStarting = false;
+async function checkLoginLock() {
+  if (!team) return;
+  const now = loginLocked();
+  if (now === loginWasLocked) return;
+  loginWasLocked = now;
+  if (now) {
+    console.warn('团队后台要求登录：所有账号停下，显示登录页');
+    for (const acc of accounts) parkAccount(acc);
+    setAiRequest(null);
+    page = 'login';
+    refresh();
+    notifier.refresh();
+    return;
+  }
+  console.log('已登录：启动账号');
+  page = visibleAccounts().length ? 'account' : 'welcome';
+  activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
+  refresh();
+  notifier.refresh();
+  if (loginStarting) return;
+  loginStarting = true;
+  try {
+    const order = visibleAccounts().sort((a, b) => (b.id === activeId) - (a.id === activeId));
+    for (const [i, acc] of order.entries()) {
+      if (loginLocked()) break;
+      if (isLite(acc) ? liteStates.has(acc.id) : views.has(acc.id)) continue;
+      await startAccount(acc, i * 2500);
+      refresh();
+    }
+  } finally {
+    loginStarting = false;
+  }
+}
+
 function setupTeam() {
   team = new TeamSync({
     dir: app.getPath('userData'),
+    // 后台地址写死在 src/team（TEAM_SERVER）。只有从源码运行时，自检可以换成本机的假后台
+    ...(!app.isPackaged && process.env.WASWITCH_TEST_TEAM_SERVER ? { server: process.env.WASWITCH_TEST_TEAM_SERVER } : {}),
     safeStorage,
     appVersion: app.getVersion(),
     platform: process.platform,
@@ -2659,9 +2734,17 @@ function setupTeam() {
       park: (acc) => parkAccount(acc),
       unpark: (acc) => { unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
       createSeat: (seat) => createTeamSeat(seat),
-      refresh: () => refresh(),
+      refresh: () => {
+        // 第一次问到后台是“提示登录”：用户在账号页或欢迎页时换成登录页
+        if (!loginLocked() && ['account', 'welcome'].includes(page) && promptLogin()) page = 'login';
+        refresh();
+        checkLoginLock();
+      },
     },
   });
+  loginWasLocked = loginLocked();
+  // 必须登录时 7 天宽限是按时间算的：没有任何事件也要定时看一下
+  setInterval(checkLoginLock, 10 * 60 * 1000).unref?.();
   crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
   crmTimer = setInterval(() => {
     crmQueue.sweep();
@@ -2765,7 +2848,8 @@ app.whenReady().then(async () => {
   applyLoginItem();
   setupTeam();
   activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
-  page = visibleAccounts().length ? 'account' : 'welcome';
+  // 锁着（必须登录而没登录）：visibleAccounts() 是空的，下面一个号都不启动，只显示登录页
+  page = loginLocked() || promptLogin() ? 'login' : visibleAccounts().length ? 'account' : 'welcome';
   refresh();
   if (!shouldStartHidden()) win.show();
   if (dataStart.fallback) setTimeout(() => notifier.notifyApp('D 盘打不开', datadir.fallbackText(dataStart)), 5000);
@@ -3081,7 +3165,27 @@ onShell('reload', (id) => {
 });
 onShell('retry', (id) => { if (findAcc(id)) retryNow(id); });
 // 团队模式（设置 › 团队）
-handleShell('team:enroll', async ({ server, code, deviceName, localIds, consent } = {}) => team.enroll({ server, code, deviceName, localIds, consent }));
+// 登录页和设置 › 团队：登录、退出登录、“稍后”（提示登录时这次不再提示）
+handleShell('team:login', async ({ login, password } = {}) => {
+  const r = await team.login({ login: typeof login === 'string' ? login : '', password: typeof password === 'string' ? password : '' });
+  if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
+  return r;
+});
+handleShell('team:logout', async () => { const r = await team.logout(); checkLoginLock(); return r; });
+onShell('team:later', () => {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
+  refresh();
+});
+onShell('team:show-login', () => {
+  if (loginLocked() || team.loginState() === 'ok') return;
+  loginAsked = true;
+  page = 'login';
+  refresh();
+});
+// 登录页上“连不上团队后台”的“重试”：重新问一下后台（已登录的同步一次，没登录的问策略）
+handleShell('team:retry', async () => { const r = await team.syncNow(); checkLoginLock(); return r; });
 handleShell('team:join', async ({ localIds } = {}) => team.join(localIds));
 handleShell('team:sync', async () => team.syncNow());
 onShell('mute', ({ id, muted } = {}) => {

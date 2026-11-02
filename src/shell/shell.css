@@ -173,6 +173,14 @@ button.chip { border: 0; font: inherit; font-size: var(--fs-s); cursor: pointer;
 .panel h2 { margin: 0; font-size: var(--fs-xl); }
 .panel p { margin: 0; line-height: 1.65; color: var(--muted); }
 .btns { display: flex; gap: 10px; }
+/* 登录页：账号、密码、登录。窄卡片里也不换行 */
+.login-page { background: var(--white); }
+.login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 16px; }
+.login-card h1 { white-space: nowrap; }
+.login-card .btns .btn { flex: 1; min-width: 0; white-space: nowrap; }
+.login-err { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; }
+.login-err[hidden] { display: none; }
+.login-err .link-btn { flex: none; white-space: nowrap; }
 /* 问题页底部折起来的详细信息：问题代码、日志文件夹 */
 .pdetails { font-size: var(--fs-s); color: var(--muted); }
 .pdetails summary { cursor: pointer; padding: 2px 0; }
