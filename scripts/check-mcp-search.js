@@ -5,11 +5,14 @@
 // 运行：node scripts/check-mcp-search.js（npm run check:mcp 里也会跑）
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const { McpController } = require('../src/mcp/server');
 const { matcher } = require('../src/mcp/search');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -88,7 +91,7 @@ async function main() {
 
   // ---------- 接到 MCP 上 ----------
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-mcp-search-'));
-  const port = 40000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: false, port }));
   const hooks = fakeHooks();
   const st = hooks.state;

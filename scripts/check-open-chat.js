@@ -9,12 +9,15 @@
 // 运行：node scripts/check-open-chat.js（npm run check:mcp 会一起跑）
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const { McpController } = require('../src/mcp/server');
 const { createChatOpener, sendUrl, WEB_WAIT_MS } = require('../src/chat-open');
 const { normalizePhone, maskPhone } = require('../src/mcp/open-chat');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -226,7 +229,7 @@ async function checkTool() {
     openChat: async (args) => { st.opens.push(args); return st.answers.shift() || { result: 'opened' }; },
   };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-open-'));
-  fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: true, port: 39000 + Math.floor(Math.random() * 900) }));
+  fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: true, port: await freePort() }));
   const ctl = new McpController({ dataDir: dir, version: 'test', hooks });
   await ctl.init();
   const s0 = ctl.status();
