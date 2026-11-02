@@ -396,6 +396,17 @@ await test('同步到 CRM 没有开关：看得见的号一律随坐席下发 cr
   const upd = db.raw.prepare("SELECT detail FROM audit_log WHERE target = ? AND action = 'account.update' ORDER BY id DESC").get(acc1);
   assert.ok(!upd.detail.includes('crm_sync'));
 });
+await test('升级前就登记的电脑：迁移 0006 给看得见的号出新版本，旧游标也拿到 crm_sync；看不见的号不动', async () => {
+  const cur = (await sync(tokB, {})).data.cursor;
+  assert.equal((await sync(tokB, { cursor: cur })).data.seats.length, 0, '没改动时旧游标拿不到坐席');
+  const hidden = db.raw.prepare('SELECT device_id, account_id, version FROM device_seats WHERE visible = 0').all();
+  db.raw.exec(fs.readFileSync(path.join(here, '../migrations/0006_crm_all_numbers.sql'), 'utf8'));
+  const r = await sync(tokB, { cursor: cur });
+  assert.ok(r.data.seats.length >= 1);
+  assert.ok(r.data.seats.every((x) => x.visible === true && x.crm_sync === true));
+  assert.ok(r.data.cursor > cur);
+  for (const h of hidden) assert.equal(db.raw.prepare('SELECT version FROM device_seats WHERE device_id = ? AND account_id = ?').get(h.device_id, h.account_id).version, h.version, '看不见的坐席版本不变');
+});
 // ---- 同步到 CRM 第 2 步：上传、加密暂存、推给来财 ----
 const CRM_SECRET = 'test-laicrm-secret-0123456789abcdef';
 const laicrm = { calls: [], mode: 'ok', seen: new Set(),
@@ -496,7 +507,7 @@ await test('CRM 推送：长中文消息按字节拆成多批，每批 ≤256 KB
   const parts = chunkMessages({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '', email: '' } }, msgs);
   assert.ok(parts.length >= 4);
   assert.equal(parts.flat().length, 100);
-  for (const p of parts) assert.ok(Buffer.byteLength(JSON.stringify({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '' }, messages: p })) <= 256 * 1024);
+  for (const p of parts) assert.ok(Buffer.byteLength(JSON.stringify({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '', email: '' }, messages: p })) <= 256 * 1024);
 });
 await test('CRM 推送：员工没有邮箱时，推送里的邮箱是空字符串', async () => {
   resetRate();
