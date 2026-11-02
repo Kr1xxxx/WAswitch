@@ -9,6 +9,7 @@
 // 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
 const crypto = require('crypto');
 const { textKey, cleanVia, VIEW_MAX } = require('./trstore');
+const TrInfo = require('./shell/tr-info');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
@@ -607,7 +608,7 @@ class FloatCore {
   // 纠错建议：采用（替换译文）或不用
   suggestion(accId, h, take) {
     const st = this.accs.get(accId);
-    const item = st && st.items.get(h);
+    const item = st && this.itemOf(st, h);
     if (!item || !item.suggest) return false;
     if (take) { item.tr = item.suggest; item.edited = false; item.fixed = true; item.warn = []; item.via = item.suggestVia || item.via; this.save(accId, item); }
     item.suggest = '';
@@ -619,13 +620,27 @@ class FloatCore {
   // 用户手动改译文：保留，自动翻译不会再覆盖
   edit(accId, h, text) {
     const st = this.accs.get(accId);
-    const item = st && st.items.get(h);
+    const item = st && this.itemOf(st, h);
     const t = String(text || '').slice(0, 4000);
     if (!item || !t.trim() || item.state === 'queued' || item.state === 'running' || item.state === 'skip') return false;
     item.tr = t; item.state = 'done'; item.err = ''; item.warn = []; item.edited = true; item.suggest = ''; item.suggestVia = null;
     this.save(accId, item);
     this.onChange(accId);
     return true;
+  }
+
+  // 气泡译文的编辑小窗要的（见 translate-ipc.js 的 trEdit）：翻译栏里的或往上翻看到的都找，不带 data-id。
+  // rows：翻译时间、用时、模型（tr-info.js 算好，小窗只管画）。找不到返回 null
+  entry(accId, h) {
+    const st = this.accs.get(accId);
+    const item = st && typeof h === 'string' ? this.itemOf(st, h) : null;
+    if (!item) return null;
+    const state = (item.state === 'queued' && item.bg) || item.state === 'wait' ? 'manual' : item.state;
+    return {
+      h, state, orig: !!item.text, tr: item.tr || '', edited: !!item.edited, fixed: !!item.fixed, suggest: item.suggest || '',
+      err: item.state === 'error' ? item.err || '翻译失败' : '', errPid: item.state === 'error' ? item.errPid || '' : '',
+      rows: TrInfo.rows(cleanVia(item.via)),
+    };
   }
 
   // 译文和原文写到磁盘（手动改的、纠错采用的也存）

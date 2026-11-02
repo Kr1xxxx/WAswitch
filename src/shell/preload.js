@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('wa', {
   dockItem: (h, fix) => ipcRenderer.invoke('dock:item', { h, fix: fix === true }),
   dockSuggest: (accountId, h, take) => ipcRenderer.invoke('dock:suggest', { accountId, h, take: take === true }),
   dockEdit: (accountId, h, text) => ipcRenderer.invoke('dock:edit', { accountId, h, text }),
+  // 气泡译文的编辑小窗（轻量号聊天页）：这条现在的状态
+  trItem: (accountId, h) => ipcRenderer.invoke('tr:item', { accountId, h }),
   dockAuto: (on) => ipcRenderer.invoke('dock:auto', on === true),
   dockInMode: (id) => ipcRenderer.invoke('dock:inmode', id),
   dockLang: (accountId, title, lang) => ipcRenderer.invoke('dock:lang', { accountId, title, lang }),

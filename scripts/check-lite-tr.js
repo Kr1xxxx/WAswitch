@@ -93,6 +93,103 @@ app.whenReady().then(async () => {
     check((await trs())[4] === '请把目录发给我。', '15 秒到了，没有新来信也把压着的译文换上');
     check((await page('getSelection().toString()')).startsWith('Hallo!'), '到时间换译文时选区还在');
     await page('getSelection().removeAllRanges()');
+    // ---- 气泡译文的小编辑按钮（铅笔）和编辑小窗 ----
+    const pencils = () => page("[...document.querySelectorAll('.lite-msg')].map((m) => !!m.querySelector('.lite-tr .lite-tr-edit'))");
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list)} })`);
+    check(JSON.stringify(await pencils()) === JSON.stringify([true, false, false, false, false]), '只有「有译文」的消息有小铅笔（翻译中、失败、「翻译」按钮的没有）');
+    check(await page("getComputedStyle(document.querySelector('.lite-tr-edit')).visibility") === 'hidden', '鼠标不在消息上时铅笔不显示（位置留着）');
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
+    const H1 = '0000000000000001';
+    await page(`window.__entries = { ${JSON.stringify(H1)}: { h: ${JSON.stringify(H1)}, state: 'done', orig: true, tr: '你好！这款假发有 24 英寸的吗？', edited: false, fixed: false, suggest: '', err: '', errPid: '', rows: [['翻译时间', '10:02'], ['用时', '1.2 秒'], ['模型', '智谱 glm-4-flash']] } }; true`);
+    const card = () => page(`(() => { const w = document.querySelector('.sel-pop .tc'); if (!w || w.closest('.sel-pop').hidden) return null;
+      const ta = w.querySelector('textarea'); const tr = document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr').getBoundingClientRect(); const r = w.getBoundingClientRect();
+      return { text: ta.value, focus: document.activeElement === ta, below: r.top >= tr.bottom - 1, left: Math.abs(r.left - tr.left) < 2, info: w.querySelector('.tc-info').textContent, btns: [...w.querySelectorAll('.tc-foot button')].map((b) => b.textContent + (b.disabled ? '(灰)' : '')), expanded: document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').getAttribute('aria-expanded') }; })()`);
+    const tick = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    let c = await card();
+    check(!!c && c.text === '你好！这款假发有 24 英寸的吗？' && c.focus, '点铅笔弹出小窗，框里是译文，光标在框里');
+    check(!!c && c.below && c.left, '小窗在这条译文下面，左边对齐');
+    check(!!c && c.info.includes('翻译时间10:02') && c.info.includes('模型智谱 glm-4-flash'), `小窗里有翻译信息（${c && c.info}）`);
+    check(!!c && JSON.stringify(c.btns) === JSON.stringify(['纠错', '保存(灰)']) && c.expanded === 'true', `按钮是「纠错」「保存」，没改时保存是灰的，铅笔保持显示（${c && c.btns.join(' ')}）`);
+    // 小窗开着时译文块换了（别的消息的译文更新）：小窗不收
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4.map((e) => (e.id === 'M1' ? { ...e, t: e.t + ' ' } : e)))} })`);
+    await tick();
+    check(!!(await card()), '译文块换了，小窗不收');
+    // 改了没保存，点外面：收起，不弹确认；再打开改的字还在
+    await page("(() => { const ta = document.querySelector('.tc textarea'); ta.value = '你好！这款假发有 24 寸的吗？'; ta.dispatchEvent(new Event('input')); return true; })()");
+    check(JSON.stringify((await card()).btns) === JSON.stringify(['纠错', '保存']), '改了以后「保存」能点');
+    await page("document.querySelectorAll('.lite-msg .text')[2].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))");
+    check((await card()) === null, '点小窗外面收起');
+    await tick(700);
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    check((await card())?.text === '你好！这款假发有 24 寸的吗？', '改了没保存收起后，再打开改的字还在');
+    // 再点同一个铅笔：收起（按下时先收起，接着的点击不再打开）
+    await page("(() => { const b = document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit'); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })); b.click(); return true; })()");
+    await tick();
+    check((await card()) === null, '再点同一个铅笔收起，不重开');
+    await tick(700);
+    // 选着原文时打开、收起小窗：选区还在
+    await page(sel);
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    check(!!(await card()), '选着字时也能打开小窗');
+    check((await page('getSelection().toString()')).startsWith('Hallo!'), '选着字时打开小窗：选区还在（不抢焦点）');
+    await page("document.querySelector('.lite-msgs').dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }))");
+    check((await card()) === null && (await page('getSelection().toString()')).startsWith('Hallo!'), '收起小窗后选区还在');
+    await page('getSelection().removeAllRanges()');
+    await tick(700);
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    // 按 Enter 保存：交给主进程，收起
+    await page("(() => { const ta = document.querySelector('.tc textarea'); ta.focus(); ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return true; })()");
+    await tick();
+    const calls = await page('window.__calls');
+    check(JSON.stringify(calls[0]) === JSON.stringify(['edit', H1, '你好！这款假发有 24 寸的吗？']), '按 Enter 保存（dockEdit）');
+    check((await card()) === null, '保存后小窗收起');
+    // 输入法选字时的回车不算保存
+    await tick(700);
+    await page("window.__calls = []; document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    await page("(() => { const ta = document.querySelector('.tc textarea'); ta.value = 'x'; ta.dispatchEvent(new Event('input')); ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })); return true; })()");
+    await tick();
+    check((await page('window.__calls.length')) === 0 && !!(await card()), '输入法选字时的回车不保存');
+    // 纠错：框里改了先保存再纠错
+    await page("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '纠错').click()");
+    await tick();
+    check(JSON.stringify(await page('window.__calls')) === JSON.stringify([['edit', H1, 'x'], ['fix', H1]]), '改了再点纠错：先保存再纠错');
+    // 纠错中：按钮位置显示「纠错中…」，框只读
+    await page(`Object.assign(window.__entries[${JSON.stringify(H1)}], { state: 'running' }); window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
+    await tick();
+    check(await page("document.querySelector('.tc-foot').textContent.includes('纠错中…') && document.querySelector('.tc textarea').readOnly"), '纠错中：显示「纠错中…」，框只读');
+    // 改过的再纠错：出纠错建议，按钮换成「不用」「采用」；采用后收起
+    await page(`Object.assign(window.__entries[${JSON.stringify(H1)}], { state: 'done', suggest: '你好！这款假发有 24 英寸的款式吗？' }); window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
+    await tick();
+    c = await card();
+    check(!!c && JSON.stringify(c.btns) === JSON.stringify(['不用', '采用']) && (await page("document.querySelector('.tc-sg').textContent")).includes('24 英寸的款式'), '出纠错建议，按钮是「不用」「采用」');
+    if (process.env.SHOT_DIR) fs.writeFileSync(path.join(process.env.SHOT_DIR, 'lite-tr-edit.png'), (await wc.capturePage()).toPNG());
+    await page("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '采用').click()");
+    await tick();
+    check(JSON.stringify((await page('window.__calls')).slice(-1)[0]) === JSON.stringify(['take', H1, true]) && (await card()) === null, '点「采用」交给主进程，小窗收起');
+    // 纠错失败：红字 + 去填密钥
+    await tick(700);
+    await page(`Object.assign(window.__entries[${JSON.stringify(H1)}], { state: 'error', suggest: '', err: '智谱密钥不对', errPid: 'zp' }); true`);
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    check(await page("document.querySelector('.tc-err').textContent === '智谱密钥不对去填密钥'"), '纠错失败：小窗里红字和「去填密钥」');
+    // 滚动聊天：收起
+    await page("document.querySelector('.lite-msgs').dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }))");
+    check((await card()) === null, '滚动聊天收起小窗');
+    // 这条消息的译文没了（这条不在了）：小窗收起
+    await tick(700);
+    await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
+    await tick();
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4.filter((e) => e.id !== 'M1'))} })`);
+    await tick();
+    check((await card()) === null, '这条的译文没了，小窗收起');
+
+    await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
     await page("window.__liteTr({ accountId: 'other', list: [] })");
     check((await trs())[0] === '你好！这款假发有 24 英寸的吗？', '别的号的消息不影响这个号');
     await page("window.__liteTr({ accountId: '', list: [] })");
