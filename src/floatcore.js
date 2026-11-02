@@ -47,7 +47,14 @@ const JID = '[^_]+@(?:c\\.us|s\\.whatsapp\\.net|g\\.us|lid)';
 const REAL_ID = new RegExp(`^(true|false)_${JID}_([^_]+)(?:_|$)`);
 const SYNTH_ID = new RegExp(`^(true|false)_chat:[^_]*_(?:(${JID})_)?([^_]+)(?:_|$)`);
 const HASHED_ID = /^(true|false)_chat:[^_]*_h[0-9a-z]+\.\d+$/;
-const synth = (dataId) => { const s = String(dataId); return HASHED_ID.test(s) ? null : SYNTH_ID.exec(s); };
+// 页面编号要像真的消息编号（16 位以上十六进制，全局唯一）才拿来认消息；像每个对话自己的序号这种短编号，
+// 两个对话会撞上，照旧整条用（带着标题）
+const MSG_ID = /^[0-9A-Fa-f]{16,}$/;
+const synth = (dataId) => {
+  const s = String(dataId);
+  const x = HASHED_ID.test(s) ? null : SYNTH_ID.exec(s);
+  return x && MSG_ID.test(x[3]) ? x : null;
+};
 const chatOf = (dataId) => { const x = synth(dataId); return (x && x[2]) || String(dataId).split('_')[1] || ''; };
 // 认消息用的：方向 + 消息编号，不带对话编号、标题和群成员（这几段都可能变：@c.us 和 @lid 之间换、标题变）。
 const msgKey = (dataId) => {

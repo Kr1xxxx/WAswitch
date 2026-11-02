@@ -751,18 +751,23 @@ async function titleChange() {
   const idle = async (fc) => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(10); };
   const IN = [0, 2, 5, 8, 11, 14, 17, 19];
   const at = (i) => ({ h: 10, mi: i % 60, at: 1e12 + i * 60000 });
+  // 真 WhatsApp 的消息编号：20 位十六进制
+  const rid = (i) => `3EB0A1B2C3D4E5F6${String(i).padStart(4, '0')}`;
   const win = (title, from = 0, n = 20) => Array.from({ length: n }, (_, k) => {
     const i = from + k;
     const inc = IN.includes(i % 20);
-    return { id: `${!inc}_chat:${title}_3EB0${i}`, out: !inc, text: inc ? `Kunde ${i}` : `Ich ${i}`, t: at(i) };
+    return { id: `${!inc}_chat:${title}_${rid(i)}`, out: !inc, text: inc ? `Kunde ${i}` : `Ich ${i}`, t: at(i) };
   });
   const opts = { auto: true, dailyCap: 500 };
   let { store, fc } = make();
   // 编号：标题不算在消息编号里；页面编号里带着对话的按那个对话认，和带前缀的同一条消息认成一条
-  assert.strictEqual(msgKey('false_chat:online_3EB01'), msgKey('false_chat:typing…_3EB01'));
-  assert.strictEqual(msgKey('false_chat:Anna_4915112345678@c.us_3EB01'), msgKey('false_4915112345678@c.us_3EB01'));
-  assert.strictEqual(chatOf('false_chat:Anna_4915112345678@c.us_3EB01'), '4915112345678@c.us');
-  assert.strictEqual(chatOf('false_chat:Anna_3EB01'), 'chat:Anna');
+  assert.strictEqual(msgKey(`false_chat:online_${rid(1)}`), msgKey(`false_chat:typing…_${rid(1)}`));
+  assert.strictEqual(msgKey(`false_chat:Anna_4915112345678@c.us_${rid(1)}`), msgKey(`false_4915112345678@c.us_${rid(1)}`));
+  assert.strictEqual(chatOf(`false_chat:Anna_4915112345678@c.us_${rid(1)}`), '4915112345678@c.us');
+  assert.strictEqual(chatOf(`false_chat:Anna_${rid(1)}`), 'chat:Anna');
+  // 页面编号不像消息编号（每个对话自己数的 1、2、3）：两个对话会撞号，照旧整条用
+  assert.strictEqual(msgKey('false_chat:Anna_1'), 'false_chat:Anna_1');
+  assert.notStrictEqual(msgKey('false_chat:Anna_1'), msgKey('false_chat:Lucas_1'));
   // 按内容算的编号（读不到 data-id）离开对话就不唯一：照旧整条用
   assert.strictEqual(msgKey('false_chat:Anna_h1x2y3.1'), 'false_chat:Anna_h1x2y3.1');
   assert.notStrictEqual(msgKey('false_chat:Anna_h1x2y3.1'), msgKey('false_chat:Ben_h1x2y3.1'));
@@ -803,10 +808,21 @@ async function titleChange() {
   assert(fc.viewOf('W').items.some((x) => x.text === 'Kunde 20'), '标题是别的样子时翻的那条也在');
   assert.strictEqual(fc.viewOf('W').chatKey, key0);
   // 5. 两个不同的对话（消息编号不同）标题不一样：不会归到一起
-  fc.ingest('W', { title: 'Lucas Martin', msgs: [{ id: 'false_chat:Lucas Martin_3EB1X', out: false, text: 'Bonjour', t: at(40) }], bottom: true }, opts);
+  fc.ingest('W', { title: 'Lucas Martin', msgs: [{ id: `false_chat:Lucas Martin_${rid(40)}`, out: false, text: 'Bonjour', t: at(40) }], bottom: true }, opts);
   await idle(fc);
   assert.notStrictEqual(fc.viewOf('W').chatKey, key0, '别的对话');
   assert.deepStrictEqual(calls, ['Bonjour']);
+  // 6. 两个对话的页面编号都是 1、2、3（不像消息编号）：不能归成一个，各翻各的
+  calls.length = 0;
+  const seq = (title, words) => words.map((text, i) => ({ id: `false_chat:${title}_${i + 1}`, out: false, text, t: at(50 + i) }));
+  fc.ingest('S', { title: 'Anna', msgs: seq('Anna', ['Hallo', 'Preis?', 'Danke']), bottom: true }, opts);
+  await idle(fc);
+  const keyA = fc.viewOf('S').chatKey;
+  fc.ingest('S', { title: 'Lucas', msgs: seq('Lucas', ['Bonjour', 'Prix?', 'Merci']), bottom: true }, opts);
+  await idle(fc);
+  assert.notStrictEqual(fc.viewOf('S').chatKey, keyA, '页面编号一样的两个对话不归到一起');
+  assert.deepStrictEqual(fc.viewOf('S').items.map((x) => x.text), ['Bonjour', 'Prix?', 'Merci'], '翻译栏是 Lucas 的消息');
+  assert.deepStrictEqual(calls, ['Hallo', 'Preis?', 'Danke', 'Bonjour', 'Prix?', 'Merci'], '各翻各的');
   store.flush();
   const raw = fs.readFileSync(path.join(dir, 'W', '_chats.json'), 'utf8');
   assert(!/Kunde|Emma|online|click/.test(raw), '别名表里只有 hash');
