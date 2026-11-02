@@ -361,7 +361,7 @@ function setupTranslateIpc(ctx) {
   // 网页号：在 WhatsApp 页面里客户消息的气泡下面放译文（wa-page.js 的 paintTranslations，唯一改页面的地方）；
   // 轻量号：聊天页是软件自己画的，把每条消息的译文发给界面（lite:tr），lite.js 画在原文下面。
   // 用最近一次读到的消息（data-id 只在主进程）对上翻译栏里的状态；按钮（翻译、重试）点了和工作台里点一样（readerItem）
-  let inlineRead = null; // { accId, wc, lite, msgs }
+  let inlineRead = null; // { accId, wc, lite, msgs, vis }
   let inlineTimer = null;
   let inlineBusy = false;
   let inlineAgain = false;
@@ -393,6 +393,7 @@ function setupTranslateIpc(ctx) {
     if (!inlineOn()) return [];
     const items = new Map(floatCore.viewOf(r.accId).items.map((it) => [it.h, it]));
     const out = [];
+    const done = new Set();
     for (const m of r.msgs) {
       if (m.out) continue;
       // 页面上的编号：新格式按 raw；按内容算出来的编号（读不到 data-id 时）在页面上找不到，不显示
@@ -400,9 +401,25 @@ function setupTranslateIpc(ctx) {
       if (!dom) continue;
       const h = msgHash(r.accId, m.id);
       const it = items.get(h);
+      if (it) done.add(h);
       const e = it ? inlineEntry(it) : null;
       // c：这条消息的按钮被点过几次。点了马上又失败（没密钥、额度用完）时文字不变，靠它让页面把按钮重画成能点的
       if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', p: e.p || '', c: inlineClicks.get(h) || 0 });
+    }
+    // 往上翻聊天记录时屏幕上看得到的更早的客户消息（不在翻译栏里）：存过的显示译文，没翻过的给「翻译」按钮（见 FloatCore.history）
+    if (Array.isArray(r.vis) && r.vis.length) {
+      const hist = floatCore.history(r.accId, r.vis);
+      for (const m of r.vis) {
+        if (m.out) continue;
+        const dom = m.raw || (/^(true|false)_chat:/.test(m.id) ? '' : m.id);
+        const h = msgHash(r.accId, m.id);
+        if (!dom || done.has(h)) continue;
+        done.add(h);
+        const it = hist.get(h);
+        // 排着后台补翻、等着自动重翻的（翻译栏里显示「翻译」）一样显示按钮
+        const e = it ? inlineEntry((it.state === 'queued' && it.bg) || it.state === 'wait' ? { ...it, state: 'manual' } : it) : null;
+        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '' });
+      }
     }
     return out;
   }
@@ -480,14 +497,14 @@ function setupTranslateIpc(ctx) {
       readAt = Date.now();
       let r;
       try {
-        if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc);
+        if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc, { vis: inlineOn() });
       } finally { floatBusy = false; }
       if (!readerOn() || target.acc.id !== ctx.activeId) { scheduleFloat(500); return; }
       if (r.why === 'wait') { scheduleFloat(300); return; } // 轻量号刚点开对话，消息还没推过来
       if (r.ok) {
         // 打开的对话里还没有消息也算读到了（悬浮窗会提示没有文字消息）
         floatFails = 0;
-        inlineRead = { accId: target.acc.id, wc: target.lite ? null : target.wc, lite: !!target.lite, msgs: r.msgs || [] };
+        inlineRead = { accId: target.acc.id, wc: target.lite ? null : target.wc, lite: !!target.lite, msgs: r.msgs || [], vis: r.vis || [] };
         const was = floatReadable;
         floatReadable = 'ok';
         const cfg = ctx.translator.load();
