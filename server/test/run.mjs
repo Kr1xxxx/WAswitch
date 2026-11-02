@@ -377,17 +377,24 @@ await test('改账号名称后，持有它的电脑拿到新名称；备注只�
   assert.equal(r.data.seats[0].note, '只接美国客户');
   assert.equal(r.data.seats[0].expected_country, '');
 });
-await test('同步到 CRM 的开关：只有老板能开，随坐席下发', async () => {
-  const before = (await sync(tokB, {})).data.cursor;
-  assert.equal((await admin('sup@example.com').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
-  assert.equal((await boss.patch(`accounts/${acc1}`, { crm_sync: true })).status, 200);
+await test('同步到 CRM 没有开关：看得见的号一律随坐席下发 crm_sync，后台关不掉', async () => {
+  const first = await sync(tokB, {});
+  assert.equal(first.data.seats[0].crm_sync, true);
+  const before = first.data.cursor;
+  // 老板和主管传 crm_sync 都不报错，但什么也不改、不记操作
+  assert.equal((await admin('sup@example.com').patch(`accounts/${acc1}`, { crm_sync: false })).status, 200);
+  assert.equal((await boss.patch(`accounts/${acc1}`, { crm_sync: false })).status, 200);
   const r = await sync(tokB, { cursor: before });
-  assert.equal(r.data.seats[0].crm_sync, true);
-  assert.equal((await boss.get('overview')).data.accounts.find((a) => a.id === acc1).crm_sync, 1);
-  await boss.patch(`accounts/${acc1}`, { crm_sync: false });
-  const actions = db.raw.prepare('SELECT action FROM audit_log WHERE target = ? ORDER BY at').all(acc1).map((r) => r.action);
-  assert.ok(actions.includes('account.crm_on') && actions.includes('account.crm_off'), '开关聊天同步要记操作记录');
-  assert.equal((await sync(tokB, { cursor: r.data.cursor })).data.seats[0].crm_sync, false);
+  assert.equal(r.data.cursor, before, '没有改动就没有新版本');
+  assert.equal((await sync(tokB, {})).data.seats[0].crm_sync, true);
+  const actions = db.raw.prepare('SELECT action FROM audit_log WHERE target = ?').all(acc1).map((x) => x.action);
+  assert.ok(!actions.some((x) => x.startsWith('account.crm_')));
+  assert.equal(db.raw.prepare('SELECT crm_sync FROM wa_accounts WHERE id = ?').get(acc1).crm_sync, 0, '库里的旧列不会被写');
+  assert.ok(!('crm_sync' in (await boss.get('overview')).data.accounts[0]), '后台总览不再带这一列');
+  // 和别的字段一起传时，只改别的字段，操作记录里也不带 crm_sync
+  await boss.patch(`accounts/${acc1}`, { note: '只接美国客户', crm_sync: false });
+  const upd = db.raw.prepare("SELECT detail FROM audit_log WHERE target = ? AND action = 'account.update' ORDER BY id DESC").get(acc1);
+  assert.ok(!upd.detail.includes('crm_sync'));
 });
 // ---- 同步到 CRM 第 2 步：上传、加密暂存、推给来财 ----
 const CRM_SECRET = 'test-laicrm-secret-0123456789abcdef';
@@ -415,14 +422,14 @@ const msg = (k, extra = {}) => ({ k, peer: '447700900123', out: false, at: Date.
 const resetRate = () => db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'chats:%'").run();
 
 await test('CRM 上传：推送没配齐时回 503，电脑留着本机队列', async () => {
-  await boss.patch(`accounts/${acc1}`, { crm_sync: true });
   const r = await chats(tokB, acc1, [msg('3EB0AAAA0001')]);
   assert.equal(r.status, 503);
   assert.equal(r.data.crm_paused, true);
   assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
 });
 Object.assign(env, { CRM_PUSH: '1', CRM_KEY: Buffer.alloc(32, 7).toString('base64'), LAICRM_SECRET: CRM_SECRET, LAICRM: laicrm });
-await test('CRM 上传：只收这台电脑上、开着同步的号；不合格的条目拒收', async () => {
+await test('CRM 上传：只收这台电脑上的号（不看旧的 crm_sync 列）；不合格的条目拒收', async () => {
+  assert.equal(db.raw.prepare('SELECT crm_sync FROM wa_accounts WHERE id = ?').get(acc1).crm_sync, 0);
   assert.equal((await chats(tokA, acc1, [msg('3EB0AAAA0001')])).status, 409, '号不在这台电脑上');
   assert.equal((await chats(tokB, acc2, [msg('3EB0AAAA0001')])).status, 409);
   const r = await chats(tokB, acc1, [msg('3EB0AAAA0001'), msg('3EB0AAAA0002', { at: Date.now() - 120000, out: true }), msg('bad', { peer: '12345' }), msg('3EB0AAAA0003', { peer: '1234567890123456' }), { k: '../x' }]);
@@ -445,6 +452,7 @@ await test('CRM 推送：签名、按时间排序、消息编号稳定；写进�
   const first = laicrm.calls[0];
   assert.equal(first.account.id, acc1);
   assert.equal(first.staff.name, '坐席A');
+  assert.equal(first.staff.email, 'anna@example.com');
   assert.ok(first.messages.every((m) => /^[0-9a-f]{32}$/.test(m.id)));
   assert.deepEqual(first.messages.map((m) => m.dir), ['out', 'in'], '按时间从早到晚');
   assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
@@ -485,16 +493,22 @@ await test('CRM 推送：签名被拒时停推并在后台提示，恢复后提�
 });
 await test('CRM 推送：长中文消息按字节拆成多批，每批 ≤256 KB', async () => {
   const msgs = Array.from({ length: 100 }, (_, i) => ({ id: String(i).padStart(32, '0'), peer: '447700900123', dir: 'in', at: i, approx: false, text: '中'.repeat(3000) }));
-  const parts = chunkMessages({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '' } }, msgs);
+  const parts = chunkMessages({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '', email: '' } }, msgs);
   assert.ok(parts.length >= 4);
   assert.equal(parts.flat().length, 100);
   for (const p of parts) assert.ok(Buffer.byteLength(JSON.stringify({ v: 1, batch_id: 'x', account: { id: 'a', label: '号', phone: '' }, staff: { name: '' }, messages: p })) <= 256 * 1024);
 });
-await test('CRM：关掉同步时，没推出去的聊天一起删；超过 7 天的也删', async () => {
+await test('CRM 推送：员工没有邮箱时，推送里的邮箱是空字符串', async () => {
   resetRate();
-  await chats(tokB, acc1, [msg('3EB0DDDD0001')]);
-  await boss.patch(`accounts/${acc1}`, { crm_sync: false });
-  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
+  db.raw.prepare('UPDATE users SET email = NULL WHERE id = ?').run(agentA);
+  await chats(tokB, acc1, [msg('3EB0EEEE0001')]);
+  laicrm.calls = [];
+  await cron();
+  db.raw.prepare('UPDATE users SET email = ? WHERE id = ?').run('anna@example.com', agentA);
+  assert.equal(laicrm.calls[0].staff.name, '坐席A');
+  assert.equal(laicrm.calls[0].staff.email, '');
+});
+await test('CRM：超过 7 天没推出去的聊天会删', async () => {
   db.raw.prepare("INSERT INTO crm_batches (id, account_id, device_id, n, iv, data, created_at) VALUES ('old', ?, ?, 1, 'x', 'x', ?)").run(acc1, devB, Date.now() - 8 * 864e5);
   await cron();
   assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches').get().n, 0);
@@ -528,9 +542,20 @@ await test('停用员工等于停用他的所有电脑', async () => {
 await test('收回后才能删除记录；只有老板能删；删除是软删除，离线的电脑之后仍收到隐藏', async () => {
   const offlineCursor = (await sync(tokB, {})).data.cursor; // 电脑 B 之后一直离线
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 400);
+  const pending = () => db.raw.prepare('SELECT COUNT(*) AS n FROM crm_batches WHERE account_id = ?').get(acc1).n;
+  db.raw.prepare("INSERT INTO crm_batches (id, account_id, device_id, n, iv, data, created_at) VALUES ('p1', ?, ?, 1, 'x', 'x', ?)").run(acc1, devB, Date.now());
   await boss.post(`accounts/${acc1}/unassign`);
   assert.equal((await admin('sup@example.com').del(`accounts/${acc1}`)).status, 403);
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 200);
+  assert.equal(pending(), 0, '删号时没推出去的聊天一起删');
+  // 删号之后残留的批次（比如删号前一刻才进来的）推送时也丢掉，不推给来财
+  db.raw.prepare("INSERT INTO crm_batches (id, account_id, device_id, n, iv, data, created_at) VALUES ('p2', ?, ?, 1, 'x', 'x', ?)").run(acc1, devB, Date.now());
+  Object.assign(env, { CRM_PUSH: '1' });
+  laicrm.calls = [];
+  await cron();
+  Object.assign(env, { CRM_PUSH: '0' });
+  assert.equal(pending(), 0);
+  assert.equal(laicrm.calls.length, 0);
   assert.ok(!(await boss.get('overview')).data.accounts.some((a) => a.id === acc1));
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 404);
   const r = await sync(tokB, { cursor: offlineCursor });

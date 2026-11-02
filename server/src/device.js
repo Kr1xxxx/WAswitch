@@ -176,7 +176,7 @@ async function sync(request, env) {
 
   // 坐席增量：比客户端手上版本新的显示记录（含显式隐藏）
   const cursor = int(body.cursor, 0, Number.MAX_SAFE_INTEGER, 0);
-  const rows = await db.prepare(`SELECT s.account_id, s.visible, s.version, a.device_id, a.deleted_at, a.label, a.color, a.mode, a.expected_country, a.note, a.crm_sync
+  const rows = await db.prepare(`SELECT s.account_id, s.visible, s.version, a.device_id, a.deleted_at, a.label, a.color, a.mode, a.expected_country, a.note
     FROM device_seats s JOIN wa_accounts a ON a.id = s.account_id WHERE s.device_id = ? AND s.version > ? ORDER BY s.version LIMIT 200`)
     .bind(dev.id, cursor).all();
   const list = rows.results;
@@ -184,7 +184,7 @@ async function sync(request, env) {
   return json({
     ok: true,
     device_id: dev.id,
-    seats: list.map((r) => ({ team_id: r.account_id, visible: r.visible === 1 && r.deleted_at == null && r.device_id === dev.id, name: r.label, color: r.color, mode: r.mode, expected_country: r.expected_country, note: r.note, crm_sync: r.visible === 1 && r.crm_sync === 1 && r.deleted_at == null && r.device_id === dev.id })),
+    seats: list.map((r) => ({ team_id: r.account_id, visible: r.visible === 1 && r.deleted_at == null && r.device_id === dev.id, name: r.label, color: r.color, mode: r.mode, expected_country: r.expected_country, note: r.note, crm_sync: r.visible === 1 && r.deleted_at == null && r.device_id === dev.id })),
     cursor: list.length ? list[list.length - 1].version : cursor,
     more: list.length === 200,
     allow_private: await allowPrivate(db),

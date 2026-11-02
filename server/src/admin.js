@@ -28,7 +28,7 @@ async function me(db, user) {
 
 async function overview(db, user, env) {
   const where = isOwner(user) ? 'WHERE a.deleted_at IS NULL' : 'WHERE a.deleted_at IS NULL AND a.group_id = ?';
-  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.crm_sync, a.crm_stored, a.crm_dropped, a.crm_pushed_at, a.user_id, a.device_id,
+  const stmt = db.prepare(`SELECT a.id, a.label, a.number_label, a.group_id, a.mode, a.color, a.expected_country, a.note, a.crm_stored, a.crm_dropped, a.crm_pushed_at, a.user_id, a.device_id,
       u.name AS user_name, d.name AS device_name, d.last_seen_at, d.revoked_at, d.app_version,
       st.state, st.unread, st.proxy_ok, st.proxy_ms, st.exit_ip, st.exit_country, st.exit_changed, st.reported_at
     FROM wa_accounts a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
@@ -242,10 +242,6 @@ async function updateAccount(db, user, id, body) {
   if (body.color !== undefined) { sets.push('color = ?'); vals.push(typeof body.color === 'string' && COLORS_RE.test(body.color) ? body.color : ''); }
   if (body.expected_country !== undefined) { sets.push('expected_country = ?'); vals.push(country(body.expected_country)); }
   if (body.note !== undefined) { sets.push('note = ?'); vals.push(str(body.note, 500)); }
-  if (body.crm_sync !== undefined) {
-    need(isOwner(user), '只有老板能开关聊天同步');
-    sets.push('crm_sync = ?'); vals.push(body.crm_sync === true ? 1 : 0);
-  }
   if (body.group_id !== undefined) {
     need(isOwner(user), '只有老板能改账号的组');
     const g = str(body.group_id, 36) || null;
@@ -255,15 +251,12 @@ async function updateAccount(db, user, id, body) {
   if (!sets.length) return json({ ok: true });
   sets.push('updated_at = ?'); vals.push(now());
   const stmts = [db.prepare(`UPDATE wa_accounts SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id)];
-  // 关掉聊天同步：这个号还没推出去的聊天一起删
-  if (body.crm_sync !== undefined && body.crm_sync !== true) stmts.push(db.prepare('DELETE FROM crm_batches WHERE account_id = ?').bind(id));
   // 用事务内的当前归属刷新版本，不能用请求开始时读到的旧 device_id。
   stmts.push(db.prepare(`UPDATE device_seats SET visible = visible WHERE account_id = ? AND visible = 1
     AND device_id = (SELECT device_id FROM wa_accounts WHERE id = ?)`).bind(id, id));
   await db.batch(stmts);
-  await audit(db, user.id, 'account.update', id, body);
-  // 开 / 关聊天同步单独记一笔，方便以后查是谁、什么时候打开的
-  if (body.crm_sync !== undefined) await audit(db, user.id, body.crm_sync === true ? 'account.crm_on' : 'account.crm_off', id);
+  const { crm_sync: _ignored, ...logged } = body; // 同步没有开关，传来的 crm_sync 不处理也不记
+  await audit(db, user.id, 'account.update', id, logged);
   return json({ ok: true });
 }
 
@@ -303,7 +296,7 @@ async function deleteAccount(db, user, id) {
     db.prepare('DELETE FROM account_status WHERE account_id = ?').bind(id),
     db.prepare('DELETE FROM status_events WHERE account_id = ?').bind(id),
     db.prepare('DELETE FROM crm_batches WHERE account_id = ?').bind(id),
-    db.prepare("UPDATE wa_accounts SET deleted_at = ?, crm_sync = 0, label = '已删除', number_label = '', note = '', expected_country = '', updated_at = ? WHERE id = ?").bind(now(), now(), id),
+    db.prepare("UPDATE wa_accounts SET deleted_at = ?, label = '已删除', number_label = '', note = '', expected_country = '', updated_at = ? WHERE id = ?").bind(now(), now(), id),
   ]);
   await audit(db, user.id, 'account.delete', id);
   return json({ ok: true });

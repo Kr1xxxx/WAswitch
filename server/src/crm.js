@@ -5,7 +5,8 @@
 //   - 每个号每 10 分钟最多上传 3 次；每次最多 300 KB
 //   - 推给来财：每批 ≤100 条且 ≤256 KB（按 UTF-8 字节拆），HMAC 签名，消息编号 = HMAC(账号|对方号码|WhatsApp 消息编号)
 //   - 来财回 stored / duplicate / unmatched 都算处理完，这批删掉；unmatched 不暂存、不重推（shen 2026-10-25 定）
-//   - 关同步、删号时这个号还没推出去的批次一起删；超过 7 天没推出去的也删
+//   - 团队里的每个号都同步，没有开关（shen 2026-11-02 定）；推给来财的信封带员工姓名和邮箱，来财按邮箱对上员工
+//   - 删号时这个号还没推出去的批次一起删；超过 7 天没推出去的也删
 //   - 日志里只写批编号、条数、状态码，不写消息内容
 import { json, fail, now, uuid, readJson, HttpError } from './util.js';
 
@@ -80,11 +81,11 @@ export async function uploadChats(request, env, dev) {
   const body = await readJson(request, CRM_MAX_UPLOAD);
   if (body.v !== 1) throw new HttpError(426, '这个版本的 WAswitch 太旧，请先更新');
   const accountId = typeof body.team_id === 'string' && /^[0-9a-f-]{36}$/.test(body.team_id) ? body.team_id : '';
-  // 这个号必须在这台电脑上、可见、没删、开着同步
+  // 这个号必须在这台电脑上、可见、没删
   const acc = accountId && await db.prepare(`SELECT a.id FROM wa_accounts a
     JOIN device_seats s ON s.account_id = a.id AND s.device_id = a.device_id AND s.visible = 1
-    WHERE a.id = ? AND a.device_id = ? AND a.deleted_at IS NULL AND a.crm_sync = 1`).bind(accountId, dev.id).first();
-  if (!acc) return fail(409, '这个号没开聊天同步', { crm_off: true });
+    WHERE a.id = ? AND a.device_id = ? AND a.deleted_at IS NULL`).bind(accountId, dev.id).first();
+  if (!acc) return fail(409, '这个号不在这台电脑上', { crm_off: true });
   const t = now();
   const row = await db.prepare(`INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
     ON CONFLICT(key) DO UPDATE SET
@@ -150,9 +151,9 @@ export async function pushCrm(env) {
   for (const row of rows) {
     if (row.n > budget && done.batches > 0) break;
     budget -= row.n;
-    const acc = await db.prepare(`SELECT a.id, a.label, a.number_label, a.crm_sync, a.deleted_at, u.name AS staff
+    const acc = await db.prepare(`SELECT a.id, a.label, a.number_label, a.deleted_at, u.name AS staff, u.email AS staff_email
       FROM wa_accounts a LEFT JOIN users u ON u.id = a.user_id WHERE a.id = ?`).bind(row.account_id).first();
-    if (!acc || acc.crm_sync !== 1 || acc.deleted_at) {
+    if (!acc || acc.deleted_at) {
       await db.prepare('DELETE FROM crm_batches WHERE id = ?').bind(row.id).run();
       continue;
     }
@@ -168,7 +169,7 @@ export async function pushCrm(env) {
     const ids = await msgIds(env, acc.id, items);
     const messages = items.map((x, i) => ({ id: ids[i], peer: x.peer, dir: x.out ? 'out' : 'in', at: x.at, approx: x.approx, text: x.text }));
     const phone = String(acc.number_label || '').replace(/\D/g, '');
-    const envelope = { v: 1, batch_id: row.id, account: { id: acc.id, label: acc.label, phone: /^\d{8,15}$/.test(phone) ? phone : '' }, staff: { name: acc.staff || '' } };
+    const envelope = { v: 1, batch_id: row.id, account: { id: acc.id, label: acc.label, phone: /^\d{8,15}$/.test(phone) ? phone : '' }, staff: { name: acc.staff || '', email: acc.staff_email || '' } };
     let stored = 0;
     let unmatched = 0;
     let finished = true;

@@ -216,7 +216,7 @@ async function accountsPage() {
     });
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
-      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
+      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`)),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : ''),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
@@ -226,8 +226,7 @@ async function accountsPage() {
         btn('记录', () => showEvents(a)),
         !a.device_id && me.user.role === 'owner' ? btn('删除记录', () => confirm(`删除「${a.label}」的后台记录？`) && act(() => api('DELETE', `accounts/${a.id}`), '已删除'), 'danger') : null));
   });
-  const crmOn = data.accounts.some((a) => a.crm_sync === 1);
-  const crmNote = !crmOn ? null : data.crm && data.crm.auth_fail_at
+  const crmNote = !data.accounts.length ? null : data.crm && data.crm.auth_fail_at
     ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${new Date(data.crm.auth_fail_at).toLocaleString()}），已暂停推送。请检查两边的推送密钥。`)
     : data.crm && !data.crm.push ? el('p', { class: 'muted' }, '聊天同步：推送还没开，员工电脑上的聊天先留在本机（最多 7 天）。') : null;
   return [
@@ -248,17 +247,14 @@ function editAccount(a) {
     expected_country: el('input', { value: a.expected_country || '', maxlength: 2, placeholder: '如 US', size: 4 }),
     note: el('input', { value: a.note || '', maxlength: 500, placeholder: '备注（会显示给员工）', size: 30 }),
   };
-  // 同步到 CRM：只有老板能开；开了以后员工侧栏会一直显示 CRM 标记
-  const crm = me.user.role === 'owner' ? el('input', { type: 'checkbox', checked: a.crm_sync === 1 }) : null;
   const group = me.user.role === 'owner' ? el('select', {}, el('option', { value: '' }, '未分组'), me.groups.map((g) => el('option', { value: g.id, selected: g.id === a.group_id }, g.name))) : null;
   const form = el('form', { class: 'row', onsubmit: (e) => {
     e.preventDefault();
     const body = Object.fromEntries(Object.entries(f).map(([k, n]) => [k, n.value.trim()]));
     body.expected_country = body.expected_country.toUpperCase();
     if (group) body.group_id = group.value;
-    if (crm) body.crm_sync = crm.checked;
     act(() => api('PATCH', `accounts/${a.id}`, body), '已保存');
-  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, crm ? el('label', { title: '这个号单聊里的文字消息会同步到 CRM；员工那边会一直看到 CRM 标记' }, crm, ' 同步聊天到 CRM') : null, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
+  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
   document.getElementById('detail').replaceChildren(form);
 }
 
