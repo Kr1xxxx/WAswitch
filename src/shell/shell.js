@@ -1402,7 +1402,7 @@ function loginPage() {
     const later = h('button', { type: 'button', class: 'btn', onclick: () => window.wa.teamLater() }, '稍后');
     const fail = (r, again) => {
       loginForm.error = (r && r.error) || '连不上团队后台';
-      loginForm.offline = !!(r && r.offline);
+      loginForm.offline = !r || !!r.offline; // 主进程那边出错（r 为空）也当连不上，给「重试」
       loginForm.retry = loginForm.offline ? again : '';
     };
     const requestCode = async () => {
@@ -1495,7 +1495,8 @@ function loginPage() {
     loginEl.paint = paint;
     loginEl.focusFirst = () => requestAnimationFrame(() => {
       if (loginEl.contains(document.activeElement)) return;
-      if (email.value) code.focus(); else email.focus();
+      // 邮箱已经填好：焦点放到「获取验证码」，按空格或回车就能要码
+      if (email.value && !getCode.disabled) getCode.focus(); else if (email.value) code.focus(); else email.focus();
     });
   }
   loginEl.paint();
