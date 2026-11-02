@@ -114,6 +114,8 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
       - name: 译文显示在 WhatsApp 消息下面（失败重试、换回右侧工作台）
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
+      - name: 往上翻聊天记录，更早的客户消息下面也有译文或「翻译」按钮
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-history.js
       - name: 轻量号的译文显示在消息下面
         run: xvfb-run -a npx electron --no-sandbox scripts/check-lite-tr.js
       - name: 内存回收不会反复刷新

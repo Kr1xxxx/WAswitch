@@ -24,6 +24,7 @@ const VOICE_TRIP = 3; // 网页号连续 3 条语音读不到（存储改版等�
 // 自动翻译的一条最多再翻 3 次；后台补翻失败先停，按这个间隔接着补，连着再失败 3 轮才退回「翻译」按钮（shen 2026-10-30）
 const RETRY_MS = [10000, 30000, 90000];
 const TEMP_FAIL = new Set(['network', 'timeout', 'server', 'overload', 'other']);
+const HIST_MAX = 150; // 往上翻看到的旧消息（见 history）每个号最多记 150 条，最近看到的留着
 const KEEP_VIEW = VIEW_MAX; // 40（和 trstore.js 存的条数一样）。读页面只读最后 20 条，被挤出去的旧消息也留在翻译栏上，加起来最多 40 条（轻量号一次读到更多就按读到的条数）
 
 // 从最近消息里截上下文：这条消息之前的几条；这条不在里面就不给（别的对话的内容不能串进来）
@@ -185,7 +186,7 @@ class FloatCore {
   acc(accId) {
     let st = this.accs.get(accId);
     if (!st) {
-      st = { chat: '', title: '', items: new Map(), view: [], recent: [], seen: [], newest: 0, minute: [], day: { d: '', n: 0 }, paused: '', voiceFails: 0 };
+      st = { chat: '', title: '', items: new Map(), hist: new Map(), view: [], recent: [], seen: [], newest: 0, minute: [], day: { d: '', n: 0 }, paused: '', voiceFails: 0 };
       this.accs.set(accId, st);
     }
     return st;
@@ -240,6 +241,7 @@ class FloatCore {
   dropOwn(accId, st, id) {
     if (!id.startsWith('true_')) return;
     const h = msgHash(accId, 'false_' + id.slice(5));
+    st.hist.delete(h);
     const item = st.items.get(h);
     if (!item) return;
     if (item.state === 'running') return;
@@ -283,7 +285,17 @@ class FloatCore {
       if (m.out) { this.dropOwn(accId, st, m.id); continue; }
       if (!shown(m)) continue;
       const h = msgHash(accId, m.id);
-      const had = st.items.get(h);
+      let had = st.items.get(h);
+      // 往上翻时见过的旧消息（history）这次正常读到了：挪过来接着用，不重翻
+      if (!had && st.hist.has(h)) {
+        had = st.hist.get(h); st.hist.delete(h); had.hist = false; st.items.set(h, had);
+        // 还没翻的当成新读到的（往上翻时先在屏幕上见过的新消息，回到最下面要照常自动翻）
+        if (had.state === 'manual') {
+          if (!isVoice(had) && String(m.text).trim()) had.text = String(m.text);
+          fresh.push(had);
+          continue;
+        }
+      }
       if (had) {
         st.items.delete(h); st.items.set(h, had); // 又读到了：挪到最后，内存满了先删别的对话的
         // 翻好了的这条，页面上的文字这次和翻译时不一样（显示的格式变了）：按这次的文字也存一份，以后挤出内存、重启都认得
@@ -535,7 +547,7 @@ class FloatCore {
   // 用户点“翻译”或“纠错”：不受自动翻译的上限限制。fix=true 用更仔细的校对提示词重翻（会替换手动改过的）
   manual(accId, h, fix = false) {
     const st = this.accs.get(accId);
-    const item = st && st.items.get(h);
+    const item = st && this.itemOf(st, h);
     if (!item || (!item.text && !(isVoice(item) && item.src)) || item.state === 'running' || item.state === 'skip') return false; // 补回来的旧译文还没补上原文的，不能重翻
     if (!item.text && !this.deps.transcribe) return false;
     if (item.state === 'wait') this.waits = this.waits.filter((w) => !(w.accId === accId && w.h === h)); // 等着自动重翻的：现在就翻，不再等
@@ -551,7 +563,8 @@ class FloatCore {
     item.errKind = '';
     item.errCode = '';
     item.tries = 0; // 用户自己点的：之前自动重翻过几次不再算
-    this.queue.unshift({ accId, h, manual: true, fix: fix === true, context: this.contextOf(accId, h) });
+    // 往上翻看到的旧消息：上下文用它在页面上前面的几条，不用对话最新的
+    this.queue.unshift({ accId, h, manual: true, fix: fix === true, context: item.hist ? item.ctx || [] : this.contextOf(accId, h) });
     this.pump();
     return true;
   }
@@ -577,6 +590,13 @@ class FloatCore {
           item.state = 'queued';
           this.queue.push({ accId, h, context: this.contextOf(accId, h) });
         } else item.state = 'manual';
+      }
+      // 往上翻看到的旧消息：退回「翻译」按钮（不自动翻）
+      for (const item of st.hist.values()) {
+        if (item.state !== 'error' || item.errKind !== 'auth' || (opts.match && !opts.match(item.errPid || ''))) continue;
+        hit = true;
+        item.err = ''; item.errKind = ''; item.errPid = '';
+        item.state = item.tr ? 'done' : 'manual';
       }
       if (hit) touched.push(accId);
     }
@@ -691,13 +711,13 @@ class FloatCore {
       while (this.vq.length) {
         const job = this.vq.shift();
         const st = this.accs.get(job.accId);
-        const item = st && st.items.get(job.h);
+        const item = st && this.itemOf(st, job.h);
         if (!item || item.state !== 'queued' || item.text) continue;
         item.state = 'running';
         this.onChange(job.accId);
         let v;
         try { v = await this.deps.transcribe(job.accId, item.src, item.voice, { auto: !job.manual }); } catch { v = { error: '转文字失败', kind: 'other' }; }
-        if (this.accs.get(job.accId) !== st || st.items.get(job.h) !== item) continue; // 号被删了或重建了
+        if (this.accs.get(job.accId) !== st || this.itemOf(st, job.h) !== item) continue; // 号被删了或重建了
         if (v && Number.isFinite(v.seconds) && v.seconds > 0) item.voice = Math.round(v.seconds); // 网页号：WhatsApp 存的时长
         const kind = v && v.kind;
         if (item.src && item.src.dataId) {
@@ -755,7 +775,7 @@ class FloatCore {
   async run(job) {
     const done = () => { const i = this.queue.indexOf(job); if (i >= 0) this.queue.splice(i, 1); };
     const st = this.accs.get(job.accId);
-    const item = st && st.items.get(job.h);
+    const item = st && this.itemOf(st, job.h);
     if (!item || item.state !== 'queued') { done(); return; }
     item.state = 'running';
     item.bg = false;
@@ -865,6 +885,70 @@ class FloatCore {
       if (it && it.state === 'queued') { it.state = 'manual'; it.bg = false; this.onChange(q.accId); }
       return false;
     });
+  }
+
+  // 正常读到的（st.items）或往上翻看到的（st.hist）
+  itemOf(st, h) {
+    return st.items.get(h) || st.hist.get(h);
+  }
+
+  // 译文显示在消息下面、用户往上翻聊天记录时：屏幕上看得到的客户消息（vis，wa-page.js 读的）各显示什么。
+  // 读页面只读最后 20 条，往上翻时那次读数也整个不用（见 behind），所以更早的消息在这里另外认：
+  // 已经在翻译栏里的直接用；存过译文的（按原文、翻译栏记录、语音按消息编号）显示译文；没翻过的只给「翻译」按钮，
+  // 点了才翻（manual），不自动翻、不算自动翻译的额度。这些不进翻译栏（st.view），只记在 st.hist（最多 HIST_MAX 条）。
+  // 返回 Map h -> 条目
+  history(accId, vis) {
+    const st = this.acc(accId);
+    const out = new Map();
+    const msgs = (Array.isArray(vis) ? vis : []).filter((m) => m && typeof m.id === 'string');
+    const views = new Map();
+    msgs.forEach((m, i) => {
+      if (m.out || !shown(m)) return;
+      const h = msgHash(accId, m.id);
+      let item = st.items.get(h);
+      if (!item && st.hist.has(h)) {
+        item = st.hist.get(h);
+        st.hist.delete(h); st.hist.set(h, item); // 又看到了：挪到最后
+        // 还没翻的：页面上的文字变了（刚加进来时还没显示全）就用新的
+        if (item.state === 'manual' && item.text && !isVoice(item) && String(m.text).trim()) item.text = String(m.text);
+      }
+      if (!item) {
+        const context = msgs.slice(Math.max(0, i - CONTEXT_N), i).filter((x) => String(x.text || '').trim()).map((x) => ({ out: !!x.out, text: String(x.text).slice(0, 1000) }));
+        item = this.histItem(accId, m, h, views, context);
+        st.hist.set(h, item);
+      }
+      out.set(h, item);
+    });
+    // 超了先删最早看到的；正在翻的留着
+    if (st.hist.size > HIST_MAX) {
+      for (const [h, it] of [...st.hist]) {
+        if (st.hist.size <= HIST_MAX) break;
+        if (it.state !== 'queued' && it.state !== 'running') st.hist.delete(h);
+      }
+    }
+    return out;
+  }
+
+  // 往上翻看到的一条旧消息：和 ingest 一样从存的记录里认，认不出就是「翻译」按钮
+  histItem(accId, m, h, views, ctx) {
+    const store = this.deps.store;
+    const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '', hist: true, ctx };
+    if (isVoice(m)) {
+      Object.assign(item, { text: '', voice: m.voice, src: m.id.startsWith('false_') ? { dataId: m.id } : null, k: textKey(`voice:${msgKey(m.id)}`) });
+      const saved = store ? store.getKey(accId, item.ck, item.k) : null;
+      if (saved && typeof saved.text === 'string' && saved.text.trim()) {
+        return Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
+      }
+      const heard = store && store.getHeard ? store.getHeard(accId, item.ck, item.k) : null;
+      if (heard !== null && !heard.trim()) return Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
+      if (heard !== null) return Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+      if (item.voice > VOICE_MAX_S) item.note = 'long';
+      return item;
+    }
+    if (noWords(item.text)) { item.state = 'skip'; return item; }
+    const saved = store ? store.get(accId, item.ck, item.text) || this.sameMessage(accId, item, views) : null;
+    if (saved) Object.assign(item, { state: 'done', tr: saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
+    return item;
   }
 
   // 给悬浮窗看的：当前对话里收到的消息（不含 data-id）

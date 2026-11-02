@@ -176,6 +176,9 @@ function parsePre(raw) {
 // MCP 的 read_messages 可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
 const MAX_MSGS = 20;
 const MAX_MSGS_LIMIT = 50;
+// 译文显示在消息下面时另外带回「屏幕上看得到的消息」（vis，上下各多算一屏）：往上翻到更早的记录时，
+// 存过的译文、「翻译」按钮也放得上（最后 20 条那份照旧给翻译栏用）。最多 50 条，总共最多 40000 字
+const MAX_VIS = 50;
 // Shared read-only identity snapshot. Mixed/transitional DOMs fail closed.
 function chatIdentity(main) {
   if (!main) return '';
@@ -187,7 +190,7 @@ function chatIdentity(main) {
   }
   return ids.size === 1 ? [...ids][0] : '';
 }
-const readChatCode = (max = MAX_MSGS) => `(() => {
+const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   const parsePre = ${parsePre.toString()};
   const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
@@ -310,27 +313,35 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     if (!rows) return { ok: true, title, chat, msgs: [] };
     return { ok: false, why: 'nomatch' };
   }
-  const msgs = [];
-  let size = 0;
-  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
-  for (const { n, id: rawId, rawId: domId, out } of top.slice(-${max}).reverse()) {
+  // 一条消息带出去的样子；超出字数限制返回 null
+  const pack = (e, room) => {
+    const { n, id: rawId, rawId: domId, out } = e;
     const id = rawId.slice(0, 300);
     // 页面上真正的 data-id（新格式没有 true_/false_ 前缀时和 id 不一样）：在消息下面显示译文时按它找气泡
     const raw = domId && domId !== rawId ? { raw: domId.slice(0, 300) } : {};
     const r = textOf(n);
     const text = r.text.slice(0, 4000);
-    if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
-    size += text.length;
+    if (text.length > room) return null;
     // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），
     // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
     const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
     const voice = !out && /^(true|false)_/.test(rawId) && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
-    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw });
+    return voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw };
+  };
+  const msgs = [];
+  let size = 0;
+  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
+  for (const e of top.slice(-${max}).reverse()) {
+    const m = pack(e, ${max > MAX_MSGS ? 40000 : 20000} - size);
+    if (!m) break;
+    size += m.text.length;
+    msgs.push(m);
   }
   msgs.reverse();
   // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
   // 找最后一条消息外面能滚动的那层，离底部还远就是 false；找不到（没排版、页面改版）是 null。只读位置，不滚动
   let bottom = null;
+  let scroller = null;
   const last = top[top.length - 1].n;
   for (let sc = last.parentElement; sc && sc !== main; sc = sc.parentElement) {
     if (sc.scrollHeight <= sc.clientHeight + 4) continue;
@@ -339,11 +350,37 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const dist = cs.flexDirection === 'column-reverse' ? Math.abs(sc.scrollTop) : sc.scrollHeight - sc.clientHeight - sc.scrollTop;
     const gap = last.getBoundingClientRect().bottom - sc.getBoundingClientRect().bottom;
     bottom = dist <= 120 && gap <= 120;
+    scroller = sc;
     break;
+  }${vis ? `
+  // 屏幕上看得到的消息（上下各多算一屏，滚一下也已经放好；自己发的也带上，翻旧消息时当上下文）：只读位置，不滚动
+  const vis = [];
+  const box = (scroller || main).getBoundingClientRect();
+  const lo = box.top - box.height;
+  const hi = box.bottom + box.height;
+  const mid = (box.top + box.bottom) / 2;
+  const near = [];
+  for (const e of top) {
+    if (!/^(true|false)_/.test(e.id)) continue;
+    const r = e.n.getBoundingClientRect();
+    if (!r.height || r.bottom < lo || r.top > hi) continue;
+    near.push({ e, d: Math.abs((r.top + r.bottom) / 2 - mid) });
   }
-  return { ok: true, title, chat, msgs, bottom };
+  // 太多时留离屏幕中间近的，再按页面上的顺序排回去
+  const keep = new Set(near.sort((a, b) => a.d - b.d).slice(0, ${MAX_VIS}).map((x) => x.e));
+  let vsize = 0;
+  for (const e of top) {
+    if (!keep.has(e)) continue;
+    const m = pack(e, 40000 - vsize);
+    if (!m) continue;
+    vsize += m.text.length;
+    vis.push(m);
+  }
+  return { ok: true, title, chat, msgs, bottom, vis };` : `
+  return { ok: true, title, chat, msgs, bottom };`}
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
+const READ_CHAT_VIS_CODE = readChatCode(MAX_MSGS, true);
 
 const cleanTime = (t) => {
   if (!t || typeof t !== 'object') return null;
@@ -357,17 +394,22 @@ const cleanTime = (t) => {
   return { ...v, ambig: t.ambig === true, at, altAt };
 };
 
-// max：最多读几条（默认 20，最多 50）。只读页面上已经显示出来的消息，不滚动
-async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
+const cleanMsgs = (list, n) => (Array.isArray(list) ? list : []).filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
+  .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
+    ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
+
+// max：最多读几条（默认 20，最多 50）。只读页面上已经显示出来的消息，不滚动。
+// vis：另外带回屏幕上看得到的消息（只在默认的 20 条时有，译文显示在消息下面用）
+async function readOpenChat(wc, { max = MAX_MSGS, vis = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
   const n = Number.isInteger(max) ? Math.min(Math.max(max, 1), MAX_MSGS_LIMIT) : MAX_MSGS;
+  const withVis = vis === true && n === MAX_MSGS;
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: withVis ? READ_CHAT_VIS_CODE : n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
-    const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
-        ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
+    const msgs = cleanMsgs(r.msgs, n);
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
+      ...(withVis ? { vis: cleanMsgs(r.vis, MAX_VIS) } : {}) };
   } catch {
     return { ok: false, why: 'error' };
   }
@@ -400,11 +442,15 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
     w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target) && !ours(r))) w.hit(); });
     // #main 换了（切对话、关掉对话）：看它的父元素有没有增删子元素
     w.outer = new MutationObserver(() => { if (document.querySelector(SEL) !== w.main) { w.bind(); w.hit(); } });
+    // 滚动聊天记录（往上翻时译文要跟着放到看得到的消息上）：停下 200 毫秒后算一次变化
+    w.onScroll = () => { clearTimeout(w.st); w.st = setTimeout(w.hit, 200); };
     w.bind = () => {
       w.inner.disconnect();
       w.outer.disconnect();
+      if (w.main) w.main.removeEventListener('scroll', w.onScroll, true);
       w.main = document.querySelector(SEL);
       if (!w.main) return;
+      w.main.addEventListener('scroll', w.onScroll, { capture: true, passive: true });
       w.inner.observe(w.main, { childList: true, subtree: true, characterData: true });
       if (w.main.parentElement) w.outer.observe(w.main.parentElement, { childList: true });
     };
@@ -419,7 +465,7 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
 })()`;
 
 // 不用再等了（面板关了）：停止看着，下次等时再接上
-const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); w.main = null; } return 1; })()`;
+const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); if (w.main) w.main.removeEventListener('scroll', w.onScroll, true); clearTimeout(w.st); w.main = null; } return 1; })()`;
 async function stopChatWatch(wc) {
   if (!wc || wc.isDestroyed()) return;
   try { await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: STOP_WATCH_CODE }]); } catch {}
@@ -487,6 +533,12 @@ const PAINT_CODE = (list, look) => `(() => {
     sc = el;
     bottom = cs.flexDirection === 'column-reverse' ? Math.abs(el.scrollTop) <= 120 : el.scrollHeight - el.clientHeight - el.scrollTop <= 120;
     break;
+  }
+  // 往上翻着看（不在最下面）：记下屏幕上第一条消息的位置，放完译文后把它挪回原处，正在看的内容不跟着跳
+  let pin = null;
+  if (sc && !bottom) {
+    const top = sc.getBoundingClientRect().top;
+    for (const m of msgs) { const r = m.getBoundingClientRect(); if (r.height && r.bottom > top) { pin = { m, y: r.top }; break; } }
   }
   // 点过的消息这次不在列表里（已经滚出最近读到的范围）：主进程不会处理，按钮恢复能点
   const listed = new Set(L.map((e) => e && e.h));
@@ -578,6 +630,10 @@ const PAINT_CODE = (list, look) => `(() => {
   if (changed && sc && bottom) {
     if (getComputedStyle(sc).flexDirection === 'column-reverse') sc.scrollTop = 0;
     else sc.scrollTop = sc.scrollHeight;
+  } else if (changed && pin && pin.m.isConnected) {
+    // 浏览器自己的滚动锚定已经补过的话，这里量出来差 0，不会补两次
+    const d = pin.m.getBoundingClientRect().top - pin.y;
+    if (Math.abs(d) >= 1) sc.scrollTop += d;
   }
   return clicks;
 })()`;
@@ -585,7 +641,7 @@ const PAINT_CODE = (list, look) => `(() => {
 async function paintTranslations(wc, list, look) {
   if (!wc || wc.isDestroyed() || wc.isLoading()) return [];
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 60) : [], look || {}) }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 100) : [], look || {}) }]);
     return Array.isArray(r) ? r.filter((h) => typeof h === 'string' && /^[0-9a-f]{16}$/.test(h)) : [];
   } catch {
     return [];

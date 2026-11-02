@@ -92,6 +92,7 @@ async function core() {
   assert.strictEqual(fc.viewOf('A').items.length, 0);
   console.log('悬浮翻译逻辑自检通过');
   await keyRetry();
+  await scrolledHistory();
   await persisted();
   await noWordsGist();
   await sendNoJump();
@@ -1404,6 +1405,90 @@ async function keyRetry() {
   fc3.retryKeyErrors({ dailyCap: 500, match: () => true });
   assert.deepStrictEqual([fc3.viewOf('M').items[0].state, fc3.viewOf('M').items[0].tr], ['done', '译:hola 1']);
   console.log('填好密钥自动重翻自检通过');
+}
+
+// 译文显示在消息下面、往上翻聊天记录（1.0.4 bug 检查第 3 条）：屏幕上看得到的旧消息（history）
+// 存过的显示译文，没翻过的只给按钮、不自动翻；点了才翻，上下文用它前面的；翻译栏（view）不动；之后正常读到时接着用
+async function scrolledHistory() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore, textKey } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-hist-'));
+  try {
+    const store = new TrStore(dir);
+    const chat = '910@c.us';
+    const old = Array.from({ length: 30 }, (_, i) => msg(i, i % 7 === 3, chat, `frage ${i}`));
+    const ck = hashOf('H', `chat|${chat}`);
+    store.putKey('H', ck, textKey('frage 1'), { tr: '存:1', text: 'frage 1' });
+    const sent = [];
+    let fail = false;
+    const fc = new FloatCore({ store, translate: async (text, o = {}) => {
+      sent.push({ text, ctx: (o.context || []).map((m) => m.text) });
+      return fail ? { error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' } : { text: `译:${text}`, warn: [] };
+    } });
+    // 停在最下面：最后 20 条（双方）
+    fc.ingest('H', { title: 'Emma', msgs: old.slice(-20), bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    const autoSent = sent.length;
+    const viewBefore = fc.viewOf('H').items.map((x) => x.h).join();
+    // 往上翻：这次读数（最后 20 条已经是更早的）照旧不用
+    assert.strictEqual(fc.ingest('H', { title: 'Emma', msgs: old.slice(0, 20), bottom: false }, { auto: true, dailyCap: 500 }), false);
+    const vis = old.slice(0, 12);
+    const hist = fc.history('H', vis);
+    await sleep(20);
+    assert.strictEqual(sent.length, autoSent, '往上翻不自动翻');
+    const st = (i) => hist.get(msgHash('H', old[i].id));
+    assert.strictEqual(st(1).state, 'done');
+    assert.strictEqual(st(1).tr, '存:1');
+    assert.strictEqual(st(0).state, 'manual');
+    assert.strictEqual(st(3), undefined, '自己发的不放');
+    assert.strictEqual(fc.viewOf('H').items.map((x) => x.h).join(), viewBefore, '翻译栏不动');
+    // 再看一次：同一条，不重新查
+    assert.strictEqual(fc.history('H', vis).get(msgHash('H', old[0].id)), st(0));
+    // 点「翻译」：上下文是它前面看得到的几条（双方）
+    assert(fc.manual('H', msgHash('H', old[8].id)));
+    await sleep(20);
+    assert.strictEqual(sent.length, autoSent + 1);
+    assert.deepStrictEqual(sent[sent.length - 1], { text: 'frage 8', ctx: ['frage 0', 'frage 1', 'frage 2', 'frage 3', 'frage 4', 'frage 5', 'frage 6', 'frage 7'] });
+    assert.strictEqual(st(8).state, 'done');
+    assert.strictEqual(store.get('H', ck, 'frage 8').tr, '译:frage 8', '点过的存盘');
+    // 密钥问题失败的：填好后退回按钮，不自动重翻
+    fail = true;
+    fc.manual('H', msgHash('H', old[9].id));
+    await sleep(20);
+    assert.strictEqual(st(9).state, 'error');
+    fail = false;
+    const n = sent.length;
+    assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: () => true }), ['H']);
+    await sleep(20);
+    assert.strictEqual(st(9).state, 'manual');
+    assert.strictEqual(sent.length, n);
+    // 往上翻看过的这条之后被正常读到（比如新开对话读到了）：接着用，不重翻
+    const fc2h = msgHash('H', old[11].id);
+    fc.manual('H', fc2h);
+    await sleep(20);
+    const m = sent.length;
+    fc.ingest('H', { title: 'Emma', msgs: old.slice(0, 20), bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert.strictEqual(fc.viewOf('H').items.find((x) => x.h === fc2h).tr, '译:frage 11');
+    assert(!sent.slice(m).some((x) => x.text === 'frage 11'), '看过的不重翻');
+    // 往上翻时新来的客户消息先在屏幕上见过（还是「翻译」按钮）：回到最下面照常自动翻
+    const newer = msg(500, false, chat, 'frage neu');
+    fc.history('H', [newer]);
+    await sleep(20);
+    assert(!sent.some((x) => x.text === 'frage neu'), '只在屏幕上见过时不翻');
+    fc.ingest('H', { title: 'Emma', msgs: [...old.slice(0, 19), newer], bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert(sent.some((x) => x.text === 'frage neu'), '回到最下面照常自动翻');
+    // 最多记 HIST_MAX 条
+    const many = Array.from({ length: 200 }, (_, i) => msg(1000 + i, false, '911@c.us', `x ${i}`));
+    for (let i = 0; i < many.length; i += 40) fc.history('H', many.slice(i, i + 40));
+    assert(fc.accs.get('H').hist.size <= 150);
+    console.log('往上翻看到的旧消息自检通过');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留
