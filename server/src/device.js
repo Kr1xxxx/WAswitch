@@ -1,7 +1,9 @@
 // 设备接口：登记、加入团队、同步。只认设备令牌，不认 Access。
 // 规则见设计文档：只收白名单字段；只有显式 403 {revoked:true} 才让客户端停号。
 import { uploadChats } from './crm.js';
-import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE } from './util.js';
+import { json, fail, now, uuid, randomToken, sha256hex, normalizeCode, readJson, HttpError, str, int, oneOf, country, ipText, COLORS_RE, rateLimit, loginPolicy } from './util.js';
+import { normalizeLogin, verifyPassword, hashPassword, passIter } from './password.js';
+import { audit, refundRate } from './util.js';
 
 export const PROTOCOL = 1;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
@@ -19,7 +21,7 @@ export async function authDevice(request, db) {
   if (!m) throw new HttpError(401, '缺少设备令牌');
   const hash = await sha256hex(m[1]);
   const row = await db.prepare(`SELECT d.id, d.user_id, d.revoked_at, d.last_seen_at, d.app_version, d.platform, d.mem_mb, d.low_mem,
-      d.held_hides, d.confirm_hides, u.disabled_at, u.group_id FROM devices d JOIN users u ON u.id = d.user_id WHERE d.token_hash = ?`).bind(hash).first();
+      d.held_hides, d.confirm_hides, u.disabled_at, u.group_id, u.name AS user_name FROM devices d JOIN users u ON u.id = d.user_id WHERE d.token_hash = ?`).bind(hash).first();
   if (!row) throw new HttpError(401, '设备令牌无效');
   if (row.revoked_at || row.disabled_at) throw new HttpError(403, '这台电脑已被管理员停用', { revoked: true, device_id: row.id });
   return row;
@@ -58,16 +60,6 @@ async function addAccounts(db, user, deviceId, list) {
 async function allowPrivate(db) {
   const row = await db.prepare("SELECT value FROM meta WHERE key = 'allow_private'").first();
   return !row || row.value !== 0;
-}
-
-async function rateLimit(db, key, limit, windowMs) {
-  const t = now();
-  const row = await db.prepare(`INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
-    ON CONFLICT(key) DO UPDATE SET
-      count = CASE WHEN window_start < ? THEN 1 ELSE count + 1 END,
-      window_start = CASE WHEN window_start < ? THEN ? ELSE window_start END
-    RETURNING count`).bind(key, t, t - windowMs, t - windowMs, t).first();
-  if (row.count > limit) throw new HttpError(429, '尝试太多次，请 10 分钟后再试');
 }
 
 async function enroll(request, env) {
@@ -196,14 +188,94 @@ async function sync(request, env) {
     cursor: list.length ? list[list.length - 1].version : cursor,
     more: list.length === 200,
     allow_private: await allowPrivate(db),
+    login: await loginPolicy(db),
+    user: { name: dev.user_name },
     confirm_hides: dev.confirm_hides === 1,
     next_sync_s: interval,
     server_time: t,
   });
 }
 
+
+// ---------- 登录 ----------
+const LOGIN_LIMIT = 10; // 同一 IP、同一登录名各自每 10 分钟最多试 10 次
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const clientIp = (request) => request.headers.get('cf-connecting-ip') || 'unknown';
+
+// 设备和后台共用：限速、查人、验密码。成功返回用户行，失败抛 400 / 429
+export async function checkLogin(request, env, body, kind) {
+  const db = env.DB;
+  const ipKey = `login:ip:${clientIp(request)}`;
+  await rateLimit(db, ipKey, LOGIN_LIMIT, LOGIN_WINDOW_MS);
+  const name = normalizeLogin(body.login);
+  const nameKey = `login:name:${name || '-'}`;
+  await rateLimit(db, nameKey, LOGIN_LIMIT, LOGIN_WINDOW_MS);
+  const user = name ? await db.prepare(`SELECT id, name, role, group_id, disabled_at, login_name, pass_hash, pass_salt, pass_iter
+    FROM users WHERE login_name = ?`).bind(name).first() : null;
+  const ok = await verifyPassword(body.password, user, env);
+  if (!ok) {
+    await audit(db, user ? user.id : '', `${kind}.login_fail`, name.slice(0, 32), '');
+    throw new HttpError(400, '账号或密码不对');
+  }
+  await refundRate(db, [ipKey, nameKey]);
+  // 迭代次数和当前设置不一样时，顺手按新设置重算（密码本身不变）
+  if (user.pass_iter !== passIter(env)) {
+    const h = await hashPassword(body.password, env);
+    await db.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, pass_iter = ? WHERE id = ? AND pass_hash = ?')
+      .bind(h.pass_hash, h.pass_salt, h.pass_iter, user.id, user.pass_hash).run();
+  }
+  return user;
+}
+
+async function login(request, env) {
+  const db = env.DB;
+  const body = await readJson(request);
+  checkProtocol(body);
+  const user = await checkLogin(request, env, body, 'device');
+  if (user.disabled_at) return fail(403, '这个账号已停用', { disabled: true });
+  const d = body.device || {};
+  const info = [str(d.name, 40) || '未命名电脑', str(d.app_version, 20), oneOf(d.platform, PLATFORMS, '')];
+  const token = randomToken(32);
+  const hash = await sha256hex(token);
+  const t = now();
+  let deviceId = '';
+  const want = str(body.device_id, 36);
+  if (/^[0-9a-f-]{36}$/.test(want)) {
+    const old = await db.prepare('SELECT id, revoked_at FROM devices WHERE id = ? AND user_id = ?').bind(want, user.id).first();
+    // 被停用的电脑不能靠重新登录绕过去，要管理员恢复
+    if (old && old.revoked_at) return fail(403, '这台电脑已被管理员停用', { revoked: true, device_id: old.id });
+    if (old) {
+      const r = await db.prepare(`UPDATE devices SET token_hash = ?, name = ?, app_version = ?, platform = ?, last_seen_at = ?, logged_out_at = NULL
+        WHERE id = ? AND user_id = ? AND revoked_at IS NULL`).bind(hash, ...info, t, old.id, user.id).run();
+      if (r.meta.changes === 1) deviceId = old.id;
+    }
+  }
+  if (!deviceId) {
+    deviceId = uuid();
+    await db.prepare(`INSERT INTO devices (id, user_id, name, token_hash, app_version, platform, created_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, user.id, info[0], hash, info[1], info[2], t, t).run();
+  }
+  await audit(db, user.id, 'device.login', deviceId);
+  return json({ device_id: deviceId, token, user: { name: user.name }, allow_private: await allowPrivate(db), login: await loginPolicy(db) });
+}
+
+async function logout(request, env) {
+  const db = env.DB;
+  const dev = await authDevice(request, db);
+  // 令牌换成谁也不知道的随机值，这台电脑的记录和团队号的坐席都留着
+  await db.prepare('UPDATE devices SET token_hash = lower(hex(randomblob(32))), logged_out_at = ? WHERE id = ?').bind(now(), dev.id).run();
+  await audit(db, dev.user_id, 'device.logout', dev.id);
+  return json({ ok: true });
+}
+
 export async function handleDevice(request, env, path) {
+  if (path === '/api/device/policy') {
+    if (request.method !== 'GET') return fail(405, '只支持 GET');
+    return json({ v: PROTOCOL, login: await loginPolicy(env.DB) });
+  }
   if (request.method !== 'POST') return fail(405, '只支持 POST');
+  if (path === '/api/device/login') return login(request, env);
+  if (path === '/api/device/logout') return logout(request, env);
   if (path === '/api/device/enroll') return enroll(request, env);
   if (path === '/api/device/join') return join(request, env);
   if (path === '/api/device/sync') return sync(request, env);

@@ -1,25 +1,13 @@
-// 管理后台接口。进来之前 index.js 已经验过 Access JWT，这里按邮箱查人和权限。
-// 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组；坐席 agent 不能登录后台。
+// 管理后台接口。进来之前 index.js 已经按后台会话查到了人（session.js 的 resolveSession），坐席进不来。
+// 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组。
 import { pushReady } from './crm.js';
-import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit } from './util.js';
+import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit, loginPolicy, POLICIES } from './util.js';
+import { normalizeLogin, checkPassword, hashPassword, passwordStmts } from './password.js';
+
+const LOGIN_RULE = '登录名只能用小写字母、数字和 . _ -，2 到 32 位';
 
 const CODE_TTL_MS = 15 * 60 * 1000;
 const ONLINE_MS = 6 * 60 * 1000;
-
-async function resolveAdmin(db, email, env) {
-  let user = await db.prepare('SELECT id, name, email, role, group_id, disabled_at FROM users WHERE email = ?').bind(email).first();
-  const owner = String(env.OWNER_EMAIL || '').trim().toLowerCase();
-  if (!user && owner && email === owner) {
-    // 第一次登录的老板：自动建档
-    const id = uuid();
-    await db.prepare("INSERT INTO users (id, name, email, role, created_at) VALUES (?, ?, ?, 'owner', ?)").bind(id, '老板', email, now()).run();
-    await audit(db, id, 'owner.bootstrap', id);
-    user = { id, name: '老板', email, role: 'owner', group_id: null, disabled_at: null };
-  }
-  if (!user || user.disabled_at || user.role === 'agent') throw new HttpError(403, '这个邮箱没有后台权限');
-  if (user.role === 'supervisor' && !user.group_id) throw new HttpError(403, '这个主管还没分组，请老板先分组');
-  return user;
-}
 
 const isOwner = (me) => me.role === 'owner';
 const inScope = (me, groupId) => isOwner(me) || (!!groupId && groupId === me.group_id);
@@ -37,7 +25,7 @@ function seatStmt(db, deviceId, accountId, visible) {
 async function me(db, user) {
   const groups = await db.prepare('SELECT id, name FROM groups ORDER BY name').all();
   const ap = await db.prepare("SELECT value FROM meta WHERE key = 'allow_private'").first();
-  return json({ user, groups: groups.results, settings: { allow_private: !ap || ap.value !== 0 }, server_time: now() });
+  return json({ user, groups: groups.results, settings: { allow_private: !ap || ap.value !== 0, login_policy: await loginPolicy(db) }, server_time: now() });
 }
 
 async function overview(db, user, env) {
@@ -65,13 +53,15 @@ async function events(db, user, accountId) {
   return json({ events: rows.results });
 }
 
+const USER_COLS = 'id, name, email, login_name, pass_hash IS NOT NULL AS has_password, pass_changed_at, role, group_id, disabled_at, created_at';
+
 async function listUsers(db, user) {
   const users = await (isOwner(user)
-    ? db.prepare('SELECT id, name, email, role, group_id, disabled_at, created_at FROM users ORDER BY role, name')
-    : db.prepare('SELECT id, name, email, role, group_id, disabled_at, created_at FROM users WHERE group_id = ? ORDER BY role, name').bind(user.group_id)).all();
+    ? db.prepare(`SELECT ${USER_COLS} FROM users ORDER BY role, name`)
+    : db.prepare(`SELECT ${USER_COLS} FROM users WHERE group_id = ? ORDER BY role, name`).bind(user.group_id)).all();
   const devices = await (isOwner(user)
-    ? db.prepare('SELECT id, user_id, name, app_version, platform, mem_mb, low_mem, held_hides, confirm_hides, created_at, last_seen_at, revoked_at FROM devices ORDER BY created_at')
-    : db.prepare(`SELECT d.id, d.user_id, d.name, d.app_version, d.platform, d.mem_mb, d.low_mem, d.held_hides, d.confirm_hides, d.created_at, d.last_seen_at, d.revoked_at
+    ? db.prepare('SELECT id, user_id, name, app_version, platform, mem_mb, low_mem, held_hides, confirm_hides, created_at, last_seen_at, revoked_at, logged_out_at FROM devices ORDER BY created_at')
+    : db.prepare(`SELECT d.id, d.user_id, d.name, d.app_version, d.platform, d.mem_mb, d.low_mem, d.held_hides, d.confirm_hides, d.created_at, d.last_seen_at, d.revoked_at, d.logged_out_at
         FROM devices d JOIN users u ON u.id = d.user_id WHERE u.group_id = ? ORDER BY d.created_at`).bind(user.group_id)).all();
   return json({ users: users.results, devices: devices.results, server_time: now() });
 }
@@ -89,9 +79,11 @@ async function auditList(db, user, url) {
 
 // ---------- 人 ----------
 
-async function createUser(db, user, body) {
+async function createUser(db, user, body, env) {
   const name = str(body.name, 40);
   if (!name) return fail(400, '请填写名字');
+  const login = normalizeLogin(body.login_name);
+  if (!login) return fail(400, LOGIN_RULE);
   const role = oneOf(body.role, ['owner', 'supervisor', 'agent'], 'agent');
   let groupId = str(body.group_id, 36) || null;
   const email = str(body.email, 120).toLowerCase() || null;
@@ -100,18 +92,33 @@ async function createUser(db, user, body) {
     need(role === 'agent', '主管只能添加坐席');
     groupId = user.group_id;
   }
-  if (role !== 'agent' && !email) return fail(400, '老板和主管要填邮箱（用来登录后台）');
   if (role === 'supervisor' && !groupId) return fail(400, '主管要选一个组');
   if (groupId) found(await db.prepare('SELECT id FROM groups WHERE id = ?').bind(groupId).first(), '没有这个组');
-  if (email && await db.prepare('SELECT id FROM users WHERE email = ?').bind(email).first()) return fail(409, '这个邮箱已经有人用了');
+  const h = await hashPassword(checkPassword(body.password), env);
   const id = uuid();
-  await db.prepare('INSERT INTO users (id, name, email, role, group_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, name, email, role, groupId, now()).run();
-  await audit(db, user.id, 'user.create', id, { name, role, group_id: groupId });
+  const t = now();
+  try {
+    await db.prepare(`INSERT INTO users (id, name, email, login_name, pass_hash, pass_salt, pass_iter, pass_changed_at, role, group_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, name, email, login, h.pass_hash, h.pass_salt, h.pass_iter, t, role, groupId, t).run();
+  } catch (e) {
+    if (/UNIQUE/i.test(e.message)) return fail(409, /login_name/i.test(e.message) ? '这个登录名已经有人用了' : '这个邮箱已经有人用了');
+    throw e;
+  }
+  await audit(db, user.id, 'user.create', id, { name, login_name: login, role, group_id: groupId });
   return json({ id });
 }
 
+// 重置密码：这个人所有电脑回到登录页，后台会话也一起失效
+async function resetPassword(db, user, id, body, env) {
+  const u = await targetUser(db, user, id);
+  const h = await hashPassword(checkPassword(body.password), env);
+  await db.batch(passwordStmts(db, u.id, h, now()));
+  await audit(db, user.id, 'user.password', id);
+  return json({ ok: true, self: u.id === user.id });
+}
+
 async function targetUser(db, user, id) {
-  const u = found(await db.prepare('SELECT id, name, email, role, group_id, disabled_at FROM users WHERE id = ?').bind(id).first(), '没有这个人');
+  const u = found(await db.prepare('SELECT id, name, email, login_name, role, group_id, disabled_at FROM users WHERE id = ?').bind(id).first(), '没有这个人');
   if (!isOwner(user)) need(u.role === 'agent' && u.group_id === user.group_id);
   return u;
 }
@@ -124,6 +131,11 @@ async function updateUser(db, user, id, body) {
   if (body.disabled !== undefined) {
     need(u.id !== user.id, '不能停用自己');
     sets.push('disabled_at = ?'); vals.push(body.disabled ? now() : null);
+  }
+  if (body.login_name !== undefined) {
+    const l = normalizeLogin(body.login_name);
+    if (!l) return fail(400, LOGIN_RULE);
+    sets.push('login_name = ?'); vals.push(l);
   }
   if (isOwner(user)) {
     if (body.role !== undefined) {
@@ -156,7 +168,6 @@ async function updateUser(db, user, id, body) {
   // 只改名字或停用时不做角色校验：停用是离职流程，不能被旧数据挡住
   const touched = (...cols) => cols.some((c) => sets.includes(`${c} = ?`));
   const guards = [];
-  if (touched('role', 'email')) guards.push(`(${proposed('role')} = 'agent' OR ${proposed('email')} IS NOT NULL)`);
   if (touched('role', 'group_id')) guards.push(`(${proposed('role')} <> 'supervisor' OR ${proposed('group_id')} IS NOT NULL)`);
   if (!isOwner(user)) {
     guards.push("role = 'agent' AND group_id = ? AND EXISTS (SELECT 1 FROM users actor WHERE actor.id = ? AND actor.role = 'supervisor' AND actor.disabled_at IS NULL AND actor.group_id = ?)");
@@ -168,11 +179,11 @@ async function updateUser(db, user, id, body) {
     after = await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND ${valid}
       RETURNING role, group_id, email`).bind(...vals, id, ...guardVals).first();
   } catch (e) {
-    if (/UNIQUE/i.test(e.message)) return fail(409, '这个邮箱已经有人用了');
+    if (/UNIQUE/i.test(e.message)) return fail(409, /login_name/i.test(e.message) ? '这个登录名已经有人用了' : '这个邮箱已经有人用了');
     throw e;
   }
   if (!after) return isOwner(user)
-    ? fail(400, '老板和主管要有邮箱，主管还要选择一个组')
+    ? fail(400, '主管要选择一个组')
     : fail(403, '权限或员工所属组已变化，请刷新后重试');
   await audit(db, user.id, 'user.update', id, body);
   // 换组不会自动搬走他名下的号：提醒老板，主管的管辖范围按账号的组算
@@ -323,6 +334,12 @@ async function createGroup(db, user, body) {
 
 async function updateSettings(db, user, body) {
   need(isOwner(user));
+  if (body.login_policy !== undefined) {
+    const v = POLICIES.indexOf(body.login_policy);
+    if (v < 0) return fail(400, '登录设置不对');
+    await db.prepare("UPDATE meta SET value = ? WHERE key = 'login_policy'").bind(v).run();
+    await audit(db, user.id, 'settings.update', 'login_policy', { login_policy: body.login_policy });
+  }
   if (typeof body.allow_private === 'boolean') {
     await db.prepare("UPDATE meta SET value = ? WHERE key = 'allow_private'").bind(body.allow_private ? 1 : 0).run();
     await audit(db, user.id, 'settings.update', 'allow_private', { allow_private: body.allow_private });
@@ -332,9 +349,10 @@ async function updateSettings(db, user, body) {
 
 // ---------- 路由 ----------
 
-export async function handleAdmin(request, env, path, identity) {
+// user：index.js 按会话查到的人 { id, name, login_name, role, group_id }
+export async function handleAdmin(request, env, path, user) {
   const db = env.DB;
-  const user = await resolveAdmin(db, identity.email, env);
+  if (!user || !['owner', 'supervisor'].includes(user.role)) throw new HttpError(403, '这个账号没有后台权限');
   const m = request.method;
   // 改数据的请求必须带自定义头并且是 JSON，挡住跨站表单
   if (m !== 'GET' && request.headers.get('x-waswitch-admin') !== '1') return fail(403, '缺少请求头');
@@ -353,8 +371,9 @@ export async function handleAdmin(request, env, path, identity) {
     case 'POST accounts/:id/unassign': return unassignAccount(db, user, id);
     case 'DELETE accounts/:id': return deleteAccount(db, user, id);
     case 'GET users': return listUsers(db, user);
-    case 'POST users': return createUser(db, user, body);
+    case 'POST users': return createUser(db, user, body, env);
     case 'PATCH users/:id': return updateUser(db, user, id, body);
+    case 'POST users/:id/password': return resetPassword(db, user, id, body, env);
     case 'POST users/:id/enroll-code': return enrollCode(db, user, id);
     case 'PATCH devices/:id': return renameDevice(db, user, id, body);
     case 'POST devices/:id/revoke': return setDeviceRevoked(db, user, id, true);

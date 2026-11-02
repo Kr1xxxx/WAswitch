@@ -1,6 +1,7 @@
 // 团队后台自检：node server/test/run.mjs
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fakeD1 } from './fake-d1.mjs';
 import worker from '../src/index.js';
@@ -30,91 +31,175 @@ async function jwt(email, { aud = AUD, iss = `https://${DOMAIN}`, exp = Math.flo
 }
 
 const db = fakeD1(path.join(here, '../migrations'));
-const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: AUD, OWNER_EMAIL: 'Boss@Example.com', SYNC_INTERVAL_S: '120', ASSETS: { fetch: async () => new Response('<html>admin</html>', { headers: { 'content-type': 'text/html' } }) } };
+const env = { DB: db, SYNC_INTERVAL_S: '120', ASSETS: { fetch: async () => new Response('<html>admin</html>', { headers: { 'content-type': 'text/html' } }) } };
+const PW = 'correct horse 1';
+const SETUP = 'test-setup-code-0123';
 
-async function call(method, p, { token, body, jwtFor, headers = {}, rawJwt } = {}) {
+async function call(method, p, { token, body, jwtFor, headers = {}, rawJwt, ip } = {}) {
   const h = { ...headers };
   if (body !== undefined) h['content-type'] = 'application/json';
   if (token) h.authorization = `Bearer ${token}`;
   if (jwtFor) h['cf-access-jwt-assertion'] = await jwt(jwtFor);
   if (rawJwt) h['cf-access-jwt-assertion'] = rawJwt;
-  if (method !== 'GET' && jwtFor && h['x-waswitch-admin'] === undefined) h['x-waswitch-admin'] = '1';
+  if (ip) h['cf-connecting-ip'] = ip;
+  if (method !== 'GET' && p.startsWith('/api/admin/') && h['x-waswitch-admin'] === undefined) h['x-waswitch-admin'] = '1';
   const res = await worker.fetch(new Request(`https://team.example.com${p}`, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }), env, {});
   let data = null;
   const text = await res.text();
   try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, headers: res.headers };
 }
-const admin = (email) => ({
-  get: (p) => call('GET', `/api/admin/${p}`, { jwtFor: email }),
-  post: (p, body = {}) => call('POST', `/api/admin/${p}`, { jwtFor: email, body }),
-  patch: (p, body) => call('PATCH', `/api/admin/${p}`, { jwtFor: email, body }),
-  put: (p, body) => call('PUT', `/api/admin/${p}`, { jwtFor: email, body }),
-  del: (p) => call('DELETE', `/api/admin/${p}`, { jwtFor: email }),
-});
+// 后台：按登录名登录一次，之后带会话令牌
+const sessions = new Map();
+async function sessionFor(login, password = PW) {
+  if (!sessions.has(login)) {
+    const r = await call('POST', '/api/admin/session', { body: { login, password } });
+    assert.equal(r.status, 200, `${login} 登录后台：${JSON.stringify(r.data)}`);
+    sessions.set(login, r.data.token);
+  }
+  return sessions.get(login);
+}
+const admin = (login) => {
+  const go = async (method, p, body) => call(method, `/api/admin/${p}`, { token: await sessionFor(login), body });
+  return { get: (p) => go('GET', p), post: (p, body = {}) => go('POST', p, body), patch: (p, body) => go('PATCH', p, body), put: (p, body) => go('PUT', p, body), del: (p) => go('DELETE', p) };
+};
 const sync = (token, body) => call('POST', '/api/device/sync', { token, body: { v: 1, now: Date.now(), cursor: 0, ...body } });
+const devLogin = (login, password, extra = {}) => call('POST', '/api/device/login', { body: { v: 1, login, password, device: { name: '笔记本', app_version: '1.0.5', platform: 'mac' }, ...extra }, ip: extra.ip });
 let passed = 0;
 async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
 
 console.log('团队后台自检');
-const boss = admin('boss@example.com');
 
-await test('没有 Access 登录：管理接口和管理页面都拒绝', async () => {
-  assert.equal((await call('GET', '/api/admin/me')).status, 403);
-  assert.equal((await call('GET', '/admin/')).status, 403);
-  assert.equal((await call('GET', '/anything')).status, 403);
-});
-await test('绕路径：点段被规范化后仍要 JWT；编码斜杠和重复斜杠直接 404', async () => {
-  assert.equal((await call('GET', '/api/device/%2e%2e/admin/me')).status, 403);
-  assert.equal((await call('GET', '/api/device%2f..%2fadmin/me', { jwtFor: 'boss@example.com' })).status, 404);
-  assert.equal((await call('GET', '/api//admin/me', { jwtFor: 'boss@example.com' })).status, 404);
-});
-await test('JWT 的 aud、iss、过期、签名任何一项不对都拒绝', async () => {
-  for (const bad of [await jwt('boss@example.com', { aud: 'x' }), await jwt('boss@example.com', { iss: 'https://evil.cloudflareaccess.com' }),
-    await jwt('boss@example.com', { exp: 1 }), await jwt('boss@example.com', { key: other.privateKey })]) {
-    assert.equal((await call('GET', '/api/admin/me', { rawJwt: bad })).status, 403);
-  }
-});
-await test('没配 Access 环境变量时一律拒绝', async () => {
-  const saved = env.ACCESS_AUD; env.ACCESS_AUD = '';
-  assert.equal((await boss.get('me')).status, 403);
-  env.ACCESS_AUD = saved;
-});
-await test('老板第一次登录自动建档；管理页面加安全头', async () => {
-  const r = await boss.get('me');
-  assert.equal(r.status, 200);
-  assert.equal(r.data.user.role, 'owner');
-  const page = await call('GET', '/admin/', { jwtFor: 'boss@example.com' });
+await test('没登录：管理接口 401；后台页面直接给（里面没有数据）；别的地址 404', async () => {
+  assert.equal((await call('GET', '/api/admin/me')).status, 401);
+  assert.equal((await call('GET', '/api/admin/me', { token: 'A'.repeat(43) })).status, 401);
+  const page = await call('GET', '/admin/');
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
   assert.equal(page.headers.get('access-control-allow-origin'), null);
+  assert.equal((await call('GET', '/anything')).status, 404);
 });
-await test('陌生邮箱进不了后台', async () => {
-  assert.equal((await admin('nobody@example.com').get('me')).status, 403);
+await test('绕路径：点段被规范化后仍要会话；编码斜杠和重复斜杠直接 404', async () => {
+  assert.equal((await call('GET', '/api/device/%2e%2e/admin/me')).status, 401);
+  assert.equal((await call('GET', '/api/device%2f..%2fadmin/me')).status, 404);
+  assert.equal((await call('GET', '/api//admin/me')).status, 404);
+});
+await test('初始化：没设 SETUP_CODE 一律拒绝', async () => {
+  assert.deepEqual((await call('GET', '/api/admin/setup')).data, { enabled: false, needed: true });
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: '', login: 'boss', password: PW } })).status, 403);
+  env.SETUP_CODE = 'short';
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: 'short', login: 'boss', password: PW } })).status, 403, '太短的口令不算设置了');
+  env.SETUP_CODE = SETUP;
+});
+await test('初始化：口令不对、登录名不合格、密码太短都拒绝；不带自定义头拒绝', async () => {
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: 'wrong-code-000000', login: 'boss', password: PW } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: '老板', password: PW } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'boss', password: 'short' } })).status, 400);
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'boss', password: PW }, headers: { 'x-waswitch-admin': '' } })).status, 403);
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM users').get().n, 0);
+  const fails = db.raw.prepare("SELECT detail FROM audit_log WHERE action = 'admin.setup_fail'").all();
+  assert.ok(fails.length >= 1 && !JSON.stringify(fails).includes('wrong-code'), '记失败，不记口令');
+});
+let ownerId;
+await test('初始化：建出老板并直接登录；库里只有哈希；之后只能用口令重置老板密码', async () => {
+  const r = await call('POST', '/api/admin/setup', { body: { code: SETUP, name: '老板', login: ' Boss ', password: 'first password' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.created, true);
+  const row = db.raw.prepare('SELECT * FROM users').get();
+  ownerId = row.id;
+  assert.deepEqual([row.role, row.login_name, row.pass_iter], ['owner', 'boss', 100000]);
+  assert.equal(row.pass_hash.length, 64);
+  assert.ok(!JSON.stringify(row).includes('first password'));
+  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).data.user.role, 'owner');
+  assert.equal((await call('GET', '/api/admin/setup')).data.needed, false);
+  // 再用口令：不会多建一个老板，而是重置这个老板的密码，旧会话失效
+  assert.equal((await call('POST', '/api/admin/setup', { body: { code: SETUP, name: 'x', login: 'someone', password: PW } })).status, 400);
+  const again = await call('POST', '/api/admin/setup', { body: { code: SETUP, login: 'BOSS', password: PW } });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.created, false);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner'").get().n, 1);
+  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 401);
+  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'boss', password: 'first password' } })).status, 400);
+});
+await test('初始化：两个请求同时到只建出一个老板', async () => {
+  const fresh = fakeD1(path.join(here, '../migrations'));
+  const e2 = { ...env, DB: fresh };
+  const req = (login) => worker.fetch(new Request('https://team.example.com/api/admin/setup', { method: 'POST', headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' }, body: JSON.stringify({ code: SETUP, login, password: PW }) }), e2, {});
+  const rs = await Promise.all([req('boss1'), req('boss2')]);
+  assert.equal(fresh.raw.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner'").get().n, 1);
+  assert.deepEqual(rs.map((r) => r.status).sort(), [200, 400]);
+});
+const boss = admin('boss');
+await test('后台登录：错的密码和不存在的登录名回一样的话；退出后会话失效；过期的会话失效', async () => {
+  const bad = await call('POST', '/api/admin/session', { body: { login: 'boss', password: 'nope nope' } });
+  const none = await call('POST', '/api/admin/session', { body: { login: 'ghost', password: 'nope nope' } });
+  assert.deepEqual([bad.status, none.status], [400, 400]);
+  assert.equal(bad.data.error, none.data.error);
+  const r = await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } });
+  assert.equal(r.status, 200);
+  assert.ok(r.data.expires_at - Date.now() > 11.9 * 3600e3 && r.data.expires_at - Date.now() <= 12 * 3600e3);
+  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 200);
+  assert.equal((await call('DELETE', '/api/admin/session', { token: r.data.token })).status, 200);
+  assert.equal((await call('GET', '/api/admin/me', { token: r.data.token })).status, 401);
+  const r2 = await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } });
+  db.raw.prepare('UPDATE admin_sessions SET expires_at = ?').run(Date.now() - 1);
+  assert.equal((await call('GET', '/api/admin/me', { token: r2.data.token })).status, 401);
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = ?').get(r2.data.token)?.n, 0, '库里不存明文令牌');
+  db.raw.prepare('DELETE FROM admin_sessions').run();
+  sessions.clear();
 });
 await test('改数据的请求不带自定义头就拒绝', async () => {
-  const r = await call('POST', '/api/admin/groups', { jwtFor: 'boss@example.com', body: { name: 'x' }, headers: { 'x-waswitch-admin': '' } });
+  const r = await call('POST', '/api/admin/groups', { token: await sessionFor('boss'), body: { name: 'x' }, headers: { 'x-waswitch-admin': '' } });
   assert.equal(r.status, 403);
+});
+await test('配了 Cloudflare Access 时两道都要过；只配一半一律拒绝；设备接口不受影响', async () => {
+  const tok = await sessionFor('boss');
+  Object.assign(env, { ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: AUD });
+  assert.equal((await call('GET', '/api/admin/me', { token: tok })).status, 403, '只有会话');
+  assert.equal((await call('GET', '/api/admin/me', { jwtFor: 'boss@example.com' })).status, 401, '只有 Access');
+  assert.equal((await call('GET', '/api/admin/me', { token: tok, jwtFor: 'boss@example.com' })).status, 200);
+  assert.equal((await call('GET', '/admin/')).status, 403);
+  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'boss', password: PW } })).status, 403);
+  for (const bad of [await jwt('boss@example.com', { aud: 'x' }), await jwt('boss@example.com', { iss: 'https://evil.cloudflareaccess.com' }),
+    await jwt('boss@example.com', { exp: 1 }), await jwt('boss@example.com', { key: other.privateKey })]) {
+    assert.equal((await call('GET', '/api/admin/me', { token: tok, rawJwt: bad })).status, 403);
+  }
+  _resetCertCache(); certFetches = 0;
+  for (let i = 0; i < 5; i += 1) await call('GET', '/api/admin/me', { token: tok, jwtFor: 'boss@example.com' });
+  assert.equal(certFetches, 1, 'Access 公钥有缓存');
+  env.ACCESS_TEAM_DOMAIN = '';
+  assert.equal((await call('GET', '/api/admin/me', { token: tok, jwtFor: 'boss@example.com' })).status, 403);
+  assert.equal((await call('GET', '/api/device/policy')).status, 200);
+  env.ACCESS_AUD = '';
+  assert.equal((await call('GET', '/api/admin/me', { token: tok })).status, 200);
 });
 
 let gA, gB, sup, agentA, agentB;
-await test('建组、主管、坐席；主管只能加本组坐席', async () => {
+await test('建组、主管、坐席：要填登录名和初始密码；主管只能加本组坐席', async () => {
   gA = (await boss.post('groups', { name: 'A 组' })).data.id;
   gB = (await boss.post('groups', { name: 'B 组' })).data.id;
-  sup = (await boss.post('users', { name: '主管甲', email: 'sup@example.com', role: 'supervisor', group_id: gA })).data.id;
+  sup = (await boss.post('users', { name: '主管甲', login_name: 'Sup', password: PW, role: 'supervisor', group_id: gA })).data.id;
   assert.ok(sup);
-  assert.equal((await boss.post('users', { name: '没邮箱主管', role: 'supervisor', group_id: gA })).status, 400);
-  const s = admin('sup@example.com');
-  assert.equal((await s.post('users', { name: '想当主管', email: 'x@example.com', role: 'supervisor' })).status, 403);
-  agentA = (await s.post('users', { name: '坐席A', group_id: gB })).data.id; // group_id 被忽略，强制本组
-  agentB = (await boss.post('users', { name: '坐席B', group_id: gB })).data.id;
+  assert.equal((await boss.post('users', { name: '没登录名', password: PW, role: 'supervisor', group_id: gA })).status, 400);
+  assert.equal((await boss.post('users', { name: '密码太短', login_name: 'short', password: '1234567' })).status, 400);
+  assert.equal((await boss.post('users', { name: '重名', login_name: 'SUP', password: PW })).status, 409);
+  assert.equal((await boss.post('users', { name: '没组主管', login_name: 'nogroup', password: PW, role: 'supervisor' })).status, 400);
+  const s = admin('sup');
+  assert.equal((await s.post('users', { name: '想当主管', login_name: 'x1', password: PW, role: 'supervisor' })).status, 403);
+  agentA = (await s.post('users', { name: '坐席A', login_name: 'anna', password: PW, group_id: gB })).data.id; // group_id 被忽略，强制本组
+  agentB = (await boss.post('users', { name: '坐席B', login_name: 'ben', password: PW, group_id: gB })).data.id;
   const list = (await s.get('users')).data.users;
   assert.deepEqual(list.map((u) => u.name).sort(), ['主管甲', '坐席A'].sort());
+  assert.ok(list.every((u) => u.has_password === 1 && !('pass_hash' in u) && !('pass_salt' in u)), '密码哈希不发给网页');
+});
+await test('坐席不能登录后台', async () => {
+  const r = await call('POST', '/api/admin/session', { body: { login: 'anna', password: PW } });
+  assert.equal(r.status, 403);
 });
 
 let codeA, tokA, devA, acc1, acc2;
 await test('登记码只能用一次；登记时带上本机账号', async () => {
-  codeA = (await admin('sup@example.com').post(`users/${agentA}/enroll-code`)).data.code;
+  codeA = (await admin('sup').post(`users/${agentA}/enroll-code`)).data.code;
   assert.match(codeA, /^[A-Z2-9]{5}-[A-Z2-9]{5}$/);
   const body = { v: 1, code: codeA.toLowerCase(), device: { name: '前台电脑', app_version: '0.4.0', platform: 'win' },
     accounts: [{ local_id: '1700000000001', name: '美国号', color: '#25d366', mode: 'web' }, { local_id: '1700000000002', name: '小号', mode: 'lite' }, { local_id: '../x', name: '坏的' }] };
@@ -168,7 +253,7 @@ await test('换人：原电脑收到显式隐藏，新电脑收到显示', async
   tokB = r.data.token; devB = r.data.device_id;
   const first = await sync(tokA, {});
   const cursorA = first.data.cursor;
-  assert.equal((await admin('sup@example.com').post(`accounts/${acc1}/assign`, { device_id: devB })).status, 200);
+  assert.equal((await admin('sup').post(`accounts/${acc1}/assign`, { device_id: devB })).status, 200);
   const a = await sync(tokA, { cursor: cursorA });
   assert.deepEqual(a.data.seats.map((s) => [s.team_id, s.visible]), [[acc1, false]]);
   const b = await sync(tokB, {});
@@ -187,7 +272,7 @@ await test('改账号名称后，持有它的电脑拿到新名称；备注只�
 });
 await test('同步到 CRM 的开关：只有老板能开，随坐席下发', async () => {
   const before = (await sync(tokB, {})).data.cursor;
-  assert.equal((await admin('sup@example.com').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
+  assert.equal((await admin('sup').patch(`accounts/${acc1}`, { crm_sync: true })).status, 403);
   assert.equal((await boss.patch(`accounts/${acc1}`, { crm_sync: true })).status, 200);
   const r = await sync(tokB, { cursor: before });
   assert.equal(r.data.seats[0].crm_sync, true);
@@ -309,7 +394,7 @@ await test('CRM：关掉同步时，没推出去的聊天一起删；超过 7 �
   Object.assign(env, { CRM_PUSH: '0' });
 });
 await test('主管看不到别组的号，也不能分配', async () => {
-  const s = admin('sup@example.com');
+  const s = admin('sup');
   await boss.patch(`accounts/${acc2}`, { group_id: gB });
   const ov = (await s.get('overview')).data.accounts.map((a) => a.id);
   assert.ok(ov.includes(acc1) && !ov.includes(acc2));
@@ -337,7 +422,7 @@ await test('收回后才能删除记录；只有老板能删；删除是软删�
   const offlineCursor = (await sync(tokB, {})).data.cursor; // 电脑 B 之后一直离线
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 400);
   await boss.post(`accounts/${acc1}/unassign`);
-  assert.equal((await admin('sup@example.com').del(`accounts/${acc1}`)).status, 403);
+  assert.equal((await admin('sup').del(`accounts/${acc1}`)).status, 403);
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 200);
   assert.ok(!(await boss.get('overview')).data.accounts.some((a) => a.id === acc1));
   assert.equal((await boss.del(`accounts/${acc1}`)).status, 404);
@@ -365,14 +450,134 @@ await test('登记接口按 IP 限速', async () => {
 });
 await test('操作记录：老板看全部，主管只看自己的', async () => {
   const all = (await boss.get('audit')).data.entries;
-  const mine = (await admin('sup@example.com').get('audit')).data.entries;
+  const mine = (await admin('sup').get('audit')).data.entries;
   assert.ok(all.length > mine.length && mine.length > 0);
   assert.ok(mine.every((e) => e.actor_id === sup));
 });
-await test('Access 公钥缓存：不是每个请求都去拉', async () => {
-  _resetCertCache(); certFetches = 0;
-  for (let i = 0; i < 5; i += 1) await boss.get('me');
-  assert.equal(certFetches, 1);
+// ---- 登录 ----
+await test('登录策略：默认提示登录；不要令牌；只有老板能改；同步和登录都带上', async () => {
+  assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'optional' });
+  assert.equal((await call('POST', '/api/device/policy', { body: {} })).status, 405);
+  assert.equal((await admin('sup').put('settings', { login_policy: 'required' })).status, 403);
+  assert.equal((await boss.put('settings', { login_policy: 'always' })).status, 400);
+  for (const p of ['required', 'off', 'optional']) {
+    assert.equal((await boss.put('settings', { login_policy: p })).status, 200);
+    assert.equal((await call('GET', '/api/device/policy')).data.login, p);
+    assert.equal((await sync(tokA, {})).data.login, p);
+    assert.equal((await boss.get('me')).data.settings.login_policy, p);
+  }
+  assert.deepEqual((await sync(tokA, {})).data.user, { name: '坐席A' });
+});
+let loginDev, loginTok;
+await test('软件登录：成功拿到令牌和人名；错的密码、不存在的账号回同一句话；失败只记登录名', async () => {
+  const r = await devLogin('ANNA', PW);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.user, { name: '坐席A' });
+  assert.equal(r.data.login, 'optional');
+  assert.equal(typeof r.data.allow_private, 'boolean');
+  loginDev = r.data.device_id; loginTok = r.data.token;
+  const row = db.raw.prepare('SELECT name, platform, app_version, token_hash FROM devices WHERE id = ?').get(loginDev);
+  assert.deepEqual([row.name, row.platform, row.app_version], ['笔记本', 'mac', '1.0.5']);
+  assert.notEqual(row.token_hash, loginTok);
+  assert.equal((await sync(loginTok, {})).status, 200);
+  const bad = await devLogin('anna', 'wrong password', { ip: '7.7.7.1' });
+  const none = await devLogin('nobody', 'wrong password', { ip: '7.7.7.1' });
+  assert.deepEqual([bad.status, none.status, bad.data.error], [400, 400, '账号或密码不对']);
+  assert.equal(none.data.error, bad.data.error);
+  assert.equal((await call('POST', '/api/device/login', { body: { v: 99, login: 'anna', password: PW } })).status, 426);
+  const log = JSON.stringify(db.raw.prepare("SELECT * FROM audit_log WHERE action = 'device.login_fail'").all());
+  assert.ok(log.includes('anna') && !log.includes('wrong password'));
+});
+await test('软件登录：带上次的设备号且是本人的就沿用（坐席不丢），旧令牌作废；别人的设备号就新建', async () => {
+  const r = await devLogin('anna', PW, { device_id: devB });
+  assert.equal(r.data.device_id, devB);
+  assert.equal((await sync(tokB, {})).status, 401, '旧令牌作废');
+  tokB = r.data.token;
+  assert.equal((await sync(tokB, {})).status, 200);
+  const other = await devLogin('ben', PW, { device_id: devB });
+  assert.notEqual(other.data.device_id, devB);
+  assert.equal((await sync(tokB, {})).status, 200, '别人登录不影响这台');
+  assert.equal(db.raw.prepare('SELECT user_id FROM devices WHERE id = ?').get(other.data.device_id).user_id, agentB);
+});
+await test('软件登录：被停用的电脑带着设备号登录回 403 revoked；被停用的人回 403 disabled', async () => {
+  await boss.post(`devices/${devB}/revoke`);
+  const r = await devLogin('anna', PW, { device_id: devB });
+  assert.deepEqual([r.status, r.data.revoked, r.data.device_id], [403, true, devB]);
+  await boss.post(`devices/${devB}/restore`);
+  await boss.patch(`users/${agentB}`, { disabled: true });
+  const d = await devLogin('ben', PW);
+  assert.deepEqual([d.status, d.data.disabled, d.data.error], [403, true, '这个账号已停用']);
+  const wrong = await devLogin('ben', 'not the password', { ip: '7.7.7.2' });
+  assert.equal(wrong.status, 400, '密码不对时不透露账号被停用');
+  await boss.patch(`users/${agentB}`, { disabled: false });
+});
+await test('退出登录：令牌失效（401，不是 403），设备记录和坐席留着，后台看得出已退出', async () => {
+  const r = await devLogin('anna', PW);
+  assert.equal((await call('POST', '/api/device/logout', { token: r.data.token, body: {} })).status, 200);
+  const s = await sync(r.data.token, {});
+  assert.equal(s.status, 401);
+  assert.equal(s.data.revoked, undefined);
+  const d = (await boss.get('users')).data.devices.find((x) => x.id === r.data.device_id);
+  assert.ok(d.logged_out_at > 0);
+  const back = await devLogin('anna', PW, { device_id: r.data.device_id });
+  assert.equal(back.data.device_id, r.data.device_id);
+  assert.equal((await boss.get('users')).data.devices.find((x) => x.id === r.data.device_id).logged_out_at, null);
+});
+await test('重置密码：这个人所有电脑的令牌和后台会话都失效；旧密码不能用；主管只能重置本组坐席', async () => {
+  assert.equal((await admin('sup').post(`users/${agentB}/password`, { password: 'new password 2' })).status, 403);
+  assert.equal((await admin('sup').post(`users/${agentA}/password`, { password: 'short' })).status, 400);
+  assert.equal((await sync(tokB, {})).status, 200);
+  assert.equal((await admin('sup').post(`users/${agentA}/password`, { password: 'new password 2' })).status, 200);
+  assert.equal((await sync(tokB, {})).status, 401);
+  assert.equal((await sync(loginTok, {})).status, 401);
+  assert.equal((await sync(tokA, {})).status, 401, '用登记码登记的电脑也失效');
+  assert.equal((await devLogin('anna', PW, { ip: '7.7.7.3' })).status, 400);
+  const r = await devLogin('anna', 'new password 2', { device_id: devB });
+  tokB = r.data.token;
+  tokA = (await devLogin('anna', 'new password 2', { device_id: devA })).data.token;
+  assert.equal((await sync(tokA, {})).status, 200);
+  // 主管自己的后台会话
+  const supTok = await sessionFor('sup');
+  await boss.post(`users/${sup}/password`, { password: 'sup password 2' });
+  assert.equal((await call('GET', '/api/admin/me', { token: supTok })).status, 401);
+  sessions.delete('sup');
+  await sessionFor('sup', 'sup password 2');
+});
+await test('改登录名：重名 409，格式不对 400；改了以后用新名字登录', async () => {
+  assert.equal((await boss.patch(`users/${agentA}`, { login_name: 'BEN' })).status, 409);
+  assert.equal((await boss.patch(`users/${agentA}`, { login_name: 'a' })).status, 400);
+  assert.equal((await admin('sup').patch(`users/${agentA}`, { login_name: 'anna.k' })).status, 200);
+  assert.equal((await devLogin('anna.k', 'new password 2', { device_id: devB })).status, 200);
+});
+await test('登录限速：同一个登录名 10 分钟最多错 10 次（换 IP 也不行），同一个 IP 也是；成功的登录不占额度', async () => {
+  db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'login:%'").run();
+  for (let i = 0; i < 15; i += 1) assert.equal((await devLogin('ben', PW)).status, 200, '同一个 IP 成功登录很多次');
+  for (let i = 0; i < 10; i += 1) assert.equal((await devLogin('ben', 'bad password', { ip: `8.8.8.${i}` })).status, 400);
+  assert.equal((await devLogin('ben', PW, { ip: '8.8.9.1' })).status, 429, '密码对也先挡住');
+  assert.equal((await call('POST', '/api/admin/session', { body: { login: 'ben', password: PW }, ip: '8.8.9.2' })).status, 429, '后台登录同一个额度');
+  for (let i = 0; i < 10; i += 1) await devLogin(`nobody${i}`, 'bad password', { ip: '6.6.6.6' });
+  assert.equal((await devLogin('anna.k', 'new password 2', { ip: '6.6.6.6' })).status, 429);
+  // 并发：先计数再验密码，同时打 20 个也最多 10 个进得去
+  const rs = await Promise.all(Array.from({ length: 20 }, (_, i) => devLogin('boss', 'bad password', { ip: `5.5.5.${i}` })));
+  assert.equal(rs.filter((r) => r.status === 400).length, 10);
+  db.raw.prepare("DELETE FROM rate_limits WHERE key LIKE 'login:%'").run();
+});
+await test('改了 PASS_ITER：下次登录时自动按新次数重算，密码不变', async () => {
+  env.PASS_ITER = '20000';
+  assert.equal((await devLogin('ben', PW)).status, 200);
+  assert.equal(db.raw.prepare('SELECT pass_iter FROM users WHERE id = ?').get(agentB).pass_iter, 20000);
+  delete env.PASS_ITER;
+  assert.equal((await devLogin('ben', PW)).status, 200);
+  assert.equal(db.raw.prepare('SELECT pass_iter FROM users WHERE id = ?').get(agentB).pass_iter, 100000);
+});
+await test('定时任务只有一个（每 30 分钟）；每天 UTC 19:00 那次清理过期会话和旧记录，其它时候不清', async () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(here, '../wrangler.jsonc'), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+  assert.deepEqual(cfg.triggers.crons, ['*/30 * * * *']);
+  db.raw.prepare("INSERT INTO admin_sessions (token_hash, user_id, created_at, expires_at) VALUES ('old', ?, 0, 1)").run(ownerId);
+  await worker.scheduled({ cron: '*/30 * * * *', scheduledTime: Date.UTC(2026, 10, 2, 19, 30) }, env);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = 'old'").get().n, 1);
+  await worker.scheduled({ cron: '*/30 * * * *', scheduledTime: Date.UTC(2026, 10, 2, 19, 0) }, env);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM admin_sessions WHERE token_hash = 'old'").get().n, 0);
 });
 await test('每日清理任务能跑', async () => {
   await worker.scheduled({}, env);

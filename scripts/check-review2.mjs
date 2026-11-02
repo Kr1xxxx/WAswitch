@@ -42,7 +42,7 @@ async function fixture() {
   db.raw.prepare('INSERT INTO device_seats VALUES(?,?,1,0)').run(devices[0].id, account);
   const admin = (method, route, body = {}) => handleAdmin(new Request(`https://team.example/api/admin/${route}`, {
     method, headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' }, body: JSON.stringify(body),
-  }), { DB: db }, `/api/admin/${route}`, { email: 'owner@example.com' });
+  }), { DB: db }, `/api/admin/${route}`, { id: owner, name: 'Owner', role: 'owner', group_id: null });
   const sync = (device, unread, events = []) => handleDevice(new Request('https://team.example/api/device/sync', {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${device.token}` },
     body: JSON.stringify({ v: 1, cursor: 0, status: [{ team_id: account, state: 'ready', unread }], events }),
@@ -124,11 +124,11 @@ try {
     assert.equal(f.db.raw.prepare('SELECT COUNT(*) AS n FROM status_events').get().n, 0);
   });
 
-  await test('无效用户更新返回 400 时，名称、组、禁用状态和邮箱都不变', async () => {
+  await test('无效用户更新返回 400 时，名称、组、禁用状态和登录名都不变', async () => {
     const f = await fixture();
     const row = () => ({ ...f.db.raw.prepare('SELECT * FROM users WHERE id=?').get(f.agent) });
     const before = row();
-    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { name: 'changed', disabled: true, email: '' })).status, 400);
+    assert.equal((await f.admin('PATCH', `users/${f.agent}`, { name: 'changed', disabled: true, login_name: 'new.name', group_id: '' })).status, 400);
     assert.deepEqual(row(), before);
     assert.equal((await f.admin('PATCH', `users/${f.agent}`, { group_id: '' })).status, 400);
     assert.deepEqual(row(), before);
@@ -136,7 +136,7 @@ try {
     assert.equal(row().email, null);
   });
 
-  await test('用户更新提交时重新验证角色约束，不能用过时快照清空新主管邮箱', async () => {
+  await test('用户更新提交时重新验证角色约束，不能用过时快照清空新主管的组', async () => {
     const f = await fixture();
     await f.admin('PATCH', `users/${f.agent}`, { role: 'agent' });
     const prepare = f.db.prepare.bind(f.db);
@@ -158,13 +158,13 @@ try {
       };
       return stmt;
     };
-    const clear = f.admin('PATCH', `users/${f.agent}`, { name: 'stale', email: '' });
+    const clear = f.admin('PATCH', `users/${f.agent}`, { name: 'stale', group_id: '' });
     await entered;
     try { assert.equal((await f.admin('PATCH', `users/${f.agent}`, { role: 'supervisor' })).status, 200); }
     finally { release(); }
     assert.equal((await clear).status, 400);
-    const row = f.db.raw.prepare('SELECT role,email,name FROM users WHERE id=?').get(f.agent);
-    assert.equal(row.role, 'supervisor'); assert.equal(row.email, 'supervisor@example.com'); assert.equal(row.name, 'Supervisor');
+    const row = f.db.raw.prepare('SELECT role,group_id,name FROM users WHERE id=?').get(f.agent);
+    assert.equal(row.role, 'supervisor'); assert.ok(row.group_id); assert.equal(row.name, 'Supervisor');
   });
 
   await test('不合法角色返回 400；没分组的旧主管仍能改名和停用，但不能在无组时设为主管', async () => {

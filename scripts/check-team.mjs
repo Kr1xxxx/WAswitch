@@ -13,24 +13,19 @@ const require = createRequire(import.meta.url);
 const { TeamSync } = require('../src/team/index.js');
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-// ---- 后台：内存数据库 + 假的 Access ----
-const DOMAIN = 'acme.cloudflareaccess.com';
-const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
-const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
-globalThis.fetch = async () => new Response(JSON.stringify({ keys: [{ ...pub, kid: 'k1' }] }), { headers: { 'content-type': 'application/json' } });
-const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-async function jwt(email) {
-  const head = enc({ alg: 'RS256', kid: 'k1' });
-  const body = enc({ email, aud: ['aud'], iss: `https://${DOMAIN}`, exp: Math.floor(Date.now() / 1000) + 600 });
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, new TextEncoder().encode(`${head}.${body}`));
-  return `${head}.${body}.${Buffer.from(sig).toString('base64url')}`;
-}
+// ---- 后台：内存数据库；老板用初始化口令建账号，再用会话令牌调后台接口 ----
 const db = fakeD1(path.join(root, 'server/migrations'));
-const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: 'aud', OWNER_EMAIL: 'boss@example.com', ASSETS: { fetch: async () => new Response('') } };
+const env = { DB: db, SETUP_CODE: 'check-team-setup-code', PASS_ITER: '10000', ASSETS: { fetch: async () => new Response('') } };
+const setup = await worker.fetch(new Request('https://team.example.com/api/admin/setup', {
+  method: 'POST', headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' },
+  body: JSON.stringify({ code: env.SETUP_CODE, name: '老板', login: 'boss', password: 'boss password 1' }),
+}), env, {});
+const bossToken = (await setup.json()).token;
+assert.ok(bossToken, '初始化老板账号');
 async function boss(method, p, body) {
   const res = await worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
     method, body: body === undefined ? undefined : JSON.stringify(body),
-    headers: { 'cf-access-jwt-assertion': await jwt('boss@example.com'), 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${bossToken}`, 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   }), env, {});
   return res.json();
 }
@@ -79,7 +74,7 @@ async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${na
 console.log('团队模式端到端自检');
 
 const me = await boss('GET', 'me');
-const agent = await boss('POST', 'users', { name: '坐席A' });
+const agent = await boss('POST', 'users', { name: '坐席A', login_name: 'anna', password: 'anna password 1' });
 const code = async () => (await boss('POST', `users/${agent.id}/enroll-code`)).code;
 const A = machine('a', [acc('101', '一号'), acc('102', '二号'), acc('103', '三号'), acc('104', '私人号')]);
 assert.equal(me.user.role, 'owner');

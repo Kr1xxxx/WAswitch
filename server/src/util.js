@@ -94,3 +94,25 @@ export async function audit(db, actorId, action, target = '', detail = '') {
     .bind(actorId, action, String(target), now(), typeof detail === 'string' ? detail : JSON.stringify(detail)).run();
 }
 
+
+// 限速：key 每 windowMs 一个窗口，超过 limit 次返回 429。先计数再做事，并发请求也挡得住
+export async function rateLimit(db, key, limit, windowMs) {
+  const t = now();
+  const row = await db.prepare(`INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
+    ON CONFLICT(key) DO UPDATE SET
+      count = CASE WHEN window_start < ? THEN 1 ELSE count + 1 END,
+      window_start = CASE WHEN window_start < ? THEN ? ELSE window_start END
+    RETURNING count`).bind(key, t, t - windowMs, t - windowMs, t).first();
+  if (row.count > limit) throw new HttpError(429, '尝试太多次，请 10 分钟后再试');
+}
+// 成功的登录把刚才那次退回去：同一个办公室几十个人先后登录，不会把 IP 的额度用光
+export async function refundRate(db, keys) {
+  await db.batch(keys.map((k) => db.prepare('UPDATE rate_limits SET count = MAX(count - 1, 0) WHERE key = ?').bind(k)));
+}
+
+// 登录策略：meta.login_policy 0/1/2
+export const POLICIES = ['off', 'optional', 'required'];
+export async function loginPolicy(db) {
+  const row = await db.prepare("SELECT value FROM meta WHERE key = 'login_policy'").first();
+  return POLICIES[row ? row.value : 1] || 'optional';
+}
