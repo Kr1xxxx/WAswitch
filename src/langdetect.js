@@ -58,7 +58,19 @@ function detectLang(text) {
   return best;
 }
 
-const api = { detectLang };
+// 原文是不是中文（自动翻译用：翻成中文没意义，中文消息不翻）。汉字占字母的一半以上，并且没有假名、韩文
+// 比 detectLang 宽：一两个字（「好」「好的」）也算，中文夹几个英文词（产品名、型号）也算
+function isChinese(text) {
+  const t = String(text || '').slice(0, 2000);
+  let letters = 0;
+  for (const ch of t) if (/\p{L}/u.test(ch)) letters += 1;
+  if (!letters) return false;
+  if (/[぀-ヿ가-힯]/.test(t)) return false;
+  const han = (t.match(/[一-鿿]/g) || []).length;
+  return han > 0 && han / letters >= 0.5;
+}
+
+const api = { detectLang, isChinese };
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 else root.LangDetect = api;
 })(typeof window !== 'undefined' ? window : globalThis);

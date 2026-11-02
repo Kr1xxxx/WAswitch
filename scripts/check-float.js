@@ -1520,18 +1520,35 @@ async function noWordsGist() {
   assert.deepStrictEqual(sent, ['And ok…'], '时间、编号不翻，存过的不再翻');
   const items = fc.viewOf('G').items;
   assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), [['done', '谢谢，请发送发票'], ['done', '已付\n【要点】我自己写的'], ['skip', ''], ['skip', ''], ['done', '译:And ok…']]);
+  // 中文原文不翻（shen 2026-11-02）：不自动翻、不占额度、不给「翻译」按钮；自己发的也不翻；其他语言照常
+  {
+    const sent2 = [];
+    const f2 = new FloatCore({ translate: async (text) => { sent2.push(text); return { text: `译:${text}`, warn: [] }; } });
+    const c2 = '888@c.us';
+    const zh = [msg(1, false, c2, '好的，我明天付款'), msg(2, false, c2, '好'), msg(3, false, c2, 'ok 好的'), msg(4, false, c2, 'Hola, ¿cuánto cuesta?'),
+      msg(5, true, c2, 'Hello, the price is 10 EUR'), msg(6, false, c2, 'Mi pedido 订单 12345'), msg(7, false, c2, 'こんにちは、ありがとう')];
+    f2.ingest('Z', { title: 'z', msgs: zh }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert.deepStrictEqual(sent2, ['Hola, ¿cuánto cuesta?', 'Mi pedido 订单 12345', 'こんにちは、ありがとう'], '中文和自己发的不翻，其他语言照常翻');
+    const zi = f2.viewOf('Z').items;
+    assert.deepStrictEqual(zi.slice(0, 3).map((x) => x.state), ['skip', 'skip', 'skip']);
+    assert(!f2.manual('Z', zi[0].h), '中文消息没有翻译按钮');
+    // 往上翻时看到的中文旧消息也一样
+    const hs = f2.history('Z', [msg(20, false, c2, '谢谢你')]);
+    assert.strictEqual([...hs.values()][0].state, 'skip');
+  }
   // 不翻的：点不了翻译、改不了
   assert(!fc.manual('G', items[2].h));
   assert(!fc.edit('G', items[2].h, 'x'));
   // 用户自己的「收到」模式要要点：存着的要点不删；客户原文里本来就有【要点】也不删
   let keep = true;
   const fc2 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  store.put('G', ck, '客户写的【要点】', { tr: '客户\n【要点】原文就有' });
+  store.put('G', ck, 'Client wrote【要点】', { tr: '客户\n【要点】原文就有' });
   fc2.ingest('G', { title: 'g', msgs: [msg(1, false, chat, 'Thanks, please send the invoice')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc2.viewOf('G').items[0].tr, '谢谢，请发送发票\n\n【要点】客户要求发送发票');
   keep = false;
   const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
+  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, 'Client wrote【要点】')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc3.viewOf('G').items.at(-1).tr, '客户\n【要点】原文就有');
   fs.rmSync(dir, { recursive: true, force: true });
 }

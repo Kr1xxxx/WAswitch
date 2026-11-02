@@ -9,6 +9,7 @@
 // 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
 const crypto = require('crypto');
 const { textKey, cleanVia, VIEW_MAX } = require('./trstore');
+const { isChinese } = require('./langdetect');
 
 const KEEP_PER_ACCOUNT = 200;
 const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
@@ -67,6 +68,8 @@ function viaOf(rec) {
 
 // 没有任何文字（字母、汉字）的消息不用翻：时间、数字、编号、电话、表情、标点，原样看得懂（shen 2026-10-28）
 const noWords = (text) => !/\p{L}/u.test(String(text));
+// 不用翻的：没有字（时间、编号、号码、表情），或原文已经是中文（shen 2026-11-02「中文不翻译」）。状态 skip：不翻、不占额度、不显示翻译按钮，只显示原文
+const noTr = (text) => noWords(text) || isChinese(text);
 // 骨架：同一条消息两次读到的文字骨架一样，差的只是显示格式（方向符、空格、连字符、引号、表情、问号感叹号、大小写），译文照用。
 // 留字母、数字、货币和数学符号、%；两个数字中间的 - . , : / 也留（1.5 和 15、5:30 和 53:0 不是一回事），各种连字符先归成一种
 const skel = (t) => {
@@ -336,14 +339,14 @@ class FloatCore {
           // 转过、还没翻成的：用存着的文字照常翻，不再转；以前没听出话的显示原因，用户点「重试」才再转
           const heard = this.deps.store && this.deps.store.getHeard ? this.deps.store.getHeard(accId, item.ck, item.k) : null;
           if (heard !== null && !heard.trim()) Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
-          else if (heard !== null) Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+          else if (heard !== null) Object.assign(item, { text: heard, state: noTr(heard) ? 'skip' : 'manual' });
         }
         st.items.set(h, item);
         fresh.push(item);
         continue;
       }
       // 以前翻过（存在磁盘上）：直接用，不排队、不算额度
-      const skip = noWords(item.text);
+      const skip = noTr(item.text);
       let saved = !skip && this.deps.store ? this.deps.store.get(accId, item.ck, item.text) : null;
       if (!skip && saved) look.hit += 1;
       if (!skip && !saved && this.deps.store) {
@@ -742,7 +745,7 @@ class FloatCore {
         }
         item.text = v.text.trim().slice(0, 4000);
         heard(item.text); // 先存转出来的文字：翻译失败、重启后不再重转
-        if (noWords(item.text)) { item.state = 'skip'; this.onChange(job.accId); continue; }
+        if (noTr(item.text)) { item.state = 'skip'; this.onChange(job.accId); continue; }
         // 回到翻译队列：用户点的排最前
         item.state = 'queued';
         if (job.manual) this.queue.unshift(job); else this.queue.push(job);
@@ -941,11 +944,11 @@ class FloatCore {
       }
       const heard = store && store.getHeard ? store.getHeard(accId, item.ck, item.k) : null;
       if (heard !== null && !heard.trim()) return Object.assign(item, { state: 'error', err: '没听出说的话', errKind: 'empty' });
-      if (heard !== null) return Object.assign(item, { text: heard, state: noWords(heard) ? 'skip' : 'manual' });
+      if (heard !== null) return Object.assign(item, { text: heard, state: noTr(heard) ? 'skip' : 'manual' });
       if (item.voice > VOICE_MAX_S) item.note = 'long';
       return item;
     }
-    if (noWords(item.text)) { item.state = 'skip'; return item; }
+    if (noTr(item.text)) { item.state = 'skip'; return item; }
     const saved = store ? store.get(accId, item.ck, item.text) || this.sameMessage(accId, item, views) : null;
     if (saved) Object.assign(item, { state: 'done', tr: saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
     return item;
