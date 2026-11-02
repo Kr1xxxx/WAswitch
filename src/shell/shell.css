@@ -486,10 +486,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .tr-form input, .tr-form textarea { border: var(--hair) solid var(--line); border-radius: var(--r-m); padding: 6px 8px; font: inherit; background: var(--white); box-sizing: border-box; }
 .tr-form textarea { width: 100%; resize: vertical; }
 
-/* 开了“同步到 CRM”的号 */
-.avatar.crm { box-shadow: 0 0 0 2px var(--tint), 0 0 0 4px var(--blue-9); }
-.crm-tag { margin-left: 6px; padding: 0 5px; border-radius: var(--r-s); background: var(--blue-9); color: var(--white); font-size: var(--fs-s); font-weight: 600; line-height: 16px; vertical-align: 1px; }
-
 /* 右侧工作台顶部的切页：客户资料 / 话术 / 翻译 */
 .wb-tabs { flex: none; display: flex; align-items: stretch; gap: 2px; height: 42px; padding: 0 6px 0 4px; border-bottom: var(--hair) solid var(--line); background: var(--white); }
 .wb-tools { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 6px; }
@@ -689,11 +685,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .err-raw code, .pdetails code { display: block; margin-top: 4px; padding: 6px 8px; border-radius: var(--r-s); background: var(--slate-a3); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: var(--fs-s); line-height: 1.5; white-space: pre-wrap; word-break: break-all; user-select: text; }
 
 /* 按钮、标签、页签里的中文不折行：空间不够时由外层收缩或换行，不把“重新翻译”挤成“重新翻/译”（shen 2026-10-27） */
-.btn, .dk-link, .link-btn, .dk-edited, .dk-fixed, .dk-status .dk-dim, .tag, .pn-tag, .pill, .crm-tag, .tab, .tb-tab, .back, .updbtns button, .dk-label { white-space: nowrap; }
-/* 侧栏账号名太长时只省略名字，后面的 CRM 标记照样完整显示 */
+.btn, .dk-link, .link-btn, .dk-edited, .dk-fixed, .dk-status .dk-dim, .tag, .pn-tag, .pill, .tab, .tb-tab, .back, .updbtns button, .dk-label { white-space: nowrap; }
+/* 侧栏账号名太长时只省略名字 */
 .row .name { display: flex; align-items: center; gap: 4px; }
 .row .name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.row .name .crm-tag { flex: none; margin-left: 2px; }
 /* 团队页 CRM 列表：号名一行（省略号），说明占剩下的宽度 */
 .setrow > .crm-name { flex: none; max-width: 45%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 .setrow > .crm-note { flex: 1 1 0; min-width: 0; }

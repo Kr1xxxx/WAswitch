@@ -312,15 +312,14 @@ function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
   // 自己关了通知，或者所在分组整组关了，都显示成灰色
   const quiet = acc.muted || acc.groupMuted;
-  // 开了“同步到 CRM”的号：头像外圈蓝色、名字旁边 CRM 标记，侧栏收起时也看得到
-  const avatar = avatarOf(acc, acc.crm ? ' crm' : '');
+  const avatar = avatarOf(acc);
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
   const via = acc.mode === 'lite' ? `轻量模式，${acc.proxyLabel}` : acc.proxyLabel;
-  const tip = [acc.name, s.locked ? '' : acc.phone, via, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const tip = [acc.name, s.locked ? '' : acc.phone, via, acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   // 名字下面一行：有问题时写问题，平时写这个号登录的手机号（连接方式在悬停提示里）。锁着时不露手机号
   const sub = acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : s.locked ? '' : acc.phone;
   const row = h('button', {
@@ -330,7 +329,7 @@ function accountRow(acc) {
   },
   avatar,
   h('span', { class: 'meta' },
-    h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
+    h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name)),
     sub ? h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, sub) : null),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: 'var(--slate-11)' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
@@ -2168,7 +2167,7 @@ function crmBox(accounts, upload) {
     h('p', { class: 'hint', style: { margin: '0' } }, '这些号的单聊文字消息每 10 分钟同步到公司 CRM。群聊不同步；网页版的号只同步你打开过的对话。'),
     h('p', { class: 'hint', style: { margin: '0', fontSize: 'var(--fs-s)' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
-      avatarOf(a, a.crm ? ' crm' : ''),
+      avatarOf(a),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
       h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
         ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`

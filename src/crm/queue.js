@@ -70,7 +70,7 @@ class CrmQueue {
     return this.accs;
   }
 
-  // 这个号开了同步：记下开始时间（只收这之后的消息）。已经开着就返回原来的时间
+  // 这个号开始采集：记下开始时间（只收这之后的消息）。已经开着就返回原来的时间
   enable(accId) {
     const accs = this.load();
     if (!accs.has(accId)) {

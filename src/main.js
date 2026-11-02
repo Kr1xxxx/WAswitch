@@ -1346,7 +1346,7 @@ function pushState() {
         liteStatus: isLite(acc) ? (liteStates.get(acc.id)?.status || 'connecting') : '',
         team: !!acc.teamId,
         teamNote: acc.teamNote || '',
-        // 开了“同步到 CRM”：侧栏一直显示标记；团队页显示条数（不显示内容）
+        // 团队号都同步到 CRM：只在设置 › 团队显示条数（不显示内容），侧栏没有标记
         crm: crmOn(acc) ? crmQueue.stats(acc.id) : null,
         crmWanted: !!(acc.teamCrm && !isParked(acc)),
       };
@@ -2630,7 +2630,7 @@ app.on('second-instance', () => notifier.showWindow());
 
 // ---------- 团队模式 ----------
 // ---------- 同步到 CRM：采集到本机加密队列（第 1 步），定时传到团队后台（第 2 步） ----------
-// 只有团队号、管理员在后台开了同步、号没停着、系统能真加密时才采集；私人号永远不采集
+// 只有团队号（后台没有开关，一律同步）、号没停着、系统能真加密时才采集；私人号永远不采集
 let crmQueue = null;
 let crmTimer = null;
 let crmUploader = null;
