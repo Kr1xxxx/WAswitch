@@ -1108,6 +1108,14 @@ function trRoleBox(c, apply) {
     } }, '保存角色设定')));
 }
 // 内置行业词汇开关：假发、睫毛（都默认开），各自单独存。打开后词表跟在角色设定后面一起带去翻译
+// 收到的消息的译文显示在哪：聊天里消息下面（默认）或右侧工作台的翻译页（shen 2026-10-30）
+function trPlaceRow(c, apply) {
+  const sel = h('select', { 'aria-label': '译文显示在', onchange: async (e) => apply(await window.wa.trPlace(e.target.value)) },
+    [['inline', '消息下面'], ['panel', '右侧工作台']].map(([v, l]) => h('option', { value: v }, l)));
+  sel.value = c.trPlace === 'panel' ? 'panel' : 'inline';
+  return setRow('收到的消息译文显示在', '', sel);
+}
+
 function trWigBox(c, apply) {
   // 每个词条不拆行（“胶片发”不会断成两行）
   const terms = (list) => h('span', { class: 'desc' }, (list || []).flatMap((t, i) => [i ? '　' : '', h('span', { style: { whiteSpace: 'nowrap' } }, `${t.zh} = ${t.en}`)]));
@@ -1267,6 +1275,7 @@ function translatePage(page) {
   ];
   if (!trAdvanced) {
     page.append(...kids(...head,
+      trPlaceRow(c, apply),
       h('h2', { class: 'ov-h2' }, 'API 密钥'),
       trKeysBox(c, apply),
       h('h2', { class: 'ov-h2' }, '行业词汇'),
@@ -1299,6 +1308,7 @@ function translatePage(page) {
       h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px' } },
         h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
         trNetErr ? netSay : null)),
+    trPlaceRow(c, apply),
     s.accounts.length ? setRow('自动翻译收到的消息', '',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
         h('span', { class: 'tr-auto-name' }, mini(a), a.name),

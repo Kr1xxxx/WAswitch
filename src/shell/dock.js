@@ -48,7 +48,7 @@ const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !
 // 未读：打开这个对话以后新收到、还没在翻译页看过的
 function dockCountUnread() {
   const st = dk.st;
-  if (!st) { dk.unread = 0; return; }
+  if (!st || st.inline) { dk.unread = 0; return; } // 译文在消息下面：翻译页不列消息，不记未读
   if (st.title !== dk.seenTitle) {
     dk.seenTitle = st.title;
     for (const it of st.items) dk.seen.add(it.h); // 刚打开的对话：屏幕上已有的不算
@@ -609,6 +609,7 @@ function dockIncoming() {
   else if (st.readable === 'nochat') add(hint('先在左边点开一个聊天。'));
   else if (st.readable === 'loading') add(hint('正在读当前对话…'));
   else if (st.readable === 'unreadable') add(hint('打开的聊天里认不出消息（可能是 WhatsApp 改版了）。', true));
+  else if (st.inline) { /* 译文显示在聊天里消息下面（设置 › 翻译）：这里不再列一遍，只留回复框 */ }
   else if (!st.items.length) add(hint('这个对话最近没有收到文字消息。'));
   else st.items.forEach((it, i) => {
     const last = i === st.items.length - 1;

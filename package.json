@@ -57,6 +57,7 @@
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
     "check:tr-wait": "electron scripts/check-tr-wait.js",
     "check:tr-keys": "electron scripts/check-tr-keys.js",
+    "check:tr-inline": "node scripts/check-tr-inline.js && electron scripts/check-lite-tr.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"
   },
