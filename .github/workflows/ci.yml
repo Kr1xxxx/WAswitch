@@ -1,5 +1,7 @@
 # 每次 push 和 PR 自动跑全部自检；再打一个 Windows 包启动 10 秒做冒烟，确认生成了自动更新需要的文件。
 # 软件只发 Windows 和 macOS。自检放在 Ubuntu 上跑只是因为便宜、有 xvfb，不代表支持 Linux。
+# 自检分成三组，在三台机器上同时跑（按 2026-11-02 量到的耗时分，每组约 2 分钟）；新加的自检放进最合适的一组。
+# 汇总任务仍叫 checks，三组都通过它才通过。
 # 所有 action 按 commit 固定版本；只读权限。
 name: ci
 
@@ -11,8 +13,13 @@ on:
 permissions:
   contents: read
 
+# 同一个 PR 有新提交时，取消这个 PR 还在跑的旧那次；main 上的每次都跑完（各自一组，互不取消）
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  checks:
+  checks-1:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -21,6 +28,84 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # 拆组时一项都没丢：下面是拆组前 ci.yml 里每一条自检命令，每条都要原样出现在本文件里
+      - name: 拆组前的自检一条不少
+        shell: bash
+        run: |
+          body=$(sed "/<<'LIST'/,/^ *LIST\$/d" .github/workflows/ci.yml | sed -E 's/^ *(- )?(run: )?//')
+          missing=0
+          while IFS= read -r c; do
+            [ -z "$c" ] && continue
+            grep -qxF -- "$c" <<<"$body" || { echo "ci.yml 里找不到：$c"; missing=1; }
+          done <<'LIST'
+          npm run check:middot
+          npm run check:agents
+          npm run check:ime-enter
+          npm run check:mcp
+          xvfb-run -a npx electron --no-sandbox scripts/check-draft.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-read-messages.js
+          npm run check:translate
+          npm run check:customer-time
+          npm run check:font-sizes
+          npm run check:radius-motion
+          npm run check:colors
+          xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual
+          npm run check:emoji
+          node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
+          xvfb-run -a npm run check:datadir
+          npm run check:asr && xvfb-run -a npx electron --no-sandbox scripts/check-voice.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-dock-info.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-dock-draft.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-undo-ui.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-add-menu.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-page-menu.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-container-layout.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-sel-translate.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-sel-focus.js
+          node scripts/check-copy-text.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-dock-select.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-tp-swap.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-trpage-busy.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-tr-wait.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-tr-keys.js
+          npm run check:team
+          npm run check:review
+          npm run check:lite
+          npm run check:lite-unread
+          xvfb-run -a npx electron --no-sandbox scripts/check-isolation.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-web-voice.js
+          xvfb-run -a node scripts/check-view-race.js
+          xvfb-run -a node scripts/check-write-fail.js
+          xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
+          xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-login-lock.js
+          xvfb-run -a node scripts/check-qr-watch.js
+          xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
+          xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
+          xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-history.js
+          xvfb-run -a npx electron --no-sandbox scripts/check-lite-tr.js
+          npm run check:memory
+          npm run check:offline
+          npm run check:notify
+          xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
+          npm run check:updater
+          npm run check:ports
+          npm run check:atomic
+          npm run check:editor
+          xvfb-run -a npm run check:audit
+          npm run check:records
+          npm run check:import
+          npm run check:downloads
+          node scripts/check-packaged-mcp.js dist/win-unpacked/resources/app.asar
+          node scripts/smoke-packaged.js dist/win-unpacked/WAswitch.exe
+          grep -q '^sha512: ' dist/latest.yml
+          ls dist/*.exe.blockmap
+          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+          LIST
+          exit $missing
       - name: 界面文字不用中点「·」分隔
         run: npm run check:middot
       - name: AGENTS.md 界面规则：提到的变量都存在、不做深色模式
@@ -68,6 +153,26 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-page-menu.js
       - name: 更新卡片和关于页文案（立即更新）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
+      # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
+      - name: 上传组件截图差异图
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-diff
+          path: visual-diff/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  checks-2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       - name: 卡片、翻译页按自己的大小排版（容器查询）
@@ -102,10 +207,21 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-page.js
       - name: 网页号语音后台读取只读、解密、读不到时的原因
         run: xvfb-run -a npx electron --no-sandbox scripts/check-web-voice.js
-      - name: 页面崩溃重建和保存设置同时发生
-        run: xvfb-run -a node scripts/check-view-race.js
       - name: 写盘一直失败时软件照常打开、不退出
         run: xvfb-run -a node scripts/check-write-fail.js
+
+  checks-3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
+      - name: 页面崩溃重建和保存设置同时发生
+        run: xvfb-run -a node scripts/check-view-race.js
       - name: 工作台每次打开、换号、换客户都在翻译页
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
       - name: 后台要求必须登录时锁成登录页，登录后账号才启动，被停用后全部停下
@@ -144,15 +260,21 @@ jobs:
         run: npm run check:import
       - name: 下载自检
         run: npm run check:downloads
-      # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
-      - name: 上传组件截图差异图
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: visual-diff
-          path: visual-diff/
-          if-no-files-found: ignore
-          retention-days: 7
+
+  # 名字不变：PR 和合并规则看的是 checks。整轮被取消（同一 PR 来了新提交）时不跑，其余情况三组都成功才算过
+  checks:
+    if: ${{ !cancelled() }}
+    needs: [checks-1, checks-2, checks-3]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 三组自检都通过
+        env:
+          R1: ${{ needs.checks-1.result }}
+          R2: ${{ needs.checks-2.result }}
+          R3: ${{ needs.checks-3.result }}
+        run: |
+          echo "checks-1: $R1  checks-2: $R2  checks-3: $R3"
+          [ "$R1" = success ] && [ "$R2" = success ] && [ "$R3" = success ]
 
   package-win:
     runs-on: windows-latest
@@ -167,9 +289,9 @@ jobs:
       # 和发版一样：MCP 不进安装包，只带它的校验值
       - name: 打包 MCP 模块
         run: npm run build:mcp
-      # 没有代码签名证书：不自动找签名证书
+      # 没有代码签名证书：不自动找签名证书。CI 的包不发给任何人，不压缩省约 1 分钟；冒烟用的是解开的 win-unpacked，发版照常压缩
       - name: 打包（Windows 安装包）
-        run: npx electron-builder --win nsis --publish never
+        run: npx electron-builder --win nsis --publish never -c.compression=store
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: 生成了自动更新需要的文件
