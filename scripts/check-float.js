@@ -2,7 +2,7 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, inlineEntry, fromLite, hashOf, msgHash } = require('../src/floatcore');
+const { FloatCore, inlineEntry, fromLite, hashOf, msgHash, msgKey, chatOf } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 消息编号带上对话（真 WhatsApp 的消息编号各不相同；按消息编号认消息，不同对话不能撞号）
@@ -102,6 +102,7 @@ async function core() {
   await catchUpOlder();
   await parallelAuto();
   await lidSwitch();
+  await titleChange();
   await slowLanes();
   await translateVia();
   await sameMessageOtherText();
@@ -728,6 +729,89 @@ async function lidSwitch() {
   assert.strictEqual(store.seenChat('Z', hashOf('Z', 'm0')), null, '最旧的先删');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('同一个对话换编号不重翻自检通过');
+}
+
+// 页面上的 data-id 没有 true_/false_ 前缀时，消息编号是 wa-page.js 用顶栏标题补出来的（chat:<标题>_<页面编号>）。
+// 标题一会儿一变（顶栏读到的是「在线」「正在输入…」「最后上线时间」，或改了备注名）时不能当成新对话重翻
+// （shen 2026-11-02「翻译一会会自动重新翻译一遍」）：这次运行里不重翻，重启后标题又变了也不重翻
+async function titleChange() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-title-'));
+  const calls = [];
+  const logs = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    const fc = new FloatCore({ store, parallel: () => 3, log: (x) => logs.push(x),
+      translate: async (text, o = {}) => { calls.push((o.slow ? '慢:' : '') + text); await sleep(5); return { text: `译:${text}` }; } });
+    return { store, fc };
+  };
+  const idle = async (fc) => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(10); };
+  const IN = [0, 2, 5, 8, 11, 14, 17, 19];
+  const at = (i) => ({ h: 10, mi: i % 60, at: 1e12 + i * 60000 });
+  const win = (title, from = 0, n = 20) => Array.from({ length: n }, (_, k) => {
+    const i = from + k;
+    const inc = IN.includes(i % 20);
+    return { id: `${!inc}_chat:${title}_3EB0${i}`, out: !inc, text: inc ? `Kunde ${i}` : `Ich ${i}`, t: at(i) };
+  });
+  const opts = { auto: true, dailyCap: 500 };
+  let { store, fc } = make();
+  // 编号：标题不算在消息编号里；页面编号里带着对话的按那个对话认，和带前缀的同一条消息认成一条
+  assert.strictEqual(msgKey('false_chat:online_3EB01'), msgKey('false_chat:typing…_3EB01'));
+  assert.strictEqual(msgKey('false_chat:Anna_4915112345678@c.us_3EB01'), msgKey('false_4915112345678@c.us_3EB01'));
+  assert.strictEqual(chatOf('false_chat:Anna_4915112345678@c.us_3EB01'), '4915112345678@c.us');
+  assert.strictEqual(chatOf('false_chat:Anna_3EB01'), 'chat:Anna');
+  // 按内容算的编号（读不到 data-id）离开对话就不唯一：照旧整条用
+  assert.strictEqual(msgKey('false_chat:Anna_h1x2y3.1'), 'false_chat:Anna_h1x2y3.1');
+  assert.notStrictEqual(msgKey('false_chat:Anna_h1x2y3.1'), msgKey('false_chat:Ben_h1x2y3.1'));
+  // 1. 打开对话：顶栏读到「click here for contact info」，8 条客户消息
+  fc.ingest('W', { title: 'click here for contact info', msgs: win('click here for contact info'), bottom: true }, opts);
+  await idle(fc);
+  assert.strictEqual(calls.filter((c) => !c.startsWith('慢:')).length, 5, '最新 5 条照常');
+  for (const it of fc.viewOf('W').items.filter((x) => x.state !== 'done')) fc.manual('W', it.h);
+  await idle(fc);
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  const key0 = fc.viewOf('W').chatKey;
+  calls.length = 0;
+  // 2. 一会儿后顶栏变成「online」「typing…」：同一批消息，0 次，还是同一个对话，翻译栏不多不少
+  for (const title of ['online', 'typing…', 'online']) {
+    fc.ingest('W', { title, msgs: win(title), bottom: true }, opts);
+    await idle(fc);
+  }
+  assert.deepStrictEqual(calls, [], '顶栏标题变了不重翻');
+  assert.strictEqual(fc.viewOf('W').items.length, 8);
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  assert.strictEqual(fc.viewOf('W').chatKey, key0, '草稿、客户语言跟着对话走');
+  assert(logs.some((x) => x.includes('换了编号')), '认出是同一个对话时记一行日志');
+  // 3. 标题是「last seen…」时来了新消息：只翻新的那条
+  fc.ingest('W', { title: 'last seen today at 14:20', msgs: win('last seen today at 14:20', 1), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, ['Kunde 20'], '只翻新来的');
+  fc.ingest('W', { title: 'online', msgs: win('online', 2), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, ['Kunde 20'], '自己发的不翻');
+  // 4. 重启后顶栏又是另一个样子：0 次，译文都在，还是同一个对话
+  store.flush();
+  ({ store, fc } = make());
+  calls.length = 0;
+  fc.ingest('W', { title: 'Emma Schneider', msgs: win('Emma Schneider', 2), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, [], '重启后标题变了也不重翻');
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  assert(fc.viewOf('W').items.some((x) => x.text === 'Kunde 20'), '标题是别的样子时翻的那条也在');
+  assert.strictEqual(fc.viewOf('W').chatKey, key0);
+  // 5. 两个不同的对话（消息编号不同）标题不一样：不会归到一起
+  fc.ingest('W', { title: 'Lucas Martin', msgs: [{ id: 'false_chat:Lucas Martin_3EB1X', out: false, text: 'Bonjour', t: at(40) }], bottom: true }, opts);
+  await idle(fc);
+  assert.notStrictEqual(fc.viewOf('W').chatKey, key0, '别的对话');
+  assert.deepStrictEqual(calls, ['Bonjour']);
+  store.flush();
+  const raw = fs.readFileSync(path.join(dir, 'W', '_chats.json'), 'utf8');
+  assert(!/Kunde|Emma|online|click/.test(raw), '别名表里只有 hash');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('顶栏标题变了不重翻自检通过');
 }
 
 // 2026-10-29 之前存的译文记录没有原文（shen「英文的可以也存吗」）：重启后补回来的旧消息先只有译文；
@@ -1880,9 +1964,10 @@ core().then(() => {
     const r3 = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r3.msgs[r3.msgs.length - 1].text, 'newest', '最新消息不能被字数上限挤掉');
     assert(r3.msgs.reduce((n, m) => n + m.text.length, 0) <= 20000);
-    // 新版页面：编号没有 true_/false_ 前缀、标题不带 title 属性，靠气泡 class 认方向
+    // 新版页面：编号没有 true_/false_ 前缀、标题不带 title 属性，靠气泡 class 认方向。
+    // 名字下面那行（「在线」「正在输入…」）带 title、头像也带 title：标题要读名字，不能读成会变的那行
     await w.webContents.executeJavaScript(`(() => {
-      document.querySelector('#main').innerHTML = '<header><span dir="auto">Anna Müller</span></header><div role="application">'
+      document.querySelector('#main').innerHTML = '<header><div title="Profile details" role="button"><img alt=""></div><div role="button"><div><span dir="auto">Anna Müller</span></div><div><span id="sub" title="online">online</span></div></div></header><div role="application">'
         + '<div role="row"><div data-id="3EB0AA" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] Anna: "><span dir="ltr"><span>Guten Morgen, ist das Paket schon unterwegs?</span></span></div></div></div>'
         + '<div role="row"><div data-id="3EB0BB" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Ja, heute verschickt.</span></span></div></div></div></div>';
       return 1; })()`);
@@ -1891,6 +1976,10 @@ core().then(() => {
     assert.strictEqual(r4.title, 'Anna Müller');
     assert.deepStrictEqual(r4.msgs.map((m) => [m.out, m.text]), [[false, 'Guten Morgen, ist das Paket schon unterwegs?'], [true, 'Ja, heute verschickt.']]);
     assert(r4.msgs.every((m) => /^(true|false)_chat:Anna Müller_/.test(m.id)), '补出的编号要能认出是哪个对话');
+    await w.webContents.executeJavaScript(`(() => { const s = document.getElementById('sub'); s.textContent = 'typing…'; s.title = 'typing…'; return 1; })()`);
+    const r4b = await waPage.readOpenChat(w.webContents);
+    assert.strictEqual(r4b.title, 'Anna Müller', '名字下面那行变了，标题不变');
+    assert.deepStrictEqual(r4b.msgs.map((m) => m.id), r4.msgs.map((m) => m.id), '消息编号不变');
     // 刚点开、还没有消息的对话：算读到了，只是没有消息
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Lucas">Lucas</span></header><div role="application"></div>'; 1`);
     const r5 = await waPage.readOpenChat(w.webContents);

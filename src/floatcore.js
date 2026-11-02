@@ -7,6 +7,7 @@
 // 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（记录里有原文的连原文一起）。
 // 同一个对话 WhatsApp 可能换编号（手机号 @c.us 换成隐私编号 @lid，data-id 中间那段变，消息编号不变）：
 // 消息按方向 + 消息编号认（msgKey），对话按别名归到一个（trstore.js 的 canon/link），切回、重启都不重翻。
+// 页面编号没有前缀时对话只能按顶栏标题认，标题变了也一样归到原来的对话（learnAlias）。
 const crypto = require('crypto');
 const { textKey, cleanVia, VIEW_MAX } = require('./trstore');
 const { isChinese } = require('./langdetect');
@@ -39,11 +40,26 @@ function contextFrom(list, h) {
 }
 const hashOf = (accId, dataId) => crypto.createHash('sha256').update(`${accId}|${dataId}`).digest('hex').slice(0, 16);
 // data-id: false_<对话>_<消息编号>[_<群成员>]，第二段是对话
-const chatOf = (dataId) => String(dataId).split('_')[1] || '';
-// 认消息用的：方向 + 消息编号，不带对话编号和群成员（这两段都可能在 @c.us 和 @lid 之间换）。
-// 别的形状（读不到 data-id 时按内容算的 chat:<标题>_h…）照旧用整条：那种编号离开对话就不唯一
-const REAL_ID = /^(true|false)_[^_]+@(?:c\.us|s\.whatsapp\.net|g\.us|lid)_([^_]+)(?:_|$)/;
-const msgKey = (dataId) => { const m = REAL_ID.exec(String(dataId)); return m ? `${m[1]}_${m[2]}` : String(dataId); };
+// 页面上的 data-id 没有 true_/false_ 前缀时，wa-page.js 补成 true|false_chat:<对话标题>_<页面上的编号>（SYNTH_ID）。
+// 标题会变（顶栏读到的不是名字、改了备注名），不能拿它认消息：消息按页面上的编号认，页面编号里带着对话的就按那个对话认。
+// 读不到 data-id 时按内容算的编号（chat:<标题>_h<hash>.<序号>，HASHED_ID）离开对话就不唯一，照旧整条用
+const JID = '[^_]+@(?:c\\.us|s\\.whatsapp\\.net|g\\.us|lid)';
+const REAL_ID = new RegExp(`^(true|false)_${JID}_([^_]+)(?:_|$)`);
+const SYNTH_ID = new RegExp(`^(true|false)_chat:[^_]*_(?:(${JID})_)?([^_]+)(?:_|$)`);
+const HASHED_ID = /^(true|false)_chat:[^_]*_h[0-9a-z]+\.\d+$/;
+const synth = (dataId) => { const s = String(dataId); return HASHED_ID.test(s) ? null : SYNTH_ID.exec(s); };
+const chatOf = (dataId) => { const x = synth(dataId); return (x && x[2]) || String(dataId).split('_')[1] || ''; };
+// 认消息用的：方向 + 消息编号，不带对话编号、标题和群成员（这几段都可能变：@c.us 和 @lid 之间换、标题变）。
+const msgKey = (dataId) => {
+  const m = REAL_ID.exec(String(dataId));
+  if (m) return `${m[1]}_${m[2]}`;
+  const x = synth(dataId);
+  return x ? `${x[1]}_${x[3]}` : String(dataId);
+};
+// 消息编号认得出（不是按内容算的）：可以用它认出同一个对话的几个编号（见 learnAlias）
+const keyedId = (dataId) => REAL_ID.test(String(dataId)) || !!synth(dataId);
+// 日志用：消息编号的形状
+const idShape = (dataId) => (REAL_ID.test(String(dataId)) ? '带号码' : synth(dataId) ? '无前缀' : HASHED_ID.test(String(dataId)) ? '按内容' : '其他');
 const msgHash = (accId, dataId) => hashOf(accId, msgKey(dataId));
 const chatHash = (accId, dataId) => hashOf(accId, `chat|${chatOf(dataId)}`);
 const PHONE_CHAT = /@(?:c\.us|s\.whatsapp\.net)$/;
@@ -442,7 +458,8 @@ class FloatCore {
   // 打开对话时有客户消息没认出译文：日志记一行（只有个数和消息编号的形状，不含内容），真机上翻了又翻时用来看是哪一种
   logLook(accId, chat, msgs, look) {
     const ids = msgs.filter((m) => !m.out).map((m) => m.id);
-    const shape = ids.length === 0 ? '无' : ids.every((id) => REAL_ID.test(id)) ? '带号码' : ids.some((id) => REAL_ID.test(id)) ? '混合' : '按标题';
+    const shapes = [...new Set(ids.map(idShape))];
+    const shape = !shapes.length ? '无' : shapes.length > 1 ? '混合' : shapes[0];
     const chats = new Set(msgs.map((m) => chatOf(m.id))).size;
     const info = this.deps.store.info(accId, chat);
     if (!info.records && !info.unread && !look.seen) return; // 这个对话本来就没翻过：第一次打开，不用记
@@ -457,6 +474,7 @@ class FloatCore {
   // 认出同一个对话的两个编号：
   // a. 一次读到的私聊里两种编号都有（手机号的和隐私编号的，比如客户的消息是 @c.us、自己刚发的是 @lid）；
   // b. 一条客户消息以前在另一个编号下见过（这次运行里看 st.items，重启后看存着的最近消息索引）。
+  //    页面编号没有前缀时对话按标题认：标题变了（顶栏读到的变了、改了备注名）也这样归到原来的对话，不重翻。
   // 每条读到的客户消息都记进索引（只有 hash），以后换了编号也认得出
   learnAlias(accId, st, msgs) {
     const store = this.deps.store;
@@ -469,10 +487,10 @@ class FloatCore {
       if (phone && lid && store.link(accId, hashOf(accId, `chat|${phone}`), hashOf(accId, `chat|${lid}`))) learned = true;
     }
     for (const m of msgs) {
-      if (m.out || !shown(m) || !REAL_ID.test(m.id)) continue;
+      if (m.out || !shown(m) || !keyedId(m.id)) continue;
       const h = msgHash(accId, m.id);
       const ck = chatHash(accId, m.id);
-      const had = st.items.get(h);
+      const had = this.itemOf(st, h);
       const before = (had && had.ck) || store.seenChat(accId, h);
       if (before && store.link(accId, before, ck)) learned = true;
       store.markSeen(accId, h, store.canon(accId, ck));
