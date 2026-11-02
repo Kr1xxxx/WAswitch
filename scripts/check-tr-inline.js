@@ -295,8 +295,8 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
       check(!!lightText && same(nums(lightText.color), hexNums(RADIX.hex('slate', 11))), `浅色主题：译文字是 Radix slate 11（${lightText && lightText.color}）`);
       await shot('inline-light');
       await pageC.evaluate(`(() => { window.__n1 = document.querySelector('[data-id$="_IN1"] [data-wasw-tr]'); document.body.classList.add('dark'); return 1; })()`);
-      const dk = await waitFor(async () => { const l = await look('IN1', 'n'); return !!l && same(nums(l.color), hexNums(RADIX.hexDark('slate', 11))); }, 3000);
-      check(dk >= 0, `WhatsApp 换成深色后，译文字换成 Radix slate-dark 11（${dk} 毫秒）`);
+      const dk = await waitFor(async () => { const l = await look('IN1', 'n'); return !!l && same(nums(l.color), hexNums(RADIX.hexDark('slate', 12))); }, 3000);
+      check(dk >= 0, `WhatsApp 换成深色后，译文字换成 Radix slate-dark 12，和 WhatsApp 正文一样白（${dk} 毫秒）`);
       const dText = await look('IN1', 'n');
       const dBad = await look('IN7', "n.querySelector('[data-wasw-bad]')");
       const dBtn = await look('IN7', "n.querySelector('button')");
