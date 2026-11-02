@@ -6,7 +6,7 @@ window.__pending = [];
 const cfg = { providers: [
   { id: 'z', preset: 'zhipu', name: '智谱', model: 'glm-4-flash', hasKey: true },
   { id: 'h', preset: 'hunyuan', name: '腾讯混元', model: 'hy-mt2-plus', hasKey: true },
-], primaryId: 'z', fallbackId: 'h', langs: ['英语', '德语', '中文'], deeplCap: 100000 };
+], primaryId: 'z', fallbackId: 'h', langs: ['英语', '德语', '中文'] };
 const hang = (name) => (req) => { window.__calls.push([name, req]); return new Promise((res) => window.__pending.push(res)); };
 const cancel = (name) => async () => { window.__calls.push([name]); const p = window.__pending.shift(); if (p) p({ error: '已取消', kind: 'cancel' }); return !!p; };
 window.__release = (text) => { const p = window.__pending.shift(); if (p) p({ text }); return !!p; };
