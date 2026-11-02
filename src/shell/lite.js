@@ -51,6 +51,10 @@ function makeLitePage(id) {
   let statusKey = '';
   let sending = false;
   const drafts = new Map();
+  // 收到的消息下面显示的译文（主进程 lite:tr 发来，按消息编号）；设置里选了「右侧工作台」时是空的
+  let trs = new Map();
+  let trKey = '';
+  let lastView = null;
 
   function rememberDraft() {
     if (openJid) drafts.set(openJid, { text: input.value });
@@ -78,9 +82,21 @@ function makeLitePage(id) {
     list.scrollTop = top;
   }
 
+  // 一条消息下面的译文：done 译文；busy 翻译中；error 原因 + 重试；manual「翻译」按钮（点了和工作台里点一样）
+  function trLine(m) {
+    const e = !m.me && trs.get(String(m.id));
+    if (!e) return null;
+    const btn = (label) => h('button', { class: 'lite-tr-btn', type: 'button', onclick: (ev) => { ev.currentTarget.disabled = true; window.wa.dockItem(e.h); } }, label);
+    if (e.k === 'done') return h('div', { class: 'lite-tr' }, e.t);
+    if (e.k === 'busy') return h('div', { class: 'lite-tr' }, e.t);
+    if (e.k === 'error') return h('div', { class: 'lite-tr' }, h('span', { class: 'bad' }, e.t), ' ', btn(e.b));
+    return h('div', { class: 'lite-tr' }, btn(e.b));
+  }
+
   function drawMessages(view) {
+    lastView = view;
     const items = view.messages || [];
-    const key = `${view.jid}:${items.length}:${items.length ? items[items.length - 1].id : ''}`;
+    const key = `${view.jid}:${items.length}:${items.length ? items[items.length - 1].id : ''}:${trKey}`;
     if (key === lastMsgKey) return;
     const switched = !lastMsgKey.startsWith(`${view.jid}:`);
     lastMsgKey = key;
@@ -92,6 +108,7 @@ function makeLitePage(id) {
     msgs.replaceChildren(...items.map((m) => h('div', { class: `lite-msg${m.me ? ' me' : ''}` },
       m.from ? h('small', { class: 'from' }, m.from) : null,
       h('span', { class: 'text' }, linkify(m.text)),
+      trLine(m),
       h('small', { class: 'time' }, liteTime(m.ts)))));
     if (!items.length) msgs.append(h('div', { class: 'lite-none' }, '这个对话在本机还没有消息记录。'));
     if (switched || nearBottom) msgs.scrollTop = msgs.scrollHeight;
@@ -204,8 +221,22 @@ function makeLitePage(id) {
     return 'ok';
   }
 
-  return { el, update, fill };
+  // 主进程发来这个号当前对话的译文（list 为空 = 拿掉）。内容没变不重画
+  function setTr(list) {
+    const next = new Map((Array.isArray(list) ? list : []).filter((e) => e && typeof e.id === 'string').map((e) => [e.id, e]));
+    const key = [...next.values()].map((e) => [e.id, e.k, e.t, e.b].join('\u0001')).join('\u0002');
+    if (key === trKey) return;
+    trs = next;
+    trKey = key;
+    if (lastView && openJid && lastView.jid === openJid && !conv.hidden) drawMessages(lastView);
+  }
+
+  return { el, update, fill, setTr };
 }
+
+window.wa.onLiteTr(({ accountId, list } = {}) => {
+  for (const [id, p] of litePages) if (!accountId || id === accountId) p.setTr(accountId ? list : []);
+});
 
 // ---- 选中文字后的「翻译」小按钮和悬浮译文窗（轻量号的聊天页是软件自己的界面，直接画在这里；样子和网页号的一样，共用 seltr/card.js） ----
 // 放在选区最后一行下面，下面放不下就放到第一行上面；按钮右边和选区末尾对齐，译文窗左边和最后一行开头对齐

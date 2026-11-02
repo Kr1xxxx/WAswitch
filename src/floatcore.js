@@ -106,7 +106,8 @@ function fromLite(view, jid) {
     const voice = !m.me && typeof m.voice === 'number' && Number.isFinite(m.voice);
     if (!text.trim() && !voice) continue;
     const d = m.ts ? new Date(m.ts * 1000) : null;
-    const row = { id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes(), at: d.getTime() } : null };
+    // raw：轻量聊天页上这条消息的编号（译文显示在消息下面时按它对上）
+    const row = { id: `${!!m.me}_${chat}_${String(m.id).replace(/_/g, '')}`, raw: String(m.id), out: !!m.me, text, t: d ? { h: d.getHours(), mi: d.getMinutes(), at: d.getTime() } : null };
     // 语音：时长和下载用的对话、消息编号（只留在主进程，见 viewOf）
     if (voice) Object.assign(row, { text: '', voice: Math.max(0, Math.round(m.voice)), src: { jid: String(jid), id: String(m.id) } });
     msgs.push(row);

@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('seltr', {
   ready: () => ipcRenderer.send('seltr:ready'),
   go: () => ipcRenderer.send('seltr:go'),
   retry: () => ipcRenderer.send('seltr:retry'),
-  copy: (text) => ipcRenderer.send('seltr:copy', typeof text === 'string' ? text : ''),
+  copy: (text) => ipcRenderer.invoke('seltr:copy', typeof text === 'string' ? text : ''),
   size: (h) => ipcRenderer.send('seltr:size', Number(h) || 0),
   hide: () => ipcRenderer.send('seltr:hide'),
 });

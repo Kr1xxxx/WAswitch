@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('wa', {
   panelData: () => ipcRenderer.invoke('panel:data'),
   onPanelChanged: (cb) => ipcRenderer.on('panel:changed', () => cb()),
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
+  // 轻量号：每条收到的消息下面显示的译文（设置里选了「消息下面」时）
+  onLiteTr: (cb) => ipcRenderer.on('lite:tr', (_e, d) => cb(d)),
   // 语音转文字：主进程把下载好的语音给界面解码（见 shell/voice.js）
   onVoiceDecode: (cb) => ipcRenderer.on('voice:decode', (_e, req) => cb(req)),
   voiceDecoded: (n, r) => ipcRenderer.send('voice:decoded', n, r),
@@ -50,6 +52,7 @@ contextBridge.exposeInMainWorld('wa', {
   panelExport: (kind, format) => ipcRenderer.invoke('panel:export', { kind, format }),
   panelImport: (kind) => ipcRenderer.invoke('panel:import', { kind }),
   trDailyCap: (n) => ipcRenderer.invoke('tr:dailycap', n),
+  trPlace: (place) => ipcRenderer.invoke('tr:place', place),
   trAuto: (accountId, on) => ipcRenderer.invoke('tr:auto', { accountId, on: on === true }),
   trConfig: () => ipcRenderer.invoke('tr:config'),
   trProviderSave: (data) => ipcRenderer.invoke('tr:provider:save', data),

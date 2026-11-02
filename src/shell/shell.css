@@ -321,6 +321,13 @@ h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.01e
 .lite-msg .text { white-space: pre-wrap; word-break: break-word; }
 .lite-msg .from { font-size: var(--fs-s); font-weight: 600; color: var(--blue-11); }
 .lite-msg .time { align-self: flex-end; font-size: var(--fs-s); color: var(--muted); }
+/* 收到的消息下面的译文（设置里选了「消息下面」）：原文下面一条细线，次要文字色 */
+.lite-tr { margin-top: 4px; padding-top: 6px; border-top: var(--hair) solid var(--slate-6); color: var(--slate-11); white-space: pre-wrap; word-break: break-word; user-select: text; }
+.lite-tr .bad { color: var(--red-11); }
+.lite-tr-btn { height: 22px; padding: 0 8px; border: 0; border-radius: var(--r-s); background: var(--slate-4); color: var(--slate-12); font: inherit; font-size: var(--fs-s); white-space: nowrap; cursor: pointer; transition: background-color var(--fx) var(--fx-ease); }
+.lite-tr-btn:hover:not(:disabled) { background: var(--slate-5); }
+.lite-tr-btn:disabled { cursor: default; }
+.lite-tr-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* 轻量号聊天页里选中文字后的「翻译」按钮和译文窗（样式在 ../seltr/card.css，和网页号上的一样） */
 .sel-pop { position: fixed; z-index: 55; -webkit-app-region: no-drag; }
 .sel-pop[hidden] { display: none; }
@@ -589,6 +596,12 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-status:empty { display: none; }
 .dk-edited { font-size: var(--fs-s); color: var(--amber-11); background: var(--amber-3); border-radius: var(--r-s); padding: 0 6px; }
 .dk-edited[hidden] { display: none; }
+/* 译文在消息下面时翻译页只有回复：两个框平分整页高度，不再限四行 */
+.dk-inline > .dk-hint { padding: 6px 10px 0; }
+.dk-inline .dk-compose { flex: 1; min-height: 0; border-top: 0; padding-top: 4px; }
+.dk-inline .dk-compose .dk-card { flex: 1 1 0; min-height: 96px; display: flex; flex-direction: column; }
+.dk-inline .dk-compose .dk-field { flex: 1; min-height: 0; }
+.dk-inline .dk-compose .dk-card .dk-in, .dk-inline .dk-compose .dk-card .dk-out { flex: 1; min-height: 0; max-height: none; field-sizing: fixed; }
 .dk-acts { display: flex; gap: 8px; }
 .dk-acts .btn { height: 36px; padding: 0 14px; font-size: var(--fs-m); }
 .dk-insert { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }

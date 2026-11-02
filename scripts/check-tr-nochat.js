@@ -58,6 +58,8 @@ window.__close = () => { document.getElementById('wrap').innerHTML = ''; return 
     id: '1', name: '测试号', color: '#16A34A', proxy: '', mode: 'web', primary: true,
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'SG', seed: 1 },
   }]));
+  // 这个检查看的是工作台翻译页列出消息：设置成「译文显示在右侧工作台」（默认是消息下面，见 check-tr-inline.js）
+  fs.writeFileSync(path.join(home, 'waswitch', 'translate.json'), JSON.stringify({ trPlace: 'panel' }));
   const port = await freePort();
   // 直连号跟随系统代理：去掉环境里的代理变量，让请求直接到本地假服务
   const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };

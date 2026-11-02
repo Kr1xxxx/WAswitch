@@ -24,6 +24,7 @@ const dk = {
   msg: '',
   bad: false,
   msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
+  listStale: 0, // 用户选着消息列表里的字，列表重画先压着：压了多久（开始压的时间，0 = 没压）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
   openOrig: new Set(), // 点开看原文的收到消息（hash）；默认原文完全隐藏
@@ -48,7 +49,7 @@ const dockVisible = () => !!(s && s.panelOpen && s.panelTab === 'translate' && !
 // 未读：打开这个对话以后新收到、还没在翻译页看过的
 function dockCountUnread() {
   const st = dk.st;
-  if (!st) { dk.unread = 0; return; }
+  if (!st || st.inline) { dk.unread = 0; return; } // 译文在消息下面：翻译页不列消息，不记未读
   if (st.title !== dk.seenTitle) {
     dk.seenTitle = st.title;
     for (const it of st.items) dk.seen.add(it.h); // 刚打开的对话：屏幕上已有的不算
@@ -589,8 +590,23 @@ function dockPillSync(box) {
   box.append(play ? fxPlay(pill, 'fx-fade') : pill);
 }
 
+// 自动翻译暂停的提示：消息列表底部和“译文在消息下面”时的两个框上面都用
+function dockPausedHint() {
+  const st = dk.st;
+  if (st.paused === 'day') return h('p', { class: 'hint dk-hint' }, `今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`);
+  if (st.paused === 'minute') return h('p', { class: 'hint dk-hint' }, '一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。');
+  return null;
+}
+
 function dockIncoming() {
   const st = dk.st;
+  // 译文显示在聊天里消息下面（设置 › 翻译）：不列消息，翻译页只有回复的两个框（shen 2026-11-02）
+  // 扫码和认不出消息照样提示：气泡里没有译文时，用户在这里能看到原因
+  if (st.inline) {
+    if (st.readable === 'qr') return h('p', { class: 'hint dk-hint' }, '扫码登录后可用。');
+    if (st.readable === 'unreadable') return h('p', { class: 'hint dk-hint bad' }, '打开的聊天里认不出消息（可能是 WhatsApp 改版了）。');
+    return dockPausedHint();
+  }
   const list = h('div', { class: 'dk-list' });
   const box = h('div', { class: 'dk-listbox' }, list);
   // 只看用户滚到了哪：内容自己变高（字体加载、展开原文）不会触发 scroll，不会把“在底下”误判成“在中间”
@@ -617,8 +633,7 @@ function dockIncoming() {
     if (last) fx(`dk-last:${st.accountId}|${st.title || ''}`, it.h, row, 'fx-in', false);
     add(row);
   });
-  if (st.paused === 'day') add(hint(`今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`));
-  else if (st.paused === 'minute') add(hint('一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。'));
+  add(dockPausedHint());
   dockPillSync(box);
   return box;
 }
@@ -685,8 +700,7 @@ function dockField(box, getText, hint) {
   const copyBtn = h('button', { class: 'dk-tool', title: '复制', 'aria-label': '复制', onclick: async () => {
     const text = getText();
     if (!text) return;
-    await window.wa.panelCopy(text);
-    copyFlash(copyBtn);
+    if (await window.wa.panelCopy(text)) copyFlash(copyBtn);
   } }, icon('copy', 18));
   return h('div', { class: 'dk-card' }, h('div', { class: 'dk-field' }, box,
     h('div', { class: 'dk-tools' }, copyBtn, typeof hint === 'string' ? h('span', { class: 'dk-keyhint' }, hint) : hint || null)));
@@ -760,6 +774,14 @@ function dockRender(force = false) {
     if (btn) btn.focus({ preventScroll: true });
   }
 }
+const LIST_STALE_MS = 15000;
+function dockListSelected() {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+  const box = $panel.querySelector('.dk-listbox');
+  return !!box && box.contains(sel.anchorNode) && box.contains(sel.focusNode);
+}
+document.addEventListener('selectionchange', () => { if (dk.listStale && !dockListSelected()) dockRender(false); });
 function dockRenderBody(force) {
   dockSyncTabTools();
   const host = $panel.querySelector('.dk-host');
@@ -777,6 +799,13 @@ function dockRenderBody(force) {
     return;
   }
   const root = host.querySelector('.dk');
+  // 用户在消息列表里选着字（要复制译文）：列表重画会把选区弄没，这次先不画，选区没了（selectionchange）再补画；
+  // 选着不放超过 LIST_STALE_MS 也画一次，免得新消息一直不出来
+  if (root && !force && !dk.redraw && dockListSelected()) {
+    if (!dk.listStale) dk.listStale = Date.now();
+    if (Date.now() - dk.listStale < LIST_STALE_MS) return;
+  }
+  dk.listStale = 0;
   const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
   const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
@@ -789,11 +818,12 @@ function dockRenderBody(force) {
     const keep = root.querySelector('.dk-compose');
     const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动
     dockPillSync(list);
+    root.classList.toggle('dk-inline', !!st.inline);
     root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
     dockScrollRestore(mark);
     return;
   }
-  const el = h('div', { class: 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: st.inline ? 'dk dk-inline' : 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
   dockScrollRestore(mark);

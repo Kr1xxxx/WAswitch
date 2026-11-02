@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>lite</title>
+<link rel="stylesheet" href="../../src/colors/radix.css">
+<link rel="stylesheet" href="../../src/fonts/fonts.css">
+<link rel="stylesheet" href="../../src/tokens.css">
+<link rel="stylesheet" href="../../src/shell/shell.css">
+<style>body { margin: 0; } #host { position: fixed; inset: 0; display: flex; }</style>
+</head><body><div id="host"></div>
+<!-- 只加载软件界面里的轻量模式聊天页（src/shell/lite.js）和真的样式，给「译文显示在消息下面」的自检用（scripts/check-lite-tr.js）。
+     h()、segs()、rawDetail() 和 window.wa 是最小的替身；点了气泡里的按钮记在 window.__items。 -->
+<script>
+  function h(tag, attrs, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'style') Object.assign(el.style, v);
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'value') el.value = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+  function segs(...a) { return a.filter(Boolean); }
+  function rawDetail(t) { return h('span', null, t); }
+  window.__items = [];
+  window.wa = {
+    liteSend: async () => ({}), liteOpen: () => {}, openLink: () => {}, retry: () => {},
+    onLiteFill: () => {}, liteFilled: () => {},
+    onLiteTr: (cb) => { window.__liteTr = cb; },
+    dockItem: (h) => { window.__items.push(h); return Promise.resolve({ ok: true }); },
+  };
+</script>
+<script src="../../src/shell/lite.js"></script>
+</body></html>

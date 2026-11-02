@@ -116,8 +116,7 @@ function tpOutPane(which) {
   box.addEventListener('input', () => tpUpdate());
   const copy = morphBtn(`tp-copy${which}`, { idle: '复制', ok: '已复制' }, async () => {
     if (!box.value.trim()) return {};
-    await window.wa.panelCopy(box.value);
-    return { ok: true };
+    return (await window.wa.panelCopy(box.value)) ? { ok: true } : {}; // 没复制上：按钮保持原样
   }, { class: 'tp-btn tp-copy primary' });
   const foot = h('div', { class: 'tp-foot' }, model, h('span', { class: 'grow' }), count);
   // 报错放在译文本来出现的位置（左上）

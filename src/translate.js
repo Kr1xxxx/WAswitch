@@ -37,6 +37,7 @@ const SEED_VER = 3; // 2：老用户没有智谱的也补上；3：默认改成�
 const MAX_CHAT_LANGS = 1000;
 const CHAT_KEY = /^[\w-]{1,64}:[0-9a-f]{16}$/;
 const DAILY_CAPS = [100, 200, 500, 1000, 2000];
+const TR_PLACES = ['inline', 'panel']; // 收到的消息的译文：消息下面 | 右侧工作台
 // DeepL 每个使用者（这台电脑上的这个软件）每月最多翻多少字符：默认 10 万，可以在 DeepL 的设置里改（shen 2026-10-28）。
 // 换密钥也接着算，每月 1 号清零
 const DEEPL_MONTH_CAP = 100000;
@@ -373,6 +374,8 @@ class Translator {
     const base = { providers: [], primaryId: '', fallbackId: '', fixId: '', network: { mode: 'system', proxyUrl: '' }, accountLang: {},
       // 悬浮窗：自动翻译默认开，accountAuto 里只记手动关掉的号（false）；每个号每天最多自动翻几条、收到用的模式、窗口位置
       accountAuto: {}, dailyCap: 500, floatInMode: '', float: { dx: 24, dy: 64, collapsed: false },
+      // 收到的消息的译文显示在哪：inline = 聊天里消息下面（默认，shen 2026-10-30），panel = 右侧工作台的翻译页
+      trPlace: 'inline',
       // 每个对话记住的客户语言。键是“账号编号:对话的 hash”（不存号码和名字），src = manual（手动选的）| detected（认出来的）
       chatLang: {},
       // 角色设定：每次翻译和纠错都带上（固定译法、语气等）
@@ -441,6 +444,7 @@ class Translator {
             }
           }
           if (typeof raw.floatInMode === 'string') base.floatInMode = raw.floatInMode.slice(0, 64);
+          if (TR_PLACES.includes(raw.trPlace)) base.trPlace = raw.trPlace;
           if (raw.chatLang && typeof raw.chatLang === 'object') {
             for (const [k, v] of Object.entries(raw.chatLang)) {
               if (CHAT_KEY.test(k) && v && LANGS.includes(v.lang) && ['manual', 'detected'].includes(v.src)) base.chatLang[k] = { lang: v.lang, src: v.src, at: Number(v.at) || 0 };
@@ -567,6 +571,7 @@ class Translator {
       dailyCap: c.dailyCap,
       dailyCaps: DAILY_CAPS,
       floatInMode: c.floatInMode,
+      trPlace: c.trPlace,
       rolePrompt: c.rolePrompt,
       wigTerms: c.wigTerms !== false,
       deeplCap: c.deeplCap,
@@ -744,13 +749,14 @@ class Translator {
   }
 
   // 悬浮窗的设置（只接受固定的几种值）
-  setFloat({ accId, auto, dailyCap, inMode, pos } = {}) {
+  setFloat({ accId, auto, dailyCap, inMode, pos, place } = {}) {
     const c = this.load();
     if (typeof accId === 'string' && accId) {
       if (auto === true) delete c.accountAuto[accId]; else if (auto === false) c.accountAuto[accId] = false;
     }
     if (DAILY_CAPS.includes(dailyCap)) c.dailyCap = dailyCap;
     if (typeof inMode === 'string') c.floatInMode = inMode.slice(0, 64);
+    if (TR_PLACES.includes(place)) c.trPlace = place;
     if (pos && typeof pos === 'object') c.float = { dx: clampNum(pos.dx, 0, 4000, c.float.dx), dy: clampNum(pos.dy, 0, 4000, c.float.dy), collapsed: typeof pos.collapsed === 'boolean' ? pos.collapsed : c.float.collapsed };
     this.save();
   }

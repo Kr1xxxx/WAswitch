@@ -25,6 +25,7 @@
     liteOpen: () => {}, openLink: () => {}, retry: () => {},
     onLiteFill: (cb) => { window.__fill = cb; },
     liteFilled: (n, r) => { window.__filled.push({ n, r }); },
+    onLiteTr: (cb) => { window.__liteTr = cb; }, dockItem: (h) => { window.__items = (window.__items || []).concat(h); },
   };
 </script>
 <script src="../../src/shell/lite.js"></script>

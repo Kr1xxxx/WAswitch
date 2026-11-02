@@ -60,8 +60,10 @@
       const text = String(st.text || '');
       const copy = el('button', 'sc-btn', '复制');
       copy.type = 'button';
-      copy.addEventListener('click', () => {
-        handlers.copy(text);
+      copy.addEventListener('click', async () => {
+        let ok = false;
+        try { ok = (await handlers.copy(text)) === true; } catch { ok = false; }
+        if (!ok || !copy.isConnected) return; // 没复制上：按钮保持原样
         copy.textContent = '已复制';
         clearTimeout(copyTimer);
         copyTimer = setTimeout(() => { copy.textContent = '复制'; }, COPIED_MS);
