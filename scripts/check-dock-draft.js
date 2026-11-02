@@ -161,6 +161,13 @@ const part3 = async () => {
   window.__type('.dk-in', '!');
   await window.__wait(450);
   out.editedAfter = window.__last(D);
+  // 剪贴板被占着没写上（主进程返回 'clip'）：提示重点一次，草稿不能被当成用掉了
+  window.__insertResult = 'clip';
+  document.querySelector('.dk-insert').click();
+  await window.__wait(450);
+  const clipMsg = document.querySelector('.dk-msg');
+  out.clip = { text: clipMsg ? clipMsg.textContent : '', bad: !!(clipMsg && clipMsg.classList.contains('bad')), draft: window.__last(D) };
+  window.__insertResult = 'ok';
   // 4) 换目标语言（dock:lang 返回的状态也走 dockAdopt）：回复框不变
   window.__dock = window.__base({ title: 'Sophie Martin', chatKey: D, draft: null, target: '德语', targetSrc: 'manual' });
   const before = window.__box().text;
@@ -280,6 +287,8 @@ app.whenReady().then(async () => {
   assert.strictEqual(r3.used.d, null, `放进输入框后草稿删掉 ${JSON.stringify(r3.used)}`);
   assert.strictEqual(r3.usedBox.text, '补一句，明天发货', '这次框里还在');
   assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句，明天发货!', '放进去以后再改就又存');
+  assert(r3.clip.bad && r3.clip.text.includes('没贴上') && r3.clip.text.includes('再点一次'), `剪贴板没写上：红字提示再点一次 ${JSON.stringify(r3.clip)}`);
+  assert(r3.clip.draft.d && r3.clip.draft.d.text === '补一句，明天发货!', '没贴上时草稿还在');
   assert(r3.langKept, '换目标语言不换回复框');
 
   await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
