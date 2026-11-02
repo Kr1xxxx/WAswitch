@@ -13,24 +13,27 @@ const require = createRequire(import.meta.url);
 const { TeamSync } = require('../src/team/index.js');
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-// ---- 后台：内存数据库 + 假的 Access ----
-const DOMAIN = 'acme.cloudflareaccess.com';
-const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
-const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
-globalThis.fetch = async () => new Response(JSON.stringify({ keys: [{ ...pub, kid: 'k1' }] }), { headers: { 'content-type': 'application/json' } });
-const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-async function jwt(email) {
-  const head = enc({ alg: 'RS256', kid: 'k1' });
-  const body = enc({ email, aud: ['aud'], iss: `https://${DOMAIN}`, exp: Math.floor(Date.now() / 1000) + 600 });
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, new TextEncoder().encode(`${head}.${body}`));
-  return `${head}.${body}.${Buffer.from(sig).toString('base64url')}`;
-}
+// ---- 后台：内存数据库；发信换成假的，老板用 OWNER_EMAIL 收码登录后台 ----
 const db = fakeD1(path.join(root, 'server/migrations'));
-const env = { DB: db, ACCESS_TEAM_DOMAIN: DOMAIN, ACCESS_AUD: 'aud', OWNER_EMAIL: 'boss@example.com', ASSETS: { fetch: async () => new Response('') } };
+const env = { DB: db, OWNER_EMAIL: 'boss@example.com', RESEND_API_KEY: 're_test', ASSETS: { fetch: async () => new Response('') } };
+const mails = [];
+globalThis.fetch = async (url, opts) => {
+  assert.equal(url, 'https://api.resend.com/emails');
+  mails.push(JSON.parse(opts.body));
+  return new Response('{}', { headers: { 'content-type': 'application/json' } });
+};
+const adminReq = (p, body, token) => worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
+  method: 'POST', body: JSON.stringify(body),
+  headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+}), env, {});
+await adminReq('code', { email: 'boss@example.com' });
+const bossCode = /验证码 (\d{6})/.exec(mails.at(-1).text)[1];
+const bossToken = (await (await adminReq('session', { email: 'boss@example.com', code: bossCode })).json()).token;
+assert.ok(bossToken, '老板登录后台');
 async function boss(method, p, body) {
   const res = await worker.fetch(new Request(`https://team.example.com/api/admin/${p}`, {
     method, body: body === undefined ? undefined : JSON.stringify(body),
-    headers: { 'cf-access-jwt-assertion': await jwt('boss@example.com'), 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${bossToken}`, 'x-waswitch-admin': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   }), env, {});
   return res.json();
 }
@@ -79,7 +82,7 @@ async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${na
 console.log('团队模式端到端自检');
 
 const me = await boss('GET', 'me');
-const agent = await boss('POST', 'users', { name: '坐席A' });
+const agent = await boss('POST', 'users', { name: '坐席A', email: 'anna@example.com' });
 const code = async () => (await boss('POST', `users/${agent.id}/enroll-code`)).code;
 const A = machine('a', [acc('101', '一号'), acc('102', '二号'), acc('103', '三号'), acc('104', '私人号')]);
 assert.equal(me.user.role, 'owner');

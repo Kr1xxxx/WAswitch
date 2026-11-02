@@ -94,3 +94,35 @@ export async function audit(db, actorId, action, target = '', detail = '') {
     .bind(actorId, action, String(target), now(), typeof detail === 'string' ? detail : JSON.stringify(detail)).run();
 }
 
+
+// 限速：key 每 windowMs 一个窗口，超过 limit 次返回 429（带 retry_after_s）。先计数再做事，并发请求也挡得住。
+// 被挡住的那次也算数（窗口不会因此变长）
+export async function rateLimit(db, key, limit, windowMs, message) {
+  const t = now();
+  const row = await db.prepare(`INSERT INTO rate_limits (key, window_start, count) VALUES (?, ?, 1)
+    ON CONFLICT(key) DO UPDATE SET
+      count = CASE WHEN window_start < ? THEN 1 ELSE count + 1 END,
+      window_start = CASE WHEN window_start < ? THEN ? ELSE window_start END
+    RETURNING count, window_start`).bind(key, t, t - windowMs, t - windowMs, t).first();
+  if (row.count > limit) {
+    const retry = Math.max(1, Math.ceil((row.window_start + windowMs - t) / 1000));
+    throw new HttpError(429, message ? message(retry) : '尝试太多次，请 10 分钟后再试', { retry_after_s: retry });
+  }
+}
+// 成功的那次退回去：同一个办公室几十个人先后登录，不会把 IP 的额度用光
+export async function refundRate(db, keys) {
+  await db.batch(keys.map((k) => db.prepare('UPDATE rate_limits SET count = MAX(count - 1, 0) WHERE key = ?').bind(k)));
+}
+
+// 邮箱：去空格、转小写、最长 254。不合格返回空串
+export function normalizeEmail(v) {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
+}
+
+// 登录策略：meta.login_policy 0/1/2
+export const POLICIES = ['off', 'optional', 'required'];
+export async function loginPolicy(db) {
+  const row = await db.prepare("SELECT value FROM meta WHERE key = 'login_policy'").first();
+  return POLICIES[row ? row.value : 1] || 'optional';
+}
