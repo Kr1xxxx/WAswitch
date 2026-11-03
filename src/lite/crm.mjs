@@ -4,6 +4,7 @@
 //   - 按消息自带的时间判断：只收开关打开之后的消息（不看 upsert 的类型，手机发的消息有时是 append）
 //   - 对方是 @lid（隐藏号码的编号）时，用 remoteJidAlt 或 Baileys 的 lid 映射找真实号码；找不到就跳过并计数
 //   - 先拆开 ephemeral / viewOnce 的外层；表情回应、撤回 / 编辑、投票等不收
+//   - 第一次开始采集时，把本机聊天缓存里最近 30 天的单聊补传一次（backfillItems），规则同上
 import { toNumber } from './store.mjs';
 
 const MAX_TEXT = 4000;
@@ -75,4 +76,29 @@ export async function crmItem(msg, since, pnForLid) {
   const peer = await peerNumber(msg.key, pnForLid);
   if (!peer) return { skip: 'nonumber' };
   return { item: { mid: String(msg.key.id).slice(0, 200), peer, out: !!msg.key.fromMe, at, text } };
+}
+
+// 本机聊天缓存（store.mjs 的 ChatStore）里的文字是给界面看的，换成和 textOf 一样的占位
+const STORE_OTHER = '[暂不支持的消息，请在手机上查看]';
+
+// 补传：本机缓存里 since 之后的单聊消息。store: { msgs: Map(jid -> [{ id, me, ts, text }]), altPn, nameOf(jid) }。
+// 返回 { items, skipped }（skipped = 单聊但认不出号码的条数）。每条带上对方的 WhatsApp 名字
+export async function backfillItems(store, since, pnForLid) {
+  const items = [];
+  let skipped = 0;
+  if (!store || !store.msgs || !since) return { items, skipped };
+  for (const [jid, list] of store.msgs) {
+    if (!isOneToOne(String(jid)) || !Array.isArray(list)) continue;
+    const recent = list.filter((m) => m && m.id && Number(m.ts) * 1000 >= since && typeof m.text === 'string');
+    if (!recent.length) continue;
+    const peer = await peerNumber({ remoteJid: jid, remoteJidAlt: store.altPn && store.altPn.get(jid) }, pnForLid);
+    if (!peer) { skipped += recent.length; continue; }
+    const name = (store.nameOf && (store.nameOf(jid) || store.nameOf(`${peer}@s.whatsapp.net`))) || '';
+    for (const m of recent) {
+      const text = m.text === STORE_OTHER ? '[其它消息]' : m.text.slice(0, MAX_TEXT);
+      if (!text) continue;
+      items.push({ mid: String(m.id).slice(0, 200), peer, out: !!m.me, at: Number(m.ts) * 1000, text, ...(name ? { name } : {}) });
+    }
+  }
+  return { items, skipped };
 }

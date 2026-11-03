@@ -41,7 +41,7 @@ const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
 const { TeamSync } = require('./team');
-const { CrmQueue } = require('./crm/queue');
+const { CrmQueue, keepQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
@@ -2150,6 +2150,8 @@ function bindLiteEvents() {
     // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
     if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
     if (status === 'open') fillOriginalsSoon(id);
+    if (status === 'open' && prev !== 'open') liteOpenAt.set(id, Date.now());
+    if (status !== 'open') liteOpenAt.delete(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
@@ -2629,22 +2631,29 @@ function maybeMoveData() {
 app.on('second-instance', () => notifier.showWindow());
 
 // ---------- 团队模式 ----------
-// ---------- 同步到 CRM：采集到本机加密队列（第 1 步），定时传到团队后台（第 2 步） ----------
-// 只有团队号（后台没有开关，一律同步）、号没停着、系统能真加密时才采集；私人号永远不采集
+// ---------- 同步到 CRM：采集到本机加密队列，每 2 分钟传到来财 ----------
+// 只有团队号（登录后本机的号都自动加入团队）、号没停着、系统能真加密时才采集
 let crmQueue = null;
 let crmTimer = null;
 let crmUploader = null;
-const CRM_UPLOAD_MS = 10 * 60 * 1000;
+const CRM_UPLOAD_MS = 2 * 60 * 1000;
 const CRM_READ_MS = 15 * 1000;
+const CRM_BACKFILL_DAYS_MS = 30 * 24 * 3600 * 1000;
+const CRM_BACKFILL_WAIT_MS = 2 * 60 * 1000; // 轻量号连上后等 2 分钟（手机把最近的聊天同步过来）再补传
+const liteOpenAt = new Map(); // 轻量号这次连上的时间
+const crmBackfilling = new Set();
 const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
-// 开关、收回、停用、换私人号、删号之后：停止采集，删掉队列和去重表
+// 不该采集的号：停止采集。号被收回、不再同步、删号、换人登录：连队列和去重表一起删（keepQueue）；
+// 电脑被停用、登录失效、号暂时停着：队列留着，重新登录后接着传
 function crmReconcile() {
   if (!crmQueue) return;
   for (const id of crmQueue.enabledIds()) {
-    if (crmOn(accounts.find((a) => a.id === id))) continue;
+    const acc = accounts.find((a) => a.id === id);
+    if (crmOn(acc)) continue;
+    if (liteHost) liteHost.setCrm(id, 0);
+    if (keepQueue(acc)) continue;
     crmQueue.purge(id);
     crmWebReader.forget(id);
-    if (liteHost) liteHost.setCrm(id, 0);
   }
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
@@ -2665,13 +2674,33 @@ async function crmReadWeb(id, switching) {
   if (!r.ok || !crmOn(acc)) return;
   const since = crmQueue.since(acc.id);
   const now = Date.now();
-  const got = crmWebReader.collect(acc.id, r.msgs, since, now);
+  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title); // 对话标题 = 对方的 WhatsApp 名字
   for (const item of got.items) crmQueue.add(acc.id, item);
   if (got.nonumber) crmQueue.skip(acc.id, got.nonumber);
   if (got.notime) crmQueue.skipNoTime(acc.id, got.notime);
 }
 // 每个对话读到过哪些消息（只在内存里）：读不出时间的旧消息不收、跳过的只算一次
 const crmWebReader = new crmWeb.WebReader();
+
+// 轻量号第一次开始采集（或这个版本第一次运行时已经在采集）：把本机缓存里最近 30 天的单聊补传一次。
+// 号要连着、连上满 2 分钟；拿不到（没在运行、超时）就下一轮再试。网页版的号只看得到打开的对话，不补传
+function crmBackfill() {
+  if (!crmQueue || !liteHost) return;
+  for (const acc of accounts) {
+    if (!isLite(acc) || !crmOn(acc) || !crmQueue.needsBackfill(acc.id) || crmBackfilling.has(acc.id)) continue;
+    const openAt = liteOpenAt.get(acc.id);
+    if (!openAt || Date.now() - openAt < CRM_BACKFILL_WAIT_MS) continue;
+    crmBackfilling.add(acc.id);
+    liteHost.crmBackfill(acc.id, Date.now() - CRM_BACKFILL_DAYS_MS).then((r) => {
+      if (!r || !Array.isArray(r.items) || !crmOn(acc) || !crmQueue.needsBackfill(acc.id)) return;
+      let n = 0;
+      for (const item of r.items) if (crmQueue.add(acc.id, item, { backfill: true })) n += 1;
+      if (Number.isInteger(r.skipped) && r.skipped > 0) crmQueue.skip(acc.id, r.skipped);
+      crmQueue.markBackfilled(acc.id);
+      console.log(`轻量号 ${acc.id} 补传最近 30 天的聊天：${n} 条进队列`);
+    }, (e) => console.warn(`轻量号 ${acc.id} 补传没成功：${e.message}`)).finally(() => crmBackfilling.delete(acc.id));
+  }
+}
 
 // 后台是“提示登录”、还没登录：这次打开软件提示一次登录页（可以点“稍后”）
 const loginPromptWanted = () => !!team && !loginPrompted && team.policy() === 'optional' && team.loginState() === 'none';
@@ -2753,12 +2782,16 @@ function setupTeam() {
     crmQueue.sweep();
     if (activeId) crmReadWeb(activeId, false);
   }, CRM_READ_MS);
-  // 第 2 步：每 10 分钟把本机队列传到团队后台；后台确认收到才从本机删
+  // 每 2 分钟（队列里有要传的时候）把本机队列传到来财；第一次在启动 60 秒后。来财回答了才从本机删
   crmUploader = new CrmUploader({ queue: crmQueue, team, accounts: () => accounts, crmOn });
-  const upload = () => crmUploader.run().then(() => refresh(), (e) => console.warn(`CRM 上传失败：${e.message}`));
+  const upload = () => {
+    crmBackfill();
+    if (!crmUploader.due()) return;
+    crmUploader.run().then(() => refresh(), (e) => console.warn(`CRM 上传失败：${e.message}`));
+  };
   setTimeout(upload, 60 * 1000).unref?.();
   setInterval(upload, CRM_UPLOAD_MS).unref?.();
-  // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
+  // 停着的号启动时就不运行（以最后一次同步的结果为准）
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }
 
@@ -3175,7 +3208,13 @@ handleShell('team:login', async ({ email, code } = {}) => {
   if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
   return r;
 });
-handleShell('team:logout', async () => { const r = await team.logout(); checkLoginLock(); return r; });
+// 主动退出登录：本机还没传的聊天一起删（下一个登录的人可能是别人）
+handleShell('team:logout', async () => {
+  const r = await team.logout();
+  if (crmQueue) for (const id of crmQueue.enabledIds()) { crmQueue.purge(id); crmWebReader.forget(id); if (liteHost) liteHost.setCrm(id, 0); }
+  checkLoginLock();
+  return r;
+});
 onShell('team:later', () => {
   if (loginLocked()) return;
   loginPrompted = true;
@@ -3190,7 +3229,6 @@ onShell('team:show-login', () => {
 });
 // 登录页上“连不上团队后台”的“重试”：重新问一下后台（已登录的同步一次，没登录的问策略）
 handleShell('team:retry', async () => { const r = await team.syncNow(); checkLoginLock(); return r; });
-handleShell('team:join', async ({ localIds } = {}) => team.join(localIds));
 handleShell('team:sync', async () => team.syncNow());
 onShell('mute', ({ id, muted } = {}) => {
   const acc = findAcc(id);

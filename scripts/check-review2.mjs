@@ -13,7 +13,7 @@ import { sha256hex, readJson } from '../server/src/util.js';
 
 const require = createRequire(import.meta.url);
 const { TeamSync } = require('../src/team');
-const { CrmQueue } = require('../src/crm/queue');
+const { CrmQueue, keepQueue } = require('../src/crm/queue');
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dirs = [], databases = [];
 const tmp = () => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-review2-')); dirs.push(dir); return dir; };
@@ -73,7 +73,7 @@ try {
     // 调用实际主进程的采集撤销代码，确认队列删除和轻量采集停止，而非测试里模拟清理。
     const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8');
     reconcile = vm.runInNewContext(main.slice(main.indexOf('const crmOn ='), main.indexOf('// 网页版号：只读员工正在看的对话')) + '\ncrmReconcile;', {
-      crmQueue: queue, team, accounts, isParked: a => team.isParked(a), isLite: () => true,
+      crmQueue: queue, keepQueue, team, accounts, isParked: a => team.isParked(a), isLite: () => true,
       crmWebReader: { forget() {} }, liteHost: { setCrm: (id, since) => { if (!since) stopped.push(id); } },
     });
     await team.syncNow();
