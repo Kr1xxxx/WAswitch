@@ -3,14 +3,14 @@
 //   - 只传团队号；来财回 200 才动本机队列（失败下一轮自动重传，本机最多留 30 天）
 //   - 来财对每条回一个结果（results）：stored / duplicate / rejected 删掉；held（对方还不是来财客户）
 //     留在本机的 held 表里，每小时再传一次，30 天后自动删（queue.js）
-//   - 旧后台 200 不带 results：这批全部删掉（以前的做法）
+//   - 旧后台 200 不带 results：这批全部删掉（以前的做法）；results 条数对不上：这批留着下一轮再传
+//   - 不认识的结果当 held（留着、每小时再传，30 天后删）
 //   - 每次最多约 200 KB、500 条；每个号每轮最多传 3 次（来财限制每个号每 10 分钟 20 次）
 //   - 503（来财还没开、推送暂停）：这一轮停，聊天留在本机；409（这个号没开）、429（太频繁）：这个号下一轮再传
 //   - 不跟随跳转、不走账号代理（用 TeamSync.post）
 const MAX_BODY = 200 * 1024;
 const MAX_ITEMS = 500;
 const PER_ACCOUNT = 3;
-const RESULTS = ['stored', 'duplicate', 'held', 'rejected'];
 
 function pickBatch(items) {
   const out = [];
@@ -73,11 +73,17 @@ class CrmUploader {
           }
           const d = r.data || {};
           if (r.status === 200 && d.ok === true) {
-            const res = Array.isArray(d.results) && d.results.length === batch.length && d.results.every((x) => RESULTS.includes(x)) ? d.results : null;
-            if (res) {
-              const n = this.queue.settle(acc.id, batch.map((b, i) => ({ h: b.h, status: res[i] })));
+            if (Array.isArray(d.results) && d.results.length !== batch.length) {
+              // 结果条数对不上：不知道哪条成了，这批全部留着，下一轮再传（来财按编号去重）
+              this.last = { at: this.now(), error: '来财的回答不对，聊天先留在本机' };
+              calls = PER_ACCOUNT;
+              break;
+            }
+            if (Array.isArray(d.results)) {
+              // 不认识的结果当 held：留着，一小时后再传
+              const n = this.queue.settle(acc.id, batch.map((b, i) => ({ h: b.h, status: d.results[i] })));
               sent += n.done;
-              held += res.filter((x) => x === 'held').length;
+              held += n.held;
             } else {
               // 旧后台：不合格被拒收的也一起删，再传也不会变合格
               this.queue.ack(acc.id, batch.map((b) => b.h));

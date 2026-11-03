@@ -41,7 +41,7 @@ const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
 const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
 const { TeamSync } = require('./team');
-const { CrmQueue } = require('./crm/queue');
+const { CrmQueue, keepQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
@@ -2643,14 +2643,17 @@ const CRM_BACKFILL_WAIT_MS = 2 * 60 * 1000; // 轻量号连上后等 2 分钟（
 const liteOpenAt = new Map(); // 轻量号这次连上的时间
 const crmBackfilling = new Set();
 const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
-// 开关、收回、停用、换私人号、删号之后：停止采集，删掉队列和去重表
+// 不该采集的号：停止采集。号被收回、不再同步、删号、换人登录：连队列和去重表一起删（keepQueue）；
+// 电脑被停用、登录失效、号暂时停着：队列留着，重新登录后接着传
 function crmReconcile() {
   if (!crmQueue) return;
   for (const id of crmQueue.enabledIds()) {
-    if (crmOn(accounts.find((a) => a.id === id))) continue;
+    const acc = accounts.find((a) => a.id === id);
+    if (crmOn(acc)) continue;
+    if (liteHost) liteHost.setCrm(id, 0);
+    if (keepQueue(acc)) continue;
     crmQueue.purge(id);
     crmWebReader.forget(id);
-    if (liteHost) liteHost.setCrm(id, 0);
   }
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
@@ -3205,7 +3208,13 @@ handleShell('team:login', async ({ email, code } = {}) => {
   if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
   return r;
 });
-handleShell('team:logout', async () => { const r = await team.logout(); checkLoginLock(); return r; });
+// 主动退出登录：本机还没传的聊天一起删（下一个登录的人可能是别人）
+handleShell('team:logout', async () => {
+  const r = await team.logout();
+  if (crmQueue) for (const id of crmQueue.enabledIds()) { crmQueue.purge(id); crmWebReader.forget(id); if (liteHost) liteHost.setCrm(id, 0); }
+  checkLoginLock();
+  return r;
+});
 onShell('team:later', () => {
   if (loginLocked()) return;
   loginPrompted = true;
