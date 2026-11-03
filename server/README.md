@@ -38,15 +38,11 @@ D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID�
 
 团队里每个号都同步，没有按号的开关（私人号不在团队里，不同步）：员工电脑每 10 分钟把团队号单聊里的文字传上来，后台加密暂存，每 30 分钟推给来财（带员工姓名和邮箱，来财按邮箱对上员工），推完就删，最多留 7 天。对不上来财客户的号码，来财也先收下，放在来财的「沟通 › 未匹配的 WhatsApp」里，由那边匹配到客户、建成新客户或不要；来财没收下的（比如格式不对）这边只计数。格式见交接说明文档。
 
-**真实客户上云、来财接收入口验收通过之前不要开。** 没开时员工电脑不上传，聊天留在本机（最多 7 天）。
+已经打开（2026-11-03）：`wrangler.jsonc` 里 `CRM_PUSH` 是 `"1"`，`services` 绑定到来财 `laicrm-app` 的 `WaswitchIngest`；迁移已跑到 `0006_crm_all_numbers.sql`。还要放两个 secret（`npx wrangler secret put`，或控制台 Variables and Secrets 里选 Secret），不要发在聊天里：
 
-开的步骤（老板做）：
+- `CRM_KEY`：32 字节随机数的 base64（`openssl rand -base64 32`），加密暂存的聊天、算消息编号。换了它，还没推出去的聊天会作废。
+- `LAICRM_SECRET`：推送签名密钥（`openssl rand -hex 32`），和来财的 `WASWITCH_INGEST_SECRET` 放同一个（来财那边 `GEN_WASWITCH_SECRET=1` 部署时生成）。
 
-1. 来财 `laicrm-app` 做好命名入口 `WaswitchIngest` 后，取消 `wrangler.jsonc` 里 `services` 那行的注释。
-2. 自己生成两个随机密钥，用 `npx wrangler secret put` 放进这个 Worker，不要发在聊天里：
-   - `CRM_KEY`：32 字节随机数的 base64（`openssl rand -base64 32`），加密暂存的聊天、算消息编号。换了它，还没推出去的聊天会作废。
-   - `LAICRM_SECRET`：推送签名密钥（`openssl rand -hex 32`），和来财的 `WASWITCH_INGEST_SECRET` 放同一个。
-3. 执行迁移（`0004_crm_push.sql` 到 `0006_crm_all_numbers.sql`，`npx wrangler d1 migrations apply waswitch-team --remote`）。
-4. 把 `wrangler.jsonc` 里的 `CRM_PUSH` 改成 `"1"`，部署。
+这两个没放好时，员工电脑上传会收到 503，聊天留在本机（最多 7 天），不会丢。
 
 Cloudflare 免费版每个账号最多 5 个定时任务，这个 Worker 只用 1 个（每 30 分钟：推送；每天 UTC 19:00 那次顺便清理旧记录），和来财、mailflare 共用。后台“账号”页显示每个号已写入和来财没收下的条数；来财拒绝签名时页面顶上会提示。
