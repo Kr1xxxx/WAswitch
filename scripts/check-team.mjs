@@ -373,6 +373,7 @@ await test('停用电脑（403 revoked）：变成“已停用”，必须登录
   assert.ok(A.log.includes('park:103'));
   assert.ok(A.accounts.every((a) => A.team.isParked(a)));
   assert.equal(A.accounts[2].teamHidden, false, '只是停着，不算收回');
+  assert.equal(A.accounts[2].teamCrm, true, '停用不撤 CRM 授权：本机队列留着，恢复或重新登录后接着传');
   await setPolicy('optional');
   await A.team.fetchPolicy();
   assert.equal(A.team.locked(), false);
@@ -399,6 +400,7 @@ await test('401（令牌失效）：回到没登录，团队号停着；必须�
   assert.equal(A.team.locked(), true);
   assert.ok(A.log.includes('park:103'));
   assert.equal(A.accounts[2].teamHidden, false, '不是收回，只是停着');
+  assert.equal(A.accounts[2].teamCrm, true, '401 不撤 CRM 授权：队列留着');
   assert.equal((await A.team.syncNow()).skipped, true, '没登录不同步');
 });
 await test('同一个人再登录：沿用这台设备，团队号直接回来', async () => {

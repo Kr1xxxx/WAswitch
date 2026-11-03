@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import { crmItem, textOf, backfillItems } from '../src/lite/crm.mjs';
 
 const require = createRequire(import.meta.url);
-const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, keyIdOf, cleanName } = require('../src/crm/queue.js');
+const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, keyIdOf, cleanName, keepQueue } = require('../src/crm/queue.js');
 const { CrmUploader, pickBatch } = require('../src/crm/upload.js');
 const { webItem, timeOf, WebReader } = require('../src/crm/web.js');
 const { parsePre } = require('../src/wa-page.js');
@@ -208,6 +208,7 @@ await test('第 2 步：号码只收 8～15 位；记下 WhatsApp 消息编号�
   q.enable('1');
   assert.equal(q.add('1', { mid: 'a1', peer: '1234567', at: T0, text: 'x' }), false);
   assert.equal(q.add('1', { mid: 'a2', peer: '1234567890123456', at: T0, text: 'x' }), false);
+  assert.equal(q.add('1', { mid: 'a3', peer: '0447700900123', at: T0, text: 'x' }), false, '以 0 开头的来财不收，只计数');
   assert.equal(q.add('1', { mid: 'false_447700900123@c.us_3EB0ABCDEF', peer: '447700900123', at: T0, text: '😀'.repeat(5000) }), true);
   assert.equal(q.add('1', { mid: '3EB0LITE01', peer: '447700900123', at: T0, text: 'x' }), true);
   const [w, l] = q.peek('1');
@@ -216,7 +217,7 @@ await test('第 2 步：号码只收 8～15 位；记下 WhatsApp 消息编号�
   assert.equal(Array.from(w.text).length, 4000);
   assert.equal(keyIdOf('true_8613800000000@c.us_3EB0X1Y2Z3'), '3EB0X1Y2Z3');
   assert.equal(keyIdOf('../bad'), '');
-  assert.equal(q.stats('1').skipped, 2);
+  assert.equal(q.stats('1').skipped, 3);
 });
 
 await test('对方的 WhatsApp 名字：去掉空白、最多 100 字；像号码的不要；写盘加密', async () => {
@@ -371,7 +372,7 @@ await test('上传到来财：按每条的结果处理；held 留着，每小时
   now += MAX_AGE_MS + 1;
   assert.equal(q.stats('1').held, 0, '30 天后自动删');
 });
-await test('上传到来财：结果条数对不上或是旧后台（没有 results）就整批删；409 / 429 / 503 留着', async () => {
+await test('上传到来财：结果条数对不上就整批留着；不认识的结果当 held；旧后台（没有 results）整批删；409 / 429 / 503 留着', async () => {
   const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => T0, timers: noTimers });
   q.enable('1');
   for (let i = 0; i < 2; i += 1) q.add('1', { mid: `3EB0X${i}`, peer: '447700900123', at: T0 + i, text: `m${i}` });
@@ -383,9 +384,38 @@ await test('上传到来财：结果条数对不上或是旧后台（没有 resu
     assert.equal(team.calls.length, 1);
     if (reply.status === 503) assert.equal(r.paused, true);
   }
-  const team = fakeTeam([{ status: 200, data: { ok: true, results: ['stored'] } }]);
+  let team = fakeTeam([{ status: 200, data: { ok: true, results: ['stored'] } }]);
   await new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true }).run();
-  assert.equal(q.stats('1').queued, 0);
+  assert.equal(team.calls.length, 1, '对不上就这一轮停');
+  assert.deepEqual([q.stats('1').queued, q.stats('1').held], [2, 0], '条数对不上：一条也不删');
+  team = fakeTeam([{ status: 200, data: { ok: true, results: ['stored', 'parked_later'] } }]);
+  await new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true }).run();
+  assert.deepEqual([q.stats('1').queued, q.stats('1').held], [0, 1], '不认识的结果留着当 held');
+  q.add('1', { mid: '3EB0X9', peer: '447700900123', at: T0 + 9, text: 'm9' });
+  team = fakeTeam([{ status: 200, data: { ok: true } }]);
+  await new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true }).run();
+  assert.equal(q.stats('1').queued, 0, '旧后台没有 results：整批删');
+});
+await test('停用、登录失效时队列留着（重新登录接着传）；收回、不再同步、删号才删；主动退出登录全部删', async () => {
+  const team = { teamId: '00000000-0000-0000-0000-000000000001', teamHidden: false, teamCrm: true };
+  assert.equal(keepQueue(team), true, '停用 / 401 / 没登录：号还是团队号，队列留着');
+  assert.equal(keepQueue({ ...team, teamHidden: true }), false, '收回（换人登录时也会先收起）');
+  assert.equal(keepQueue({ ...team, teamCrm: false }), false, '来财不再同步这个号');
+  assert.equal(keepQueue({ ...team, teamId: '' }), false, '不是团队号');
+  assert.equal(keepQueue(undefined), false, '号删了');
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const rec = main.slice(main.indexOf('function crmReconcile'), main.indexOf('async function crmReadWeb'));
+  assert.ok(/if \(keepQueue\(acc\)\) continue;\s*crmQueue\.purge\(id\)/.test(rec), 'crmReconcile 先看 keepQueue 再删');
+  const out = main.slice(main.indexOf("handleShell('team:logout'"), main.indexOf("onShell('team:later'"));
+  assert.ok(out.includes('crmQueue.purge(id)'), '主动退出登录时删队列');
+  // 停用、401 不改团队号的字段：TeamSync 的 doSync / tokenGone 不碰 teamCrm、teamHidden
+  const idx = fs.readFileSync(new URL('../src/team/index.js', import.meta.url), 'utf8');
+  for (const fn of ['tokenGone(why) {', 'offline(why']) {
+    const body = idx.slice(idx.indexOf(fn), idx.indexOf('\n  }\n', idx.indexOf(fn)));
+    assert.ok(!/teamCrm|teamHidden/.test(body), `${fn} 不该收回号`);
+  }
+  const rv = idx.slice(idx.indexOf('if (r.status === 403 && r.data && r.data.revoked === true'), idx.indexOf("if (r.status === 401)"));
+  assert.ok(rv.length > 0 && !/teamCrm|teamHidden/.test(rv), '403 revoked 不收回号');
 });
 await test('上传：一个号一轮最多 3 次（新的和先留着的合计），来财限每个号每 10 分钟 20 次', async () => {
   let now = T0;

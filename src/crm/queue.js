@@ -43,6 +43,14 @@ function keyIdOf(mid) {
 
 const hashOf = (accId, mid) => crypto.createHash('sha256').update(`${accId}|${mid}`).digest('hex').slice(0, 32);
 
+// 这个号现在不采集时，本机队列要不要留着。
+// 留着：电脑被停用（403）、登录失效（401）、还没登录、号暂时停着——员工重新登录（同一台设备）后接着传。
+// 删掉：号被收回（隐藏）、来财不再同步这个号、号删了、不再是团队号（换人登录时 login() 会先把号收起）。
+// 主动“退出登录”另外在 main.js 里全部删掉
+function keepQueue(acc) {
+  return !!(acc && acc.teamId && !acc.teamHidden && acc.teamCrm);
+}
+
 class CrmQueue {
   // deps: { dir, safeStorage, now?, onError? }
   constructor({ dir, safeStorage, now = Date.now, onError = () => {}, timers = { setTimeout, clearTimeout } }) {
@@ -135,8 +143,8 @@ class CrmQueue {
     if (a.seen.has(h)) return false;
     a.seen.add(h);
     if (a.seen.size > MAX_SEEN) a.seen.delete(a.seen.values().next().value);
-    // 号码只收 8～15 位（国际号码最长 15 位，和来财一致）；不合格的只计数
-    if (!/^\d{8,15}$/.test(String(item.peer || ''))) { a.skipped += 1; this.saveSoon(); return false; }
+    // 号码只收 8～15 位、不以 0 开头（国际号码最长 15 位，和来财一致）；不合格的只计数
+    if (!/^[1-9]\d{7,14}$/.test(String(item.peer || ''))) { a.skipped += 1; this.saveSoon(); return false; }
     const x = { h, k: keyIdOf(item.mid), peer: String(item.peer), out: item.out === true, at: Math.round(at), approx: item.approx === true, text: Array.from(String(item.text || '')).slice(0, MAX_TEXT).join('') };
     const name = cleanName(item.name);
     if (name) x.name = name;
@@ -280,5 +288,5 @@ class CrmQueue {
   }
 }
 
-module.exports = { CrmQueue, canEncrypt, hashOf, keyIdOf, cleanName, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS };
+module.exports = { CrmQueue, canEncrypt, hashOf, keyIdOf, cleanName, keepQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS };
 

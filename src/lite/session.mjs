@@ -114,7 +114,7 @@ export class Session {
 
   // 补传本机缓存里 since 之后的单聊（主进程在这个号第一次开始采集时调用一次）
   async crmBackfill(since) {
-    if (!this.store) return null;
+    if (!this.store || this.status !== 'open' || !this.sock) return null; // 没连上：主进程下一轮再试，不算补过
     const sock = this.sock;
     const pnForLid = (lid) => sock?.signalRepository?.lidMapping?.getPNForLID?.(lid);
     return backfillItems(this.store, Number(since) || 0, pnForLid);
