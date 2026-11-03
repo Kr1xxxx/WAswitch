@@ -583,9 +583,11 @@ await test('客户端暂停的收回：上报后台，管理员确认后下发�
   await sync(tokA, { device: { held_hides: 0 } });
   assert.equal(db.raw.prepare('SELECT confirm_hides FROM devices WHERE id = ?').get(devA).confirm_hides, 0);
 });
-await test('私人号开关随同步下发', async () => {
-  await boss.put('settings', { allow_private: false });
+await test('私人号一律不允许：同步下发 false；后台没有这个开关，传了也不理', async () => {
   assert.equal((await sync(tokA, {})).data.allow_private, false);
+  assert.equal((await boss.put('settings', { allow_private: true })).status, 200);
+  assert.equal((await sync(tokA, {})).data.allow_private, false);
+  assert.equal((await boss.get('me')).data.settings.allow_private, undefined);
 });
 await test('登记接口按 IP 限速', async () => {
   let last;
@@ -632,7 +634,7 @@ await test('软件登录：成功拿到令牌和人名；码不对回「验证�
   assert.equal(r.status, 200);
   assert.deepEqual(r.data.user, { name: '坐席A' });
   assert.equal(r.data.login, 'optional');
-  assert.equal(typeof r.data.allow_private, 'boolean');
+  assert.equal(r.data.allow_private, false);
   loginDev = r.data.device_id; loginTok = r.data.token;
   const row = db.raw.prepare('SELECT name, platform, app_version, token_hash FROM devices WHERE id = ?').get(loginDev);
   assert.deepEqual([row.name, row.platform, row.app_version], ['笔记本', 'mac', '1.0.5']);

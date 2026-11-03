@@ -22,8 +22,7 @@ function seatStmt(db, deviceId, accountId, visible) {
 
 async function me(db, user) {
   const groups = await db.prepare('SELECT id, name FROM groups ORDER BY name').all();
-  const ap = await db.prepare("SELECT value FROM meta WHERE key = 'allow_private'").first();
-  return json({ user, groups: groups.results, settings: { allow_private: !ap || ap.value !== 0, login_policy: await loginPolicy(db) }, server_time: now() });
+  return json({ user, groups: groups.results, settings: { login_policy: await loginPolicy(db) }, server_time: now() });
 }
 
 async function overview(db, user, env) {
@@ -321,10 +320,6 @@ async function updateSettings(db, user, body) {
     if (v < 0) return fail(400, '登录设置不对');
     await db.prepare("UPDATE meta SET value = ? WHERE key = 'login_policy'").bind(v).run();
     await audit(db, user.id, 'settings.update', 'login_policy', { login_policy: body.login_policy });
-  }
-  if (typeof body.allow_private === 'boolean') {
-    await db.prepare("UPDATE meta SET value = ? WHERE key = 'allow_private'").bind(body.allow_private ? 1 : 0).run();
-    await audit(db, user.id, 'settings.update', 'allow_private', { allow_private: body.allow_private });
   }
   return json({ ok: true });
 }

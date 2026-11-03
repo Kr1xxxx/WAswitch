@@ -33,5 +33,7 @@
   // 另外两个 secret 由老板自己放（wrangler secret put），不写在这里：
   //   CRM_KEY        32 字节随机数的 base64，用来加密暂存的聊天和算消息编号
   //   LAICRM_SECRET  推送签名密钥，和来财的 WASWITCH_INGEST_SECRET 一样
+  // D1 在美国东部（ENAM）：Worker 放到旁边跑，每句查询少走一趟远路（后台每次点击从约 0.3 秒降到几十毫秒）
+  "placement": { "region": "aws:us-east-1" },
   "observability": { "enabled": true }
 }

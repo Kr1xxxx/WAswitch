@@ -57,9 +57,10 @@ async function addAccounts(db, user, deviceId, list) {
   return out;
 }
 
-async function allowPrivate(db) {
-  const row = await db.prepare("SELECT value FROM meta WHERE key = 'allow_private'").first();
-  return !row || row.value !== 0;
+// 公司规定团队电脑上不许有私人号（2026-11-03）：一律下发 false，电脑端把私人号停掉并隐藏（数据不删）。
+// 没有开关；meta 里的 allow_private 留着不用。
+async function allowPrivate() {
+  return false;
 }
 
 async function enroll(request, env) {
