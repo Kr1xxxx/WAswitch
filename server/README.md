@@ -11,7 +11,7 @@ Cloudflare Worker + D1。老板和主管在 `/admin/` 填邮箱收验证码登�
 - 限速：同一邮箱 60 秒 1 次、1 小时 5 次；同一 IP 1 小时最多要 50 次码；验证时同一 IP 10 分钟 10 次。登录成功的那次不占 IP 的额度（一个办公室共用出口 IP）。码和邮件正文不写日志，操作记录只记邮箱和结果。
 - 软件登录：`POST /api/device/login`，换一个设备令牌（库里只存 SHA-256）。带上次的 `device_id` 且是本人的、没被停用，就沿用这台电脑，团队号的坐席不丢；带的是本人被停用的电脑，回 403 `revoked`。退出登录（`POST /api/device/logout`）或管理员点「让他重新登录」后，令牌失效（401）。
 - 后台网页登录：`POST /api/admin/session`，换一个 7 天的会话令牌，网页放 `localStorage`，每个请求带 `Authorization: Bearer`。只有老板、主管和 `OWNER_EMAIL` 能登录后台。`OWNER_EMAIL` 一定是老板：第一次登录时自动建档，以后登录时也会确保是老板、没被停用。老板换邮箱或进不去，改这个 secret 就行。
-- 登录策略在后台 › 设置 › 登录：不用登录 / 提示登录（默认）/ 必须登录。软件每次同步都会拿到最新的，改了立刻生效，不用发版。没登录时也可以 `GET /api/device/policy` 查。
+- 登录策略一律是「必须登录」（公司规定，2026-11-03，迁移 0007），后台没有开关：没登录团队的 WAswitch 整个锁在登录页，所以先在后台给每个员工建账号。软件每次同步都会拿到最新的；没登录时也可以 `GET /api/device/policy` 查。
 - 发信在 `src/mail.js`（现在用 Resend），以后换渠道只改这个文件。
 - 可选：再加一道 Cloudflare Access。在 Worker 里设了 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 后，设备接口以外的所有地址都要先过 Access，再要邮箱验证码。只设了一个或设错时，后台一律拒绝。
 
@@ -32,7 +32,7 @@ D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID�
 4. Worker › Settings › Variables and Secrets › Add，类型都选 **Secret**：`RESEND_API_KEY` 粘上一步的 key；`OWNER_EMAIL` 填你自己的邮箱。key 不要发到聊天里。
 5. 打开 https://wa.laicrm.com/admin/ ，填你的邮箱收码登录；到「人员与电脑」给每个员工建账号（名字 + 工作邮箱）。先拿自己和一个员工的邮箱各收一次码，确认没进垃圾箱。
 
-以后加新的迁移：`npx wrangler d1 migrations apply waswitch-team --remote`（`d1_migrations` 表里记着已经跑过的）。
+以后加新的迁移：`npx wrangler d1 migrations apply waswitch-team --remote`（2026-11-03 已跑到 0007）（`d1_migrations` 表里记着已经跑过的）。
 
 ## 聊天同步到来财（第 2 步）
 

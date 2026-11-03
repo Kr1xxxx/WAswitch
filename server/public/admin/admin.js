@@ -267,7 +267,6 @@ async function showEvents(a) {
   } catch (e) { toast(e.message); }
 }
 
-const POLICY_TEXT = { off: '不用登录', optional: '提示登录', required: '必须登录' };
 
 function deviceLine(d, now) {
   const status = d.revoked_at ? '已停用' : d.logged_out_at ? '已退出登录' : ago(d.last_seen_at, now);
@@ -334,12 +333,8 @@ async function auditPage() {
 }
 
 function settingsPage() {
-  const policy = el('select', {}, Object.entries(POLICY_TEXT).map(([v, t]) => el('option', { value: v, selected: v === me.settings.login_policy }, t)));
-  policy.addEventListener('change', () => act(() => api('PUT', 'settings', { login_policy: policy.value }), '已保存'));
   const gname = el('input', { placeholder: '组名', maxlength: 40, required: true });
   return [
-    el('h2', {}, '登录'),
-    el('label', { class: 'field inline' }, el('span', {}, 'WAswitch 打开时'), policy),
     el('h2', {}, '小组'),
     el('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); act(() => api('POST', 'groups', { name: gname.value }), '已添加'); } }, gname, el('button', { class: 'btn primary', type: 'submit' }, '添加小组')),
     el('ul', {}, me.groups.map((g) => el('li', {}, g.name))),

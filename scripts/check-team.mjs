@@ -58,7 +58,8 @@ async function fetchImpl(url, opts) {
   if (opts.body && url.endsWith('/sync')) sent.push(JSON.parse(opts.body));
   return worker.fetch(new Request(url, opts), env, {});
 }
-const setPolicy = (login) => boss('PUT', 'settings', { login_policy: login });
+// 后台已经改不了登录策略（一律必须登录，迁移 0007）；这里直接改库，好测电脑端在各种策略下的表现
+const setPolicy = async (login) => { db.raw.prepare("UPDATE meta SET value = ? WHERE key = 'login_policy'").run(['off', 'optional', 'required'].indexOf(login)); };
 
 // ---- 一台模拟的 WAswitch ----
 const fakeSafe = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`enc:${t}`), decryptString: (b) => b.toString().replace(/^enc:/, '') };

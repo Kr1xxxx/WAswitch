@@ -1,7 +1,7 @@
 // 管理后台接口。进来之前 index.js 已经按后台会话查到了人（session.js 的 resolveSession），坐席进不来。
 // 权限只在这里判断：老板 owner 看全部；主管 supervisor 只管本组。
 import { pushReady } from './crm.js';
-import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit, loginPolicy, POLICIES, normalizeEmail } from './util.js';
+import { json, fail, now, uuid, randomCode, sha256hex, readJson, HttpError, str, oneOf, country, COLORS_RE, audit, loginPolicy, normalizeEmail } from './util.js';
 import { signOutStmts } from './session.js';
 
 const CODE_TTL_MS = 15 * 60 * 1000;
@@ -315,12 +315,7 @@ async function createGroup(db, user, body) {
 
 async function updateSettings(db, user, body) {
   need(isOwner(user));
-  if (body.login_policy !== undefined) {
-    const v = POLICIES.indexOf(body.login_policy);
-    if (v < 0) return fail(400, '登录设置不对');
-    await db.prepare("UPDATE meta SET value = ? WHERE key = 'login_policy'").bind(v).run();
-    await audit(db, user.id, 'settings.update', 'login_policy', { login_policy: body.login_policy });
-  }
+  // 登录一律「必须登录」、私人号一律不许（公司规定，2026-11-03），后台不再改这两项，传了也不理
   return json({ ok: true });
 }
 

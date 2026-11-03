@@ -601,16 +601,15 @@ await test('操作记录：老板看全部，主管只看自己的', async () =>
   assert.ok(mine.every((e) => e.actor_id === sup));
 });
 // ---- 软件登录 ----
-await test('登录策略：默认提示登录；不要令牌；只有老板能改；同步和登录都带上', async () => {
-  assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'optional' });
+await test('登录策略：一律必须登录（迁移 0007）；不要令牌；后台改不了；同步和登录都带上', async () => {
+  assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'required' });
   assert.equal((await call('POST', '/api/device/policy', { body: {} })).status, 405);
-  assert.equal((await admin('sup@example.com').put('settings', { login_policy: 'required' })).status, 403);
-  assert.equal((await boss.put('settings', { login_policy: 'always' })).status, 400);
-  for (const p of ['required', 'off', 'optional']) {
+  assert.equal((await admin('sup@example.com').put('settings', { login_policy: 'off' })).status, 403);
+  for (const p of ['off', 'optional', 'always']) {
     assert.equal((await boss.put('settings', { login_policy: p })).status, 200);
-    assert.equal((await call('GET', '/api/device/policy')).data.login, p);
-    assert.equal((await sync(tokA, {})).data.login, p);
-    assert.equal((await boss.get('me')).data.settings.login_policy, p);
+    assert.equal((await call('GET', '/api/device/policy')).data.login, 'required');
+    assert.equal((await sync(tokA, {})).data.login, 'required');
+    assert.equal((await boss.get('me')).data.settings.login_policy, 'required');
   }
   assert.deepEqual((await sync(tokA, {})).data.user, { name: '坐席A' });
 });
@@ -633,7 +632,7 @@ await test('软件登录：成功拿到令牌和人名；码不对回「验证�
   const r = await devLoginCode('anna@example.com', lastCode('anna@example.com'));
   assert.equal(r.status, 200);
   assert.deepEqual(r.data.user, { name: '坐席A' });
-  assert.equal(r.data.login, 'optional');
+  assert.equal(r.data.login, 'required');
   assert.equal(r.data.allow_private, false);
   loginDev = r.data.device_id; loginTok = r.data.token;
   const row = db.raw.prepare('SELECT name, platform, app_version, token_hash FROM devices WHERE id = ?').get(loginDev);
