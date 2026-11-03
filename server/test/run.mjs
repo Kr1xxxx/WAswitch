@@ -22,10 +22,11 @@ const mail = { sent: [], mode: 'ok' };
 const lastCode = (to) => { const m = [...mail.sent].reverse().find((x) => x.to[0] === to); return m && /验证码 (\d{6})/.exec(m.text)[1]; };
 globalThis.fetch = async (url, opts = {}) => {
   if (url === 'https://api.resend.com/emails') {
-    assert.equal(opts.redirect, 'error');
+    assert.equal(opts.redirect, 'manual'); // Workers 不支持 'error'
     assert.equal(opts.headers.authorization, `Bearer ${env.RESEND_API_KEY}`);
     if (mail.mode === 'down') throw new TypeError('fetch failed');
     if (mail.mode === '500') return new Response('{"message":"x"}', { status: 500 });
+    if (mail.mode === '302') return new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/' } });
     mail.sent.push(JSON.parse(opts.body));
     return new Response('{"id":"m1"}', { headers: { 'content-type': 'application/json' } });
   }
@@ -217,8 +218,8 @@ await test('验证时同一 IP 10 分钟最多 10 次', async () => {
   assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: '123456' }, ip: '9.8.7.6' })).status, 429);
   resetLimits();
 });
-await test('发信失败：Resend 报错或连不上时 503，刚生成的码删掉；没配 RESEND_API_KEY 也是 503', async () => {
-  for (const mode of ['500', 'down']) {
+await test('发信失败：Resend 报错、跳转或连不上时 503，刚生成的码删掉；没配 RESEND_API_KEY 也是 503', async () => {
+  for (const mode of ['500', '302', 'down']) {
     resetLimits();
     db.raw.prepare('DELETE FROM login_codes').run();
     mail.mode = mode;
@@ -582,9 +583,11 @@ await test('客户端暂停的收回：上报后台，管理员确认后下发�
   await sync(tokA, { device: { held_hides: 0 } });
   assert.equal(db.raw.prepare('SELECT confirm_hides FROM devices WHERE id = ?').get(devA).confirm_hides, 0);
 });
-await test('私人号开关随同步下发', async () => {
-  await boss.put('settings', { allow_private: false });
+await test('私人号一律不允许：同步下发 false；后台没有这个开关，传了也不理', async () => {
   assert.equal((await sync(tokA, {})).data.allow_private, false);
+  assert.equal((await boss.put('settings', { allow_private: true })).status, 200);
+  assert.equal((await sync(tokA, {})).data.allow_private, false);
+  assert.equal((await boss.get('me')).data.settings.allow_private, undefined);
 });
 await test('登记接口按 IP 限速', async () => {
   let last;
@@ -598,16 +601,15 @@ await test('操作记录：老板看全部，主管只看自己的', async () =>
   assert.ok(mine.every((e) => e.actor_id === sup));
 });
 // ---- 软件登录 ----
-await test('登录策略：默认提示登录；不要令牌；只有老板能改；同步和登录都带上', async () => {
-  assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'optional' });
+await test('登录策略：一律必须登录（迁移 0007）；不要令牌；后台改不了；同步和登录都带上', async () => {
+  assert.deepEqual((await call('GET', '/api/device/policy')).data, { v: 1, login: 'required' });
   assert.equal((await call('POST', '/api/device/policy', { body: {} })).status, 405);
-  assert.equal((await admin('sup@example.com').put('settings', { login_policy: 'required' })).status, 403);
-  assert.equal((await boss.put('settings', { login_policy: 'always' })).status, 400);
-  for (const p of ['required', 'off', 'optional']) {
+  assert.equal((await admin('sup@example.com').put('settings', { login_policy: 'off' })).status, 403);
+  for (const p of ['off', 'optional', 'always']) {
     assert.equal((await boss.put('settings', { login_policy: p })).status, 200);
-    assert.equal((await call('GET', '/api/device/policy')).data.login, p);
-    assert.equal((await sync(tokA, {})).data.login, p);
-    assert.equal((await boss.get('me')).data.settings.login_policy, p);
+    assert.equal((await call('GET', '/api/device/policy')).data.login, 'required');
+    assert.equal((await sync(tokA, {})).data.login, 'required');
+    assert.equal((await boss.get('me')).data.settings.login_policy, 'required');
   }
   assert.deepEqual((await sync(tokA, {})).data.user, { name: '坐席A' });
 });
@@ -630,8 +632,8 @@ await test('软件登录：成功拿到令牌和人名；码不对回「验证�
   const r = await devLoginCode('anna@example.com', lastCode('anna@example.com'));
   assert.equal(r.status, 200);
   assert.deepEqual(r.data.user, { name: '坐席A' });
-  assert.equal(r.data.login, 'optional');
-  assert.equal(typeof r.data.allow_private, 'boolean');
+  assert.equal(r.data.login, 'required');
+  assert.equal(r.data.allow_private, false);
   loginDev = r.data.device_id; loginTok = r.data.token;
   const row = db.raw.prepare('SELECT name, platform, app_version, token_hash FROM devices WHERE id = ?').get(loginDev);
   assert.deepEqual([row.name, row.platform, row.app_version], ['笔记本', 'mac', '1.0.5']);

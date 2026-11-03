@@ -11,7 +11,7 @@ Cloudflare Worker + D1。老板和主管在 `/admin/` 填邮箱收验证码登�
 - 限速：同一邮箱 60 秒 1 次、1 小时 5 次；同一 IP 1 小时最多要 50 次码；验证时同一 IP 10 分钟 10 次。登录成功的那次不占 IP 的额度（一个办公室共用出口 IP）。码和邮件正文不写日志，操作记录只记邮箱和结果。
 - 软件登录：`POST /api/device/login`，换一个设备令牌（库里只存 SHA-256）。带上次的 `device_id` 且是本人的、没被停用，就沿用这台电脑，团队号的坐席不丢；带的是本人被停用的电脑，回 403 `revoked`。退出登录（`POST /api/device/logout`）或管理员点「让他重新登录」后，令牌失效（401）。
 - 后台网页登录：`POST /api/admin/session`，换一个 7 天的会话令牌，网页放 `localStorage`，每个请求带 `Authorization: Bearer`。只有老板、主管和 `OWNER_EMAIL` 能登录后台。`OWNER_EMAIL` 一定是老板：第一次登录时自动建档，以后登录时也会确保是老板、没被停用。老板换邮箱或进不去，改这个 secret 就行。
-- 登录策略在后台 › 设置 › 登录：不用登录 / 提示登录（默认）/ 必须登录。软件每次同步都会拿到最新的，改了立刻生效，不用发版。没登录时也可以 `GET /api/device/policy` 查。
+- 登录策略一律是「必须登录」（公司规定，2026-11-03，迁移 0007），后台没有开关：没登录团队的 WAswitch 整个锁在登录页，所以先在后台给每个员工建账号。软件每次同步都会拿到最新的；没登录时也可以 `GET /api/device/policy` 查。
 - 发信在 `src/mail.js`（现在用 Resend），以后换渠道只改这个文件。
 - 可选：再加一道 Cloudflare Access。在 Worker 里设了 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 后，设备接口以外的所有地址都要先过 Access，再要邮箱验证码。只设了一个或设错时，后台一律拒绝。
 
@@ -24,19 +24,19 @@ node scripts/check-team.mjs     # WAswitch 同步模块对着后台跑一遍
 
 ## 部署（老板做，一次）
 
-D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 5 步：
+D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 5 步（第 1 步 2026-11-03 已做）：
 
-1. Cloudflare 控制台 › Workers & Pages › Create › Import a repository，选这个仓库（第一次会让你给 Cloudflare 的 GitHub App 授权，只勾这个仓库），Root directory 填 `server`，Production branch 选 `main`，关掉非 main 分支的构建，部署。
+1. Cloudflare 控制台 › Workers & Pages › Create › Import a repository，选这个仓库（第一次会让你给 Cloudflare 的 GitHub App 授权，只勾这个仓库），Worker 名字填 `waswitch-teama`（和 `wrangler.jsonc` 的 `name` 一样），Root directory 填 `server`，Production branch 选 `main`，关掉非 main 分支的构建，部署。
 2. 这个 Worker › Settings › Domains & Routes › Add › Custom domain，填 `wa.laicrm.com`（`workers.dev` 和预览网址已在配置里关掉）。
 3. 登录 resend.com（没有就注册），Domains › Add Domain 填 `laicrm.com`，按提示把 DNS 加到 Cloudflare，等它变成 Verified；然后 API Keys › Create，权限选 Sending access，复制出来。如果 Resend 里已经验证过别的域名，就用那个，下一步多加一个 `MAIL_FROM`（比如 `WAswitch <no-reply@你的域名>`）。
 4. Worker › Settings › Variables and Secrets › Add，类型都选 **Secret**：`RESEND_API_KEY` 粘上一步的 key；`OWNER_EMAIL` 填你自己的邮箱。key 不要发到聊天里。
 5. 打开 https://wa.laicrm.com/admin/ ，填你的邮箱收码登录；到「人员与电脑」给每个员工建账号（名字 + 工作邮箱）。先拿自己和一个员工的邮箱各收一次码，确认没进垃圾箱。
 
-以后加新的迁移：`npx wrangler d1 migrations apply waswitch-team --remote`（`d1_migrations` 表里记着已经跑过的）。
+以后加新的迁移：`npx wrangler d1 migrations apply waswitch-team --remote`（2026-11-03 已跑到 0007）（`d1_migrations` 表里记着已经跑过的）。
 
 ## 聊天同步到来财（第 2 步）
 
-团队里每个号都同步，没有按号的开关（私人号不在团队里，不同步）：员工电脑每 10 分钟把团队号单聊里的文字传上来，后台加密暂存，每 30 分钟推给来财（带员工姓名和邮箱，来财按邮箱对上员工），推完就删，最多留 7 天。对不上来财客户的号码，来财也先收下，放在来财的「沟通 › 未匹配的 WhatsApp」里，由那边匹配到客户、建成新客户或不要；来财没收下的（比如格式不对）这边只计数。格式见交接说明文档。
+团队里每个号都同步，没有按号的开关。团队电脑上不许有私人号（公司规定，2026-11-03）：后台没有这个开关，登录团队的电脑会把私人号停掉并隐藏（数据不删）。员工电脑每 10 分钟把团队号单聊里的文字传上来，后台加密暂存，每 30 分钟推给来财（带员工姓名和邮箱，来财按邮箱对上员工），推完就删，最多留 7 天。对不上来财客户的号码，来财也先收下，放在来财的「沟通 › 未匹配的 WhatsApp」里，由那边匹配到客户、建成新客户或不要；来财没收下的（比如格式不对）这边只计数。格式见交接说明文档。
 
 已经打开（2026-11-03）：`wrangler.jsonc` 里 `CRM_PUSH` 是 `"1"`，`services` 绑定到来财 `laicrm-app` 的 `WaswitchIngest`；迁移已跑到 `0006_crm_all_numbers.sql`。还要放两个 secret（`npx wrangler secret put`，或控制台 Variables and Secrets 里选 Secret），不要发在聊天里：
 

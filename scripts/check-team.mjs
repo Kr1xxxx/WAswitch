@@ -58,7 +58,8 @@ async function fetchImpl(url, opts) {
   if (opts.body && url.endsWith('/sync')) sent.push(JSON.parse(opts.body));
   return worker.fetch(new Request(url, opts), env, {});
 }
-const setPolicy = (login) => boss('PUT', 'settings', { login_policy: login });
+// 后台已经改不了登录策略（一律必须登录，迁移 0007）；这里直接改库，好测电脑端在各种策略下的表现
+const setPolicy = async (login) => { db.raw.prepare("UPDATE meta SET value = ? WHERE key = 'login_policy'").run(['off', 'optional', 'required'].indexOf(login)); };
 
 // ---- 一台模拟的 WAswitch ----
 const fakeSafe = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`enc:${t}`), decryptString: (b) => b.toString().replace(/^enc:/, '') };
@@ -280,16 +281,15 @@ await test('一次要收回一半以上的号：先暂停，管理员确认后�
   assert.ok(A.log.includes('park:101') && A.log.includes('park:102'));
   assert.equal(A.team.state.held.length, 0);
 });
-await test('后台不允许私人号：私人号停着；再允许就恢复', async () => {
-  await boss('PUT', 'settings', { allow_private: false });
-  A.log.length = 0;
+await test('私人号一律停着（公司不允许）：后台没有开关，传了也恢复不了', async () => {
   await A.team.syncNow();
-  assert.ok(A.log.includes('park:104'));
+  assert.equal(A.team.state.allowPrivate, false);
   assert.equal(A.team.isParked(A.accounts[3]), true);
   await boss('PUT', 'settings', { allow_private: true });
+  A.log.length = 0;
   await A.team.syncNow();
-  assert.equal(A.team.isParked(A.accounts[3]), false);
-  assert.ok(A.log.includes('unpark:104'));
+  assert.equal(A.team.isParked(A.accounts[3]), true);
+  assert.ok(!A.log.includes('unpark:104'));
 });
 await test('团队号一律同步到 CRM：坐席同步后这个号带上 teamCrm；后台关不掉', async () => {
   const mine = A.accounts.find((a) => a.teamId && !a.teamHidden);
