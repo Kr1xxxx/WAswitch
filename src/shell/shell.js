@@ -1386,13 +1386,14 @@ function renderPanel(force = false) {
 
 // ---------- 登录页 ----------
 // 后台要求必须登录时整个软件只有这一页；“提示登录”时多一个“稍后”。
-// 用工作邮箱收验证码登录：邮箱 + 「获取验证码」，下面验证码 + 登录
+// 用来财的公司邮箱收验证码登录：邮箱 + 「获取验证码」，下面验证码 + 登录。
+// 来财不说这个邮箱是不是成员（发码一律成功），所以发完只提醒看看邮箱填对没有
 const loginForm = { busy: false, sending: false, error: '', offline: false, retry: '', sentTo: '', until: 0 };
 let loginEl = null;
 let loginTick = null;
 function loginPage() {
   if (!loginEl) {
-    const email = h('input', { type: 'email', autocomplete: 'email', spellcheck: 'false', maxlength: '254', 'aria-label': '邮箱' });
+    const email = h('input', { type: 'email', autocomplete: 'email', spellcheck: 'false', maxlength: '254', 'aria-label': '公司邮箱' });
     const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', 'aria-label': '验证码' });
     const err = h('div', { class: 'note bad login-err', role: 'alert', hidden: true });
     const sent = h('span', { class: 'hint login-sent', hidden: true });
@@ -1464,8 +1465,8 @@ function loginPage() {
       else submit();
     } }, '重试');
     loginEl = h('div', { class: 'center login-page' }, h('div', { class: 'login-card' },
-      h('h1', null, '登录 WAswitch'),
-      h('label', { class: 'field' }, '邮箱', h('div', { class: 'login-row' }, email, getCode)),
+      h('h1', null, '用来财账号登录'),
+      h('label', { class: 'field' }, '公司邮箱', h('div', { class: 'login-row' }, email, getCode)),
       sent,
       h('label', { class: 'field' }, '验证码', code),
       err,
@@ -1482,7 +1483,7 @@ function loginPage() {
       getCode.textContent = loginForm.sending ? '发送中' : left > 0 ? `${left} 秒后重新获取` : '获取验证码';
       getCode.disabled = loginForm.sending || loginForm.busy || left > 0;
       sent.hidden = !loginForm.sentTo;
-      sent.textContent = loginForm.sentTo ? `已发到 ${loginForm.sentTo}` : '';
+      sent.textContent = loginForm.sentTo ? '验证码已发到这个邮箱。没收到的话，看看邮箱有没有填对。' : '';
       go.disabled = loginForm.busy;
       go.textContent = loginForm.busy ? '登录中' : '登录';
       retry.disabled = loginForm.busy || loginForm.sending;
@@ -2164,13 +2165,13 @@ function crmBox(accounts, upload) {
     ? `上次上传：${new Date(upload.at).toLocaleString('zh-CN', { hour12: false })}${upload.error ? `（${upload.error}）` : '（成功）'}`
     : '还没有上传过';
   return h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '同步到 CRM'),
-    h('p', { class: 'hint', style: { margin: '0' } }, '这些号的单聊文字消息每 10 分钟同步到公司 CRM。群聊不同步；网页版的号只同步你打开过的对话。'),
+    h('p', { class: 'hint', style: { margin: '0' } }, '所有客户的聊天会 AI 分析并上传至 CRM'),
     h('p', { class: 'hint', style: { margin: '0', fontSize: 'var(--fs-s)' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
       avatarOf(a),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
       h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
-        ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
+        ? `本机排队 ${a.crm.queued} 条${a.crm.held ? `，${a.crm.held} 条等客户在来财建档后再传` : ''}${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }
 
@@ -2198,8 +2199,7 @@ function teamPage(t, accounts = []) {
       h('span', null, '登录'), h('span', null, t.userName || '已登录'),
       ...(t.email ? [h('span', null, '邮箱'), h('span', null, t.email)] : []),
       h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
-      h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
-      h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
+      h('span', null, '上次同步'), h('span', null, when(t.lastOkAt))),
     ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
     t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
     h('div', { class: 'btns' },
@@ -2214,18 +2214,6 @@ function teamPage(t, accounts = []) {
       logout),
     result,
     teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
-  // 把本机的号加入团队：选号，上传清单在下面
-  if (t.privateAccounts.length && t.allowPrivate) {
-    wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
-      t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
-        avatarOf(a),
-        h('span', { class: 'meta' }, a.name),
-        h('button', { class: 'btn', onclick: async () => {
-          const r = await window.wa.teamJoin([a.id]);
-          teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功'; teamForm.detail = (r && r.detail) || '';
-          render(true);
-        } }, '加入团队')))));
-  }
   wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
   return wrap;
 }

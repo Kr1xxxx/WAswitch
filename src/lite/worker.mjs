@@ -49,6 +49,9 @@ async function handle(m) {
     case 'crm':
       if (s) s.setCrm(m.since);
       return undefined;
+    // CRM 补传：本机缓存里最近 30 天的单聊（只给主进程，进加密队列）
+    case 'backfill':
+      return s ? s.crmBackfill(m.since) : null;
     case 'read':
       if (s) await s.read(m.jid);
       return undefined;
