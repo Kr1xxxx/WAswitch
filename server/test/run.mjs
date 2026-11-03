@@ -22,10 +22,11 @@ const mail = { sent: [], mode: 'ok' };
 const lastCode = (to) => { const m = [...mail.sent].reverse().find((x) => x.to[0] === to); return m && /验证码 (\d{6})/.exec(m.text)[1]; };
 globalThis.fetch = async (url, opts = {}) => {
   if (url === 'https://api.resend.com/emails') {
-    assert.equal(opts.redirect, 'error');
+    assert.equal(opts.redirect, 'manual'); // Workers 不支持 'error'
     assert.equal(opts.headers.authorization, `Bearer ${env.RESEND_API_KEY}`);
     if (mail.mode === 'down') throw new TypeError('fetch failed');
     if (mail.mode === '500') return new Response('{"message":"x"}', { status: 500 });
+    if (mail.mode === '302') return new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/' } });
     mail.sent.push(JSON.parse(opts.body));
     return new Response('{"id":"m1"}', { headers: { 'content-type': 'application/json' } });
   }
@@ -217,8 +218,8 @@ await test('验证时同一 IP 10 分钟最多 10 次', async () => {
   assert.equal((await call('POST', '/api/admin/session', { body: { email: 'boss@example.com', code: '123456' }, ip: '9.8.7.6' })).status, 429);
   resetLimits();
 });
-await test('发信失败：Resend 报错或连不上时 503，刚生成的码删掉；没配 RESEND_API_KEY 也是 503', async () => {
-  for (const mode of ['500', 'down']) {
+await test('发信失败：Resend 报错、跳转或连不上时 503，刚生成的码删掉；没配 RESEND_API_KEY 也是 503', async () => {
+  for (const mode of ['500', '302', 'down']) {
     resetLimits();
     db.raw.prepare('DELETE FROM login_codes').run();
     mail.mode = mode;

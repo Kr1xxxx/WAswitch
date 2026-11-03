@@ -10,7 +10,8 @@ export async function sendCode(env, to, code) {
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      redirect: 'error',
+      // Workers 不支持 redirect: 'error'（构造请求时直接抛 TypeError）；用 manual，3xx 算失败
+      redirect: 'manual',
       signal: AbortSignal.timeout(10000),
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
       body: JSON.stringify({
