@@ -3,7 +3,7 @@
   // 在控制台放的一律用 Secret 类型（普通变量每次部署会被这个文件覆盖）：
   //   RESEND_API_KEY（必须，发验证码邮件）、OWNER_EMAIL（必须，老板邮箱）、MAIL_FROM（可选，发件人）
   //   ACCESS_TEAM_DOMAIN、ACCESS_AUD（可选，再加一道 Cloudflare Access）
-  "name": "waswitch-team",
+  "name": "waswitch-teama",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
   // 审计要求：关掉 workers.dev 和预览网址（预览版本连同一个 D1）

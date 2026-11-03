@@ -24,9 +24,9 @@ node scripts/check-team.mjs     # WAswitch 同步模块对着后台跑一遍
 
 ## 部署（老板做，一次）
 
-D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 5 步：
+D1 数据库 `waswitch-team` 已经建好，`wrangler.jsonc` 里填了它的 ID，迁移也跑完了。剩下 5 步（第 1 步 2026-11-03 已做）：
 
-1. Cloudflare 控制台 › Workers & Pages › Create › Import a repository，选这个仓库（第一次会让你给 Cloudflare 的 GitHub App 授权，只勾这个仓库），Root directory 填 `server`，Production branch 选 `main`，关掉非 main 分支的构建，部署。
+1. Cloudflare 控制台 › Workers & Pages › Create › Import a repository，选这个仓库（第一次会让你给 Cloudflare 的 GitHub App 授权，只勾这个仓库），Worker 名字填 `waswitch-teama`（和 `wrangler.jsonc` 的 `name` 一样），Root directory 填 `server`，Production branch 选 `main`，关掉非 main 分支的构建，部署。
 2. 这个 Worker › Settings › Domains & Routes › Add › Custom domain，填 `wa.laicrm.com`（`workers.dev` 和预览网址已在配置里关掉）。
 3. 登录 resend.com（没有就注册），Domains › Add Domain 填 `laicrm.com`，按提示把 DNS 加到 Cloudflare，等它变成 Verified；然后 API Keys › Create，权限选 Sending access，复制出来。如果 Resend 里已经验证过别的域名，就用那个，下一步多加一个 `MAIL_FROM`（比如 `WAswitch <no-reply@你的域名>`）。
 4. Worker › Settings › Variables and Secrets › Add，类型都选 **Secret**：`RESEND_API_KEY` 粘上一步的 key；`OWNER_EMAIL` 填你自己的邮箱。key 不要发到聊天里。
