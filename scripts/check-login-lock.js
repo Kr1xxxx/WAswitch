@@ -2,8 +2,10 @@
 // 做法：起一个本机假后台（policy / code / login / logout / sync），用临时配置启动真的软件
 // （两个网页版账号，代理指向关着的端口，不联网），通过 CDP 读软件界面：
 //   1) 缓存的策略是 required、没登录：启动后只有登录页，一个账号页面都不建；没有“稍后”；软件更新照常（有更新状态）；
-//   2) 邮箱回车要验证码：按钮倒计时，显示“已发到 …”，焦点到验证码框；填错码自动提交，只显示一行“验证码不对或已过期”，码清空，还锁着；
-//   3) 填对 6 位自动登录成功：解锁，两个账号的页面建起来；设置 › 团队显示名字和“退出登录”，没有后台地址和登记码；
+//   2) 邮箱回车要验证码（来财对任何邮箱都回 200）：按钮倒计时，提醒看看邮箱填对没有，焦点到验证码框；
+//      填错码自动提交，只显示一行“验证码不对或已过期”，码清空，还锁着；
+//   3) 填对 6 位自动登录成功：解锁，两个账号的页面建起来，两个号自动加入团队（/join，不用点按钮）；
+//      设置 › 团队显示名字和“退出登录”，没有后台地址、登记码和“加入团队”按钮；
 //   4) 后台说这台电脑被停用（403 revoked）：账号页面全部关掉，回到登录页，说明“这台电脑已被管理员停用”；
 //   5) 策略改成 optional、重新启动：提示登录页有“稍后”，账号照常启动；点“稍后”回到账号页。
 // 900×600 下登录页文字不裁、不换行。
@@ -38,7 +40,7 @@ async function cdp(wsUrl) {
 const DEVICE = '11111111-2222-4333-8444-555555555555';
 const TOKEN = 'T'.repeat(43);
 const CODE = '246810'; // 假后台“发到邮箱”的验证码
-const srv = { policy: 'required', revoked: false, hits: [] };
+const srv = { policy: 'required', revoked: false, hits: [], joins: [] };
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => { body += c; });
@@ -47,11 +49,8 @@ const server = http.createServer((req, res) => {
     const json = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
     const authed = req.headers.authorization === `Bearer ${TOKEN}`;
     if (req.url === '/api/device/policy' && req.method === 'GET') return json(200, { v: 1, login: srv.policy });
-    if (req.url === '/api/device/code' && req.method === 'POST') {
-      const b = JSON.parse(body || '{}');
-      if (b.email !== 'emma@example.com') return json(404, { unknown: true });
-      return json(200, { ok: true, resend_after_s: 60 });
-    }
+    // 来财：格式对的邮箱一律 200，不说是不是成员
+    if (req.url === '/api/device/code' && req.method === 'POST') return json(200, { ok: true, resend_after_s: 60 });
     if (req.url === '/api/device/login' && req.method === 'POST') {
       const b = JSON.parse(body || '{}');
       if (b.email !== 'emma@example.com' || b.code !== CODE) return json(400, { error: '验证码不对或已过期' });
@@ -60,6 +59,11 @@ const server = http.createServer((req, res) => {
     if (!authed) return json(401, { error: '设备令牌无效' });
     if (srv.revoked) return json(403, { error: '这台电脑已被管理员停用', revoked: true, device_id: DEVICE });
     if (req.url === '/api/device/logout') return json(200, { ok: true });
+    if (req.url === '/api/device/join') {
+      const b = JSON.parse(body || '{}');
+      srv.joins.push(b);
+      return json(200, { accounts: b.accounts.map((a, i) => ({ local_id: a.local_id, team_id: `11111111-2222-4333-8444-00000000000${i}` })) });
+    }
     if (req.url === '/api/device/sync') return json(200, { ok: true, seats: [], cursor: 0, next_sync_s: 120, allow_private: true, login: srv.policy, user: { name: 'Emma Schulz' } });
     return json(404, { error: 'not found' });
   });
@@ -146,13 +150,14 @@ async function launch(profile, teamServer) {
       const h1 = card.querySelector('h1');
       return { title: h1.textContent, oneLine: h1.getClientRects().length === 1 && h1.offsetHeight < 40, btns, clipped, side: document.getElementById('side').textContent, w: innerWidth, h: innerHeight };
     })()`);
-    check(ui.title === '登录 WAswitch' && ui.oneLine, `标题「登录 WAswitch」一行显示（${JSON.stringify(ui)}）`);
+    check(ui.title === '用来财账号登录' && ui.oneLine, `标题「用来财账号登录」一行显示（${JSON.stringify(ui)}）`);
+    check(await shell.evaluate(`document.querySelector('.login-card label.field').firstChild.textContent`) === '公司邮箱', '邮箱框叫「公司邮箱」');
     check(ui.btns.join('|') === '获取验证码|登录', `必须登录时没有“稍后”（${ui.btns.join('|')}）`);
     check(ui.clipped.length === 0, '登录页文字没被裁');
     check(!/Sales/.test(ui.side), '侧栏里没有账号');
     // 2) 邮箱回车要验证码
     await askCode(shell, 'emma@example.com');
-    check(await waitFor(async () => (await codeUi(shell)).sent === '已发到 emma@example.com', 5000), '显示“已发到 emma@example.com”');
+    check(await waitFor(async () => (await codeUi(shell)).sent === '验证码已发到这个邮箱。没收到的话，看看邮箱有没有填对。', 5000), '发码后提醒看看邮箱有没有填对');
     let cu = await codeUi(shell);
     check(/^\d+ 秒后重新获取$/.test(cu.btn) && cu.codeFocused, `按钮倒计时，焦点在验证码框（${JSON.stringify(cu)}）`);
     // 窗口最小 900×600：把软件界面按这个大小排版再量一次（倒计时状态）
@@ -193,7 +198,10 @@ async function launch(profile, teamServer) {
       return document.getElementById('content').textContent;
     })()`);
     check(teamTab.includes('Emma Schulz') && teamTab.includes('退出登录'), '设置 › 团队显示名字和“退出登录”');
-    check(!teamTab.includes('后台地址') && !teamTab.includes('登记码'), '没有后台地址和登记码');
+    check(!teamTab.includes('后台地址') && !teamTab.includes('登记码') && !teamTab.includes('加入团队') && !teamTab.includes('私人号'), '没有后台地址、登记码、“加入团队”和私人号');
+    check(await waitFor(async () => srv.joins.length > 0, 5000), '登录后两个号自动加入团队');
+    const joined = srv.joins[0] ? srv.joins[0].accounts.map((a) => `${a.local_id}:${a.phone}`).join(',') : '';
+    check(joined === '1:,2:', `加入时带着每个号自己的号码（这里还没读到，是空的）（${joined}）`);
     await shell.evaluate(`window.wa.showPage('account')`);
 
     // 4) 运行中被停用
@@ -212,6 +220,8 @@ async function launch(profile, teamServer) {
     srv.revoked = false;
     srv.policy = 'optional';
     fs.writeFileSync(path.join(profile, 'team.json'), JSON.stringify({ server: teamServer, policy: 'optional' }));
+    // 上一段登录后两个号已经加入团队；这里看的是“提示登录”本身，换回没加入过的两个号
+    fs.writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify([account('1', 'Sales DE', dead[0], 1), account('2', 'Sales FR', dead[1], 2)]));
     app = await launch(profile, teamServer);
     children.push(app.child);
     shell = app.shell;

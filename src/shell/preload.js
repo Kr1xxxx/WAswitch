@@ -121,6 +121,5 @@ contextBridge.exposeInMainWorld('wa', {
   teamLater: () => ipcRenderer.send('team:later'),
   showLogin: () => ipcRenderer.send('team:show-login'),
   teamRetry: () => ipcRenderer.invoke('team:retry'),
-  teamJoin: (localIds) => ipcRenderer.invoke('team:join', { localIds }),
   teamSync: () => ipcRenderer.invoke('team:sync'),
 });

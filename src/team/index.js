@@ -1,6 +1,6 @@
-// 团队模式：员工用账号和密码登录团队后台（Cloudflare Worker），定时同步坐席并上报账号状态。
-// 后台按“登录”开关（off / optional / required）决定要不要登录才能用；必须登录时没登录、被停用、
-// 连续 7 天连不上后台，软件就锁成登录页（见 locked()）。自动更新不看这些。
+// 团队模式：员工用来财的公司邮箱收验证码登录（来财 laicrm.com 的 /api/device/*），定时同步坐席并上报账号状态。
+// 登录后本机每个号都自动加入团队（没有私人号）。来财按“登录”策略（off / optional / required）决定要不要登录才能用；
+// 必须登录时没登录、被停用、连续 7 天连不上来财，软件就锁成登录页（见 locked()）。自动更新不看这些。
 //
 // 规则（设计文档 + 审计）：
 // - 只在主进程里跑，只读一份白名单状态，不碰账号的 session、页面、分区目录、轻量号密钥。
@@ -18,7 +18,7 @@ const RADIX = require('../colors/radix');
 
 const PROTOCOL = 1;
 const FILE = 'team.json';
-const TEAM_SERVER = 'https://wa.laicrm.com';
+const TEAM_SERVER = 'https://laicrm.com';
 const POLICIES = ['off', 'optional', 'required'];
 const GRACE_MS = 7 * 24 * 3600 * 1000; // 必须登录时，连不上后台最多照常用 7 天
 const IDLE_CHECK_MS = 30 * 60 * 1000; // 没登录或已停用时，每 30 分钟问一次后台（策略、是否恢复）
@@ -34,6 +34,13 @@ const LOOPBACK_RE = /^http:\/\/127\.0\.0\.1:\d{2,5}$/; // 只给自检用的本�
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
 const EVENT_KINDS = ['dropped', 'recovered', 'exit_changed', 'proxy_down', 'proxy_up', 'banned'];
+const MAX_JOIN = 50; // 来财一次最多收 50 个号
+
+// 这个号自己的号码，给来财的格式：'+数字'；读不到或不像号码就是 ''
+function phoneOf(acc) {
+  const d = String((acc && acc.phone) || '').replace(/\D/g, '');
+  return /^[1-9]\d{5,14}$/.test(d) ? `+${d}` : '';
+}
 
 // 设置 › 团队里给员工看的上传清单
 const UPLOAD_FIELDS = [
@@ -41,14 +48,15 @@ const UPLOAD_FIELDS = [
   '每个团队号：代理通不通、延迟、出口 IP 和国家、出口 IP 是否变了',
   '状态变化记录：掉线、恢复、换出口、代理断开或恢复（只有类型、时间和国家代码）',
   '这台电脑：WAswitch 版本、系统类型（Windows / Mac）、内存占用、是否省内存模式',
-  '团队号单聊里的文字消息（对方号码、时间、收 / 发、文字），会写进公司的 CRM',
+  '每个团队号自己的号码',
+  '团队号单聊里的消息（对方号码、时间、收发、文字、对方的 WhatsApp 名字）',
 ];
 const NEVER_UPLOAD = [
-  '私人号的聊天内容；所有号的群聊、对话列表、通知内容、联系人名字和通讯录',
-  '二维码、登录数据、cookie、轻量号密钥',
-  '代理地址、端口、用户名、密码',
-  '你操作电脑的时间、最后操作时间（不监控员工活动）',
-  '电脑名、系统用户名、文件路径、截图',
+  '群聊、通讯录',
+  '代理设置（地址、端口、用户名、密码）',
+  '你的屏幕、你操作电脑的时间',
+  '二维码、登录数据、轻量号密钥',
+  '电脑名、系统用户名、文件路径',
 ];
 
 function cleanServer(raw) {
@@ -90,7 +98,19 @@ class TeamSync {
     this.inflight = null;
     this.failures = 0;
     this.lastSig = '';
+    this.foreign = false;
     this.state = this.load();
+    // 以前登录的是别的后台（旧版连的 wa.laicrm.com）：那边给的团队号在来财不认，当作还没加入的号，登录后重新自动加入。
+    // 已经被收回（隐藏）的号不动
+    if (this.foreign) {
+      let reset = false;
+      for (const acc of this.hooks.accounts ? this.hooks.accounts() : []) {
+        if (!acc.teamId || acc.teamHidden) continue;
+        Object.assign(acc, { teamId: '', teamHidden: false, teamNeedsProxy: false, teamNote: '', teamCrm: false, teamExpected: '' });
+        reset = true;
+      }
+      if (reset) this.hooks.save();
+    }
     this.parked = new Map(); // id -> 上次告诉主进程的“停着”状态
     for (const acc of this.hooks.accounts ? this.hooks.accounts() : []) this.parked.set(acc.id, this.isParked(acc));
     // 升级前已暂停的收回可能不会再次下发，启动时先撤销这些号的采集授权。
@@ -108,7 +128,7 @@ class TeamSync {
     try {
       const s = JSON.parse(fs.readFileSync(this.file(), 'utf8'));
       // 以前填过别的后台地址（旧版的登记表单）：那边的登录和坐席都不认
-      if (s.server && (cleanServer(s.server) || s.server) !== this.server) return empty;
+      if (s.server && (cleanServer(s.server) || s.server) !== this.server) { this.foreign = true; return empty; }
       return {
         ...empty,
         policy: POLICIES.includes(s.policy) ? s.policy : 'off',
@@ -154,8 +174,8 @@ class TeamSync {
     if (this.locked()) return true;
     if (acc.teamId && acc.teamHidden === true) return true; // 收回的号一直停着，不管团队文件在不在
     if (acc.teamId) return !this.enrolled(); // 团队号只在登录着、没被停用时运行
-    if (!this.joined()) return false;
-    return !this.state.allowPrivate && !this.state.revoked;
+    // 还没加入团队的号（刚添加的、连不上来财时添加的）照常运行：登录着时马上自动加入（autoJoin），不让新号消失
+    return false;
   }
 
   // 设置页“团队”用
@@ -169,14 +189,12 @@ class TeamSync {
       locked: this.locked(),
       userName: this.state.userName,
       email: this.state.email,
-      allowPrivate: this.state.allowPrivate,
       lastOkAt: this.state.lastOkAt,
       lastError: this.state.lastError,
       lastErrorDetail: this.state.lastErrorDetail || '',
       offline: this.enrolled() && this.failures > 0,
       held: this.state.held.length,
       teamCount: accs.filter((a) => a.teamId && !a.teamHidden).length,
-      privateAccounts: accs.filter((a) => !a.teamId).map((a) => ({ id: a.id, name: a.name, color: a.color, emoji: a.emoji })),
       uploadFields: UPLOAD_FIELDS,
       neverUpload: NEVER_UPLOAD,
       lastUpload: this.state.lastUpload ? JSON.stringify(this.state.lastUpload, null, 2) : '',
@@ -212,7 +230,7 @@ class TeamSync {
   localList(ids) {
     const accs = this.hooks.accounts();
     return ids.map((id) => accs.find((a) => a.id === id && !a.teamId)).filter(Boolean)
-      .map((a) => ({ local_id: a.id, name: a.name, color: COLOR_RE.test(a.color) ? a.color : '', mode: a.mode === 'lite' ? 'lite' : 'web' }));
+      .map((a) => ({ local_id: a.id, name: a.name, color: COLOR_RE.test(a.color) ? a.color : '', mode: a.mode === 'lite' ? 'lite' : 'web', phone: phoneOf(a) }));
   }
 
   mapTeamIds(list) {
@@ -270,8 +288,7 @@ class TeamSync {
       const n = Number.isInteger(d.resend_after_s) && d.resend_after_s > 0 ? Math.min(d.resend_after_s, 600) : 60;
       return { ok: true, resendAfterS: n };
     }
-    if (r.status === 404 && d.unknown === true) return { error: '这个邮箱还没加入团队，请找管理员' };
-    if (r.status === 403 && d.disabled === true) return { error: '这个账号已停用' };
+    // 来财对任何格式正确的邮箱都回 200（不透露这个邮箱是不是成员），所以没有“没加入团队”“已停用”这两种回答
     if (r.status === 429) return TeamSync.tooMany(d);
     if (r.status === 503) return { error: '验证码发不出去，请稍后再试' };
     if (r.status === 400) return { error: '邮箱格式不对' };
@@ -298,7 +315,7 @@ class TeamSync {
     }
     const d = r.data || {};
     if (r.status === 400) return { error: '验证码不对或已过期', badCode: true };
-    if (r.status === 403 && d.disabled === true) return { error: '这个账号已停用' };
+    if (r.status === 403 && (d.disabled === true || d.error === 'disabled')) return { error: '这个账号已停用' };
     // 本机上次的设备被管理员停用了：照样留着 device_id（不换新设备绕过停用），告诉员工找管理员
     if (r.status === 403 && d.revoked === true) return { error: '这台电脑已被管理员停用', disabled: true };
     if (r.status === 429) return TeamSync.tooMany(d);
@@ -343,20 +360,42 @@ class TeamSync {
     return { ok: true };
   }
 
-  // 把本机的私人号加入团队
+  // 把本机还不是团队号的号加入团队（带上它自己的号码）。来财按 (设备, local_id) 去重，重复加入没关系
   async join(localIds) {
     if (!this.enrolled()) return { error: '还没登录团队' };
+    const list = this.localList(Array.isArray(localIds) ? localIds.slice(0, MAX_JOIN) : []);
+    if (!list.length) return { ok: true };
+    // 先记下这些号现在停没停（主进程按这个启动过），加入后 applyParking 才知道要不要启动或停下
+    for (const id of list.map((a) => a.local_id)) {
+      const acc = this.hooks.accounts().find((a) => a.id === id);
+      if (acc && !this.parked.has(id)) this.parked.set(id, this.isParked(acc));
+    }
     let r;
     try {
-      r = await this.post('/api/device/join', { v: PROTOCOL, accounts: this.localList(Array.isArray(localIds) ? localIds : []) }, this.tokenPlain());
+      r = await this.post('/api/device/join', { v: PROTOCOL, accounts: list }, this.tokenPlain());
     } catch (e) {
       return { error: unreachable(e), detail: errtext.rawOf(e) };
     }
-    if (r.status !== 200 || !r.data) return { error: (r.data && r.data.error) || `加入失败（${r.status}）` };
+    if (r.status !== 200 || !r.data || !Array.isArray(r.data.accounts)) {
+      return { error: `加入团队没成功（${r.status}）`, detail: r.data && typeof r.data.error === 'string' ? r.data.error.slice(0, 80) : '' };
+    }
     this.mapTeamIds(r.data.accounts);
+    this.applyParking();
     this.hooks.refresh();
     this.schedule(1000);
     return { ok: true };
+  }
+
+  // 还不是团队号的本机号（被收回、隐藏的团队号不算）
+  pendingJoin() { return this.hooks.accounts().filter((a) => !a.teamId).map((a) => a.id); }
+
+  // 自动加入：登录后第一次同步、每次同步成功、新加了号时调用。同时只跑一次；失败了等下次同步再试
+  autoJoin() {
+    if (!this.enrolled() || this.joining) return this.joining || Promise.resolve(null);
+    const ids = this.pendingJoin();
+    if (!ids.length) return Promise.resolve(null);
+    this.joining = this.join(ids).catch(() => null).finally(() => { this.joining = null; });
+    return this.joining;
   }
 
   // ---------- 状态和事件 ----------
@@ -372,6 +411,7 @@ class TeamSync {
         exit_ip: typeof s.exit_ip === 'string' ? s.exit_ip : '',
         exit_country: typeof s.exit_country === 'string' && /^[A-Z]{2}$/.test(s.exit_country) ? s.exit_country : '',
         exit_changed: s.exit_changed === true,
+        phone: phoneOf(a),
       };
     });
   }
@@ -390,6 +430,12 @@ class TeamSync {
   // 离线退避期间不提前（免得断网时反复重试）。
   noteChange(force = false) {
     if (!this.enrolled() || this.state.revoked) return;
+    // 新加了号（或有号还没加入）：马上自动加入，不等下一次同步。同一批号只试一次，失败了交给下一次同步
+    const pending = this.pendingJoin().join(',');
+    if (pending !== this.lastJoinSig) {
+      this.lastJoinSig = pending;
+      if (pending && this.failures === 0) this.autoJoin();
+    }
     const sig = JSON.stringify(this.statusList().map((x) => [x.team_id, x.state]));
     if (!force && sig === this.lastSig) return;
     this.lastSig = sig;
@@ -483,6 +529,8 @@ class TeamSync {
     this.hooks.refresh();
     const next = Math.min(900, Math.max(60, Number(r.data.next_sync_s) || 120)) * 1000;
     this.schedule(r.data.more === true ? 1000 : next);
+    // 本机还有没加入团队的号：自动加入（登录后第一次同步、启动后第一次同步都会走到这里）
+    if (r.data.more !== true && this.pendingJoin().length) await this.autoJoin();
     return { ok: true };
   }
 
@@ -506,7 +554,7 @@ class TeamSync {
     return { offline: true, error: why, ...(detail ? { detail } : {}) };
   }
 
-  // 每个号该不该停着（isParked）变了就告诉主进程：后台不允许私人号、停用、退出登录、令牌失效、恢复。
+  // 每个号该不该停着（isParked）变了就告诉主进程：收回、停用、退出登录、令牌失效、恢复。
   // 只在变化时调用，同一个号不会反复停、反复启动
   setParked(acc, on) {
     this.parked.set(acc.id, on);
@@ -574,5 +622,5 @@ class TeamSync {
   }
 }
 
-module.exports = { TeamSync, cleanServer, UPLOAD_FIELDS, NEVER_UPLOAD, PROTOCOL, TEAM_SERVER, GRACE_MS };
+module.exports = { TeamSync, cleanServer, phoneOf, UPLOAD_FIELDS, NEVER_UPLOAD, PROTOCOL, TEAM_SERVER, GRACE_MS };
 

@@ -12,8 +12,9 @@ function timeOf(t, now) {
   return { at: Math.max(...options), approx: t.ambig === true };
 }
 
-// 返回 null（不收）、{ skip: 'nonumber' | 'notime' } 或 { item }
-function webItem(msg, since, now) {
+// 返回 null（不收）、{ skip: 'nonumber' | 'notime' } 或 { item }。
+// name：打开的对话的标题（对方在 WhatsApp 里的名字，queue.js 会去掉像号码的）
+function webItem(msg, since, now, name = '') {
   if (!msg || typeof msg.id !== 'string') return null;
   const m = /^(true|false)_([^_]+)_/.exec(msg.id);
   if (!m) return null;
@@ -26,7 +27,9 @@ function webItem(msg, since, now) {
   if (at < since) return null;
   if (!pn) return { skip: 'nonumber' }; // @lid：拿不到真实号码
   const text = typeof msg.text === 'string' && msg.text ? msg.text : '[非文字消息]';
-  return { item: { mid: msg.id.slice(0, 300), peer: pn[1], out: m[1] === 'true', at, approx, text } };
+  const item = { mid: msg.id.slice(0, 300), peer: pn[1], out: m[1] === 'true', at, approx, text };
+  if (typeof name === 'string' && name) item.name = name.slice(0, 100);
+  return { item };
 }
 
 // 记住这次运行里每个对话读到过哪些消息（只在内存里）。
@@ -37,7 +40,7 @@ class WebReader {
   constructor() { this.chats = new Map(); } // "账号|对话" -> Set(消息编号)
 
   // 返回 { items, nonumber, notime }；nonumber / notime 只算第一次见到的
-  collect(accId, msgs, since, now) {
+  collect(accId, msgs, since, now, name = '') {
     const out = { items: [], nonumber: 0, notime: 0 };
     for (const m of msgs) {
       const jid = /^(?:true|false)_([^_]+)_/.exec(String(m && m.id));
@@ -48,7 +51,7 @@ class WebReader {
       const isNew = !seen.has(m.id);
       seen.add(m.id);
       if (seen.size > MAX_IDS) this.chats.set(key, new Set([...seen].slice(-MAX_IDS / 2)));
-      const x = webItem(m, since, now);
+      const x = webItem(m, since, now, name);
       if (!x) continue;
       if (x.item) out.items.push(x.item);
       else if (isNew) out[x.skip] += 1;

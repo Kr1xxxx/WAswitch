@@ -1,5 +1,6 @@
-// 团队模式端到端自检：WAswitch 的同步模块（src/team）对着真的 Worker 代码 + 内存 SQLite。
-// 不需要 Electron，不联网。node scripts/check-team.mjs
+// 团队模式端到端自检：WAswitch 的同步模块（src/team）对着旧团队后台的 Worker 代码（server/）+ 内存 SQLite，
+// 再加一个按来财 /api/device/* 新规矩回答的假后台（发码一律 200、错误是 { ok:false, error:'代码' }）。
+// 软件里连的是来财（TEAM_SERVER），这里两种后台都测。不需要 Electron，不联网。node scripts/check-team.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -46,6 +47,7 @@ async function boss(method, p, body) {
 // 网络开关：模拟断网、401、HTML 错误页等
 let net = 'ok';
 const sent = [];
+const joins = [];
 async function fetchImpl(url, opts) {
   assert.equal(opts.redirect, 'error');
   assert.ok(url.startsWith(`${SERVER}/api/device/`), url);
@@ -56,6 +58,7 @@ async function fetchImpl(url, opts) {
   if (net === '403other') return new Response('{"revoked":true,"device_id":"00000000-0000-0000-0000-000000000000"}', { status: 403, headers: { 'content-type': 'application/json' } });
   if (net === 'html') return new Response('<html>Access login</html>', { status: 200, headers: { 'content-type': 'text/html' } });
   if (opts.body && url.endsWith('/sync')) sent.push(JSON.parse(opts.body));
+  if (opts.body && url.endsWith('/join')) joins.push(JSON.parse(opts.body));
   return worker.fetch(new Request(url, opts), env, {});
 }
 // 后台已经改不了登录策略（一律必须登录，迁移 0007）；这里直接改库，好测电脑端在各种策略下的表现
@@ -101,16 +104,16 @@ async function signIn(m, email) {
   if (!r.ok) return r;
   return m.team.login({ email, code: lastCode(email.trim().toLowerCase()) });
 }
-const A = machine('a', [acc('101', '一号'), acc('102', '二号'), acc('103', '三号'), acc('104', '私人号')]);
+const A = machine('a', [acc('101', '一号', { phone: '+49 151 1111 2222' }), acc('102', '二号'), acc('103', '三号')]);
 
 await test('后台地址写死；没登录时是 none，策略默认 off，不锁', async () => {
-  assert.equal(TEAM_SERVER, 'https://wa.laicrm.com');
+  assert.equal(TEAM_SERVER, 'https://laicrm.com');
   const plain = new TeamSync({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'team-x-')), safeStorage: fakeSafe, hooks: A.team.hooks, server: 'http://evil.example.com' });
   assert.equal(plain.server, TEAM_SERVER, '不是 https 的地址不认');
   assert.equal(A.team.loginState(), 'none');
   assert.equal(A.team.policy(), 'off');
   assert.equal(A.team.locked(), false);
-  assert.equal(A.team.isParked(A.accounts[3]), false);
+  assert.equal(A.team.isParked(A.accounts[2]), false);
 });
 await test('问策略：不带令牌；required 且没登录就锁，所有号都停着', async () => {
   await setPolicy('required');
@@ -125,12 +128,8 @@ await test('问策略：不带令牌；required 且没登录就锁，所有号�
   await A.team.fetchPolicy();
   assert.equal(A.team.locked(), false);
 });
-await test('要验证码：没加入团队、停用、太频繁、发不出去、连不上，都只给一句话', async () => {
-  assert.deepEqual(await A.team.requestCode({ email: 'nobody@example.com' }), { error: '这个邮箱还没加入团队，请找管理员' });
+await test('要验证码：格式不对、太频繁、发不出去、连不上，都只给一句话', async () => {
   assert.deepEqual(await A.team.requestCode({ email: 'not-an-email' }), { error: '邮箱格式不对' });
-  await boss('PATCH', `users/${userB.id}`, { disabled: true });
-  assert.deepEqual(await A.team.requestCode({ email: 'lucas@example.com' }), { error: '这个账号已停用' });
-  await boss('PATCH', `users/${userB.id}`, { disabled: false });
   resetLimits();
   assert.deepEqual(await A.team.requestCode({ email: ' Emma@Example.com ' }), { ok: true, resendAfterS: 60 });
   const busy = await A.team.requestCode({ email: 'emma@example.com' });
@@ -179,9 +178,18 @@ await test('登录成功：令牌加密存盘，记下名字和策略', async ()
   const file = fs.readFileSync(path.join(A.dir, 'team.json'), 'utf8');
   assert.ok(!/"token": "[A-Za-z0-9_-]{43}"/.test(file));
   assert.ok(file.includes('"policy": "optional"'));
-  assert.deepEqual(await A.team.join(['101', '102', '103']), { ok: true });
-  assert.ok(A.accounts.slice(0, 3).every((a) => /^[0-9a-f-]{36}$/.test(a.teamId)));
-  assert.equal(A.accounts[3].teamId, undefined);
+});
+await test('登录后第一次同步：本机每个号自动加入团队，带上自己的号码', async () => {
+  joins.length = 0;
+  assert.deepEqual(await A.team.syncNow(), { ok: true });
+  assert.ok(A.accounts.every((a) => /^[0-9a-f-]{36}$/.test(a.teamId)), '三个号都加入了');
+  assert.equal(joins.length, 1);
+  assert.deepEqual(joins[0].accounts.map((a) => [a.local_id, a.phone]), [['101', '+4915111112222'], ['102', ''], ['103', '']]);
+  assert.deepEqual(Object.keys(joins[0].accounts[0]).sort(), ['color', 'local_id', 'mode', 'name', 'phone']);
+  assert.ok(!JSON.stringify(joins).includes('SECRETPASS'));
+  joins.length = 0;
+  await A.team.syncNow();
+  assert.equal(joins.length, 0, '都加入了就不再调 /join');
 });
 await test('同步：上传内容只有白名单字段，不含代理和密码；同步顺便刷新策略', async () => {
   sent.length = 0;
@@ -191,16 +199,17 @@ await test('同步：上传内容只有白名单字段，不含代理和密码�
   assert.equal(A.team.policy(), 'required');
   assert.equal(A.team.locked(), false, '登录着就不锁');
   const body = JSON.stringify(sent);
-  for (const bad of ['SECRETPASS', '127.0.0.1:7891', '私人号', 'last_active', 'unread_since', lastCode('emma@example.com')]) assert.ok(!body.includes(bad), `不该上传 ${bad}`);
+  for (const bad of ['SECRETPASS', '127.0.0.1:7891', '一号', 'last_active', 'unread_since', lastCode('emma@example.com')]) assert.ok(!body.includes(bad), `不该上传 ${bad}`);
   assert.equal(sent[0].status.length, 3);
-  assert.deepEqual(Object.keys(sent[0].status[0]).sort(), ['exit_changed', 'exit_country', 'exit_ip', 'proxy_ms', 'proxy_ok', 'state', 'team_id', 'unread']);
+  assert.deepEqual(Object.keys(sent[0].status[0]).sort(), ['exit_changed', 'exit_country', 'exit_ip', 'phone', 'proxy_ms', 'proxy_ok', 'state', 'team_id', 'unread']);
+  assert.deepEqual(sent[0].status.map((x) => x.phone), ['+4915111112222', '', ''], '每个号自己的号码');
   const ov = await boss('GET', 'overview');
   assert.equal(ov.accounts.find((a) => a.id === A.accounts[0].teamId).unread, 2);
   assert.ok(A.team.snapshot().lastUpload.includes('"unread": 2'));
 });
 await test('事件：掉线记录随下次同步上传，成功后清空队列', async () => {
   A.team.recordEvent(A.accounts[0], 'dropped');
-  A.team.recordEvent(A.accounts[3], 'dropped'); // 私人号不记
+  A.team.recordEvent({ id: '999', name: '没加入的号' }, 'dropped'); // 不是团队号的不记
   A.team.recordEvent(A.accounts[0], 'whatever');
   sent.length = 0;
   await A.team.syncNow();
@@ -281,15 +290,23 @@ await test('一次要收回一半以上的号：先暂停，管理员确认后�
   assert.ok(A.log.includes('park:101') && A.log.includes('park:102'));
   assert.equal(A.team.state.held.length, 0);
 });
-await test('私人号一律停着（公司不允许）：后台没有开关，传了也恢复不了', async () => {
+await test('新加的号马上自动加入团队（没有私人号）；加入前后都照常运行', async () => {
   await A.team.syncNow();
   assert.equal(A.team.state.allowPrivate, false);
-  assert.equal(A.team.isParked(A.accounts[3]), true);
-  await boss('PUT', 'settings', { allow_private: true });
+  A.accounts.push(acc('104', '四号', { phone: '+44 7700 900123', mode: 'lite' }));
+  assert.equal(A.team.isParked(A.accounts[3]), false, '还没加入时也不停着（不让新号消失）');
+  joins.length = 0;
   A.log.length = 0;
+  A.team.noteChange();
+  await A.team.joining;
+  assert.match(A.accounts[3].teamId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(joins[0].accounts, [{ local_id: '104', name: '四号', color: '#16A34A', mode: 'lite', phone: '+447700900123' }]);
+  assert.equal(A.team.isParked(A.accounts[3]), false);
+  assert.ok(!A.log.some((x) => x.endsWith(':104')), '一直在运行，不停也不重启');
+  A.team.noteChange();
+  assert.equal(A.team.joining, null, '同一批号不重复加入');
   await A.team.syncNow();
-  assert.equal(A.team.isParked(A.accounts[3]), true);
-  assert.ok(!A.log.includes('unpark:104'));
+  assert.equal(A.accounts[3].teamCrm, true, '坐席同步后带上 CRM');
 });
 await test('团队号一律同步到 CRM：坐席同步后这个号带上 teamCrm；后台关不掉', async () => {
   const mine = A.accounts.find((a) => a.teamId && !a.teamHidden);
@@ -332,9 +349,19 @@ await test('重启后从磁盘恢复登录状态；换了后台地址的旧文�
   assert.equal(again.loginState(), 'ok');
   assert.equal(again.policy(), 'required');
   assert.deepEqual(await again.syncNow(), { ok: true });
-  const other = new TeamSync({ dir: A.dir, safeStorage: fakeSafe, hooks: A.team.hooks, fetchImpl });
+  // 旧版连的是别的后台（wa.laicrm.com）：登录不认；那边的团队号当作没加入（登录后自动加入来财），被收回的不动
+  const copies = A.accounts.map((a) => ({ ...a }));
+  let saved = 0;
+  const other = new TeamSync({ dir: A.dir, safeStorage: fakeSafe, hooks: { ...A.team.hooks, accounts: () => copies, save: () => { saved += 1; } }, fetchImpl });
   assert.equal(other.loginState(), 'none');
   assert.equal(other.policy(), 'off');
+  assert.equal(saved, 1);
+  for (const [i, a] of copies.entries()) {
+    if (A.accounts[i].teamHidden) assert.equal(a.teamId, A.accounts[i].teamId, '收回的号不动');
+    else assert.deepEqual([a.teamId, a.teamCrm, a.teamNote], ['', false, ''], `${a.id} 当作没加入`);
+  }
+  assert.deepEqual(other.pendingJoin(), copies.filter((a) => !a.teamHidden).map((a) => a.id));
+  assert.equal(A.accounts.filter((a) => a.teamId).length, 4, '原来的账号没被改');
 });
 await test('停用电脑（403 revoked）：变成“已停用”，必须登录时整个锁上；恢复后自动回来', async () => {
   const devA = (await boss('GET', 'users')).devices.find((d) => d.user_id === userA.id && !d.revoked_at);
@@ -350,7 +377,7 @@ await test('停用电脑（403 revoked）：变成“已停用”，必须登录
   await A.team.fetchPolicy();
   assert.equal(A.team.locked(), false);
   assert.equal(A.team.isParked(A.accounts[2]), true, '提示登录时团队号照样停着');
-  assert.equal(A.team.isParked(A.accounts[3]), false, '私人号照常');
+  assert.equal(A.team.isParked(A.accounts[3]), true, '团队号都停着');
   await setPolicy('required');
   await A.team.fetchPolicy();
   await boss('POST', `devices/${devA.id}/restore`);
@@ -419,5 +446,60 @@ await test('换人登录：新设备，本机原来的团队号先收起，等�
   assert.equal(A.accounts[2].teamCrm, false);
   assert.equal(A.team.isParked(A.accounts[2]), true);
   assert.equal(A.team.snapshot().userName, 'Lucas Martin');
+});
+// ---- 来财的新规矩（假后台）：发码一律 200；错误是 { ok:false, error:'代码' }；/join 和 /sync 带号码 ----
+function laicai(handler) {
+  const calls = [];
+  const fetchLai = async (url, opts) => {
+    assert.equal(opts.redirect, 'error');
+    const body = opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ path: new URL(url).pathname, body });
+    const [status, data] = handler(new URL(url).pathname, body) || [404, { ok: false, error: 'not_found' }];
+    return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
+  };
+  return { calls, fetchLai };
+}
+await test('来财：发码一律 200（不说邮箱是不是成员）；429 说等几秒；停用的账号登录时才说', async () => {
+  const L = laicai((p, b) => {
+    if (p === '/api/device/code') return b.email === 'busy@example.com' ? [429, { ok: false, error: 'rate', retry_after_s: 120 }] : [200, { ok: true, resend_after_s: 60 }];
+    if (p === '/api/device/login') return [403, { ok: false, error: 'disabled' }];
+    return null;
+  });
+  const T = new TeamSync({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'team-l-')), safeStorage: fakeSafe, hooks: A.team.hooks, server: SERVER, fetchImpl: L.fetchLai });
+  assert.deepEqual(await T.requestCode({ email: 'nobody@example.com' }), { ok: true, resendAfterS: 60 });
+  assert.deepEqual(await T.requestCode({ email: 'busy@example.com' }), { error: '太频繁了，请 120 秒后再试', retryAfterS: 120 });
+  assert.deepEqual(await T.login({ email: 'nobody@example.com', code: '123456' }), { error: '这个账号已停用' });
+  const old = fs.readFileSync(new URL('../src/team/index.js', import.meta.url), 'utf8');
+  assert.ok(!old.includes('这个邮箱还没加入团队'), '没有“邮箱没加入团队”的说法了');
+});
+await test('来财：登录后同步，本机的号自动加入；/join 出错只给一句话、不把后台的代码当原话显示', async () => {
+  const UUID = (n) => `00000000-0000-4000-8000-00000000000${n}`;
+  let joinFails = true;
+  const L = laicai((p, b) => {
+    if (p === '/api/device/login') return [200, { device_id: UUID(9), token: 'K'.repeat(43), user: { name: 'Emma Schulz' }, allow_private: false, login: 'required' }];
+    if (p === '/api/device/join') return joinFails ? [400, { ok: false, error: 'too_many' }] : [200, { accounts: b.accounts.map((a, i) => ({ local_id: a.local_id, team_id: UUID(i + 1) })) }];
+    if (p === '/api/device/sync') return [200, { ok: true, device_id: UUID(9), seats: [], cursor: 0, more: false, allow_private: false, login: 'required', user: { name: 'Emma Schulz' }, confirm_hides: false, next_sync_s: 120, server_time: clock.t }];
+    return null;
+  });
+  const accs = [acc('1', 'Sales DE', { phone: '+49 30 1234567' }), acc('2', 'Sales FR', { mode: 'lite', phone: '' })];
+  const log = [];
+  const T = new TeamSync({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'team-l2-')), safeStorage: fakeSafe, server: SERVER, fetchImpl: L.fetchLai, now: () => clock.t,
+    timers: { setTimeout: () => ({}), clearTimeout: () => {} },
+    hooks: { ...A.team.hooks, accounts: () => accs, save: () => {}, park: (a) => log.push(`park:${a.id}`), unpark: (a) => log.push(`unpark:${a.id}`), refresh: () => {} } });
+  assert.deepEqual(await T.login({ email: 'emma@example.com', code: '123456' }), { ok: true });
+  assert.deepEqual(await T.syncNow(), { ok: true }, '加入失败不影响同步');
+  const err = await T.join(['1']);
+  assert.equal(err.error, '加入团队没成功（400）');
+  assert.ok(accs.every((a) => !a.teamId && !T.isParked(a)), '没加入的号照常运行，下次同步再加入');
+  joinFails = false;
+  assert.deepEqual(await T.syncNow(), { ok: true });
+  assert.deepEqual(accs.map((a) => a.teamId), [UUID(1), UUID(2)]);
+  const joinBody = L.calls.filter((c) => c.path === '/api/device/join').pop().body;
+  assert.deepEqual(joinBody.accounts.map((a) => a.phone), ['+49301234567', '']);
+  assert.ok(accs.every((a) => !T.isParked(a)));
+  assert.deepEqual(log, [], '加入前后都在运行');
+  await T.syncNow();
+  const sync = L.calls.filter((c) => c.path === '/api/device/sync').pop().body;
+  assert.deepEqual(sync.status.map((x) => x.phone), ['+49301234567', '']);
 });
 console.log(`全部通过（${passed} 项）`);
