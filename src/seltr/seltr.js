@@ -12,7 +12,6 @@ const tr = window.TrCard({
   take: (yes) => window.seltr.trTake(yes),
   // 改了没保存的字每次都告诉主进程（收起后下次打开还在）
   draft: (text) => window.seltr.trDraft(text),
-  key: () => window.seltr.trKey(),
   resized: sizeSoon,
 });
 document.body.append(card.root);

@@ -2,7 +2,7 @@
 // 记下读到的“收到的消息”，决定哪些自动翻、哪些等用户点，排队调用翻译，控制每分钟和每天的上限。
 // 消息的 data-id 里有对方号码，只留在主进程：对外（悬浮窗、大模型）只用 hash。
 // 译文另外永久存到磁盘（deps.store，见 trstore.js）：切回对话、重启都直接显示，不再调模型。
-// 客户发来的语音（轻量号和网页号）：先转文字（deps.transcribe，智谱 GLM-ASR），转出来的文字当原文照常翻译；按「voice:+消息编号」存，不再转。
+// 客户发来的语音（轻量号和网页号）：先转文字（deps.transcribe，来财的云端转写），转出来的文字当原文照常翻译；按「voice:+消息编号」存，不再转。
 // 转文字单独一条道（一次一条），不占文字翻译的队列：一条长语音转的时候，新来的文字消息照常翻。
 // 翻译栏显示过哪些消息也记在磁盘上：重新打开对话时，页面上读不到的更早的译文按记录补回来（记录里有原文的连原文一起）。
 // 同一个对话 WhatsApp 可能换编号（手机号 @c.us 换成隐私编号 @lid，data-id 中间那段变，消息编号不变）：
@@ -14,16 +14,16 @@ const { isChinese } = require('./langdetect');
 const TrInfo = require('./shell/tr-info');
 
 const KEEP_PER_ACCOUNT = 200;
-const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（用默认服务商，算额度）
+const BACKFILL = 5; // 打开自动翻译或切到一个对话时，最近 5 条没翻的照常自动翻（算额度）
 const PER_MINUTE = 20;
-const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（只在用免费服务商时，见 maxParallel）；后台补翻也算在这 3 条里
+const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（deps.parallel 说了算，见 maxParallel）；后台补翻也算在这 3 条里
 const BUSY_RETRY = 700; // 对方说忙：700 毫秒后再来
 const AUTO_MAX_CHARS = 1000;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
 const VOICE_MAX_S = 300; // 超过 5 分钟的语音不自动转（点「转文字」只转前 5 分钟，见 asr.js）
 const VOICE_TRIP = 3; // 网页号连续 3 条语音读不到（存储改版等）：这次运行里不再自动去读，新语音只给「转文字」按钮
-// 暂时的失败（网络、超时、服务器、太忙、别的）过一会儿自动再翻：10 秒、30 秒、90 秒各一次（各加减 15%），只用免费的智谱、混元。
+// 暂时的失败（网络、超时、服务器、太忙、别的）过一会儿自动再翻：10 秒、30 秒、90 秒各一次（各加减 15%），只走免费的那条路（deps.hasFree；现在没有，见 translate-ipc.js）。
 // 自动翻译的一条最多再翻 3 次；后台补翻失败先停，按这个间隔接着补，连着再失败 3 轮才退回「翻译」按钮（shen 2026-10-30）
 const RETRY_MS = [10000, 30000, 90000];
 const TEMP_FAIL = new Set(['network', 'timeout', 'server', 'overload', 'other']);
@@ -148,7 +148,7 @@ function fromLite(view, jid) {
   return { ok: true, title: view.title || (listed && listed.name) || number, msgs, bottom: true };
 }
 
-// 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| key（密钥没填或不对：只有「去填密钥」按钮，p = 服务商）| manual（「翻译」按钮）；不用翻的（skip）不显示
+// 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| manual（「翻译」按钮）；不用翻的（skip）不显示
 function inlineEntry(it) {
   const voice = typeof it.voice === 'number' && !it.text;
   if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
@@ -157,7 +157,6 @@ function inlineEntry(it) {
   // skip（不翻）：语音转出来的是中文时，直接显示转出来的字（花了转写的钱，不能看不到）；别的不显示
   if (it.state === 'skip') return typeof it.voice === 'number' && String(it.text || '').trim() ? { k: 'done', t: it.text } : null;
   if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
-  if (it.state === 'error' && it.errPid) return { k: 'key', b: '去填密钥', p: it.errPid }; // 点「重试」也没用，不显示红字
   if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
   const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
   return { k: 'manual', b: label };
@@ -561,8 +560,8 @@ class FloatCore {
   }
 
   // 切到一个对话、打开自动翻译时，这次读到的客户消息（最后 40 条）里还没翻的：
-  // 最后 5 条照常自动翻（默认服务商，算额度）；更早的用免费的智谱或混元在后台补，最新的先翻，
-  // 不算自动翻译的额度（shen 2026-10-29「之前的消息自动用智谱或者混元，免费的慢慢翻完」）。
+  // 最后 5 条照常自动翻（算额度）；更早的交给后台补翻（走免费的那条路，最新的先翻，不算自动翻译的额度，shen 2026-10-29）。
+  // 现在没有免费的路（来财按用量花钱，#209）：后台补翻马上退回「翻译」按钮，用户点了再翻。
   // 最后 5 条里因为每分钟 20 条的上限没排上的，也交给后台补（不然一直停在「翻译」按钮）。
   // 以前翻过、存着的不算在里面；同一次运行里切走再切回也会补（hs 是这次读到的，不只是第一次见到的）
   catchUp(accId, st, hs, opts, recent = st.recent) {
@@ -613,19 +612,20 @@ class FloatCore {
     return true;
   }
 
-  // 密钥填好（或换了默认服务）后：因为“没填密钥 / 密钥不对”失败的消息自动重翻一次。
-  // 别的原因（额度、网络、模型名……）失败的不动。opts: { dailyCap, match(errPid) -> 要不要重翻 }
+  // 登录团队后：因为“先登录团队 / 来财没开通”失败的消息自动重翻一次。
+  // 别的原因（额度、网络……）失败的不动。opts: { dailyCap, kinds（哪几类报错，默认只有 auth）, match(errKind) -> 要不要重翻 }
   // 正显示在面板上的：照自动翻译的上限排队（超了就退回“翻译”按钮，不再显示旧报错）；
   // 别的对话里的：直接忘掉，下次打开那个对话按新消息处理。返回改动了的号
   retryKeyErrors(opts = {}) {
+    const kinds = Array.isArray(opts.kinds) ? opts.kinds : ['auth'];
     const touched = [];
     for (const [accId, st] of this.accs) {
       let hit = false;
       for (const [h, item] of [...st.items]) {
-        if (item.state !== 'error' || item.errKind !== 'auth') continue;
-        if (opts.match && !opts.match(item.errPid || '')) continue;
+        if (item.state !== 'error' || !kinds.includes(item.errKind)) continue;
+        if (opts.match && !opts.match(item.errKind)) continue;
         hit = true;
-        item.err = ''; item.errKind = ''; item.errPid = '';
+        item.err = ''; item.errKind = '';
         // 纠错失败的：原来的译文还在，直接恢复，不再请求
         if (item.tr) { item.state = 'done'; continue; }
         if (!st.view.includes(h)) { st.items.delete(h); continue; }
@@ -637,9 +637,9 @@ class FloatCore {
       }
       // 往上翻看到的旧消息：退回「翻译」按钮（不自动翻）
       for (const item of st.hist.values()) {
-        if (item.state !== 'error' || item.errKind !== 'auth' || (opts.match && !opts.match(item.errPid || ''))) continue;
+        if (item.state !== 'error' || !kinds.includes(item.errKind) || (opts.match && !opts.match(item.errKind))) continue;
         hit = true;
-        item.err = ''; item.errKind = ''; item.errPid = '';
+        item.err = ''; item.errKind = '';
         item.state = item.tr ? 'done' : 'manual';
       }
       if (hit) touched.push(accId);
@@ -681,7 +681,7 @@ class FloatCore {
     const state = (item.state === 'queued' && item.bg) || item.state === 'wait' ? 'manual' : item.state;
     return {
       h, state, orig: !!item.text, tr: item.tr || '', edited: !!item.edited, fixed: !!item.fixed, suggest: item.suggest || '',
-      err: item.state === 'error' ? item.err || '翻译失败' : '', errPid: item.state === 'error' ? item.errPid || '' : '',
+      err: item.state === 'error' ? item.err || '翻译失败' : '',
       rows: TrInfo.rows(cleanVia(item.via)),
     };
   }
@@ -715,7 +715,7 @@ class FloatCore {
     return st ? contextFrom(st.recent, h) : [];
   }
 
-  // 同时最多翻几条：deps.parallel() 说了算（默认服务商是免费的智谱、混元时 3 条，付费的 1 条，见 translate-ipc.js）
+  // 同时最多翻几条：deps.parallel() 说了算（登录着团队 3 条，没登录 1 条，见 translate-ipc.js）
   maxParallel() {
     const n = this.deps.parallel ? Number(this.deps.parallel()) : 1;
     return Number.isFinite(n) ? Math.min(MAX_PARALLEL, Math.max(1, Math.floor(n))) : 1;
@@ -723,7 +723,7 @@ class FloatCore {
 
   // 从队列里取下一条开始翻，直到占满能同时翻的条数。
   // 新消息、用户点的、最近 5 条（非后台的）先取，最多 maxParallel() 条；
-  // 后台补翻用免费服务商自己的通道，和别的加起来最多 3 条，不隔时间；
+  // 后台补翻用自己的通道，和别的加起来最多 3 条，不隔时间；
   // 位置都被后台补翻占着时来了别的：让出一条后台补翻（取消它，放回队列前面，等会儿再翻）
   pump() {
     const max = this.maxParallel();
@@ -794,7 +794,7 @@ class FloatCore {
         const heard = (t) => { if (this.deps.store && this.deps.store.putHeard && item.ck) this.deps.store.putHeard(job.accId, item.ck, item.k, t); };
         if (!(v && typeof v.text === 'string' && v.text.trim())) {
           if (kind === 'empty') heard(''); // 没听出话也付了钱：记下来，重启后不再自动转
-          Object.assign(item, { state: 'error', err: (v && v.error) || '转文字失败', errKind: kind || 'other', errPid: (kind === 'auth' && v.providerId) || '', errCode: (v && typeof v.code === 'string' && v.code) || '' });
+          Object.assign(item, { state: 'error', err: (v && v.error) || '转文字失败', errKind: kind || 'other', errCode: (v && typeof v.code === 'string' && v.code) || '' });
           this.onChange(job.accId);
           continue;
         }
@@ -868,7 +868,7 @@ class FloatCore {
     if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.suggestVia = via; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
     else if (job.retry && !(r && r.text)) this.retryFailed(job, item, r);
     else if (job.slow && !(r && r.text)) this.bgFailed(job, item, r, kept);
-    else if (!(r && r.text) && !job.manual && !job.fix && this.retryLater(job, item, r)) { /* 自动翻译暂时失败：过一会儿用免费的再翻 */ }
+    else if (!(r && r.text) && !job.manual && !job.fix && this.retryLater(job, item, r)) { /* 自动翻译暂时失败：过一会儿再翻 */ }
     else if (r && r.text) {
       if (job.slow && !job.retry && job.round === this.bgRound) this.bgFails = 0; // 后台补翻这一轮翻成一条：重新计数（停下以前开始、晚回来的不算）
       item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item);
@@ -879,21 +879,21 @@ class FloatCore {
   }
 
   showError(item, r) {
-    item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other'; item.errPid = (r && r.kind === 'auth' && r.providerId) || '';
+    item.state = 'error'; item.err = (r && r.error) || '翻译失败'; item.errKind = (r && r.kind) || 'other';
     item.lastErr = null;
   }
 
-  // 自动翻译（新消息、最近 5 条、语音转出来的文字）暂时失败：先显示「翻译」按钮，过一会儿用免费服务商再翻。
-  // 密钥、余额、内容、语言、模型、设置这类再翻也一样的不重翻（密钥的填好后由 retryKeyErrors 重翻）。返回 true 表示排上了
+  // 自动翻译（新消息、最近 5 条、语音转出来的文字）暂时失败：先显示「翻译」按钮，过一会儿走免费的那条路再翻。
+  // 登录、额度、内容、语言、设置这类再翻也一样的不重翻（没登录的登录后由 retryKeyErrors 重翻）。返回 true 表示排上了
   retryLater(job, item, r) {
     const kind = (r && r.kind) || 'other';
     if (!TEMP_FAIL.has(kind)) return false;
-    if (this.deps.hasFree && !this.deps.hasFree()) return false; // 智谱、混元都没填密钥：重翻也翻不了，直接显示报错
+    if (this.deps.hasFree && !this.deps.hasFree()) return false; // 没有免费的路：直接显示报错和「重试」
     const n = item.tries || 0;
     const ms = this.retryDelay(n);
     if (ms < 0) return false;
     item.tries = n + 1;
-    item.lastErr = r || { error: '翻译失败', kind: 'other' }; // 重翻时没有免费服务商等：最后显示这次的报错
+    item.lastErr = r || { error: '翻译失败', kind: 'other' }; // 重翻时没有免费的路等：最后显示这次的报错
     item.state = 'wait';
     item.bg = false;
     this.waits.push({ accId: job.accId, h: job.h, at: Date.now() + ms, context: job.context });
@@ -902,7 +902,7 @@ class FloatCore {
   }
 
   // 自动重翻又失败：还是暂时的就再等（最多 3 次），否则显示报错和「重试」。
-  // 重翻这条路本身的问题（没有免费服务商、被取消）显示原来那次的报错
+  // 重翻这条路本身的问题（没有免费的路、被取消）显示原来那次的报错
   retryFailed(job, item, r) {
     if (this.retryLater(job, item, r)) return;
     const kind = r && r.kind;
@@ -910,7 +910,7 @@ class FloatCore {
   }
 
   // 后台补翻失败：暂时的（网络、超时……）整个后台补翻先停，10 秒、30 秒、90 秒后接着补，失败的那条排最前；
-  // 连着再失败 3 轮，或者是再翻也一样的（没有免费服务商、密钥不对……），才全部退回「翻译」按钮，下次切到对话再补。
+  // 连着再失败 3 轮，或者是再翻也一样的（没有免费的路、没登录……），才全部退回「翻译」按钮，下次切到对话再补。
   // 同时在翻的几条一起失败只算一轮（停下以前开始的再失败不算）
   bgFailed(job, item, r, kept) {
     if (!kept) { item.state = 'manual'; item.bg = false; return; } // 已经整体退回了
@@ -1020,7 +1020,7 @@ class FloatCore {
       paused: st.paused,
       today: st.day.n,
       items: st.view.map((h) => st.items.get(h)).filter(Boolean)
-        .map(({ h, text, t, state, bg, tr, err, errPid, errCode, warn, note, edited, fixed, suggest, voice, via }) => ({ h, text, t, state: (state === 'queued' && bg) || state === 'wait' ? 'manual' : state, tr, err, errPid: errPid || '', code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null, via: cleanVia(via) })),
+        .map(({ h, text, t, state, bg, tr, err, errCode, warn, note, edited, fixed, suggest, voice, via }) => ({ h, text, t, state: (state === 'queued' && bg) || state === 'wait' ? 'manual' : state, tr, err, code: errCode || '', warn, note, edited: !!edited, fixed: !!fixed, suggest: suggest || '', voice: typeof voice === 'number' ? voice : null, via: cleanVia(via) })),
     };
   }
 }

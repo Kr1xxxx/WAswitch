@@ -15,8 +15,8 @@ const KC = 'cccccccccccccccc';
 const helpers = () => {
   window.__base = (over) => ({ accountId: 'a1', readable: 'ok', title: 'Emma Wilson', chatKey: 'aaaaaaaaaaaaaaaa', draft: null,
     items: [{ h: 'h1', text: 'Hi, is the 613 blonde wig still available?', t: '10:01', state: 'done', tr: '你好，613 金色假发还有货吗？' }],
-    paused: '', auto: true, dailyCap: 500, hasProvider: true, needKey: null, primaryId: 'z', fallbackId: '',
-    providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], modes: { out: [{ id: 'o', name: '标准' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
+    paused: '', auto: true, dailyCap: 500, hasProvider: true, primaryId: 'cloud', fallbackId: '',
+    providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], modes: { out: [{ id: 'o', name: '标准' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
     langs: ['英语', '德语'], target: '英语', targetSrc: 'default', autoTarget: '英语', canRemember: true, ...over });
   window.__push = (over) => { const d = window.__base(over); window.__dock = d; window.__cbs.dock(JSON.parse(JSON.stringify(d))); };
   window.__wait = (ms) => new Promise((r) => setTimeout(r, ms));

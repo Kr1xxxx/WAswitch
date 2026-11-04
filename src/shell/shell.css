@@ -506,7 +506,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-mono { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dk-dim { color: var(--muted); font-size: var(--fs-s); }
 .dk-lang { min-width: 0; max-width: 124px; font-size: var(--fs-s); }
-.dk-outhead .dk-model { max-width: 120px; color: var(--soft); }
 .dk-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
 .dk-auto { display: flex; align-items: center; gap: 6px; font-size: var(--fs-s); color: var(--soft); white-space: nowrap; cursor: pointer; }
 .dk-switch { appearance: none; width: 30px; height: 18px; border-radius: var(--r-full); background: var(--field); position: relative; margin: 0; cursor: pointer; transition: background-color var(--fx) var(--fx-ease); }
@@ -516,7 +515,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-switch:disabled { opacity: .5; cursor: default; }
 .dk-switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .dk-mini { max-width: 104px; color: var(--soft); }
-.dk-model { max-width: 150px; }
 /* 收到的消息：照 WhatsApp 收到的气泡。紧凑，时间小号灰字在右下角，纠错/编辑悬停才显示 */
 .dk-listbox { position: relative; flex: 1; min-height: 80px; display: flex; flex-direction: column; }
 /* 往上翻着时来了新消息：底部正中一个小按钮，点了回到最新（样式同撤销条） */
@@ -602,7 +600,6 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .dk-swap svg { stroke-width: 1.6; }
 .dk-swap:hover:not(:disabled) { background: var(--slate-a3); }
 .dk-swap:disabled { opacity: .4; cursor: default; }
-.dk-compose .dk-head .dk-model { max-width: 160px; color: var(--soft); }
 /* 窗口窄时先让两个下拉框变短（文字省略），按钮保持一行；实在放不下按钮整体换到下一行，不会一个字一个字地折 */
 .dk-outhead select { flex: 0 1 auto; min-width: 64px; }
 .dk-outhead .dk-row, .dk-outhead > .dk-btn { flex: none; margin-left: auto; }
@@ -663,21 +660,9 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 @keyframes fx-knob-off { from { transform: translateX(18px); } }
 .switch.fx-sw-on::after { animation: fx-knob-on var(--fx) var(--fx-ease) backwards; }
 .switch.fx-sw-off::after { animation: fx-knob-off var(--fx) var(--fx-ease) backwards; }
-/* 翻译页顶上的“还没填密钥”黄条，和表单里的申请密钥链接 */
-.dk-keybar { margin: 10px 12px 0; display: flex; align-items: center; gap: 8px; font-size: var(--fs-m); line-height: 1.5; }
-.dk-keybar > span { flex: 1; }
-.dk-keybar .pn-btn { flex: none; }
-.tr-keylink { font-size: var(--fs-s); }
-/* 翻译页：简单版只填密钥，右上角“详细设置”切换 */
+/* 设置 › 翻译：右上角“详细设置”切换 */
 .btn.sm { height: 32px; padding: 0 14px; font-size: var(--fs-m); }
 .tr-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tr-keys { gap: 0; padding: 4px 18px; }
-.tr-krow { display: flex; gap: 16px; align-items: flex-start; padding: 14px 0; border-bottom: var(--hair) solid var(--line); }
-.tr-krow:last-child { border-bottom: none; }
-.tr-krow .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.tr-krow .title { display: flex; align-items: center; }
-.tr-krow .desc { font-size: var(--fs-s); line-height: 1.6; color: var(--muted); }
-.tr-krow input { width: 240px; height: 32px; box-sizing: border-box; border: var(--hair) solid var(--field); border-radius: var(--r-m); padding: 0 12px; font-size: var(--fs-m); background: var(--white); }
 
 /* 报错原话：默认收起，点“详细信息”展开 */
 .err-raw { margin-top: 6px; font-size: var(--fs-s); color: var(--muted); text-align: left; }
@@ -723,19 +708,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
   height: 100%; display: flex; flex-direction: column; background: var(--s1); color: var(--s12); font-size: var(--fs-m); line-height: 1.5;
 }
 .tp-head { flex: none; height: 64px; display: flex; align-items: center; padding: 16px 24px 0; }
-/* 右上角三个服务商：上面名字和是否启用，下面额度。按钮内边距 8，整组往右挪 8，字和下面内容的右边对齐 */
-.tp-provs { margin: 0 -8px 0 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.tp-prov { flex: none; min-width: 112px; height: 40px; display: flex; flex-direction: column; justify-content: center; gap: 0; padding: 0 8px; border: 0; border-radius: var(--r-m);
-  background: transparent; font: inherit; font-size: var(--fs-s); line-height: 16px; text-align: left; color: var(--s11); }
-.tp-prov:hover { background: var(--s3); }
-.tp-prov-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.tp-prov-name { font-weight: 500; color: var(--s12); }
-.tp-prov-on.on { color: var(--g11); }
-.tp-prov-quota { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.tp-meter { flex: none; width: 40px; height: 4px; border-radius: var(--r-full); background: var(--s4); overflow: hidden; }
-.tp-meter-fill { display: block; height: 100%; border-radius: var(--r-full); background: var(--b9); }
-.tp-meter.near .tp-meter-fill { background: var(--a9); }
-.tp-meter.full .tp-meter-fill { background: var(--r9); }
 .tp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px 24px; }
 .tp-bar { flex: none; display: flex; align-items: center; gap: 4px; }
 .tp select.tp-lang { height: 32px; max-width: 220px; padding: 0 28px 0 12px; border: 0; border-radius: var(--r-m); background-color: var(--s3); font-size: var(--fs-m); color: var(--s12); }
@@ -761,7 +733,6 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tp select.tp-model { flex: none; height: 32px; max-width: 60%; padding: 0 24px 0 8px; border: 0; border-radius: var(--r-s); background-color: transparent; background-position: right 8px center; font-size: var(--fs-s); color: var(--s11); }
 .tp select.tp-model:hover:not(:disabled) { background-color: var(--s3); }
 .tp select.tp-model:disabled { opacity: .6; cursor: default; }
-.tp select.tp-model.single { opacity: 1; background-image: none; padding-right: 8px; }
 .tp-measure { position: absolute; left: -9999px; top: 0; visibility: hidden; white-space: pre; font-size: var(--fs-s); }
 .tp-open2 { flex: none; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border: var(--hair) solid var(--s6); border-radius: var(--r-l); background: var(--s2); font: inherit; color: var(--s12); }
 .tp-open2:hover { background: var(--s3); }

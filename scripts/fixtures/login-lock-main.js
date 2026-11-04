@@ -1,4 +1,5 @@
-// Test-only app entry for check-login-lock.js: isolated profile + a fake keyring.
+// Test-only app entry for check-login-lock.js and the checks that start logged in (fixtures/cloud-team.js):
+// isolated profile + a fake keyring.
 // xvfb on CI has no system keyring, and the login token must be stored encrypted, so the
 // test swaps safeStorage for a reversible fake. Never used by the real app.
 const { app, safeStorage } = require('electron');

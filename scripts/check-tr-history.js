@@ -5,15 +5,14 @@
 //   3. 点旧消息的「翻译」：翻好放在下面，上下文是它前面的消息（不是对话最新的）
 //   4. 回到最下面：新来的客户消息照常自动翻
 //   5. 停在中间往上翻（滚动层不做滚动锚定）：放上译文、按钮后正在看的消息不跳
-// 用真的软件 + 本地假 web.whatsapp.com + 假翻译服务（OpenAI 兼容接口，本机地址不用密钥），不连外网、不用付费模型。
+// 用真的软件 + 本地假 web.whatsapp.com + 假来财（fixtures/cloud-team.js，启动时已登录团队），不连外网。
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-history.js
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { teamOff } = require('./fixtures/team-off');
+const { startCloud, teamOn, CLOUD_MAIN } = require('./fixtures/cloud-team');
 const net = require('net');
-const http = require('http');
 const https = require('https');
 const electron = require('electron');
 const { TrStore, textKey } = require('../src/trstore');
@@ -67,21 +66,13 @@ const answer = (n) => `译文 ${n}`;
 
   // 假翻译服务：要翻的那条在最后，回「译文 N」；记下每次请求里出现的所有编号（上下文 + 这条）
   const calls = [];
-  const trServer = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => {
-      let text = '';
-      try { const j = JSON.parse(body); text = (j.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n'); } catch {}
-      const nums = [...text.matchAll(/Nummer (\d+)/g)].map((m) => Number(m[1]));
-      const n = nums.length ? nums[nums.length - 1] : -1;
-      calls.push({ n, nums });
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: answer(n) } }] }));
-    });
-  });
-  const trPort = await freePort();
-  await new Promise((r) => trServer.listen(trPort, '127.0.0.1', r));
+  const cloud = await startCloud({ chat: (body) => {
+    const text = (body.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    const nums = [...text.matchAll(/Nummer (\d+)/g)].map((m) => Number(m[1]));
+    const n = nums.length ? nums[nums.length - 1] : -1;
+    calls.push({ n, nums });
+    return { status: 200, body: { ok: true, text: answer(n), usage: { input_tokens: 10, output_tokens: 5 } } };
+  } });
 
   const dir = path.join(home, 'waswitch');
   fs.mkdirSync(dir, { recursive: true });
@@ -89,11 +80,8 @@ const answer = (n) => `译文 ${n}`;
     id: '1', name: '测试号', color: '#16A34A', proxy: '', mode: 'web', primary: true,
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'SG', seed: 1 },
   }]));
-  // 本地测试服务不是免费的智谱、混元：更早的消息不在后台补翻，没存过的就该一直是「翻译」按钮
-  fs.writeFileSync(path.join(dir, 'translate.json'), JSON.stringify({
-    seeded: true, seedVer: 3, termsDefaultOn: true, autoDefaultOn: true, network: { mode: 'direct', proxyUrl: '' },
-    providers: [{ id: 'local', preset: 'custom', name: '本地测试', baseUrl: `http://127.0.0.1:${trPort}/v1`, model: 'test' }], primaryId: 'local',
-  }));
+  // 来财要花钱：更早的消息不在后台补翻，没存过的就该一直是「翻译」按钮
+  fs.writeFileSync(path.join(dir, 'translate.json'), JSON.stringify({ termsDefaultOn: true, autoDefaultOn: true }));
   // 以前翻过、存在本机的最早几条（按原文存，和软件存的一样）
   const store = new TrStore(path.join(dir, 'translations'));
   const ck = hashOf('1', `chat|${CHAT}`);
@@ -101,10 +89,10 @@ const answer = (n) => `译文 ${n}`;
   store.flush();
 
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOn(dir, cloud.url) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
-    `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });
+    `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, CLOUD_MAIN], { env, stdio: 'ignore' });
   const list = async () => (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   let failures = 0;
   const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -210,7 +198,7 @@ const answer = (n) => `译文 ${n}`;
   } finally {
     child.kill();
     server.close();
-    trServer.close();
+    cloud.close();
   }
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);

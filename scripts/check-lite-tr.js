@@ -60,7 +60,7 @@ app.whenReady().then(async () => {
     await page("window.__mark = document.querySelectorAll('.lite-msg')[0]; true");
     await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list)} })`);
     check(await page("document.querySelectorAll('.lite-msg')[0] === window.__mark"), '内容没变时不重画');
-    // 点了「重试」马上又失败（比如没填密钥）：译文和之前一样，按钮也要换回能点的
+    // 点了「重试」马上又失败（比如没登录团队）：译文和之前一样，按钮也要换回能点的
     check(await page("[...document.querySelectorAll('.lite-msg')].slice(3, 5).every((m) => !m.querySelector('.lite-tr-btn').disabled)"), '马上又失败的「重试」「翻译」，按钮换回能点');
     // 只有译文变了：不重建整列，别的消息的节点原样留着
     const list2 = list.map((e) => (e.id === 'M3' ? { ...e, k: 'done', t: '寄到慕尼黑要多久？' } : e));
@@ -100,7 +100,7 @@ app.whenReady().then(async () => {
     check(await page("getComputedStyle(document.querySelector('.lite-tr-edit')).visibility") === 'hidden', '鼠标不在消息上时铅笔不显示（位置留着）');
     await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4)} })`);
     const H1 = '0000000000000001';
-    await page(`window.__entries = { ${JSON.stringify(H1)}: { h: ${JSON.stringify(H1)}, state: 'done', orig: true, tr: '你好！这款假发有 24 英寸的吗？', edited: false, fixed: false, suggest: '', err: '', errPid: '', rows: [['翻译时间', '10:02'], ['用时', '1.2 秒'], ['模型', '智谱 glm-4-flash']] } }; true`);
+    await page(`window.__entries = { ${JSON.stringify(H1)}: { h: ${JSON.stringify(H1)}, state: 'done', orig: true, tr: '你好！这款假发有 24 英寸的吗？', edited: false, fixed: false, suggest: '', err: '', rows: [['翻译时间', '10:02'], ['用时', '1.2 秒'], ['模型', '来财 DeepSeek']] } }; true`);
     const card = () => page(`(() => { const w = document.querySelector('.sel-pop .tc'); if (!w || w.closest('.sel-pop').hidden) return null;
       const ta = w.querySelector('textarea'); const tr = document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr').getBoundingClientRect(); const r = w.getBoundingClientRect();
       return { text: ta.value, focus: document.activeElement === ta, below: r.top >= tr.bottom - 1, left: Math.abs(r.left - tr.left) < 2, info: w.querySelector('.tc-info').textContent, btns: [...w.querySelectorAll('.tc-foot button')].map((b) => b.textContent + (b.disabled ? '(灰)' : '')), expanded: document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').getAttribute('aria-expanded') }; })()`);
@@ -110,7 +110,7 @@ app.whenReady().then(async () => {
     let c = await card();
     check(!!c && c.text === '你好！这款假发有 24 英寸的吗？' && c.focus, '点铅笔弹出小窗，框里是译文，光标在框里');
     check(!!c && c.below && c.left, '小窗在这条译文下面，左边对齐');
-    check(!!c && c.info.includes('翻译时间10:02') && c.info.includes('模型智谱 glm-4-flash'), `小窗里有翻译信息（${c && c.info}）`);
+    check(!!c && c.info.includes('翻译时间10:02') && c.info.includes('模型来财 DeepSeek'), `小窗里有翻译信息（${c && c.info}）`);
     check(!!c && JSON.stringify(c.btns) === JSON.stringify(['纠错', '保存(灰)']) && c.expanded === 'true', `按钮是「纠错」「保存」，没改时保存是灰的，铅笔保持显示（${c && c.btns.join(' ')}）`);
     // 小窗开着时译文块换了（别的消息的译文更新）：小窗不收
     await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list4.map((e) => (e.id === 'M1' ? { ...e, t: e.t + ' ' } : e)))} })`);
@@ -172,12 +172,12 @@ app.whenReady().then(async () => {
     await page("[...document.querySelectorAll('.tc-foot button')].find((b) => b.textContent === '采用').click()");
     await tick();
     check(JSON.stringify((await page('window.__calls')).slice(-1)[0]) === JSON.stringify(['take', H1, true]) && (await card()) === null, '点「采用」交给主进程，小窗收起');
-    // 纠错失败：红字 + 去填密钥
+    // 纠错失败：只有红字，没有「去填密钥」
     await tick(700);
-    await page(`Object.assign(window.__entries[${JSON.stringify(H1)}], { state: 'error', suggest: '', err: '智谱密钥不对', errPid: 'zp' }); true`);
+    await page(`Object.assign(window.__entries[${JSON.stringify(H1)}], { state: 'error', suggest: '', err: '团队登录失效，请重新登录' }); true`);
     await page("document.querySelectorAll('.lite-msg')[0].querySelector('.lite-tr-edit').click()");
     await tick();
-    check(await page("document.querySelector('.tc-err').textContent === '智谱密钥不对去填密钥'"), '纠错失败：小窗里红字和「去填密钥」');
+    check(await page("document.querySelector('.tc-err').textContent === '团队登录失效，请重新登录' && !document.querySelector('.tc-err button')"), '纠错失败：小窗里只有红字');
     // 滚动聊天：收起
     await page("document.querySelector('.lite-msgs').dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }))");
     check((await card()) === null, '滚动聊天收起小窗');

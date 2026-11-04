@@ -1,6 +1,6 @@
 {
   "name": "waswitch",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
   "main": "src/main.js",
   "scripts": {
@@ -60,7 +60,7 @@
     "check:tp-swap": "electron scripts/check-tp-swap.js",
     "check:trpage-busy": "electron scripts/check-trpage-busy.js",
     "check:tr-wait": "electron scripts/check-tr-wait.js",
-    "check:tr-keys": "electron scripts/check-tr-keys.js",
+    "check:tr-settings": "electron scripts/check-tr-settings.js",
     "check:tr-inline": "node scripts/check-tr-inline.js && node scripts/check-tr-history.js && electron scripts/check-lite-tr.js",
     "check:team": "node scripts/check-team.mjs && node server/test/run.mjs && node scripts/check-crm.mjs",
     "build:mcp": "node scripts/build-mcp.js --embed"
