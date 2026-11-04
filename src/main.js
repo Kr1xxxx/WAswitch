@@ -53,7 +53,7 @@ const { setupCheckIpc } = require('./check-ipc');
 const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
-const { setupPeerClock } = require('./peer-clock');
+const { setupPeerClock, webPeerNumber } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
@@ -2670,11 +2670,18 @@ async function crmReadWeb(id, switching) {
   if (!switching && id !== activeId) return;
   const view = views.get(acc.id);
   if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return;
-  const r = await waPage.readOpenChat(view.webContents);
+  const r = await waPage.readOpenChat(view.webContents, { max: waPage.MAX_MSGS_LIMIT }); // 最后 50 条
   if (!r.ok || !crmOn(acc)) return;
+  // 对方是隐私编号（@lid）或新版页面的编号里没有对方：按这次读到的对话编号和标题查号码（查到的记一会儿）。
+  // 查不到时这些消息跳过计数，不会没有号码或者用错号码
+  const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
+  if (r.msgs.length && !r.group && !crmWeb.phoneOfChat(r.chat)) {
+    peer.digits = await webPeerNumber(view.webContents, acc.id, peer);
+    if (!crmOn(acc)) return;
+  }
   const since = crmQueue.since(acc.id);
   const now = Date.now();
-  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title); // 对话标题 = 对方的 WhatsApp 名字
+  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title, peer); // 对话标题 = 对方的 WhatsApp 名字
   for (const item of got.items) crmQueue.add(acc.id, item);
   if (got.nonumber) crmQueue.skip(acc.id, got.nonumber);
   if (got.notime) crmQueue.skipNoTime(acc.id, got.notime);
