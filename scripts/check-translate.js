@@ -75,6 +75,7 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   const cases=[
     [{status:401,error:'login_required'},'auth','团队登录失效，请重新登录'],
     [{status:403,error:'revoked'},'auth','团队登录失效，请重新登录'],
+    [{status:403,body:{ok:false,error:'revoked',revoked:true}},'auth','这台电脑已被管理员停用'],
     [{status:409,error:'no_key'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
     [{status:409,error:'not_set_up'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
     [{status:402,error:'over_budget'},'quota','本月翻译额度用完了，请找管理员'],
@@ -167,8 +168,12 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
     network:{mode:'proxy',proxyUrl:'socks5://127.0.0.1:7891'},deeplUsage:{month:'2026-10',chars:42},deeplCap:15000,seeded:true,seedVer:3,
     rolePrompt:'贴牌 = private label',dailyCap:200,accountLang:{a1:'德语'},accountAuto:{a2:false},autoDefaultOn:true,termsDefaultOn:true,wigTerms:false,lashTerms:true,trPlace:'panel',trPlaceInlineDefault:true,
     chatLang:{'a1:0123456789abcdef':{lang:'德语',src:'manual',at:1}},float:{dx:30,dy:70,collapsed:true},floatInMode:'m1'}));
+  fs.writeFileSync(path.join(dOld,'translate.json.broken-1'),'{"providers":[{"keyEnc":"RWRsLWtleQ=="}]');
+  fs.writeFileSync(path.join(dOld,'other.json'),'{}');
   const tOld=mk(dOld);
   const cOld=tOld.publicConfig();
+  assert(!fs.existsSync(path.join(dOld,'translate.json.broken-1')),'读坏时留下的旧备份（可能有密钥）也删了');
+  assert(fs.existsSync(path.join(dOld,'other.json')),'别的文件不动');
   assert.deepEqual(cOld.providers.map((x)=>x.id),['cloud']);
   const rawOld=fs.readFileSync(path.join(dOld,'translate.json'),'utf8');
   for (const k of ['providers','primaryId','fallbackId','fixId','network','deeplUsage','deeplCap','seeded','seedVer','keyEnc','keyTail']) assert(!rawOld.includes(`"${k}"`),`升级后 translate.json 里没有 ${k}`);

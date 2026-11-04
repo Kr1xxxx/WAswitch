@@ -221,6 +221,7 @@ function extraContacts(source, output) {
 function cloudError(status, j, after = null) {
   const code = j && typeof j.error === 'string' ? j.error : '';
   const wait = j && Number.isFinite(j.retry_after_s) && j.retry_after_s > 0 ? Math.round(j.retry_after_s * 1000) : after;
+  if (status === 403 && j && j.revoked === true) return { kind: 'auth', text: '这台电脑已被管理员停用' };
   if (status === 401 || status === 403) return { kind: 'auth', text: '团队登录失效，请重新登录' };
   if (status === 426) return { kind: 'config', text: '这个版本太旧，请更新 WAswitch' };
   if (status === 409) return { kind: 'config', text: '翻译还没开通，请找管理员在来财填 DeepSeek key' };
@@ -301,7 +302,15 @@ class Translator {
         const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
         if (raw && typeof raw === 'object') {
           // 1.0.6 起不存服务商和密钥：旧文件里的（连同加密后的密钥）一次删掉
-          if (RETIRED_KEYS.some((k) => k in raw)) migrated = true;
+          if (RETIRED_KEYS.some((k) => k in raw)) {
+            migrated = true;
+            // 以前读坏时留下的备份（translate.json.broken-*）里也可能有加密的密钥，一起删掉
+            try {
+              const dir = path.dirname(this.file);
+              const prefix = `${path.basename(this.file)}.broken-`;
+              for (const f of fs.readdirSync(dir)) if (f.startsWith(prefix)) { try { fs.unlinkSync(path.join(dir, f)); } catch {} }
+            } catch {}
+          }
           if (raw.accountLang && typeof raw.accountLang === 'object') for (const [k, v] of Object.entries(raw.accountLang)) if (LANGS.includes(v)) base.accountLang[k] = v;
           if (raw.accountAuto && typeof raw.accountAuto === 'object') for (const [k, v] of Object.entries(raw.accountAuto)) if (v === false) base.accountAuto[k] = false;
           base.autoDefaultOn = raw.autoDefaultOn === true;
@@ -633,7 +642,7 @@ class Translator {
     const base = this.deps.retryMs ?? RETRY_MS;
     const once = async (wav) => {
       // 这一段的真实长度（可以带小数，来财按 max(1, 向上取整) 计）
-      const seconds = Math.min(30, Math.round(((wav.length - 44) / 2 / asr.RATE) * 100) / 100);
+      const seconds = Math.min(30, Math.max(0.01, Math.round(((wav.length - 44) / 2 / asr.RATE) * 100) / 100));
       const body = { audio: wav.toString('base64'), seconds };
       let netTried = false; // 网络断了就地重试这一段一次：前面转好的段已经用过额度，不能让整条重来。超时不重试（来财可能已经处理）
       for (let n = 0; ; n += 1) {
