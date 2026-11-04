@@ -106,13 +106,25 @@ async function signIn(m, email) {
 }
 const A = machine('a', [acc('101', '一号', { phone: '+49 151 1111 2222' }), acc('102', '二号'), acc('103', '三号')]);
 
-await test('后台地址写死；没登录时是 none，策略默认 off，不锁', async () => {
+await test('后台地址写死；没登录时是 none；还没问到策略（连不上来财）时按必须登录算，锁上', async () => {
   assert.equal(TEAM_SERVER, 'https://laicrm.com');
   const plain = new TeamSync({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'team-x-')), safeStorage: fakeSafe, hooks: A.team.hooks, server: 'http://evil.example.com' });
   assert.equal(plain.server, TEAM_SERVER, '不是 https 的地址不认');
   assert.equal(A.team.loginState(), 'none');
-  assert.equal(A.team.policy(), 'off');
-  assert.equal(A.team.locked(), false);
+  assert.equal(A.team.policy(), 'required');
+  assert.equal(A.team.locked(), true);
+  assert.equal(A.team.isParked(A.accounts[2]), true, '新装、连不上来财：号不能不登录就照常运行');
+  net = 'down';
+  assert.equal((await A.team.fetchPolicy()).offline, true);
+  net = 'ok';
+  assert.equal(A.team.locked(), true, '问不到策略还是锁着');
+  // team.json 里的策略写坏了：也按必须登录
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-p-'));
+  fs.writeFileSync(path.join(dir, 'team.json'), JSON.stringify({ server: SERVER, policy: 'whatever' }));
+  assert.equal(new TeamSync({ dir, safeStorage: fakeSafe, hooks: A.team.hooks, server: SERVER, fetchImpl }).policy(), 'required');
+  await setPolicy('off');
+  assert.deepEqual(await A.team.fetchPolicy(), { ok: true, policy: 'off' });
+  assert.equal(A.team.locked(), false, '问到了 off 才不锁');
   assert.equal(A.team.isParked(A.accounts[2]), false);
 });
 await test('问策略：不带令牌；required 且没登录就锁，所有号都停着', async () => {
@@ -354,11 +366,15 @@ await test('重启后从磁盘恢复登录状态；换了后台地址的旧文�
   let saved = 0;
   const other = new TeamSync({ dir: A.dir, safeStorage: fakeSafe, hooks: { ...A.team.hooks, accounts: () => copies, save: () => { saved += 1; } }, fetchImpl });
   assert.equal(other.loginState(), 'none');
-  assert.equal(other.policy(), 'off');
+  assert.equal(other.policy(), 'required', '旧后台的策略不认，按必须登录');
   assert.equal(saved, 1);
   for (const [i, a] of copies.entries()) {
     if (A.accounts[i].teamHidden) assert.equal(a.teamId, A.accounts[i].teamId, '收回的号不动');
-    else assert.deepEqual([a.teamId, a.teamCrm, a.teamNote], ['', false, ''], `${a.id} 当作没加入`);
+    else {
+      assert.deepEqual([a.teamId, a.teamCrm, a.teamNote], ['', false, ''], `${a.id} 当作没加入`);
+      assert.equal(a.teamKeepQueue, true, '本机队列留着，重新加入后接着传');
+      assert.equal(a.teamRejoin, true, '来财知道号码以前不上传');
+    }
   }
   assert.deepEqual(other.pendingJoin(), copies.filter((a) => !a.teamHidden).map((a) => a.id));
   assert.equal(A.accounts.filter((a) => a.teamId).length, 4, '原来的账号没被改');
@@ -439,14 +455,23 @@ await test('本机的设备被停用后再登录：说明已停用，device_id �
   assert.equal(A.team.loginState(), 'none');
   await boss('POST', `devices/${dev}/restore`);
 });
-await test('换人登录：新设备，本机原来的团队号先收起，等后台分配', async () => {
+await test('换人登录：新设备，本机原来的团队号清掉 teamId，在新设备上重新加入（不收起）；收回的号不动', async () => {
   const dev = A.team.state.deviceId;
   A.accounts[2].teamCrm = true;
+  const hiddenBefore = A.accounts.filter((a) => a.teamHidden).map((a) => [a.id, a.teamId]);
+  let changed = 0;
+  A.team.hooks.personChanged = () => { changed += 1; };
   assert.deepEqual(await signIn(A, 'lucas@example.com'), { ok: true });
+  delete A.team.hooks.personChanged;
+  assert.equal(changed, 1, '换了人：告诉主进程（删上一个人解不开的旧队列）');
   assert.notEqual(A.team.state.deviceId, dev);
-  assert.equal(A.accounts[2].teamHidden, true);
+  assert.equal(A.accounts[2].teamId, '');
+  assert.equal(A.accounts[2].teamHidden, false);
   assert.equal(A.accounts[2].teamCrm, false);
-  assert.equal(A.team.isParked(A.accounts[2]), true);
+  assert.equal(A.accounts[2].teamRejoin, true);
+  assert.equal(A.accounts[2].teamKeepQueue, undefined, '换了人：队列不留');
+  assert.equal(A.team.isParked(A.accounts[2]), false, '没加入的号照常运行，马上自动加入');
+  assert.deepEqual(A.accounts.filter((a) => a.teamHidden).map((a) => [a.id, a.teamId]), hiddenBefore, '管理员收回的号还是收着');
   assert.equal(A.team.snapshot().userName, 'Lucas Martin');
 });
 // ---- 来财的新规矩（假后台）：发码一律 200；错误是 { ok:false, error:'代码' }；/join 和 /sync 带号码 ----
@@ -488,7 +513,10 @@ await test('来财：登录后同步，本机的号自动加入；/join 出错�
   const T = new TeamSync({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'team-l2-')), safeStorage: fakeSafe, server: SERVER, fetchImpl: L.fetchLai, now: () => clock.t,
     timers: { setTimeout: () => ({}), clearTimeout: () => {} },
     hooks: { ...A.team.hooks, accounts: () => accs, save: () => {}, park: (a) => log.push(`park:${a.id}`), unpark: (a) => log.push(`unpark:${a.id}`), refresh: () => {} } });
+  assert.deepEqual(log, [], '新装：没问到策略时按必须登录，号先停着');
   assert.deepEqual(await T.login({ email: 'emma@example.com', code: '123456' }), { ok: true });
+  assert.deepEqual(log, ['unpark:1', 'unpark:2'], '登录后启动');
+  log.length = 0;
   assert.deepEqual(await T.syncNow(), { ok: true }, '加入失败不影响同步');
   const err = await T.join(['1']);
   assert.equal(err.error, '加入团队没成功（400）');
@@ -503,5 +531,177 @@ await test('来财：登录后同步，本机的号自动加入；/join 出错�
   await T.syncNow();
   const sync = L.calls.filter((c) => c.path === '/api/device/sync').pop().body;
   assert.deepEqual(sync.status.map((x) => x.phone), ['+49301234567', '']);
+});
+// ---- 按来财 /api/device/* 规矩的小假后台：设备只在 device_id 和人都对上时沿用；/join 按 (设备, 本机编号) 去重；坐席按设备给 ----
+function laicaiCloud() {
+  const c = { devices: [], numbers: [], seats: [], calls: [], loseJoin: 0, answer: null, seq: 0 };
+  const uuid = () => `00000000-0000-4000-8000-${String(++c.seq).padStart(12, '0')}`;
+  const ok = (data) => [200, data];
+  c.fetchImpl = async (url, opts) => {
+    assert.equal(opts.redirect, 'error');
+    const p = new URL(url).pathname;
+    const body = opts.body ? JSON.parse(opts.body) : null;
+    const tok = (opts.headers.authorization || '').replace(/^Bearer /, '');
+    c.calls.push({ path: p, body });
+    const dev = c.devices.find((d) => d.token && d.token === tok);
+    let r;
+    if (c.answer && (r = c.answer(p, body, dev))) return new Response(JSON.stringify(r[1]), { status: r[0], headers: { 'content-type': 'application/json' } });
+    if (p === '/api/device/policy') r = ok({ v: 1, login: 'required' });
+    else if (p === '/api/device/login') {
+      let d = c.devices.find((x) => x.id === body.device_id && x.email === body.email);
+      if (!d) { d = { id: uuid(), email: body.email }; c.devices.push(d); }
+      d.token = `T${c.seq++}`.padEnd(43, 'x');
+      r = ok({ device_id: d.id, token: d.token, user: { name: body.email.split('@')[0] }, allow_private: false, login: 'required' });
+    } else if (!dev) r = [401, { ok: false, error: 'login_required' }];
+    else if (p === '/api/device/join') {
+      const out = body.accounts.map((a) => {
+        let seat = c.seats.find((x) => x.device === dev.id && x.local_id === a.local_id);
+        if (!seat) {
+          const n = { id: uuid(), phone: a.phone, name: a.name };
+          c.numbers.push(n);
+          seat = { device: dev.id, local_id: a.local_id, number: n.id, visible: true, version: ++c.seq };
+          c.seats.push(seat);
+        }
+        return { local_id: a.local_id, team_id: seat.number };
+      });
+      if (c.loseJoin > 0) { c.loseJoin -= 1; const e = new Error('The operation was aborted'); e.name = 'AbortError'; throw e; }
+      r = ok({ accounts: out });
+    } else if (p === '/api/device/sync') {
+      for (const st of body.status) { const n = c.numbers.find((x) => x.id === st.team_id); if (n && st.phone) n.phone = st.phone; }
+      const list = c.seats.filter((x) => x.device === dev.id && x.version > body.cursor).sort((a, b) => a.version - b.version);
+      r = ok({ ok: true, device_id: dev.id, seats: list.map((x) => ({ team_id: x.number, visible: x.visible, name: c.numbers.find((n) => n.id === x.number).name, crm_sync: x.visible })),
+        cursor: list.length ? list[list.length - 1].version : body.cursor, more: false, allow_private: false, login: 'required', user: { name: dev.email.split('@')[0] }, confirm_hides: false, next_sync_s: 120 });
+    } else if (p === '/api/device/logout') { dev.token = ''; r = ok({ ok: true }); }
+    return new Response(JSON.stringify(r[1]), { status: r[0], headers: { 'content-type': 'application/json' } });
+  };
+  return c;
+}
+function laiMachine(cloud, accs, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-lai-'))) {
+  const m = { accounts: accs, log: [], dir };
+  m.team = new TeamSync({ dir, safeStorage: fakeSafe, server: SERVER, fetchImpl: cloud.fetchImpl, now: () => clock.t, timers: { setTimeout: () => ({}), clearTimeout: () => {} },
+    hooks: { ...A.team.hooks, accounts: () => m.accounts, save: () => {}, park: (a) => m.log.push(`park:${a.id}`), unpark: (a) => m.log.push(`unpark:${a.id}`), refresh: () => {},
+      createSeat: (seat) => { const a = { id: String(9000 + m.accounts.length), name: seat.name, teamId: seat.teamId, teamHidden: false, teamCrm: seat.crm }; m.accounts.push(a); m.log.push(`create:${seat.teamId}`); return a; } } });
+  return m;
+}
+const view = (accs) => accs.map((a) => ({ id: a.id, teamId: a.teamId, hidden: !!a.teamHidden, crm: !!a.teamCrm, rejoin: !!a.teamRejoin }));
+
+await test('同一台电脑 A→B→A：每个人沿用自己的设备；号在新设备上重新加入，换回 A 时拿回 A 原来的团队号，不收起、不重复', async () => {
+  const cloud = laicaiCloud();
+  const accs = [acc('1', 'Sales UK', { phone: '+44 7700 900001' }), acc('2', 'Sales DE', { phone: '' })];
+  const M = laiMachine(cloud, accs);
+  const signInLai = (email) => M.team.login({ email, code: '123456' });
+  assert.deepEqual(await signInLai('emma@example.com'), { ok: true });
+  const devA = M.team.state.deviceId;
+  await M.team.syncNow();
+  await M.team.syncNow();
+  const teamA = accs.map((a) => a.teamId);
+  assert.ok(teamA.every((t) => /^[0-9a-f-]{36}$/.test(t)));
+  assert.ok(accs.every((a) => a.teamCrm && !a.teamHidden && !a.teamRejoin));
+  await M.team.logout();
+  // B 登录：新设备；号清掉 teamId，在 B 的设备上加入（来财那边多出 B 的两行，A 的留着，管理员可以删）
+  assert.deepEqual(await signInLai('lucas@example.com'), { ok: true });
+  const devB = M.team.state.deviceId;
+  assert.notEqual(devB, devA);
+  assert.equal(cloud.calls.filter((x) => x.path === '/api/device/login').pop().body.device_id, undefined, 'B 在这台电脑上没用过设备：不带 A 的');
+  assert.deepEqual(view(accs).map((a) => [a.teamId, a.hidden, a.rejoin]), [['', false, true], ['', false, true]]);
+  assert.ok(accs.every((a) => !M.team.isParked(a)), '没收起：照常运行');
+  await M.team.syncNow();
+  await M.team.syncNow();
+  const teamB = accs.map((a) => a.teamId);
+  assert.ok(teamB.every((t, i) => t && t !== teamA[i]), 'B 的设备上是新的团队号');
+  assert.deepEqual(accs.map((a) => [a.teamCrm, !!a.teamRejoin]), [[true, false], [true, true]], '带了号码的马上能传；没号码的等号码');
+  const join = cloud.calls.filter((x) => x.path === '/api/device/join').pop().body.accounts;
+  assert.deepEqual(join.map((a) => a.phone), ['+447700900001', ''], '重新加入带上号码');
+  // 第二个号读到了自己的号码：下次同步报上去以后才开始上传
+  accs[1].phone = '+49 30 1234567';
+  await M.team.syncNow();
+  assert.equal(accs[1].teamRejoin, undefined, '来财知道号码了');
+  await M.team.logout();
+  // A 再登录：带 A 自己的设备，拿回 A 原来的团队号
+  assert.deepEqual(await signInLai('emma@example.com'), { ok: true });
+  assert.equal(cloud.calls.filter((x) => x.path === '/api/device/login').pop().body.device_id, devA);
+  assert.equal(M.team.state.deviceId, devA);
+  M.log.length = 0;
+  await M.team.syncNow();
+  await M.team.syncNow();
+  assert.deepEqual(accs.map((a) => a.teamId), teamA, '拿回 A 原来的团队号');
+  assert.equal(accs.length, 2, '没有多出重复的号');
+  assert.ok(!M.log.some((x) => x.startsWith('create:') || x.startsWith('park:')), JSON.stringify(M.log));
+  assert.ok(accs.every((a) => a.teamCrm && !a.teamHidden && !a.teamRejoin && !M.team.isParked(a)));
+  assert.equal(cloud.numbers.length, 4, '来财：A 的两行和 B 的两行');
+  // 重启后 devices 表还在
+  const again = laiMachine(cloud, accs, M.dir);
+  assert.deepEqual(again.team.state.devices, { 'lucas@example.com': devB, 'emma@example.com': devA });
+});
+
+await test('同一个人换了设备（来财那边设备没了）：号重新加入，本机队列留着', async () => {
+  const cloud = laicaiCloud();
+  const accs = [acc('1', 'Sales UK', { phone: '+44 7700 900001' })];
+  const M = laiMachine(cloud, accs);
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  await M.team.syncNow();
+  await M.team.syncNow();
+  cloud.devices.length = 0;
+  await M.team.logout();
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  assert.deepEqual([accs[0].teamId, accs[0].teamKeepQueue, accs[0].teamRejoin], ['', true, true]);
+  await M.team.syncNow();
+  await M.team.syncNow();
+  assert.ok(accs[0].teamId && accs[0].teamCrm);
+  assert.equal(accs[0].teamKeepQueue, undefined, '来财同意同步以后按正常规则');
+});
+
+await test('加入的回答丢了（超时）：下次同步先重新加入再认坐席，不新建重复的号；还是没回答就先不认', async () => {
+  const cloud = laicaiCloud();
+  const accs = [acc('1', 'Sales UK', { phone: '+44 7700 900001' })];
+  const M = laiMachine(cloud, accs);
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  cloud.loseJoin = 3; // 第一次加入、第二次同步里的先加入和末尾的自动加入都丢回答
+  await M.team.syncNow(); // 自动加入：来财加了，回答丢了
+  assert.ok(!accs[0].teamId);
+  assert.deepEqual(M.team.state.joinSent, ['1']);
+  const cursor = M.team.state.cursor;
+  await M.team.syncNow(); // 坐席来了；重新加入又丢了：先不认，cursor 不动
+  assert.equal(accs.length, 1, '没有新建重复的号');
+  assert.ok(!accs[0].teamId);
+  assert.equal(M.team.state.cursor, cursor, '坐席下次再拿');
+  await M.team.syncNow();
+  assert.equal(accs.length, 1);
+  assert.ok(/^[0-9a-f-]{36}$/.test(accs[0].teamId));
+  assert.deepEqual(M.team.state.joinSent, []);
+  await M.team.syncNow();
+  assert.equal(accs[0].teamCrm, true);
+  assert.ok(!M.log.some((x) => x.startsWith('create:')));
+  // 后台的坐席带 local_id 时直接按本机编号认
+  const B2 = laiMachine(cloud, [acc('5', 'Sales FR')]);
+  B2.team.state.token = fakeSafe.encryptString('x').toString('base64');
+  B2.team.applySeats([{ team_id: '00000000-0000-4000-8000-0000000000aa', local_id: '5', visible: true, crm_sync: true }], false);
+  assert.deepEqual(view(B2.accounts), [{ id: '5', teamId: '00000000-0000-4000-8000-0000000000aa', hidden: false, crm: true, rejoin: false }]);
+});
+
+await test('401 login_required（管理员按了“重新登录”）：回到登录页，设备、团队号、CRM 授权都留着；只有 403 revoked 才是停用', async () => {
+  const cloud = laicaiCloud();
+  const accs = [acc('1', 'Sales UK', { phone: '+44 7700 900001' })];
+  const M = laiMachine(cloud, accs);
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  await M.team.syncNow();
+  await M.team.syncNow();
+  const dev = M.team.state.deviceId;
+  const team1 = accs[0].teamId;
+  cloud.answer = (p) => (p === '/api/device/sync' ? [401, { ok: false, error: 'login_required' }] : null);
+  const r = await M.team.syncNow();
+  assert.equal(r.loggedOut, true);
+  assert.equal(M.team.loginState(), 'none', '登录页，不是“已停用”');
+  assert.equal(M.team.snapshot().lastError, '登录已失效，请重新登录');
+  assert.equal(M.team.state.deviceId, dev);
+  assert.deepEqual([accs[0].teamId, accs[0].teamHidden, accs[0].teamCrm], [team1, false, true]);
+  cloud.answer = null;
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  assert.equal(M.team.state.deviceId, dev, '同一台设备');
+  assert.equal(accs[0].teamId, team1);
+  cloud.answer = (p, b, d) => (p === '/api/device/sync' ? [403, { ok: false, error: 'revoked', revoked: true, device_id: d.id }] : null);
+  assert.deepEqual(await M.team.syncNow(), { revoked: true });
+  assert.equal(M.team.loginState(), 'disabled');
+  assert.equal(M.team.snapshot().lastError, '这台电脑已被管理员停用');
 });
 console.log(`全部通过（${passed} 项）`);
