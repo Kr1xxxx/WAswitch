@@ -6,7 +6,12 @@
 // - 只在主进程里跑，只读一份白名单状态，不碰账号的 session、页面、分区目录、轻量号密钥。
 // - 同步请求走本机网络，不经过任何账号的代理，不带任何账号的 cookie；不跟随跳转。
 // - 后台发来的东西只当数据：显示/隐藏、名称、颜色、备注。没有命令、网址、代理。
-// - 只有显式的 403 { revoked: true, device_id: 本机 } 才算停用；401 = 令牌失效，回到没登录；其它任何错误都当离线，照常工作。
+// - 只有显式的 403 { revoked: true, device_id: 本机 } 才算停用；401 = 令牌失效（退出过、管理员按了“重新登录”），
+//   回到登录页，设备、团队号和本机队列都留着；其它任何错误都当离线，照常工作。
+// - 连不上来财、没问到策略时按“必须登录”算（不让号在没登录时照常运行）。
+// - 每个邮箱在这台电脑上用过的设备记在 devices 里：A→B→A 换人再换回来，A 拿回自己的设备和坐席。
+// - 换了设备（换人登录）：本机原来的团队号清掉 teamId，在新设备上重新自动加入（teamRejoin），
+//   来财知道这个号自己的号码之前不上传聊天（来财靠号码在电脑之间去重，不然 30 天的聊天会存两份）。
 // - 收回只认显式的 visible:false；一次要隐藏本机一半以上的团队号时先暂停，等管理员在后台确认。
 // - 不采集员工活动（最后操作时间、未读等待时长），只报未读数。
 const fs = require('fs');
@@ -35,6 +40,10 @@ const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const STATES = ['ready', 'loading', 'needs_qr', 'proxy_down', 'needs_proxy', 'error', 'banned', 'stopped'];
 const EVENT_KINDS = ['dropped', 'recovered', 'exit_changed', 'proxy_down', 'proxy_up', 'banned'];
 const MAX_JOIN = 50; // 来财一次最多收 50 个号
+const MAX_DEVICES = 20; // devices 表（邮箱 → 设备）最多记这么多人
+const DEFAULT_POLICY = 'required'; // 没问到策略时按必须登录
+const JOIN_RETRY_MIN_MS = 5 * 1000; // 加入后有号没拿到团队号：5 秒后再试，之后翻倍
+const JOIN_RETRY_MAX_MS = 5 * 60 * 1000;
 
 // 这个号自己的号码，给来财的格式：'+数字'；读不到或不像号码就是 ''
 function phoneOf(acc) {
@@ -101,12 +110,12 @@ class TeamSync {
     this.foreign = false;
     this.state = this.load();
     // 以前登录的是别的后台（旧版连的 wa.laicrm.com）：那边给的团队号在来财不认，当作还没加入的号，登录后重新自动加入。
-    // 已经被收回（隐藏）的号不动
+    // 本机队列留着，等重新加入、来财同意同步后接着传（teamKeepQueue）。已经被收回（隐藏）的号不动
     if (this.foreign) {
       let reset = false;
       for (const acc of this.hooks.accounts ? this.hooks.accounts() : []) {
         if (!acc.teamId || acc.teamHidden) continue;
-        Object.assign(acc, { teamId: '', teamHidden: false, teamNeedsProxy: false, teamNote: '', teamCrm: false, teamExpected: '' });
+        TeamSync.resetForRejoin(acc, true);
         reset = true;
       }
       if (reset) this.hooks.save();
@@ -124,17 +133,27 @@ class TeamSync {
   // ---------- 本地文件 ----------
   file() { return path.join(this.dir, FILE); }
   load() {
-    const empty = { server: this.server, policy: 'off', deviceId: '', token: '', userName: '', email: '', cursor: 0, allowPrivate: true, revoked: false, held: [], events: [], lastOkAt: 0, lastError: '', lastUpload: null };
+    const empty = { server: this.server, policy: DEFAULT_POLICY, deviceId: '', token: '', userName: '', email: '', devices: {}, joinSent: [], cursor: 0, allowPrivate: true, revoked: false, held: [], events: [], lastOkAt: 0, lastError: '', lastUpload: null };
     try {
       const s = JSON.parse(fs.readFileSync(this.file(), 'utf8'));
       // 以前填过别的后台地址（旧版的登记表单）：那边的登录和坐席都不认
       if (s.server && (cleanServer(s.server) || s.server) !== this.server) { this.foreign = true; return empty; }
+      const deviceId = UUID_RE.test(s.deviceId) ? s.deviceId : '';
+      const email = TeamSync.cleanEmail(s.email);
+      const devices = {};
+      if (s.devices && typeof s.devices === 'object') {
+        for (const [k, v] of Object.entries(s.devices)) if (TeamSync.cleanEmail(k) === k && UUID_RE.test(v)) devices[k] = v;
+      }
+      // 旧版文件没有 devices：上次登录的人和设备先记进去
+      if (email && deviceId && !devices[email]) devices[email] = deviceId;
       return {
         ...empty,
-        policy: POLICIES.includes(s.policy) ? s.policy : 'off',
+        policy: POLICIES.includes(s.policy) ? s.policy : DEFAULT_POLICY,
         userName: typeof s.userName === 'string' ? s.userName.slice(0, 40) : '',
-        email: TeamSync.cleanEmail(s.email), // 上次登录用的邮箱（不是密钥）：登录页预先填好
-        deviceId: UUID_RE.test(s.deviceId) ? s.deviceId : '',
+        email, // 上次登录用的邮箱（不是密钥）：登录页预先填好；换人登录时拿来比
+        deviceId, // 本机团队号现在挂在哪个设备上
+        devices,
+        joinSent: Array.isArray(s.joinSent) ? s.joinSent.filter((x) => typeof x === 'string' && /^\d+$/.test(x)).slice(0, 200) : [],
         token: typeof s.token === 'string' ? s.token : '',
         cursor: Number.isSafeInteger(s.cursor) && s.cursor >= 0 ? s.cursor : 0,
         allowPrivate: s.allowPrivate !== false,
@@ -176,6 +195,21 @@ class TeamSync {
     if (acc.teamId) return !this.enrolled(); // 团队号只在登录着、没被停用时运行
     // 还没加入团队的号（刚添加的、连不上来财时添加的）照常运行：登录着时马上自动加入（autoJoin），不让新号消失
     return false;
+  }
+
+  // 团队号要在新设备（或新后台）上重新加入：清掉 teamId 和收回、同步标记，等 autoJoin。
+  // keepQueue = 本机还没传的聊天留着（同一个人换了设备、升级换后台）；换人登录时不留。
+  // 留着队列时要再补传一次（teamRebackfill）：轻量号只采实时消息，重新加入之前这段时间来的消息只能靠补传（来财去重）
+  static resetForRejoin(acc, keepQueue) {
+    Object.assign(acc, { teamId: '', teamHidden: false, teamNeedsProxy: false, teamNote: '', teamCrm: false, teamExpected: '', teamRejoin: true });
+    if (keepQueue) Object.assign(acc, { teamKeepQueue: true, teamRebackfill: true });
+    else { delete acc.teamKeepQueue; delete acc.teamRebackfill; }
+  }
+  // 重新加入的号：来财知道它自己的号码以后才上传聊天（main.js crmOn 看 teamRejoin）
+  static rejoinDone(acc) {
+    if (!acc.teamRejoin) return false;
+    delete acc.teamRejoin;
+    return true;
   }
 
   // 设置页“团队”用
@@ -233,11 +267,16 @@ class TeamSync {
       .map((a) => ({ local_id: a.id, name: a.name, color: COLOR_RE.test(a.color) ? a.color : '', mode: a.mode === 'lite' ? 'lite' : 'web', phone: phoneOf(a) }));
   }
 
-  mapTeamIds(list) {
+  // sentPhones：这次 /join 带上了号码的本机号（来财已经知道它的号码）
+  mapTeamIds(list, sentPhones = new Set()) {
     const accs = this.hooks.accounts();
     for (const m of Array.isArray(list) ? list : []) {
       const acc = accs.find((a) => a.id === m.local_id);
-      if (acc && UUID_RE.test(m.team_id)) { acc.teamId = m.team_id; acc.teamHidden = false; }
+      if (acc && UUID_RE.test(m.team_id) && !acc.teamId) {
+        acc.teamId = m.team_id;
+        acc.teamHidden = false;
+        if (sentPhones.has(acc.id)) TeamSync.rejoinDone(acc);
+      }
     }
     this.hooks.save();
   }
@@ -303,12 +342,15 @@ class TeamSync {
     if (!addr) return { error: '邮箱格式不对' };
     const pin = String(code || '').trim();
     if (!/^\d{6}$/.test(pin)) return { error: '验证码不对或已过期', badCode: true };
+    // 这个人在这台电脑上用过的设备；旧文件什么都没记时带上次的设备（来财只在设备和人都对上时沿用）
+    const known = this.state.devices || {};
+    const want = known[addr] || (!Object.keys(known).length ? this.state.deviceId : '');
     let r;
     try {
       r = await this.post('/api/device/login', {
         v: PROTOCOL, email: addr, code: pin,
         device: { name: { win: 'Windows', mac: 'Mac', linux: 'Linux' }[this.platform] || '', app_version: this.appVersion, platform: this.platform },
-        ...(this.state.deviceId ? { device_id: this.state.deviceId } : {}),
+        ...(want ? { device_id: want } : {}),
       });
     } catch (e) {
       return { error: '连不上团队后台', offline: true, detail: errtext.rawOf(e) };
@@ -323,16 +365,28 @@ class TeamSync {
     if (r.status !== 200 || typeof d.token !== 'string' || !d.token || !UUID_RE.test(d.device_id)) {
       return { error: '连不上团队后台', offline: true, detail: `HTTP ${r.status}` };
     }
-    // 换了设备（换人登录、或上次的设备被停用）：本机原来的团队号先全部收起，等后台给新设备分配
+    // 换了设备（换人登录、A→B→A 换回来）：本机原来的团队号清掉 teamId，在新设备上重新自动加入（不收起，免得号再也回不来）。
+    // 来财按 (设备, 本机编号) 去重：换回 A 的设备时拿回 A 原来的团队号。
+    // 同一个人：本机队列留着，加入后接着传；换了人：队列删掉（crmReconcile 看 keepQueue），坏了的旧队列文件也删
     const sameDevice = d.device_id === this.state.deviceId;
+    const otherPerson = !!this.state.email && this.state.email !== addr;
     if (!sameDevice) {
       let changed = false;
-      for (const a of this.hooks.accounts()) if (a.teamId && !a.teamHidden) { a.teamHidden = true; a.teamCrm = false; changed = true; }
+      for (const a of this.hooks.accounts()) {
+        if ((a.teamId && !a.teamHidden) || a.teamRejoin) { TeamSync.resetForRejoin(a, !otherPerson && (!!a.teamId || !!a.teamKeepQueue)); changed = true; }
+      }
       if (changed) this.hooks.save();
     }
+    if (otherPerson && this.hooks.personChanged) this.hooks.personChanged();
+    const devices = { ...(this.state.devices || {}) };
+    delete devices[addr];
+    devices[addr] = d.device_id;
+    const names = Object.keys(devices);
+    for (const k of names.slice(0, Math.max(0, names.length - MAX_DEVICES))) delete devices[k];
     this.state = {
-      ...this.state, deviceId: d.device_id, token: this.safe.encryptString(d.token).toString('base64'),
+      ...this.state, deviceId: d.device_id, token: this.safe.encryptString(d.token).toString('base64'), devices,
       cursor: 0, revoked: false, held: [], events: sameDevice ? this.state.events : [], allowPrivate: d.allow_private !== false,
+      joinSent: sameDevice ? this.state.joinSent : [],
       lastError: '', lastErrorDetail: '', lastOkAt: this.now(), userName: '', email: addr,
     };
     this.setUserName(d.user);
@@ -370,19 +424,33 @@ class TeamSync {
       const acc = this.hooks.accounts().find((a) => a.id === id);
       if (acc && !this.parked.has(id)) this.parked.set(id, this.isParked(acc));
     }
+    // 来财可能已经加入了、只是回答丢了（超时、断线、5xx）：记下这些号，同步时先重新加入再认坐席（见 doSync），不新建重复的号
+    const ids = list.map((a) => a.local_id);
+    const unanswered = () => {
+      this.state.joinSent = [...new Set([...(this.state.joinSent || []), ...ids])].slice(-200);
+      this.persist();
+    };
     let r;
     try {
       r = await this.post('/api/device/join', { v: PROTOCOL, accounts: list }, this.tokenPlain());
     } catch (e) {
+      unanswered();
       return { error: unreachable(e), detail: errtext.rawOf(e) };
     }
     if (r.status !== 200 || !r.data || !Array.isArray(r.data.accounts)) {
+      if (r.status >= 500 || r.status === 200) unanswered();
       return { error: `加入团队没成功（${r.status}）`, detail: r.data && typeof r.data.error === 'string' ? r.data.error.slice(0, 80) : '' };
     }
-    this.mapTeamIds(r.data.accounts);
+    this.mapTeamIds(r.data.accounts, new Set(list.filter((a) => a.phone).map((a) => a.local_id)));
+    const done = new Set(r.data.accounts.map((m) => m && m.local_id));
+    this.state.joinSent = (this.state.joinSent || []).filter((id) => !done.has(id));
+    this.persist();
     this.applyParking();
     this.hooks.refresh();
-    this.schedule(1000);
+    // 来财的回答里少了号（编号不合格被丢掉）：这些号还会再试，间隔翻倍（最多 5 分钟），免得每秒一次 /join + /sync
+    const missing = ids.some((id) => !done.has(id));
+    this.joinDelay = missing ? Math.min((this.joinDelay || JOIN_RETRY_MIN_MS / 2) * 2, JOIN_RETRY_MAX_MS) : 0;
+    this.schedule(missing ? this.joinDelay : 1000);
     return { ok: true };
   }
 
@@ -506,7 +574,7 @@ class TeamSync {
       this.schedule(IDLE_CHECK_MS);
       return { revoked: true };
     }
-    // 401：令牌没了（退出过、管理员重置了密码），回到没登录
+    // 401：令牌没了（退出过、管理员按了“重新登录”），回到登录页；设备、团队号、本机队列都留着，同一个人再登录接着用
     if (r.status === 401) return this.tokenGone('登录已失效，请重新登录');
     if (r.status !== 200 || !r.data || r.data.ok !== true || !Array.isArray(r.data.seats)) {
       const why = r.status === 426 ? '这个版本太旧，请更新 WAswitch' : `后台暂时不可用（${r.status}）`;
@@ -522,13 +590,28 @@ class TeamSync {
     this.state.lastError = '';
     this.state.lastErrorDetail = '';
     this.state.allowPrivate = r.data.allow_private !== false;
-    this.applySeats(r.data.seats, r.data.confirm_hides === true);
-    if (Number.isSafeInteger(r.data.cursor) && r.data.cursor >= this.state.cursor) this.state.cursor = r.data.cursor;
+    // 这次上报带上了号码的团队号：来财已经知道它的号码，重新加入的号可以开始上传聊天
+    let rejoined = false;
+    for (const s of body.status) {
+      if (!s.phone) continue;
+      const acc = this.hooks.accounts().find((a) => a.teamId === s.team_id);
+      if (acc && TeamSync.rejoinDone(acc)) rejoined = true;
+    }
+    if (rejoined) this.hooks.save();
+    // 后台给了本机还对不上的坐席，而本机还有没加入的号：先加入（来财按本机编号去重，回答里就是这些坐席），再认坐席，
+    // 免得把自己的号当成新分来的号再建一个。上次加入的回答丢了、这次还是没加入成：先不认这些坐席，下次同步再来
+    let defer = false;
+    if (this.unknownSeats(r.data.seats).length && this.pendingJoin().length) {
+      await (this.joining || this.autoJoin());
+      defer = this.unknownSeats(r.data.seats).length > 0 && this.unanswered().length > 0;
+    }
+    this.applySeats(r.data.seats, r.data.confirm_hides === true, { skipUnknown: defer });
+    if (!defer && Number.isSafeInteger(r.data.cursor) && r.data.cursor >= this.state.cursor) this.state.cursor = r.data.cursor;
     this.persist();
     this.applyParking();
     this.hooks.refresh();
     const next = Math.min(900, Math.max(60, Number(r.data.next_sync_s) || 120)) * 1000;
-    this.schedule(r.data.more === true ? 1000 : next);
+    this.schedule(r.data.more === true && !defer ? 1000 : next);
     // 本机还有没加入团队的号：自动加入（登录后第一次同步、启动后第一次同步都会走到这里）
     if (r.data.more !== true && this.pendingJoin().length) await this.autoJoin();
     return { ok: true };
@@ -569,21 +652,40 @@ class TeamSync {
     }
   }
 
-  applySeats(seats, confirmHides) {
+  // 本机还对不上的可见坐席（按 team_id 和 local_id 都找不到本机的号）
+  unknownSeats(seats) {
+    const accs = this.hooks.accounts();
+    return (Array.isArray(seats) ? seats : []).filter((s) => s && s.visible === true && UUID_RE.test(s.team_id) && !this.seatAccount(accs, s));
+  }
+  // 坐席对应的本机号：先按 team_id；后台带了 local_id 时按本机编号认还没加入的号
+  seatAccount(accs, s) {
+    return accs.find((a) => a.teamId === s.team_id)
+      || (typeof s.local_id === 'string' && s.local_id ? accs.find((a) => a.id === s.local_id && !a.teamId) : undefined);
+  }
+  // 发过 /join 但没收到回答、现在还没加入的号
+  unanswered() {
+    const accs = this.hooks.accounts();
+    return (this.state.joinSent || []).filter((id) => accs.some((a) => a.id === id && !a.teamId));
+  }
+
+  applySeats(seats, confirmHides, { skipUnknown = false } = {}) {
     const accs = this.hooks.accounts();
     const hides = [];
     let changed = false;
     for (const s of seats) {
       if (!s || !UUID_RE.test(s.team_id)) continue;
-      const acc = accs.find((a) => a.teamId === s.team_id);
+      const acc = this.seatAccount(accs, s);
+      if (acc && !acc.teamId) { acc.teamId = s.team_id; acc.teamHidden = false; }
       if (s.visible !== true) {
         if (s.visible === false && acc) {
           // 暂停批量隐藏不等于继续授权采集；收回一到达就撤销 CRM。
           if (acc.teamCrm) { acc.teamCrm = false; changed = true; }
+          if (acc.teamKeepQueue) { delete acc.teamKeepQueue; changed = true; }
           if (!acc.teamHidden) hides.push(acc);
         }
         continue;
       }
+      if (!acc && skipUnknown) continue;
       this.state.held = this.state.held.filter((id) => id !== s.team_id);
       const fields = {
         name: typeof s.name === 'string' && s.name.trim() ? s.name.trim().slice(0, 40) : null,
@@ -598,6 +700,7 @@ class TeamSync {
         acc.teamNote = fields.note;
         acc.teamExpected = fields.expected;
         acc.teamCrm = fields.crm;
+        delete acc.teamKeepQueue; // 重新加入后来财的回答到了：队列按 keepQueue 的正常规则
         if (acc.teamHidden) { acc.teamHidden = false; this.setParked(acc, false); }
       } else {
         this.hooks.createSeat({ teamId: s.team_id, name: fields.name || '团队账号', color: fields.color, mode: s.mode === 'lite' ? 'lite' : 'web', note: fields.note, expected: fields.expected, crm: fields.crm });

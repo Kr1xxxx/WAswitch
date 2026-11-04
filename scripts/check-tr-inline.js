@@ -14,6 +14,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { teamOff } = require('./fixtures/team-off');
 const net = require('net');
 const http = require('http');
 const https = require('https');
@@ -116,7 +117,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     providers: [{ id: 'local', preset: 'custom', name: '本地测试', baseUrl: `http://127.0.0.1:${trPort}/v1`, model: 'test' }], primaryId: 'local',
   }));
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
     `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });

@@ -9,10 +9,11 @@ import { createRequire } from 'node:module';
 import { crmItem, textOf, backfillItems } from '../src/lite/crm.mjs';
 
 const require = createRequire(import.meta.url);
-const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, keyIdOf, cleanName, keepQueue } = require('../src/crm/queue.js');
-const { CrmUploader, pickBatch } = require('../src/crm/upload.js');
-const { webItem, timeOf, WebReader } = require('../src/crm/web.js');
-const { parsePre } = require('../src/wa-page.js');
+const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, BAD_RETRY_MS, keyIdOf, cleanName, keepQueue } = require('../src/crm/queue.js');
+const { CrmUploader, pickBatch, BUDGET_TEXT } = require('../src/crm/upload.js');
+const { webItem, timeOf, phoneOfChat, WebReader } = require('../src/crm/web.js');
+const { parsePre, MAX_MSGS_LIMIT } = require('../src/wa-page.js');
+const { webPeerNumber } = require('../src/peer-clock.js');
 
 let passed = 0;
 async function test(name, fn) { await fn(); passed += 1; console.log(`  ✓ ${name}`); }
@@ -101,13 +102,70 @@ await test('文件坏了：备份后从空队列开始', async () => {
   assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('crm-queue.bin.bad-')));
 });
 
-await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总共 1 GB', async () => {
+await test('系统还不能加密（safeStorage 没准备好）：队列文件不动、不覆盖，能加密了再读', async () => {
+  const dir = tmp();
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => T0, timers: noTimers });
+  q.enable('1');
+  q.add('1', { mid: '3EB0KEEP1', peer: '447700900123', at: T0 + 1, text: 'keep me' });
+  q.saveNow();
+  const before = fs.readFileSync(path.join(dir, 'crm-queue.bin'));
+  let ready = false;
+  const late = { ...safe(), isEncryptionAvailable: () => ready };
+  const q2 = new CrmQueue({ dir, safeStorage: late, now: () => T0, timers: noTimers });
+  assert.deepEqual(q2.enabledIds(), []);
+  q2.sweep();
+  q2.saveNow();
+  assert.deepEqual(fs.readdirSync(dir), ['crm-queue.bin'], '没改名成 .bad');
+  assert.ok(fs.readFileSync(path.join(dir, 'crm-queue.bin')).equals(before), '没被空队列覆盖');
+  ready = true;
+  assert.equal(q2.stats('1').queued, 1, '能加密了就读出来');
+  assert.equal(q2.peek('1')[0].text, 'keep me');
+});
+
+await test('解不开（钥匙环拒绝一次）：改名 .bad，之后再试最新的一个并回来；30 天后删；换了人登录时删', async () => {
+  const dir = tmp();
+  let now = T0;
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers });
+  q.enable('1');
+  q.add('1', { mid: '3EB0OLD1', peer: '447700900123', at: T0 + 1, text: 'held chat' });
+  q.saveNow();
+  let deny = true;
+  const flaky = { ...safe(), decryptString: (b) => { if (deny) throw new Error('denied'); return safe().decryptString(b); } };
+  const q2 = new CrmQueue({ dir, safeStorage: flaky, now: () => now, timers: noTimers });
+  assert.deepEqual(q2.enabledIds(), []);
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('crm-queue.bin.bad-')));
+  // 这期间来了新消息
+  q2.enable('1');
+  q2.add('1', { mid: '3EB0NEW1', peer: '447700900123', at: now + 5, text: 'new chat' });
+  deny = false;
+  q2.sweep();
+  assert.equal(q2.stats('1').queued, 1, '30 分钟内不再试');
+  now += BAD_RETRY_MS;
+  q2.sweep();
+  assert.deepEqual(q2.peek('1').map((x) => x.text), ['held chat', 'new chat'], '解开了：并回来');
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')), '并回来以后删掉 .bad');
+  assert.equal(q2.add('1', { mid: '3EB0OLD1', peer: '447700900123', at: T0 + 1, text: 'x' }), false, '去重表也并回来');
+  // 一直解不开：30 天后删
+  fs.writeFileSync(path.join(dir, `crm-queue.bin.bad-${now}`), 'garbage');
+  now += BAD_RETRY_MS;
+  q2.sweep();
+  assert.ok(fs.readdirSync(dir).some((f) => f.includes('.bad-')), '30 天内留着');
+  now += MAX_AGE_MS + 1;
+  q2.sweep();
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')), '30 天后删');
+  // 换了人登录：删
+  fs.writeFileSync(path.join(dir, `crm-queue.bin.bad-${now}`), 'garbage');
+  q2.dropBad();
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')));
+});
+
+await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总共约 400 MB', async () => {
   let now = T0;
   const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => now, timers: noTimers });
   q.enable('1');
   assert.equal(MAX_SEEN, 20000);
   assert.equal(MAX_AGE_MS, 30 * 24 * 3600 * 1000);
-  assert.equal(MAX_BYTES, 1024 * 1024 * 1024);
+  assert.equal(MAX_BYTES, 400 * 1024 * 1024, '整个文件要一次写成一个字符串：远低于 V8 的字符串上限');
   for (let i = 0; i < MAX_SEEN + 50; i += 1) q.add('1', { mid: `m${i}`, peer: '8613800000000', at: T0 + i, text: 'x' });
   assert.equal(q.load().get('1').seen.size, MAX_SEEN);
   assert.equal(q.add('1', { mid: 'm0', peer: '8613800000000', at: T0 + 1, text: 'x' }), true, '最早的去重记录被挤掉');
@@ -118,6 +176,42 @@ await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总
   q.add('1', { mid: 'new', peer: '8613800000000', at: now, text: 'new' });
   q.sweep();
   assert.equal(q.stats('1').queued, 1);
+});
+
+await test('超过大小上限：先丢最早的 held（等建档的），没有了再丢最早的待发；记下丢了几条；写盘照常', async () => {
+  const dir = tmp();
+  const errors = [];
+  let now = T0;
+  // 每条估算 3 * 100 + 100 = 400 字节；上限 4000 = 10 条
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers, maxBytes: 4000, onError: (e) => errors.push(e.message) });
+  q.enable('1');
+  q.enable('2');
+  const add = (acc, i) => q.add(acc, { mid: `3EB0CAP${acc}${i}`, peer: '447700900123', at: T0 + i, text: 'x'.repeat(100) });
+  for (let i = 0; i < 4; i += 1) add('1', i);
+  q.settle('1', q.peek('1').map((x) => ({ h: x.h, status: 'held' })));
+  for (let i = 10; i < 16; i += 1) add('2', i);
+  assert.deepEqual([q.stats('1').held, q.stats('2').queued], [4, 6]);
+  add('1', 20);
+  add('2', 21);
+  assert.deepEqual([q.stats('1').held, q.stats('1').queued, q.stats('2').queued], [2, 1, 7], '先丢最早的两条 held，新的待发都在');
+  assert.equal(q.dropped.n, 2);
+  assert.ok(errors.length >= 1 && errors.every((m) => /^本机队列太大，丢掉最早的 \d+ 条$/.test(m)), '记日志（只有条数）');
+  for (let i = 30; i < 33; i += 1) add('2', i);
+  assert.deepEqual([q.stats('1').held, q.stats('1').queued + q.stats('2').queued], [0, 10], 'held 丢完了再丢最早的待发');
+  assert.equal(q.peek('2')[0].k, '3EB0CAP211', '丢的是所有号里最早的一条（3EB0CAP210）');
+  q.saveNow();
+  const q2 = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers, maxBytes: 4000 });
+  assert.equal(q2.stats('2').queued, 9);
+  // 传掉一些、回到上限以下：丢了多少那句话不再显示
+  assert.ok(q.dropped.n > 0);
+  q.ack('2', q.peek('2', 3).map((x) => x.h));
+  q.sweep();
+  assert.deepEqual(q.dropped, { n: 0, at: 0 });
+  // 团队页“上次上传”那一行接一句
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const fn = main.slice(main.indexOf('function crmUploadStatus'), main.indexOf('function setupTeam'));
+  assert.ok(fn.includes('crmQueue.dropped') && /删了最早的/.test(fn));
+  assert.ok(!fn.includes('·'));
 });
 
 // ---- 轻量号 ----
@@ -247,6 +341,110 @@ await test('网页版：对话标题作为对方名字带进每一条', async ()
   const r = new WebReader().collect('5', [{ id: 'false_447700900123@c.us_3EB0N1', text: 'hello', t }], since, now, 'Oliver Brown');
   assert.equal(r.items[0].name, 'Oliver Brown');
   assert.equal(webItem({ id: 'false_447700900123@c.us_3EB0N2', text: 'x', t }, since, now).item.name, undefined);
+});
+
+await test('网页版新编号（没有 true_/false_ 前缀）：方向照旧，号码用查到的，查不到计数，群不收', async () => {
+  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const since = new Date(2026, 9, 24, 10, 0).getTime();
+  const t = parsePre('[11:00, 2026/10/24] x: ');
+  // readOpenChat 把新版编号补成 "<方向>_chat:<标题>_<原编号>"；没有 data-id 时是 "_h<内容哈希>.<序号>"
+  const msgs = [
+    { id: 'false_chat:Anna Müller_3EB0AA', out: false, text: 'Guten Morgen, ist das Paket schon unterwegs?', t },
+    { id: 'true_chat:Anna Müller_3EB0BB', out: true, text: 'Ja, heute verschickt.', t },
+    { id: 'false_chat:Anna Müller_h1x2y3z.1', out: false, text: 'Danke!', t },
+  ];
+  const peer = { chat: '', title: 'Anna Müller', group: false, digits: '4915112345678' };
+  const r = new WebReader().collect('5', msgs, since, now, 'Anna Müller', peer);
+  assert.deepEqual(r.items.map((x) => [x.peer, x.out, x.text, x.name]), [
+    ['4915112345678', false, 'Guten Morgen, ist das Paket schon unterwegs?', 'Anna Müller'],
+    ['4915112345678', true, 'Ja, heute verschickt.', 'Anna Müller'],
+    ['4915112345678', false, 'Danke!', 'Anna Müller'],
+  ], '新版编号的单聊要收，方向看前缀');
+  assert.equal(r.nonumber, 0);
+  // 页面上的原编号（没有前缀）直接给进来：方向看 readOpenChat 认出的 out
+  assert.equal(webItem({ id: '3EB0CC', out: true, text: 'x', t }, since, now, 'Anna Müller', peer).item.out, true);
+  assert.equal(webItem({ id: '3EB0CC', text: 'x', t }, since, now, 'Anna Müller', peer), null, '没有前缀又认不出方向：不收');
+  // 查不到号码：跳过计数，不能没有号码也不能用错号码
+  const miss = new WebReader().collect('5', msgs, since, now, 'Anna Müller', { ...peer, digits: '' });
+  assert.deepEqual(miss, { items: [], nonumber: 3, notime: 0 });
+  assert.deepEqual(new WebReader().collect('5', msgs, since, now, 'Anna Müller'), { items: [], nonumber: 3, notime: 0 }, '没给号码：计数');
+  // 号码是别的对话的（标题对不上、或者页面认得出对话编号）：不用
+  assert.deepEqual(webItem(msgs[0], since, now, 'Anna Müller', { ...peer, title: 'Hans Becker' }), { skip: 'nonumber' });
+  assert.deepEqual(webItem(msgs[0], since, now, 'Hans Becker', { ...peer, title: 'Hans Becker' }), { skip: 'nonumber' });
+  assert.deepEqual(webItem(msgs[0], since, now, 'Anna Müller', { ...peer, chat: '447700900123@c.us' }), { skip: 'nonumber' });
+  assert.deepEqual(webItem(msgs[0], since, now, 'Anna Müller', { ...peer, digits: '12ab' }), { skip: 'nonumber' });
+  // 群（几个人在说话）：不收、不计数
+  assert.deepEqual(new WebReader().collect('5', msgs, since, now, 'Anna Müller', { ...peer, group: true }), { items: [], nonumber: 0, notime: 0 });
+  // 旧格式照旧；@s.whatsapp.net 也认
+  assert.equal(webItem({ id: 'true_447700900123@s.whatsapp.net_3EB0DD', text: 'x', t }, since, now).item.peer, '447700900123');
+  assert.equal(webItem({ id: 'false_447700900123@c.us_3EB0EE', text: 'x', t }, since, now, 'Oliver', { chat: '447700900123@c.us', digits: '4915112345678' }).item.peer, '447700900123', '编号里有号码就用编号的');
+  assert.equal(phoneOfChat('447700900123@c.us'), '447700900123');
+  assert.equal(phoneOfChat('123456789012345@lid'), '');
+});
+
+await test('网页版 @lid 对话：查到号码就收，查不到计数；号码只用在同一个对话上', async () => {
+  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const since = new Date(2026, 9, 24, 10, 0).getTime();
+  const t = parsePre('[11:00, 2026/10/24] x: ');
+  const lid = '123456789012345@lid';
+  const msgs = [{ id: `false_${lid}_3EB0L1`, text: 'Can you send the PI?', t }, { id: `true_${lid}_3EB0L2`, text: 'Sure, today.', t }];
+  const ok = new WebReader().collect('5', msgs, since, now, 'Lena Weber', { chat: lid, title: 'Lena Weber', group: false, digits: '447700900123' });
+  assert.deepEqual(ok.items.map((x) => [x.mid, x.peer, x.out]), [[`false_${lid}_3EB0L1`, '447700900123', false], [`true_${lid}_3EB0L2`, '447700900123', true]]);
+  assert.equal(ok.nonumber, 0);
+  const reader = new WebReader();
+  assert.deepEqual(reader.collect('5', msgs, since, now, 'Lena Weber', { chat: lid, title: 'Lena Weber', group: false, digits: '' }), { items: [], nonumber: 2, notime: 0 }, '查不到：计数');
+  // 后来查到了：同样的消息照常收（跳过只是计数，不记成已处理）
+  assert.equal(reader.collect('5', msgs, since, now, 'Lena Weber', { chat: lid, title: 'Lena Weber', group: false, digits: '447700900123' }).items.length, 2);
+  assert.deepEqual(webItem(msgs[0], since, now, 'Lena Weber', { chat: '999999999999999@lid', digits: '447700900123' }), { skip: 'nonumber' }, '别的对话的号码不能用');
+
+  // webPeerNumber：编号里有号码不查；群不查；@lid 查 WhatsApp 本地数据，查到的记住
+  let asks = 0;
+  const wc = (pn) => ({ isDestroyed: () => false, isLoading: () => false, executeJavaScriptInIsolatedWorld: async () => { asks += 1; return { pn, why: pn ? 'lid:contact' : 'notfound', stores: [] }; } });
+  assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: '4915112345678@c.us', title: 'Lena' }), '4915112345678');
+  assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: '120363012345678901@g.us', title: 'Team DACH' }), '');
+  assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: '', title: '+44 7700 900123' }), '447700900123', '标题就是号码');
+  assert.equal(asks, 0);
+  assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: lid, title: 'Lena Weber' }), '447700900123');
+  assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: lid, title: 'Lena Weber' }), '447700900123');
+  assert.equal(asks, 1, '查到的号码记一会儿');
+  assert.equal(await webPeerNumber(wc(''), 'w1', { chat: '555555555555555@lid', title: 'Nina Weber' }), '');
+  // 新版页面认不出对话编号：只有断定是单聊才按标题找联系人
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'Anna Müller', oneToOne: true }), '4915112345678');
+  const n = asks;
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'ACME GmbH', oneToOne: false }), '', '可能是群：不按名字找');
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'ACME GmbH' }), '', '没说是单聊：不按名字找');
+  assert.equal(asks, n, '没去查');
+  assert.equal(await webPeerNumber(wc(''), 'w1', { chat: '', title: '+49 151 12345678', oneToOne: false }), '4915112345678', '标题就是号码照样用');
+  assert.equal(await webPeerNumber(wc('12'), 'w1', { chat: '666666666666666@lid', title: 'Paul' }), '', '不像号码的不用');
+  assert.equal(await webPeerNumber({ isDestroyed: () => false, isLoading: () => false, executeJavaScriptInIsolatedWorld: async () => { throw new Error('x'); } }, 'w1', { chat: '777777777777777@lid', title: 'Eva' }), '');
+});
+
+await test('网页版新编号：同名的群（只有一个不是标题的人说过话）不能记到同名联系人的号码上', async () => {
+  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const since = new Date(2026, 9, 24, 10, 0).getTime();
+  const t = parsePre('[11:00, 2026/10/24] x: ');
+  // readOpenChat：群 "ACME GmbH"，最近 50 条里只有 Lena Weber 说过话 → group false，但 oneToOne false
+  const r = { ok: true, title: 'ACME GmbH', chat: '', group: false, oneToOne: false, msgs: [
+    { id: 'false_chat:ACME GmbH_3EB0G1', out: false, text: 'Invoice attached', t },
+    { id: 'true_chat:ACME GmbH_3EB0G2', out: true, text: 'Thanks', t },
+  ] };
+  let asks = 0;
+  // WhatsApp 的联系人表里正好有一个同名联系人 "ACME GmbH"
+  const wc = { isDestroyed: () => false, isLoading: () => false, executeJavaScriptInIsolatedWorld: async () => { asks += 1; return { pn: '4915112345678', why: 'name', stores: [] }; } };
+  const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
+  peer.digits = await webPeerNumber(wc, 'g1', { ...peer, oneToOne: r.oneToOne });
+  const got = new WebReader().collect('g1', r.msgs, since, now, r.title, peer);
+  assert.deepEqual(got, { items: [], nonumber: 2, notime: 0 }, '跳过计数，不出条目');
+  assert.equal(asks, 0, '不按名字去查');
+});
+
+await test('网页版每个对话读最后 50 条，@lid 和新版编号按对话查号码', async () => {
+  assert.equal(MAX_MSGS_LIMIT, 50);
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const fn = main.slice(main.indexOf('async function crmReadWeb'), main.indexOf('const crmWebReader'));
+  assert.ok(fn.includes('readOpenChat(view.webContents, { max: waPage.MAX_MSGS_LIMIT })'), '读 50 条');
+  assert.ok(fn.includes('webPeerNumber(view.webContents, acc.id, { ...peer, oneToOne: r.oneToOne })'), '查这个对话的号码，带上是不是单聊');
+  assert.ok(/collect\(acc\.id, r\.msgs, since, now, r\.title, peer\)/.test(fn), '号码交给 WebReader');
 });
 
 await test('轻量号补传：本机缓存里 30 天内的单聊，@lid 换成号码，群不要，名字带上；只补一次', async () => {
@@ -396,18 +594,34 @@ await test('上传到来财：结果条数对不上就整批留着；不认识�
   await new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true }).run();
   assert.equal(q.stats('1').queued, 0, '旧后台没有 results：整批删');
 });
-await test('停用、登录失效时队列留着（重新登录接着传）；收回、不再同步、删号才删；主动退出登录全部删', async () => {
+await test('停用、登录失效、退出登录时队列留着（重新登录接着传）；收回、不再同步、删号、换人登录才删', async () => {
   const team = { teamId: '00000000-0000-0000-0000-000000000001', teamHidden: false, teamCrm: true };
-  assert.equal(keepQueue(team), true, '停用 / 401 / 没登录：号还是团队号，队列留着');
-  assert.equal(keepQueue({ ...team, teamHidden: true }), false, '收回（换人登录时也会先收起）');
+  assert.equal(keepQueue(team), true, '停用 / 401 / 退出登录 / 没登录：号还是团队号，队列留着');
+  assert.equal(keepQueue({ ...team, teamHidden: true }), false, '收回');
   assert.equal(keepQueue({ ...team, teamCrm: false }), false, '来财不再同步这个号');
-  assert.equal(keepQueue({ ...team, teamId: '' }), false, '不是团队号');
+  assert.equal(keepQueue({ ...team, teamId: '' }), false, '不是团队号（换人登录时 login() 清掉 teamId）');
+  assert.equal(keepQueue({ ...team, teamId: '', teamCrm: false, teamRejoin: true, teamKeepQueue: true }), true, '同一个人换设备、升级换后台：重新加入期间留着');
+  assert.equal(keepQueue({ ...team, teamHidden: true, teamKeepQueue: true }), false, '重新加入时被收回：删');
   assert.equal(keepQueue(undefined), false, '号删了');
   const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const rec = main.slice(main.indexOf('function crmReconcile'), main.indexOf('async function crmReadWeb'));
   assert.ok(/if \(keepQueue\(acc\)\) continue;\s*crmQueue\.purge\(id\)/.test(rec), 'crmReconcile 先看 keepQueue 再删');
   const out = main.slice(main.indexOf("handleShell('team:logout'"), main.indexOf("onShell('team:later'"));
-  assert.ok(out.includes('crmQueue.purge(id)'), '主动退出登录时删队列');
+  assert.ok(out.includes('team.logout()') && !out.includes('purge'), '主动退出登录不删队列（界面说退出登录能撤回）');
+  assert.ok(/personChanged: \(\) => crmQueue\?\.dropBad\(\)/.test(main), '换了人登录：删上一个人解不开的旧队列');
+  assert.ok(/const crmOn = [^\n]*!acc\.teamRejoin/.test(main), '重新加入的号：来财知道号码以后才采集和上传');
+  assert.ok(/if \(acc\.teamRebackfill\) \{ crmQueue\.rebackfill\(acc\.id\); delete acc\.teamRebackfill; rebackfilled = true; \}/.test(rec), '队列留着的重新加入：再补传一次');
+  assert.ok(/if \(rebackfilled\) saveAccounts\(\);/.test(rec), '补传标记清掉后马上存，重启后不再补');
+  assert.ok(/crmWaitPhone: /.test(main), '等号码的号告诉团队页');
+  const shell = fs.readFileSync(new URL('../src/shell/shell.js', import.meta.url), 'utf8');
+  assert.ok(shell.includes("a.crmWaitPhone ? '等读到本号的号码'"), '团队页显示在等号码');
+  // 补传标记：清掉后 needsBackfill
+  const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => T0, timers: noTimers });
+  q.enable('1');
+  q.markBackfilled('1');
+  assert.equal(q.needsBackfill('1'), false);
+  q.rebackfill('1');
+  assert.equal(q.needsBackfill('1'), true);
   // 停用、401 不改团队号的字段：TeamSync 的 doSync / tokenGone 不碰 teamCrm、teamHidden
   const idx = fs.readFileSync(new URL('../src/team/index.js', import.meta.url), 'utf8');
   for (const fn of ['tokenGone(why) {', 'offline(why']) {
@@ -416,6 +630,36 @@ await test('停用、登录失效时队列留着（重新登录接着传）；�
   }
   const rv = idx.slice(idx.indexOf('if (r.status === 403 && r.data && r.data.revoked === true'), idx.indexOf("if (r.status === 401)"));
   assert.ok(rv.length > 0 && !/teamCrm|teamHidden/.test(rv), '403 revoked 不收回号');
+});
+await test('来财今天的上传额度用完（429 budget）：说明天继续，所有号都停，聊天留着，过 retry_after_s 再传；别的 429 照旧', async () => {
+  let now = T0;
+  const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => now, timers: noTimers });
+  const accs = [{ id: '1', teamId: 'a' }, { id: '2', teamId: 'b' }];
+  for (const a of accs) { q.enable(a.id); q.add(a.id, { mid: `3EB0BUD${a.id}`, peer: '447700900123', at: T0 + 1, text: 'x' }); }
+  let team = fakeTeam([{ status: 429, data: { ok: false, error: 'budget', retry_after_s: 3600 } }]);
+  const up = new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true, now: () => now });
+  const r = await up.run();
+  assert.equal(r.budget, true);
+  assert.equal(team.calls.length, 1, '第二个号也不传了');
+  assert.equal(up.last.error, BUDGET_TEXT);
+  assert.equal(BUDGET_TEXT, '今天的上传额度用完了，明天继续');
+  assert.deepEqual([q.stats('1').queued, q.stats('2').queued], [1, 1]);
+  now += 3599 * 1000;
+  assert.equal(up.due(), false, '没到时间不传');
+  up.team = team = fakeTeam([]);
+  assert.equal((await up.run()).skipped, true);
+  assert.equal(team.calls.length, 0);
+  now += 1000;
+  assert.equal(up.due(), true);
+  await up.run();
+  assert.deepEqual([q.stats('1').queued, q.stats('2').queued], [0, 0]);
+  assert.equal(up.last.error, '');
+  // 别的 429：还是“太频繁”，只停这个号
+  q.add('1', { mid: '3EB0BUD9', peer: '447700900123', at: now, text: 'y' });
+  up.team = team = fakeTeam([{ status: 429, data: { ok: false, error: 'rate', retry_after_s: 30 } }]);
+  await up.run();
+  assert.equal(up.last.error, '太频繁，稍后再传');
+  assert.equal(up.due(), true);
 });
 await test('上传：一个号一轮最多 3 次（新的和先留着的合计），来财限每个号每 10 分钟 20 次', async () => {
   let now = T0;

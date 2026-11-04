@@ -53,7 +53,7 @@ const { setupCheckIpc } = require('./check-ipc');
 const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
-const { setupPeerClock } = require('./peer-clock');
+const { setupPeerClock, webPeerNumber } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
@@ -1287,7 +1287,7 @@ function pushState() {
     update: updater ? updater.snapshot() : null,
     mcp: mcpModule ? mcpModule.view() : null,
     collapsed: sideCollapsed(),
-    team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
+    team: team ? { ...team.snapshot(), crmUpload: crmUploadStatus() } : null,
     loginLocked: loginLocked(),
     locked,
     panelOpen: panelShown(),
@@ -1349,6 +1349,8 @@ function pushState() {
         // 团队号都同步到 CRM：只在设置 › 团队显示条数（不显示内容），侧栏没有标记
         crm: crmOn(acc) ? crmQueue.stats(acc.id) : null,
         crmWanted: !!(acc.teamCrm && !isParked(acc)),
+        // 重新加入的号：来财知道它的号码以前不同步（团队页显示“等读到本号的号码”）
+        crmWaitPhone: !!(acc.teamId && acc.teamCrm && acc.teamRejoin && !isParked(acc)),
       };
     }),
     lite: liteStateForShell(),
@@ -2642,9 +2644,10 @@ const CRM_BACKFILL_DAYS_MS = 30 * 24 * 3600 * 1000;
 const CRM_BACKFILL_WAIT_MS = 2 * 60 * 1000; // 轻量号连上后等 2 分钟（手机把最近的聊天同步过来）再补传
 const liteOpenAt = new Map(); // 轻量号这次连上的时间
 const crmBackfilling = new Set();
-const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
+// 重新加入的号（换了设备、换了后台，teamRejoin）：来财知道它自己的号码以后才采集和上传（来财靠号码在电脑之间去重）
+const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !acc.teamRejoin && !isParked(acc) && crmQueue.canEncrypt());
 // 不该采集的号：停止采集。号被收回、不再同步、删号、换人登录：连队列和去重表一起删（keepQueue）；
-// 电脑被停用、登录失效、号暂时停着：队列留着，重新登录后接着传
+// 电脑被停用、登录失效、退出登录、号暂时停着、同一个人重新加入：队列留着，重新登录后接着传
 function crmReconcile() {
   if (!crmQueue) return;
   for (const id of crmQueue.enabledIds()) {
@@ -2655,11 +2658,15 @@ function crmReconcile() {
     crmQueue.purge(id);
     crmWebReader.forget(id);
   }
+  let rebackfilled = false;
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
+    // 重新加入、队列留着的号：再补传一次（重新加入前这段时间的消息），来财去重；记下已经补过，重启后不再补
+    if (acc.teamRebackfill) { crmQueue.rebackfill(acc.id); delete acc.teamRebackfill; rebackfilled = true; }
     const since = crmQueue.enable(acc.id);
     if (isLite(acc) && liteHost) liteHost.setCrm(acc.id, since);
   }
+  if (rebackfilled) saveAccounts();
 }
 // 网页版号：只读员工正在看的对话，条件和悬浮窗一样（账号页、窗口看得见、没锁、号正常、页面没在加载）
 // switching = 切走前最后读一次（这时它还是当前号）
@@ -2670,11 +2677,19 @@ async function crmReadWeb(id, switching) {
   if (!switching && id !== activeId) return;
   const view = views.get(acc.id);
   if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return;
-  const r = await waPage.readOpenChat(view.webContents);
+  const r = await waPage.readOpenChat(view.webContents, { max: waPage.MAX_MSGS_LIMIT }); // 最后 50 条
   if (!r.ok || !crmOn(acc)) return;
+  // 对方是隐私编号（@lid）或新版页面的编号里没有对方：按这次读到的对话编号和标题查号码（查到的记一会儿）。
+  // 查不到时这些消息跳过计数，不会没有号码或者用错号码
+  // 编号认不出时，只有断定是和标题那个人的单聊（oneToOne）才按标题找联系人的号码
+  const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
+  if (r.msgs.length && !r.group && !crmWeb.phoneOfChat(r.chat)) {
+    peer.digits = await webPeerNumber(view.webContents, acc.id, { ...peer, oneToOne: r.oneToOne });
+    if (!crmOn(acc)) return;
+  }
   const since = crmQueue.since(acc.id);
   const now = Date.now();
-  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title); // 对话标题 = 对方的 WhatsApp 名字
+  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title, peer); // 对话标题 = 对方的 WhatsApp 名字
   for (const item of got.items) crmQueue.add(acc.id, item);
   if (got.nonumber) crmQueue.skip(acc.id, got.nonumber);
   if (got.notime) crmQueue.skipNoTime(acc.id, got.notime);
@@ -2749,6 +2764,16 @@ async function checkLoginLock() {
   }
 }
 
+// 设置 › 团队的“上次上传”一行：本机队列太大丢过等建档的聊天时，接在后面说一句
+function crmUploadStatus() {
+  if (!crmUploader) return null;
+  const last = crmUploader.last;
+  const d = crmQueue ? crmQueue.dropped : null;
+  if (!d || !d.n) return last;
+  const note = `本机存不下，删了最早的 ${d.n} 条聊天`;
+  return { at: last.at || d.at, error: last.error ? `${last.error}；${note}` : note };
+}
+
 function setupTeam() {
   team = new TeamSync({
     dir: app.getPath('userData'),
@@ -2766,6 +2791,8 @@ function setupTeam() {
       // 刚解锁（登录成功、恢复）：交给 checkLoginLock 按 2.5 秒错开启动，不在这里一起启动
       unpark: (acc) => { if (loginWasLocked) return; unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
       createSeat: (seat) => createTeamSeat(seat),
+      // 换了人登录：上一个人解不开的旧队列文件也删（还在的队列由 crmReconcile 按 keepQueue 删）
+      personChanged: () => crmQueue?.dropBad(),
       refresh: () => {
         // 第一次问到后台是“提示登录”：用户在账号页或欢迎页时换成登录页
         if (!loginLocked() && ['account', 'welcome'].includes(page) && promptLogin()) page = 'login';
@@ -2777,7 +2804,7 @@ function setupTeam() {
   loginWasLocked = loginLocked();
   // 必须登录时 7 天宽限是按时间算的：没有任何事件也要定时看一下
   setInterval(checkLoginLock, 60 * 1000).unref?.();
-  crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
+  crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列：${e.message}`) });
   crmTimer = setInterval(() => {
     crmQueue.sweep();
     if (activeId) crmReadWeb(activeId, false);
@@ -3208,10 +3235,10 @@ handleShell('team:login', async ({ email, code } = {}) => {
   if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
   return r;
 });
-// 主动退出登录：本机还没传的聊天一起删（下一个登录的人可能是别人）
+// 主动退出登录：停止采集，本机还没传的聊天留着（同一个人再登录接着传；换了人登录时 login() 清掉团队号，crmReconcile 再删）
 handleShell('team:logout', async () => {
   const r = await team.logout();
-  if (crmQueue) for (const id of crmQueue.enabledIds()) { crmQueue.purge(id); crmWebReader.forget(id); if (liteHost) liteHost.setCrm(id, 0); }
+  if (crmQueue && liteHost) for (const id of crmQueue.enabledIds()) liteHost.setCrm(id, 0);
   checkLoginLock();
   return r;
 });

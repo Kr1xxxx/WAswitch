@@ -11,6 +11,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { teamOff } = require('./fixtures/team-off');
 const net = require('net');
 const http = require('http');
 const https = require('https');
@@ -100,7 +101,7 @@ const answer = (n) => `译文 ${n}`;
   store.flush();
 
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
     `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });

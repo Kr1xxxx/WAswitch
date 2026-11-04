@@ -176,7 +176,7 @@ function parsePre(raw) {
 // 悬浮翻译和 CRM 同步：只读当前打开的对话的最后 20 条消息。
 // 只用 querySelector / getAttribute / textContent（不用 innerText，不触发排版），不滚动、不聚焦、不改页面。
 // 不读群里的发送人、引用的消息和链接预览；时间只在隔离环境里解析成数字（t），发送人名字不带出来。每条最多 4000 字，总共最多 20000 字。
-// MCP 的 read_messages 可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
+// MCP 的 read_messages 和 CRM 采集可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
 const MAX_MSGS = 20;
 const MAX_MSGS_LIMIT = 50;
 // 译文显示在消息下面时另外带回「屏幕上看得到的消息」（vis，上下各多算一屏）：往上翻到更早的记录时，
@@ -287,7 +287,7 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   }
   resolve(top);
   for (const e of top) {
-    if (e.out === null) e.out = false; // 实在认不出：当成收到的，客户的消息不能漏
+    if (e.out === null) { e.out = false; e.guess = true; } // 实在认不出：当成收到的，客户的消息不能漏
     // 新格式编号没有 true_/false_ 前缀：补成同样的形状，悬浮窗靠中间那段认出换了对话
     e.id = /^(true|false)_/.test(e.rawId) ? e.rawId : (e.out ? 'true_' : 'false_') + chatPart + '_' + e.rawId;
   }
@@ -301,6 +301,7 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
     const seen = new Map();
     for (const e of top) {
       const out = e.out === true;
+      if (e.out === null) e.guess = true;
       const { text, pre } = textOf(e.n);
       const key = (out ? 'o' : 'i') + pre + '|' + text;
       const k = (seen.get(key) || 0) + 1;
@@ -309,6 +310,13 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
       e.id = (out ? 'true_' : 'false_') + chatPart + '_h' + hash(key) + '.' + k;
     }
   }
+  // 像不像群：编号是群的，或者认得出是收到的消息里有两个以上不同的发送人名字（新版编号里没有对话编号时用）
+  const senders = new Set(top.filter((e) => e.out === false && !e.guess && e.name).map((e) => e.name));
+  const group = /@g\.us$/.test(chat) || senders.size > 1;
+  // 能不能断定是和标题那个人的单聊：收到的消息只有标题这个人发的（或者还没有收到的）。
+  // 有一个发送人不是标题，就可能是群（群里只有一个人说过话），不能按标题去找联系人的号码；
+  // 有认不准收发的消息（guess）也不算，那些消息里可能就有群里别人发的
+  const oneToOne = !group && !top.some((e) => e.out === false && e.guess) && (senders.size === 0 || (senders.size === 1 && senders.has(norm(title))));
   // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;
@@ -379,11 +387,12 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
     vsize += m.text.length;
     vis.push(m);
   }
-  return { ok: true, title, chat, msgs, bottom, vis };` : `
-  return { ok: true, title, chat, msgs, bottom };`}
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom, vis };` : `
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom };`}
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
 const READ_CHAT_VIS_CODE = readChatCode(MAX_MSGS, true);
+const READ_CHAT_MAX_CODE = readChatCode(MAX_MSGS_LIMIT);
 
 const cleanTime = (t) => {
   if (!t || typeof t !== 'object') return null;
@@ -401,17 +410,17 @@ const cleanMsgs = (list, n) => (Array.isArray(list) ? list : []).filter((m) => m
   .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
     ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
 
-// max：最多读几条（默认 20，最多 50）。只读页面上已经显示出来的消息，不滚动。
+// max：最多读几条（默认 20，最多 50；CRM 采集读 50 条）。只读页面上已经显示出来的消息，不滚动。
 // vis：另外带回屏幕上看得到的消息（只在默认的 20 条时有，译文显示在消息下面用）
 async function readOpenChat(wc, { max = MAX_MSGS, vis = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
   const n = Number.isInteger(max) ? Math.min(Math.max(max, 1), MAX_MSGS_LIMIT) : MAX_MSGS;
   const withVis = vis === true && n === MAX_MSGS;
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: withVis ? READ_CHAT_VIS_CODE : n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: withVis ? READ_CHAT_VIS_CODE : n === MAX_MSGS ? READ_CHAT_CODE : n === MAX_MSGS_LIMIT ? READ_CHAT_MAX_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = cleanMsgs(r.msgs, n);
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', group: r.group === true, oneToOne: r.oneToOne === true, msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
       ...(withVis ? { vis: cleanMsgs(r.vis, MAX_VIS) } : {}) };
   } catch {
     return { ok: false, why: 'error' };
@@ -990,5 +999,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

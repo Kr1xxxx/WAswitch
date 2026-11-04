@@ -9,6 +9,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { teamOff } = require('./fixtures/team-off');
 const net = require('net');
 const https = require('https');
 const electron = require('electron');
@@ -63,7 +64,7 @@ window.__close = () => { document.getElementById('wrap').innerHTML = ''; return 
   fs.writeFileSync(path.join(home, 'waswitch', 'translate.json'), JSON.stringify({ trPlace: 'panel', trPlaceInlineDefault: true }));
   const port = await freePort();
   // 直连号跟随系统代理：去掉环境里的代理变量，让请求直接到本地假服务
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
     `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });

@@ -1996,6 +1996,37 @@ core().then(() => {
     const r4b = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r4b.title, 'Anna Müller', '名字下面那行变了，标题不变');
     assert.deepStrictEqual(r4b.msgs.map((m) => m.id), r4.msgs.map((m) => m.id), '消息编号不变');
+    assert.strictEqual(r4.group, false, '新版编号的单聊不算群（CRM 采集靠它查号码）');
+    // 新版编号的群：编号里认不出对话，收到的消息有两个发送人就算群，CRM 采集不收
+    await w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">Team DACH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0G1" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] Lena Weber: "><span class="selectable-text"><span>Hallo zusammen</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0G2" class="message-in"><div data-pre-plain-text="[09:11, 26/10/2026] Paul Schmitt: "><span class="selectable-text"><span>Moin</span></span></div></div></div></div>';
+      return 1; })()`);
+    const rg = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rg.ok && rg.msgs.length === 2, JSON.stringify(rg));
+    assert.strictEqual(rg.group, true, '两个发送人：算群');
+    assert.strictEqual(rg.oneToOne, false);
+    // 只有一个人说过话：名字就是标题才算单聊；不是标题（同名的群里只有一个人说过话）不算
+    const one = (sender) => w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">ACME GmbH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0S1" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] ${sender}: "><span class="selectable-text"><span>Invoice attached</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0S2" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Thanks</span></span></div></div></div></div>';
+      return 1; })()`);
+    await one('Lena Weber');
+    const rs = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rs.ok && rs.group === false && rs.oneToOne === false, '发送人不是标题：不断定是单聊 ' + JSON.stringify(rs));
+    await one('ACME GmbH');
+    const rt = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rt.ok && rt.group === false && rt.oneToOne === true, '发送人就是标题：单聊 ' + JSON.stringify(rt));
+    // 认不准收发的消息（没有气泡 class、位置也看不出）可能是群里别人发的：也不断定是单聊
+    await w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">ACME GmbH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0Q1"><div data-pre-plain-text="[09:10, 26/10/2026] Lena Weber: "><span class="selectable-text"><span>Invoice attached</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0Q2" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Thanks</span></span></div></div></div></div>';
+      return 1; })()`);
+    const rq = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rq.ok && rq.msgs.length === 2 && rq.group === false && rq.oneToOne === false, '认不准收发：不断定是单聊 ' + JSON.stringify(rq));
     // 刚点开、还没有消息的对话：算读到了，只是没有消息
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Lucas">Lucas</span></header><div role="application"></div>'; 1`);
     const r5 = await waPage.readOpenChat(w.webContents);
