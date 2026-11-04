@@ -2170,7 +2170,7 @@ function crmBox(accounts, upload) {
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
       avatarOf(a),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
-      h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
+      h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crmWaitPhone ? '等读到本号的号码' : a.crm
         ? `本机排队 ${a.crm.queued} 条${a.crm.held ? `，${a.crm.held} 条等客户在来财建档后再传` : ''}${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }

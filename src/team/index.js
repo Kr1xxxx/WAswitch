@@ -42,6 +42,8 @@ const EVENT_KINDS = ['dropped', 'recovered', 'exit_changed', 'proxy_down', 'prox
 const MAX_JOIN = 50; // 来财一次最多收 50 个号
 const MAX_DEVICES = 20; // devices 表（邮箱 → 设备）最多记这么多人
 const DEFAULT_POLICY = 'required'; // 没问到策略时按必须登录
+const JOIN_RETRY_MIN_MS = 5 * 1000; // 加入后有号没拿到团队号：5 秒后再试，之后翻倍
+const JOIN_RETRY_MAX_MS = 5 * 60 * 1000;
 
 // 这个号自己的号码，给来财的格式：'+数字'；读不到或不像号码就是 ''
 function phoneOf(acc) {
@@ -196,10 +198,12 @@ class TeamSync {
   }
 
   // 团队号要在新设备（或新后台）上重新加入：清掉 teamId 和收回、同步标记，等 autoJoin。
-  // keepQueue = 本机还没传的聊天留着（同一个人换了设备、升级换后台）；换人登录时不留
+  // keepQueue = 本机还没传的聊天留着（同一个人换了设备、升级换后台）；换人登录时不留。
+  // 留着队列时要再补传一次（teamRebackfill）：轻量号只采实时消息，重新加入之前这段时间来的消息只能靠补传（来财去重）
   static resetForRejoin(acc, keepQueue) {
     Object.assign(acc, { teamId: '', teamHidden: false, teamNeedsProxy: false, teamNote: '', teamCrm: false, teamExpected: '', teamRejoin: true });
-    if (keepQueue) acc.teamKeepQueue = true; else delete acc.teamKeepQueue;
+    if (keepQueue) Object.assign(acc, { teamKeepQueue: true, teamRebackfill: true });
+    else { delete acc.teamKeepQueue; delete acc.teamRebackfill; }
   }
   // 重新加入的号：来财知道它自己的号码以后才上传聊天（main.js crmOn 看 teamRejoin）
   static rejoinDone(acc) {
@@ -443,7 +447,10 @@ class TeamSync {
     this.persist();
     this.applyParking();
     this.hooks.refresh();
-    this.schedule(1000);
+    // 来财的回答里少了号（编号不合格被丢掉）：这些号还会再试，间隔翻倍（最多 5 分钟），免得每秒一次 /join + /sync
+    const missing = ids.some((id) => !done.has(id));
+    this.joinDelay = missing ? Math.min((this.joinDelay || JOIN_RETRY_MIN_MS / 2) * 2, JOIN_RETRY_MAX_MS) : 0;
+    this.schedule(missing ? this.joinDelay : 1000);
     return { ok: true };
   }
 
