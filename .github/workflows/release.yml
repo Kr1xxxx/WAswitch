@@ -1,4 +1,5 @@
 # 打 tag（例如 v0.2.0）时自动打包 Windows 和 macOS 安装包，发到公开的 Kr1xxxx/WAswitch 的 Releases。
+# 也可以在 Actions 里对 main 手动运行：tag 取 package.json 的版本号，发布时建（推不了 tag 的环境用）。
 # 源码在私有仓库 Kr1xxxx/WAswitch-src；公开的 WAswitch 只放安装包和下载说明，永远不放源码。
 # 已装的软件认的是「Kr1xxxx/WAswitch」这个名字（package.json 的 build.publish、src/updater.js、MCP 下载地址），
 # 所以更新和下载都从公开仓库拿。发到那里用密钥 RELEASES_TOKEN（只能写 Kr1xxxx/WAswitch 的 Contents），
@@ -17,6 +18,8 @@ name: release
 on:
   push:
     tags: ['v*']
+  # 手动运行只认 main，版本号的 tag 不能已经存在；tag 由下面发布时建在这次运行的提交上
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +27,8 @@ permissions:
 jobs:
   mcp-module:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -32,7 +37,18 @@ jobs:
           cache: npm
       - run: npm ci
       - name: tag 和 package.json 的版本号一致
-        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+        id: tag
+        run: |
+          v="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$v" = "$GITHUB_REF_NAME"
+          else
+            test "$GITHUB_REF_NAME" = main || { echo "::error::手动运行只认 main"; exit 1; }
+            if git ls-remote --exit-code --tags origin "refs/tags/$v" >/dev/null; then
+              echo "::error::$v 已经发过了，先改 package.json 的版本号"; exit 1
+            fi
+          fi
+          echo "tag=$v" >> "$GITHUB_OUTPUT"
       - name: 打包 MCP 模块并自检
         run: npm run check:mcp
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -56,6 +72,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: tag 和 package.json 的版本号一致
+        if: github.event_name == 'push'
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -82,13 +99,14 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: build
+    needs: [mcp-module, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       PUBLIC_REPO: Kr1xxxx/WAswitch
       SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
+      TAG: ${{ needs.mcp-module.outputs.tag }}
       GH_TOKEN: ${{ github.repository == 'Kr1xxxx/WAswitch' && secrets.GITHUB_TOKEN || secrets.RELEASES_TOKEN }}
     steps:
       - name: 检查发布用的密钥
@@ -104,12 +122,12 @@ jobs:
           path: dist
           merge-multiple: true
       # 拆开后 target_commitish 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上。
-      # 没拆时 tag 已经在本仓库，用它本身的提交。
+      # 没拆时 tag 在本仓库：打 tag 运行时已经有了，手动运行时建在这次运行的提交上。
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           repository: ${{ env.PUBLIC_REPO }}
           token: ${{ env.GH_TOKEN }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ env.SAME_REPO == 'true' && github.sha || 'main' }}
           files: dist/*
           draft: false
@@ -120,4 +138,4 @@ jobs:
         run: scripts/sync-public-repo.sh "$PUBLIC_REPO"
       - name: 不登录下载 latest.yml、安装包和 MCP 文件，确认能下
         if: env.SAME_REPO != 'true'
-        run: scripts/verify-public-release.sh "$GITHUB_REF_NAME" "$PUBLIC_REPO"
+        run: scripts/verify-public-release.sh "$TAG" "$PUBLIC_REPO"
