@@ -314,8 +314,9 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   const senders = new Set(top.filter((e) => e.out === false && !e.guess && e.name).map((e) => e.name));
   const group = /@g\.us$/.test(chat) || senders.size > 1;
   // 能不能断定是和标题那个人的单聊：收到的消息只有标题这个人发的（或者还没有收到的）。
-  // 有一个发送人不是标题，就可能是群（群里只有一个人说过话），不能按标题去找联系人的号码
-  const oneToOne = !group && (senders.size === 0 || (senders.size === 1 && senders.has(norm(title))));
+  // 有一个发送人不是标题，就可能是群（群里只有一个人说过话），不能按标题去找联系人的号码；
+  // 有认不准收发的消息（guess）也不算，那些消息里可能就有群里别人发的
+  const oneToOne = !group && !top.some((e) => e.out === false && e.guess) && (senders.size === 0 || (senders.size === 1 && senders.has(norm(title))));
   // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;

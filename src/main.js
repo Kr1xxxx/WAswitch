@@ -2658,13 +2658,15 @@ function crmReconcile() {
     crmQueue.purge(id);
     crmWebReader.forget(id);
   }
+  let rebackfilled = false;
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
-    // 重新加入、队列留着的号：再补传一次（重新加入前这段时间的消息），来财去重
-    if (acc.teamRebackfill) { crmQueue.rebackfill(acc.id); delete acc.teamRebackfill; }
+    // 重新加入、队列留着的号：再补传一次（重新加入前这段时间的消息），来财去重；记下已经补过，重启后不再补
+    if (acc.teamRebackfill) { crmQueue.rebackfill(acc.id); delete acc.teamRebackfill; rebackfilled = true; }
     const since = crmQueue.enable(acc.id);
     if (isLite(acc) && liteHost) liteHost.setCrm(acc.id, since);
   }
+  if (rebackfilled) saveAccounts();
 }
 // 网页版号：只读员工正在看的对话，条件和悬浮窗一样（账号页、窗口看得见、没锁、号正常、页面没在加载）
 // switching = 切走前最后读一次（这时它还是当前号）
