@@ -2674,9 +2674,10 @@ async function crmReadWeb(id, switching) {
   if (!r.ok || !crmOn(acc)) return;
   // 对方是隐私编号（@lid）或新版页面的编号里没有对方：按这次读到的对话编号和标题查号码（查到的记一会儿）。
   // 查不到时这些消息跳过计数，不会没有号码或者用错号码
+  // 编号认不出时，只有断定是和标题那个人的单聊（oneToOne）才按标题找联系人的号码
   const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
   if (r.msgs.length && !r.group && !crmWeb.phoneOfChat(r.chat)) {
-    peer.digits = await webPeerNumber(view.webContents, acc.id, peer);
+    peer.digits = await webPeerNumber(view.webContents, acc.id, { ...peer, oneToOne: r.oneToOne });
     if (!crmOn(acc)) return;
   }
   const since = crmQueue.since(acc.id);

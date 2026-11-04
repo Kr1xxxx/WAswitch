@@ -313,6 +313,9 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   // 像不像群：编号是群的，或者认得出是收到的消息里有两个以上不同的发送人名字（新版编号里没有对话编号时用）
   const senders = new Set(top.filter((e) => e.out === false && !e.guess && e.name).map((e) => e.name));
   const group = /@g\.us$/.test(chat) || senders.size > 1;
+  // 能不能断定是和标题那个人的单聊：收到的消息只有标题这个人发的（或者还没有收到的）。
+  // 有一个发送人不是标题，就可能是群（群里只有一个人说过话），不能按标题去找联系人的号码
+  const oneToOne = !group && (senders.size === 0 || (senders.size === 1 && senders.has(norm(title))));
   // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;
@@ -383,8 +386,8 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
     vsize += m.text.length;
     vis.push(m);
   }
-  return { ok: true, title, chat, group, msgs, bottom, vis };` : `
-  return { ok: true, title, chat, group, msgs, bottom };`}
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom, vis };` : `
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom };`}
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
 const READ_CHAT_VIS_CODE = readChatCode(MAX_MSGS, true);
@@ -416,7 +419,7 @@ async function readOpenChat(wc, { max = MAX_MSGS, vis = false } = {}) {
     const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: withVis ? READ_CHAT_VIS_CODE : n === MAX_MSGS ? READ_CHAT_CODE : n === MAX_MSGS_LIMIT ? READ_CHAT_MAX_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
     const msgs = cleanMsgs(r.msgs, n);
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', group: r.group === true, msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', group: r.group === true, oneToOne: r.oneToOne === true, msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
       ...(withVis ? { vis: cleanMsgs(r.vis, MAX_VIS) } : {}) };
   } catch {
     return { ok: false, why: 'error' };

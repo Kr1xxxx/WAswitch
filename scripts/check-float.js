@@ -2006,6 +2006,19 @@ core().then(() => {
     const rg = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
     assert(rg.ok && rg.msgs.length === 2, JSON.stringify(rg));
     assert.strictEqual(rg.group, true, '两个发送人：算群');
+    assert.strictEqual(rg.oneToOne, false);
+    // 只有一个人说过话：名字就是标题才算单聊；不是标题（同名的群里只有一个人说过话）不算
+    const one = (sender) => w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">ACME GmbH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0S1" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] ${sender}: "><span class="selectable-text"><span>Invoice attached</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0S2" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Thanks</span></span></div></div></div></div>';
+      return 1; })()`);
+    await one('Lena Weber');
+    const rs = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rs.ok && rs.group === false && rs.oneToOne === false, '发送人不是标题：不断定是单聊 ' + JSON.stringify(rs));
+    await one('ACME GmbH');
+    const rt = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rt.ok && rt.group === false && rt.oneToOne === true, '发送人就是标题：单聊 ' + JSON.stringify(rt));
     // 刚点开、还没有消息的对话：算读到了，只是没有消息
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Lucas">Lucas</span></header><div role="application"></div>'; 1`);
     const r5 = await waPage.readOpenChat(w.webContents);
