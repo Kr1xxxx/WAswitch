@@ -408,8 +408,34 @@ await test('网页版 @lid 对话：查到号码就收，查不到计数；号�
   assert.equal(await webPeerNumber(wc('447700900123'), 'w1', { chat: lid, title: 'Lena Weber' }), '447700900123');
   assert.equal(asks, 1, '查到的号码记一会儿');
   assert.equal(await webPeerNumber(wc(''), 'w1', { chat: '555555555555555@lid', title: 'Nina Weber' }), '');
+  // 新版页面认不出对话编号：只有断定是单聊才按标题找联系人
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'Anna Müller', oneToOne: true }), '4915112345678');
+  const n = asks;
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'ACME GmbH', oneToOne: false }), '', '可能是群：不按名字找');
+  assert.equal(await webPeerNumber(wc('4915112345678'), 'w1', { chat: '', title: 'ACME GmbH' }), '', '没说是单聊：不按名字找');
+  assert.equal(asks, n, '没去查');
+  assert.equal(await webPeerNumber(wc(''), 'w1', { chat: '', title: '+49 151 12345678', oneToOne: false }), '4915112345678', '标题就是号码照样用');
   assert.equal(await webPeerNumber(wc('12'), 'w1', { chat: '666666666666666@lid', title: 'Paul' }), '', '不像号码的不用');
   assert.equal(await webPeerNumber({ isDestroyed: () => false, isLoading: () => false, executeJavaScriptInIsolatedWorld: async () => { throw new Error('x'); } }, 'w1', { chat: '777777777777777@lid', title: 'Eva' }), '');
+});
+
+await test('网页版新编号：同名的群（只有一个不是标题的人说过话）不能记到同名联系人的号码上', async () => {
+  const now = new Date(2026, 9, 24, 12, 0).getTime();
+  const since = new Date(2026, 9, 24, 10, 0).getTime();
+  const t = parsePre('[11:00, 2026/10/24] x: ');
+  // readOpenChat：群 "ACME GmbH"，最近 50 条里只有 Lena Weber 说过话 → group false，但 oneToOne false
+  const r = { ok: true, title: 'ACME GmbH', chat: '', group: false, oneToOne: false, msgs: [
+    { id: 'false_chat:ACME GmbH_3EB0G1', out: false, text: 'Invoice attached', t },
+    { id: 'true_chat:ACME GmbH_3EB0G2', out: true, text: 'Thanks', t },
+  ] };
+  let asks = 0;
+  // WhatsApp 的联系人表里正好有一个同名联系人 "ACME GmbH"
+  const wc = { isDestroyed: () => false, isLoading: () => false, executeJavaScriptInIsolatedWorld: async () => { asks += 1; return { pn: '4915112345678', why: 'name', stores: [] }; } };
+  const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
+  peer.digits = await webPeerNumber(wc, 'g1', { ...peer, oneToOne: r.oneToOne });
+  const got = new WebReader().collect('g1', r.msgs, since, now, r.title, peer);
+  assert.deepEqual(got, { items: [], nonumber: 2, notime: 0 }, '跳过计数，不出条目');
+  assert.equal(asks, 0, '不按名字去查');
 });
 
 await test('网页版每个对话读最后 50 条，@lid 和新版编号按对话查号码', async () => {
@@ -417,7 +443,7 @@ await test('网页版每个对话读最后 50 条，@lid 和新版编号按对�
   const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const fn = main.slice(main.indexOf('async function crmReadWeb'), main.indexOf('const crmWebReader'));
   assert.ok(fn.includes('readOpenChat(view.webContents, { max: waPage.MAX_MSGS_LIMIT })'), '读 50 条');
-  assert.ok(/webPeerNumber\(view\.webContents, acc\.id, peer\)/.test(fn), '查这个对话的号码');
+  assert.ok(fn.includes('webPeerNumber(view.webContents, acc.id, { ...peer, oneToOne: r.oneToOne })'), '查这个对话的号码，带上是不是单聊');
   assert.ok(/collect\(acc\.id, r\.msgs, since, now, r\.title, peer\)/.test(fn), '号码交给 WebReader');
 });
 

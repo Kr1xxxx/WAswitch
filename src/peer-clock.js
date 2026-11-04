@@ -23,7 +23,9 @@ function remember(key, digits) {
 
 // CRM 采集用：网页号打开的对话（readOpenChat 读到的 { chat, title }）是哪个号码。
 // 编号里有号码就用编号的；标题本身是号码（没存名字的联系人）用标题；隐私编号（@lid）或新版页面认不出编号时，
-// 查一次 WhatsApp 自己的本地数据（lookupPeerPhone）。群、查不到都返回 ''
+// 查一次 WhatsApp 自己的本地数据（lookupPeerPhone）。群、查不到都返回 ''。
+// 编号认不出时只能按标题找同名联系人：只有 readOpenChat 断定是和标题那个人的单聊（oneToOne）才找，
+// 不然名字一样的群会被当成这个联系人
 async function webPeerNumber(wc, accId, r) {
   if (!r || !wc) return '';
   const id = fromChatId(r.chat);
@@ -32,6 +34,7 @@ async function webPeerNumber(wc, accId, r) {
   const t = fromText(r.title);
   if (t) return t;
   if (!r.chat && !r.title) return '';
+  if (!r.chat && r.oneToOne !== true) return '';
   const key = `${accId}|${r.chat}|${r.title}`;
   const hit = remembered(key);
   if (hit) return hit.digits;
