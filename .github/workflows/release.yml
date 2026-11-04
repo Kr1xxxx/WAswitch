@@ -9,6 +9,9 @@
 # MCP 接口不在安装包里：先在一台机器上打成单独的文件 waswitch-mcp-<版本>.js（mcp-module），
 # 两个安装包都带上它的 sha512（src/mcp-module.json），用户在设置里下载时按这个校验。
 # 构建产物（upload-artifact）只在 job 之间传文件用，留 1 天：私有仓库只有 500 MB 存储，每次约 351 MB。
+# 没拆仓库时（源码和安装包都在 Kr1xxxx/WAswitch，私有，2026-11-03 决定先不拆）：发到本仓库自己的 Releases，
+# 用本仓库的 GITHUB_TOKEN（publish 这一步给写权限），不同步下载说明（会盖掉源码的 README），也不做不登录下载检查
+# （私有仓库不登录下不了）。已装的软件这时自动更新不了，新版要手动卸载旧版再装。
 name: release
 
 on:
@@ -81,11 +84,15 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       PUBLIC_REPO: Kr1xxxx/WAswitch
-      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
+      GH_TOKEN: ${{ github.repository == 'Kr1xxxx/WAswitch' && secrets.GITHUB_TOKEN || secrets.RELEASES_TOKEN }}
     steps:
       - name: 检查发布用的密钥
+        if: env.SAME_REPO != 'true'
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::没有配置密钥 RELEASES_TOKEN。需要一个只能写 ${PUBLIC_REPO} 的 Contents 的令牌，放在 WAswitch-src 的 Settings › Secrets and variables › Actions。"
@@ -96,18 +103,21 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # target_commitish 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上
+      # 拆开后 target_commitish 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上。
+      # 没拆时 tag 已经在本仓库，用它本身的提交。
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           repository: ${{ env.PUBLIC_REPO }}
-          token: ${{ secrets.RELEASES_TOKEN }}
+          token: ${{ env.GH_TOKEN }}
           tag_name: ${{ github.ref_name }}
-          target_commitish: main
+          target_commitish: ${{ env.SAME_REPO == 'true' && github.sha || 'main' }}
           files: dist/*
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
       - name: 同步下载说明和 Clash 说明到公开仓库
+        if: env.SAME_REPO != 'true'
         run: scripts/sync-public-repo.sh "$PUBLIC_REPO"
       - name: 不登录下载 latest.yml、安装包和 MCP 文件，确认能下
+        if: env.SAME_REPO != 'true'
         run: scripts/verify-public-release.sh "$GITHUB_REF_NAME" "$PUBLIC_REPO"
