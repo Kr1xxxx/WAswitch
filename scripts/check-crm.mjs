@@ -201,6 +201,11 @@ await test('超过大小上限：先丢最早的 held（等建档的），没有
   q.saveNow();
   const q2 = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers, maxBytes: 4000 });
   assert.equal(q2.stats('2').queued, 9);
+  // 传掉一些、回到上限以下：丢了多少那句话不再显示
+  assert.ok(q.dropped.n > 0);
+  q.ack('2', q.peek('2', 3).map((x) => x.h));
+  q.sweep();
+  assert.deepEqual(q.dropped, { n: 0, at: 0 });
   // 团队页“上次上传”那一行接一句
   const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const fn = main.slice(main.indexOf('function crmUploadStatus'), main.indexOf('function setupTeam'));
@@ -500,6 +505,17 @@ await test('停用、登录失效、退出登录时队列留着（重新登录�
   assert.ok(out.includes('team.logout()') && !out.includes('purge'), '主动退出登录不删队列（界面说退出登录能撤回）');
   assert.ok(/personChanged: \(\) => crmQueue\?\.dropBad\(\)/.test(main), '换了人登录：删上一个人解不开的旧队列');
   assert.ok(/const crmOn = [^\n]*!acc\.teamRejoin/.test(main), '重新加入的号：来财知道号码以后才采集和上传');
+  assert.ok(/if \(acc\.teamRebackfill\) \{ crmQueue\.rebackfill\(acc\.id\); delete acc\.teamRebackfill; \}/.test(rec), '队列留着的重新加入：再补传一次');
+  assert.ok(/crmWaitPhone: /.test(main), '等号码的号告诉团队页');
+  const shell = fs.readFileSync(new URL('../src/shell/shell.js', import.meta.url), 'utf8');
+  assert.ok(shell.includes("a.crmWaitPhone ? '等读到本号的号码'"), '团队页显示在等号码');
+  // 补传标记：清掉后 needsBackfill
+  const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => T0, timers: noTimers });
+  q.enable('1');
+  q.markBackfilled('1');
+  assert.equal(q.needsBackfill('1'), false);
+  q.rebackfill('1');
+  assert.equal(q.needsBackfill('1'), true);
   // 停用、401 不改团队号的字段：TeamSync 的 doSync / tokenGone 不碰 teamCrm、teamHidden
   const idx = fs.readFileSync(new URL('../src/team/index.js', import.meta.url), 'utf8');
   for (const fn of ['tokenGone(why) {', 'offline(why']) {

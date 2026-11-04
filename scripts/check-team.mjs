@@ -578,7 +578,8 @@ function laicaiCloud() {
 }
 function laiMachine(cloud, accs, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-lai-'))) {
   const m = { accounts: accs, log: [], dir };
-  m.team = new TeamSync({ dir, safeStorage: fakeSafe, server: SERVER, fetchImpl: cloud.fetchImpl, now: () => clock.t, timers: { setTimeout: () => ({}), clearTimeout: () => {} },
+  m.waits = [];
+  m.team = new TeamSync({ dir, safeStorage: fakeSafe, server: SERVER, fetchImpl: cloud.fetchImpl, now: () => clock.t, timers: { setTimeout: (_f, ms) => { m.waits.push(ms); return {}; }, clearTimeout: () => {} },
     hooks: { ...A.team.hooks, accounts: () => m.accounts, save: () => {}, park: (a) => m.log.push(`park:${a.id}`), unpark: (a) => m.log.push(`unpark:${a.id}`), refresh: () => {},
       createSeat: (seat) => { const a = { id: String(9000 + m.accounts.length), name: seat.name, teamId: seat.teamId, teamHidden: false, teamCrm: seat.crm }; m.accounts.push(a); m.log.push(`create:${seat.teamId}`); return a; } } });
   return m;
@@ -644,7 +645,7 @@ await test('同一个人换了设备（来财那边设备没了）：号重新�
   cloud.devices.length = 0;
   await M.team.logout();
   await M.team.login({ email: 'emma@example.com', code: '123456' });
-  assert.deepEqual([accs[0].teamId, accs[0].teamKeepQueue, accs[0].teamRejoin], ['', true, true]);
+  assert.deepEqual([accs[0].teamId, accs[0].teamKeepQueue, accs[0].teamRejoin, accs[0].teamRebackfill], ['', true, true, true], '队列留着时再补传一次（重新加入前的消息）');
   await M.team.syncNow();
   await M.team.syncNow();
   assert.ok(accs[0].teamId && accs[0].teamCrm);
@@ -677,6 +678,31 @@ await test('加入的回答丢了（超时）：下次同步先重新加入再�
   B2.team.state.token = fakeSafe.encryptString('x').toString('base64');
   B2.team.applySeats([{ team_id: '00000000-0000-4000-8000-0000000000aa', local_id: '5', visible: true, crm_sync: true }], false);
   assert.deepEqual(view(B2.accounts), [{ id: '5', teamId: '00000000-0000-4000-8000-0000000000aa', hidden: false, crm: true, rejoin: false }]);
+});
+
+await test('加入的回答里少了号（编号不合格被丢掉）：再试的间隔翻倍到 5 分钟，成功后恢复', async () => {
+  const cloud = laicaiCloud();
+  const accs = [acc('1', 'Sales UK', { phone: '+44 7700 900001' }), acc('2', 'Sales DE', { phone: '+49 30 1234567' })];
+  const M = laiMachine(cloud, accs);
+  await M.team.login({ email: 'emma@example.com', code: '123456' });
+  let drop = true;
+  cloud.answer = (p, b, d) => {
+    if (p !== '/api/device/join' || !drop) return null;
+    return [200, { accounts: b.accounts.filter((a) => a.local_id === '1').map((a) => ({ local_id: a.local_id, team_id: '00000000-0000-4000-8000-0000000000b1' })) }];
+  };
+  const joinWaits = [];
+  for (let i = 0; i < 8; i += 1) {
+    M.waits.length = 0;
+    await M.team.join(M.team.pendingJoin());
+    joinWaits.push(M.waits.at(-1));
+  }
+  assert.deepEqual(joinWaits, [5000, 10000, 20000, 40000, 80000, 160000, 300000, 300000]);
+  drop = false;
+  M.waits.length = 0;
+  await M.team.join(M.team.pendingJoin());
+  assert.equal(M.waits.at(-1), 1000, '都拿到了：恢复 1 秒后同步');
+  assert.equal(M.team.joinDelay, 0);
+  assert.ok(accs.every((a) => a.teamId));
 });
 
 await test('401 login_required（管理员按了“重新登录”）：回到登录页，设备、团队号、CRM 授权都留着；只有 403 revoked 才是停用', async () => {

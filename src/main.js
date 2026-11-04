@@ -1349,6 +1349,8 @@ function pushState() {
         // 团队号都同步到 CRM：只在设置 › 团队显示条数（不显示内容），侧栏没有标记
         crm: crmOn(acc) ? crmQueue.stats(acc.id) : null,
         crmWanted: !!(acc.teamCrm && !isParked(acc)),
+        // 重新加入的号：来财知道它的号码以前不同步（团队页显示“等读到本号的号码”）
+        crmWaitPhone: !!(acc.teamId && acc.teamCrm && acc.teamRejoin && !isParked(acc)),
       };
     }),
     lite: liteStateForShell(),
@@ -2658,6 +2660,8 @@ function crmReconcile() {
   }
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
+    // 重新加入、队列留着的号：再补传一次（重新加入前这段时间的消息），来财去重
+    if (acc.teamRebackfill) { crmQueue.rebackfill(acc.id); delete acc.teamRebackfill; }
     const since = crmQueue.enable(acc.id);
     if (isLite(acc) && liteHost) liteHost.setCrm(acc.id, since);
   }

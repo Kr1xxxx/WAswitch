@@ -198,6 +198,13 @@ class CrmQueue {
     const a = this.load().get(accId);
     return !!a && !a.backfilled;
   }
+  // 重新加入的号：再补传一次（main.js crmReconcile 看 teamRebackfill）
+  rebackfill(accId) {
+    const a = this.load().get(accId);
+    if (!a || !a.backfilled) return;
+    a.backfilled = false;
+    this.saveSoon();
+  }
   markBackfilled(accId) {
     const a = this.load().get(accId);
     if (!a || a.backfilled) return;
@@ -354,6 +361,8 @@ class CrmQueue {
       changed = true;
       this.dropped = { n: this.dropped.n + dropped, at: this.now() };
       this.onError(new Error(`本机队列太大，丢掉最早的 ${dropped} 条`));
+    } else if (this.dropped.n && size < this.maxBytes * 0.9) {
+      this.dropped = { n: 0, at: 0 }; // 队列传掉一些、回到上限以下了：团队页那句话不再显示
     }
     this.bytes = size;
     return changed;
