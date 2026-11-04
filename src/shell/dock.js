@@ -20,10 +20,9 @@ const dk = {
   forTitle: null, // 译文是给哪个对话翻的
   warn: [],
   busy: false,
-  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（按钮上倒计时）
+  waitUntil: 0, // 来财太忙、等着重试：等到什么时候（按钮上倒计时）
   msg: '',
   bad: false,
-  msgPid: '', // 提示是“密钥没填/不对”时，是哪个服务商（显示“去填密钥”）
   listStale: 0, // 用户选着消息列表里的字，列表重画先压着：压了多久（开始压的时间，0 = 没压）
   editing: null, // 正在手动改哪条收到消息的译文（hash）
   editText: '',
@@ -102,7 +101,7 @@ function dockLoadDraft(d, title) {
   d = d || {};
   Object.assign(dk, {
     text: d.text || '', out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
-    suggest: '', forTitle: d.out ? title : null, msg: '', bad: false, msgPid: '',
+    suggest: '', forTitle: d.out ? title : null, msg: '', bad: false,
   });
   dk.draftSent = JSON.stringify(dockDraftOf());
   dk.draftUsed = '';
@@ -176,7 +175,7 @@ function dockAdopt(st) {
 window.addEventListener('beforeunload', dockDraftFlush);
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, msgPid: '', unread: 0, seenTitle: null, pill: false, info: null });
+  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, unread: 0, seenTitle: null, pill: false, info: null });
   dk.seen.clear();
 }
 
@@ -192,9 +191,9 @@ function dockHasNew(prev, st) {
   return !prev.items.some((it) => it.h === last);
 }
 
-function dockSay(msg, bad = false, pid = '', detail = '') { dk.msg = msg; dk.bad = bad; dk.msgPid = pid; dk.detail = detail || ''; dockRender(true); }
+function dockSay(msg, bad = false, detail = '') { dk.msg = msg; dk.bad = bad; dk.detail = detail || ''; dockRender(true); }
 
-// 服务商太忙、等着重试：转圈的按钮显示还要等几秒，等完回到「翻译中」
+// 来财太忙、等着重试：转圈的按钮显示还要等几秒，等完回到「翻译中」
 let dkWaitTimer = 0;
 function dockBusyText() {
   const left = dk.waitUntil ? Math.ceil((dk.waitUntil - Date.now()) / 1000) : 0;
@@ -271,16 +270,16 @@ async function dockTranslate(insert = false, fresh = false) {
 }
 async function dockRun(p) {
   p.key = dk.draftKey;
-  dk.busy = true; dk.msg = ''; dk.msgPid = ''; dockRender(true);
+  dk.busy = true; dk.msg = ''; dockRender(true);
   let r;
   try { r = await window.wa.trRun(p.req); } catch { r = { error: '翻译失败' }; }
   dk.busy = false;
   dockWait(0);
   if (!dk.st || p.acc !== dk.st.accountId || p.key !== dk.draftKey) return dockRender(true); // 换号、换对话了：作废（再翻一次直接用记下的译文）
-  if (r.error) return dockSay(r.error, true, r.kind === 'auth' ? r.providerId || '' : '', r.detail);
+  if (r.error) return dockSay(r.error, true, r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
-  if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点“重新翻译”' : r.fallback ? '默认的翻译服务连不上，这次用了备用的' : '');
+  if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点“重新翻译”' : '');
   if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   return dockInsert();
 }
@@ -289,7 +288,7 @@ async function dockInsert() {
   if (dk.st && dk.forTitle !== null && dk.st.title !== dk.forTitle) return dockSay('译文是给另一个对话翻的，没有放。看一下再点', true);
   const key = dk.draftKey;
   await panelInsert(dk.out);
-  dk.msg = pn.msg; dk.bad = pn.bad; dk.msgPid = ''; pn.msg = '';
+  dk.msg = pn.msg; dk.bad = pn.bad; pn.msg = '';
   if (!dk.bad && dk.msg && key === dk.draftKey) { dk.draftUsed = JSON.stringify(dockDraftOf()); dockDraftFlush(); } // 放进去了：草稿用掉了
   dockRender(true);
 }
@@ -298,18 +297,6 @@ function dockInsertKey() {
   if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
 }
-// 换默认翻译模型（和 设置 › 翻译 的“设为默认”是同一个设置）。选的是现在的备用，就把两个对调
-async function dockModel(id) {
-  const st = dk.st;
-  if (!st || !id || id === st.primaryId) return;
-  let r;
-  try { r = await window.wa.trRoles(id, st.fallbackId === id ? st.primaryId : undefined); } catch { r = null; }
-  if (!r || !r.config) return dockSay('没换成，去设置 › 翻译里看一下', true);
-  if (typeof tr !== 'undefined') { tr.cfg = r.config; tr.modes = r.modes; }
-  const p = st.providers.find((x) => x.id === id);
-  dockSay(p ? `翻译模型换成了 ${p.model ? `${p.name}（${p.model}）` : p.name}` : '');
-}
-
 // ---- 界面 ----
 // 语言条（照 shen 2026-10-28 的参考图）：左边原文语言「自动检测」，中间 ⇄ 对调，右边目标语言「自动选择」。
 // 自动选择：中文翻成客户的语言（客户资料 > 从客户消息认出来的 > 英语），英文等别的语言翻成中文。
@@ -351,17 +338,6 @@ function dockLangBar() {
   } }, icon('swap', 18));
   swapBtn.setAttribute('aria-pressed', String(lt.swapped));
   return h('div', { class: 'dk-bar' }, src, swapBtn, tgt);
-}
-
-// 翻译模型：选中就设为默认翻译服务商（和 设置 › 翻译 的默认服务商是同一个设置）
-function dockModelSel(cls, short = false) {
-  const st = dk.st;
-  const provs = st.providers || [];
-  if (!provs.length) return null;
-  const sel = h('select', { class: `${cls} dk-model`, 'aria-label': '翻译模型', title: '换翻译模型（和 设置 › 翻译 的默认服务商同步）', disabled: dk.busy || provs.length < 2,
-    onchange: (e) => dockModel(e.target.value) }, provs.map((p) => h('option', { value: p.id }, p.model ? (short ? p.model : `${p.name} ${p.model}`) : p.name)));
-  sel.value = st.primaryId;
-  return sel;
 }
 
 // 收到消息的译文：纠错（用仔细校对的提示词重翻这一条）、编辑（直接改，改过的保留，不会被自动覆盖）
@@ -565,7 +541,6 @@ function dockItemRow(it, last) {
     : it.state === 'skip' ? h('span', { class: 'dk-tr' }, it.text, sp) // 时间、数字、表情这类不用翻：原文当译文显示
     : it.state === 'queued' || it.state === 'running' ? h('span', { class: 'dk-tr dk-dim' }, typeof it.voice === 'number' && !it.text ? '转文字中…' : '翻译中…', sp)
       : it.state === 'error' ? h('span', { class: 'dk-tr bad', title: it.code || null }, it.err, ' ',
-        it.errPid ? h('button', { class: 'dk-link', onclick: () => trOpenKey(it.errPid) }, '去填密钥') : null, it.errPid ? ' ' : null,
         h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, '重试'), sp)
         : h('span', null, h('button', { class: 'dk-link', onclick: () => window.wa.dockItem(it.h) }, dockManualLabel(it)), sp);
   // 语音还没有译文（等着转、转文字中、报错、不用翻）：图标放在这一行左边
@@ -739,8 +714,7 @@ function dockCompose() {
     dk.fixed && !dk.edited ? h('span', { class: 'dk-fixed' }, '已纠错') : null,
     stale ? h('span', { class: 'dk-dim' }, '原文改过了') : null);
   return h('div', { class: 'dk-compose' },
-    // 模型选择放在“回复”后面（shen 2026-10-28）
-    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复'), dockModelSel('dk-lang', true)),
+    h('div', { class: 'dk-head' }, h('span', { class: 'dk-label' }, '回复')),
     dockField(input, () => input.value, keyHint),
     h('div', { class: 'dk-outhead' },
       dockLangBar(),
@@ -753,15 +727,6 @@ function dockCompose() {
     dk.warn.length ? h('div', { class: 'tr-warn' }, `原文没有：${dk.warn.slice(0, 3).join('、')}`) : null,
     h('div', { class: 'dk-acts' },
       h('button', { class: 'btn primary dk-insert', disabled: dk.busy, title: '放进当前聊天框（会占用剪贴板），不会发送，发送自己按', onclick: dockInsertKey }, '放进输入框')));
-}
-
-// 默认翻译服务没填密钥：顶上一条黄条，点“去填密钥”直接打开它的表单
-function dockKeyBar() {
-  const k = dk.st && dk.st.needKey;
-  if (!k) return null;
-  return h('div', { class: 'tr-warn dk-keybar', role: 'status' },
-    h('span', null, `默认翻译服务「${k.name}」还没填密钥。`),
-    h('button', { class: 'pn-btn primary', onclick: () => trOpenKey(k.id) }, '去填密钥'));
 }
 
 // force=false：只刷新状态条和消息列表，正在写的回复不动
@@ -796,12 +761,6 @@ function dockRenderBody(force) {
   // 账号出了问题（代理不通、退出登录等）：读不到对话，工作台只留一句，不显示「正在读当前对话…」和回复框
   const acc = s.accounts.find((a) => a.id === s.activeId);
   if (acc && acc.problem) { host.replaceChildren(h('p', { class: 'hint dk-hint' }, '账号连上后可用。')); return; }
-  if (!st.hasProvider) {
-    host.replaceChildren(h('div', { class: 'pn-form', style: { paddingTop: '12px' } },
-      h('span', { class: 'hint' }, '还没设置翻译服务。'),
-      h('button', { class: 'pn-btn primary', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); } }, '去设置')));
-    return;
-  }
   const root = host.querySelector('.dk');
   // 用户在消息列表里选着字（要复制译文）：列表重画会把选区弄没，这次先不画，选区没了（selectionchange）再补画；
   // 选着不放超过 LIST_STALE_MS 也画一次，免得新消息一直不出来
@@ -810,8 +769,7 @@ function dockRenderBody(force) {
     if (Date.now() - dk.listStale < LIST_STALE_MS) return;
   }
   dk.listStale = 0;
-  const keyBtn = dk.msg && dk.msgPid ? [' ', h('button', { class: 'dk-link', onclick: () => trOpenKey(dk.msgPid) }, '去填密钥')] : [];
-  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, ...keyBtn, dk.bad ? rawDetail(dk.detail) : null)) : null;
+  const msg = dk.msg ? fx('dk-msg', dk.msg, h('div', { class: `pn-msg dk-msg${dk.bad ? ' bad' : ''}` }, dk.msg, dk.bad ? rawDetail(dk.detail) : null)) : null;
   const typing = root && root.contains(document.activeElement) && ['TEXTAREA', 'INPUT', 'SELECT'].includes(document.activeElement.tagName);
   const mark = dockScrollMark();
   dockDraftQueue(false); // 翻译、纠错、对调这些改了草稿的，重画时一起存（没变就不发）
@@ -823,11 +781,11 @@ function dockRenderBody(force) {
     const list = dk.editing ? root.querySelector('.dk-listbox') : null; // 正在改译文：消息列表先不动
     dockPillSync(list);
     root.classList.toggle('dk-inline', !!st.inline);
-    root.replaceChildren(...kids(dockKeyBar(), list || dockIncoming(), msg, keep));
+    root.replaceChildren(...kids(list || dockIncoming(), msg, keep));
     dockScrollRestore(mark);
     return;
   }
-  const el = h('div', { class: st.inline ? 'dk dk-inline' : 'dk' }, ...kids(dockKeyBar(), dockIncoming(), msg, dockCompose()));
+  const el = h('div', { class: st.inline ? 'dk dk-inline' : 'dk' }, ...kids(dockIncoming(), msg, dockCompose()));
   const focusIn = root && document.activeElement && document.activeElement.classList.contains('dk-in');
   host.replaceChildren(el);
   dockScrollRestore(mark);

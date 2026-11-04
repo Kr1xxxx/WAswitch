@@ -52,7 +52,7 @@ function quietKey(ev) {
 //   copy(text) -> Promise<boolean>（真的写进剪贴板了才是 true）
 //   focus() -> 键盘焦点还给当前账号页面
 //   mouseUp(id) -> 账号页面上松开了鼠标左键
-//   trEdit：气泡译文的编辑小窗（translate-ipc.js 的 trEdit）{ save(id, h, text), fix(id, h, text), take(id, h, yes), draft(id, h, text), key(id, h), closed(id, h) }
+//   trEdit：气泡译文的编辑小窗（translate-ipc.js 的 trEdit）{ save(id, h, text), fix(id, h, text), take(id, h, yes), draft(id, h, text), closed(id, h) }
 // 退出软件拆视图时 view.webContents 可能已经是 undefined：一律先看它还在不在
 const wcOk = (v) => !!v && !!v.webContents && !v.webContents.isDestroyed();
 
@@ -317,12 +317,6 @@ function createSelTranslate(deps) {
     if (!t) return;
     if (t === shown) shown.st.draft = txt(text);
     deps.trEdit.draft(t.id, t.mh, txt(text));
-  });
-  ipcMain.on('seltr:tr-key', (e) => {
-    if (!trOn(e)) return;
-    const cur = shown;
-    hide();
-    deps.trEdit.key(cur.id, cur.mh);
   });
 
   // 退出软件时调（main.js 的 before-quit）：拆掉视图，之后不再响应

@@ -16,8 +16,8 @@
   }
 
   // handlers：save(text) 保存；fix(text) 纠错（text 和译文不同先保存）；take(yes) 采用 / 不用纠错建议；
-  // draft(text) 改了没保存的字（收起后下次打开还在）；key(pid) 去填密钥；resized() 高度变了
-  // 返回 { root, set(st), focus() }。st：{ h, state, orig, tr, edited, fixed, suggest, err, errPid, rows, draft }
+  // draft(text) 改了没保存的字（收起后下次打开还在）；resized() 高度变了
+  // 返回 { root, set(st), focus() }。st：{ h, state, orig, tr, edited, fixed, suggest, err, rows, draft }
   function TrCard(handlers) {
     const box = el('div', 'tc');
     box.setAttribute('role', 'dialog');
@@ -79,12 +79,9 @@
       // 纠错建议（手动改过的再纠错）
       sg.hidden = !st.suggest;
       if (st.suggest) sg.replaceChildren(el('small', '', '纠错建议'), el('span', '', st.suggest));
-      // 纠错失败：红字；密钥的问题多一个「去填密钥」
+      // 纠错失败：红字
       err.hidden = !st.err;
-      if (st.err) {
-        err.replaceChildren(el('span', '', st.err));
-        if (st.errPid) err.append(btn('去填密钥', 'link', () => handlers.key(st.errPid)));
-      }
+      if (st.err) err.replaceChildren(el('span', '', st.err));
       // 翻译信息：已手动修改 / 已纠错，翻译（纠错）时间、用时、模型
       const parts = [];
       if (st.edited) parts.push(el('span', 'tc-tag', '已手动修改'));

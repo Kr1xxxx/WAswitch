@@ -57,5 +57,4 @@
 .tc-btn.primary { background: var(--slate-12); color: var(--slate-1); }
 .tc-btn.primary:hover:not(:disabled) { background: var(--slate-11); }
 .tc-btn:disabled { opacity: .5; cursor: default; }
-.tc-btn.link { height: auto; min-width: 0; margin-left: 8px; padding: 0 4px; font-size: var(--fs-s); line-height: 16px; text-decoration: underline; }
 .tc-btn:focus-visible { outline: 2px solid var(--blue-8); outline-offset: 1px; }

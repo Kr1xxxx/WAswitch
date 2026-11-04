@@ -1550,7 +1550,7 @@ async function onNetworkChange() {
     // 断开旧连接，WhatsApp 网页会立刻用新线路重连，登录和聊天都不受影响
     await ses.closeAllConnections().catch(() => {});
   }
-  const tr = trIpc.translateSession(false); // 翻译可能跟随系统代理
+  const tr = trIpc.translateSession(); // 翻译（发给来财）跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   // 等着自动重翻的、停着的后台补翻：换了线路马上再试（刚掉线那一下不试，试了也是白白用掉一次）
@@ -2896,7 +2896,9 @@ app.whenReady().then(async () => {
     fs.writeFileSync(flag, '1');
   } catch (e) { console.warn(`旧翻译模式清理失败：${e.message}`); }
   try { updateModes(modeStore); } catch (e) { console.warn(`翻译模式更新失败：${e.message}`); }
-  translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: trIpc.translateSession });
+  // 翻译、纠错、语音转文字都走来财，用团队登录的设备令牌（team 在后面 setupTeam 里才建，这里用到时再读）
+  translator = new Translator({ dir: app.getPath('userData'), sessionFor: trIpc.translateSession,
+    cloud: () => (team && team.enrolled() ? { server: team.server, token: team.tokenPlain() } : null) });
   trIpc.applyTranslateNet().catch(() => {});
   trIpc.setupFloatCore();
   setInterval(checkFollowUps, 60 * 1000);
@@ -3232,7 +3234,7 @@ onShell('retry', (id) => { if (findAcc(id)) retryNow(id); });
 handleShell('team:code', async ({ email } = {}) => team.requestCode({ email: typeof email === 'string' ? email : '' }));
 handleShell('team:login', async ({ email, code } = {}) => {
   const r = await team.login({ email: typeof email === 'string' ? email : '', code: typeof code === 'string' ? code : '' });
-  if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); }
+  if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); trIpc.retryCloudErrors(); }
   return r;
 });
 // 主动退出登录：停止采集，本机还没传的聊天留着（同一个人再登录接着传；换了人登录时 login() 清掉团队号，crmReconcile 再删）

@@ -43,13 +43,17 @@ assert.deepEqual(E.friendly(new Error('还没连上，暂时不能发送')), { t
 const f = E.friendly(new Error('net::ERR_CONNECTION_RESET'));
 assert(zh(f.text) && f.detail === 'net::ERR_CONNECTION_RESET', JSON.stringify(f));
 
-// 翻译：服务商的英文原话不进正文，写明是哪个服务商
+// 翻译走来财（#209）：来财的错误码换成中文，不带英文原话；429 带上要等多久
 const T = require('../src/translate');
-assert.equal(T.statusError(401, 'OpenRouter').text, 'OpenRouter 的密钥不对或没有权限');
-assert.equal(T.statusError(401, '智谱').text, '智谱的密钥不对或没有权限');
-assert.equal(T.statusError(401).text, '服务商的密钥不对或没有权限');
-assert.equal(T.statusError(429, '智谱').text, '智谱请求太频繁，请重试');
-assert.equal(T.statusError(429, 'DeepL').text, 'DeepL 请求太频繁，请重试');
+assert.deepEqual(T.cloudError(401, { error: 'login_required' }), { kind: 'auth', text: '团队登录失效，请重新登录' });
+assert.deepEqual(T.cloudError(409, { error: 'no_key' }), { kind: 'config', text: '翻译还没开通，请找管理员在来财填 DeepSeek key' });
+assert.equal(T.cloudError(402, { error: 'no_balance' }).text, 'DeepSeek 余额不足，请找管理员');
+assert.equal(T.cloudError(402, { error: 'over_budget' }).text, '本月翻译额度用完了，请找管理员');
+assert.deepEqual(T.cloudError(429, { error: 'rate_limited', retry_after_s: 2 }), { kind: 'overload', text: '来财请求太频繁，请重试', retryAfter: 2000 });
+assert.equal(T.cloudError(429, {}, 3000).retryAfter, 3000, '没给 retry_after_s 用 Retry-After 头');
+assert.equal(T.cloudError(418, null).text, '来财返回了错误（418）');
+for (const code of [400, 401, 402, 403, 409, 413, 422, 426, 429, 500, 502, 504]) assert(zh(T.cloudError(code, { error: 'x' }).text), String(code));
+assert.equal(T.asrError(503, { error: 'no_ai', retry_after_s: 60 }).text, '语音转文字暂时用不了，请稍后再试');
 
 console.log('check-errtext: ok');
 

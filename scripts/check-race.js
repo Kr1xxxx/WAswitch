@@ -1,102 +1,57 @@
-// 收到的消息自动翻译时同时发给免费服务商（智谱、混元），用先翻出来的（shen 2026-10-29「哪个翻出来用哪个」）：
-// 先回来的成功就用、别的马上取消；先回来的报错就等别的；都失败才用付费的备用（一次一条）；默认是付费的不一起发。
-// 用假的网络会话，不发任何真实请求。
+// 收到的消息自动翻译走来财（#209）：登录着团队时每条在自己的通道上翻，最多 3 条一起翻，不占用户翻译那条；
+// 没登录时不走并行通道（调用方照旧一次一条，报「先登录团队」）；没有付费备用，也没有后台补翻（要花钱）。
+// 用假的来财（scripts/fixtures/fake-cloud.js），不发任何真实请求。
 const T = require('../src/translate.js');
+const { FloatCore } = require('../src/floatcore');
+const { fakeCloud } = require('./fixtures/fake-cloud');
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-race-'));
-const ss = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from('E' + t), decryptString: (b) => b.toString().slice(1) };
-const plan = {}; // host -> { ms, status }
-const log = []; // { host, aborted }
-let paidNow = 0;
-let paidMax = 0;
-const fake = { fetch: (url, opt) => new Promise((res, rej) => {
-  const host = new URL(url).hostname;
-  const p = plan[host] || { ms: 10 };
-  const row = { host, aborted: false };
-  log.push(row);
-  const deepl = /deepl/.test(host);
-  if (deepl) { paidNow += 1; paidMax = Math.max(paidMax, paidNow); }
-  const t = setTimeout(() => {
-    if (deepl) paidNow -= 1;
-    const st = p.status || 200;
-    const text = deepl ? JSON.stringify({ translations: [{ text: `DL` }] }) : JSON.stringify({ choices: [{ message: { content: host.includes('tokenhub') ? 'HY' : 'ZP' } }] });
-    res({ ok: st < 300, status: st, body: null, headers: { get: () => null }, text: async () => (st < 300 ? text : '{"error":{"message":"x"}}') });
-  }, p.ms);
-  opt.signal.addEventListener('abort', () => { clearTimeout(t); if (deepl) paidNow -= 1; row.aborted = true; rej(new Error('ab')); });
-}) };
-const tr = new T.Translator({ seed: false, dir, safeStorage: ss, sessionFor: () => fake, retryMs: 5 });
+const cloud = fakeCloud();
+let now = 0;
+let max = 0;
+// 每个请求等 ms 毫秒才回答；包一层 fetch 记下同时有几个请求在路上
+const slow = (ms) => ({ delay: ms, ok: true });
+const realFetch = cloud.session.fetch;
+cloud.session.fetch = async (url, opt) => { now += 1; max = Math.max(max, now); try { return await realFetch(url, opt); } finally { now -= 1; } };
+const tr = new T.Translator({ dir, sessionFor: () => cloud.session, cloud: cloud.login, retryMs: 5 });
 tr.setLashTerms(false);
 tr.setWigTerms(false);
 const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' };
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 (async () => {
-  const zp = tr.saveProvider({ preset: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', key: 'k-zp' }).id;
-  const dl = tr.saveProvider({ preset: 'deepl', key: 'k-dl:fx' }).id;
-  tr.setRoles({ primaryId: zp, fallbackId: dl });
-  // 只有智谱有密钥：只发给智谱，和以前一样
-  assert.deepStrictEqual(tr.raceSet().map((p) => p.id), [zp]);
-  log.length = 0;
+  // 登录着：并行通道只有来财
+  assert.deepStrictEqual(tr.raceSet().map((p) => p.id), ['cloud']);
   let r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
-  assert.strictEqual(r.text, 'ZP');
-  assert.deepStrictEqual(log.map((x) => x.host), ['open.bigmodel.cn']);
-
-  const hy = tr.saveProvider({ preset: 'hunyuan', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-mt2-plus', key: 'k-hy' }).id;
-  assert.deepStrictEqual(tr.raceSet().map((p) => p.id), [zp, hy], '默认的排第一');
-  // 混元先翻出来：用混元的，智谱那条马上取消
-  plan['open.bigmodel.cn'] = { ms: 160 };
-  plan['tokenhub.tencentmaas.com'] = { ms: 80 };
-  log.length = 0;
-  let t0 = Date.now();
-  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
-  assert.strictEqual(r.text, 'HY');
-  assert.deepStrictEqual([r.provider, r.model], [tr.provider(hy).name, 'hy-mt2-plus'], '写先翻出来的那家（点译文时间显示）');
-  assert(Date.now() - t0 < 150, '不等慢的那个');
-  await new Promise((ok) => setTimeout(ok, 5));
-  assert(log.find((x) => x.host === 'open.bigmodel.cn').aborted, '慢的那个被取消');
+  assert.deepStrictEqual([r.text, r.provider, r.model], ['Hola', '来财', 'DeepSeek'], '点译文时间显示「来财 DeepSeek」');
   assert(!tr.busy, '不占用户翻译用的通道');
-  // 先回来的是报错：等另一个
-  plan['tokenhub.tencentmaas.com'] = { ms: 20, status: 500 };
+  // 三条一起翻：三个请求同时在路上，总时间不是三倍
+  cloud.reset(); max = 0;
+  for (let i = 0; i < 3; i += 1) cloud.next(slow(60));
+  let t0 = Date.now();
+  const rs = await Promise.all([1, 2, 3].map((i) => tr.raceFree({ text: `Hello ${i}`, mode, target: '中文' })));
+  assert.deepStrictEqual(rs.map((x) => x.text), ['Hola', 'Hola', 'Hola']);
+  assert.strictEqual(max, 3, '三条同时发');
+  assert(Date.now() - t0 < 150, `并行，不排队：${Date.now() - t0}ms`);
+  // 用户自己翻的时候（本体 busy）并行通道照样翻
+  cloud.reset(); cloud.next('hang');
+  const user = tr.translate({ text: '你好', mode: { prompt: 'p' }, target: '英语' });
+  assert(tr.busy);
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
-  assert.strictEqual(r.text, 'ZP');
-  assert.deepStrictEqual([r.provider, r.model], [tr.provider(zp).name, 'glm-4-flash']);
-  // 都失败（服务器出错）：用付费的备用，一次一条
-  plan['open.bigmodel.cn'] = { ms: 20, status: 500 };
-  let paidCalls = 0;
-  let gate = Promise.resolve();
-  const paid = (args) => { paidCalls += 1; const run = gate.then(() => tr.translate(args)); gate = run.catch(() => {}); return run; };
-  plan['api-free.deepl.com'] = { ms: 40 };
-  paidMax = 0;
-  const rs = await Promise.all([1, 2, 3].map(() => tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid })));
-  assert.deepStrictEqual(rs.map((x) => x.text), ['DL', 'DL', 'DL']);
-  assert(rs.every((x) => x.fallback));
-  assert(rs.every((x) => x.provider === 'DeepL' && x.model === ''), '换到备用的，写备用');
-  assert.strictEqual(paidCalls, 3);
-  assert.strictEqual(paidMax, 1, '付费的不同时发');
-  // 付费那条通道一直等不到：返回 busy，让调用方过一会儿重排，不报免费服务商的错
-  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid: async () => ({ error: '上一段还在翻译', kind: 'busy' }) });
-  assert.strictEqual(r.kind, 'busy');
-  // 都失败、报错不是换备用的那种（密钥不对）：不用付费的，报默认服务商的错
-  plan['open.bigmodel.cn'] = { ms: 20, status: 401 };
-  plan['tokenhub.tencentmaas.com'] = { ms: 10, status: 401 };
-  paidCalls = 0;
-  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid });
-  assert.strictEqual(r.kind, 'auth');
-  assert.strictEqual(r.providerId, zp, '报默认服务商的错');
-  assert.strictEqual(paidCalls, 0);
-  // 后台补翻（不给 paid）：都失败也不换 DeepL；调用方取消（给新消息让位置）时各通道一起停
-  plan['open.bigmodel.cn'] = { ms: 20, status: 500 };
-  plan['tokenhub.tencentmaas.com'] = { ms: 20, status: 500 };
-  log.length = 0;
-  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
-  assert.strictEqual(r.kind, 'server');
-  assert(!log.some((x) => /deepl/.test(x.host)), '后台补翻不用 DeepL');
-  plan['open.bigmodel.cn'] = { ms: 300 };
-  plan['tokenhub.tencentmaas.com'] = { ms: 300 };
-  log.length = 0;
+  assert.strictEqual(r.text, 'Hola');
+  tr.cancel();
+  assert.strictEqual((await user).kind, 'cancel');
+  // 报错：没有备用可换，原样返回（不带服务商）
+  cloud.reset(); cloud.next({ status: 502, error: 'unreachable' });
+  r = await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid: () => { throw new Error('不该再有付费备用'); } });
+  assert.deepStrictEqual([r.kind, r.error, cloud.calls.length], ['server', '来财连不上 DeepSeek，请稍后再试', 1]);
+  assert(!('providerId' in r) && !r.fallback);
+  // 调用方取消：这条通道马上停
+  cloud.reset(); cloud.next('hang');
   const ac = new AbortController();
   t0 = Date.now();
   const pending = tr.raceFree({ text: 'Hello', mode, target: '中文' }, { signal: ac.signal });
@@ -104,21 +59,47 @@ const mode = { prompt: '把用户的文字翻译成中文。', direction: 'in' }
   r = await pending;
   assert.strictEqual(r.kind, 'cancel');
   assert(Date.now() - t0 < 200, '取消马上停');
-  assert.strictEqual(log.length, 2);
-  assert(log.every((x) => x.aborted), '两家的请求都停了');
-  assert(!log.some((x) => /deepl/.test(x.host)));
   const done = new AbortController();
   done.abort();
-  log.length = 0;
+  cloud.reset();
   assert.strictEqual((await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { signal: done.signal })).kind, 'cancel');
-  assert.strictEqual(log.length, 0, '已经取消的不发');
-  // 默认是 DeepL（付费）：不一起发，调用方照旧一次一条
-  tr.setRoles({ primaryId: dl, fallbackId: zp });
+  assert.strictEqual(cloud.calls.length, 0, '已经取消的不发');
+  // 没登录：不走并行通道（返回 null，调用方照旧一次一条）
+  cloud.logout();
   assert.deepStrictEqual(tr.raceSet(), []);
   assert.strictEqual(await tr.raceFree({ text: 'Hello', mode, target: '中文' }), null);
-  // 默认是混元：混元排第一
-  tr.setRoles({ primaryId: hy, fallbackId: dl });
-  assert.deepStrictEqual(tr.raceSet().map((p) => p.id), [hy, zp]);
+  cloud.loginAgain();
+
+  // FloatCore 按 translate-ipc.js 的接法：登录着同时翻 3 条；后台补翻走的“免费的路”没有（nofree），更早的消息退回「翻译」按钮，不花钱
+  const sent = [];
+  let inFlight = 0;
+  let peak = 0;
+  const fc = new FloatCore({
+    translate: async (text, o = {}) => {
+      if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' };
+      sent.push(text);
+      inFlight += 1; peak = Math.max(peak, inFlight);
+      cloud.next({ delay: 30, ok: true });
+      try { return await tr.raceFree({ text, mode, target: '中文' }); } finally { inFlight -= 1; }
+    },
+  });
+  fc.deps.parallel = () => (tr.raceSet().length ? 3 : 1);
+  fc.deps.hasFree = () => false;
+  const msgs = Array.from({ length: 12 }, (_, i) => ({ id: `false_111@c.us_ID111N${i}`, out: false, text: `hola ${i}` }));
+  cloud.reset();
+  fc.ingest('A', { title: 'Carlos', msgs }, { auto: true, dailyCap: 500 });
+  for (let i = 0; i < 100 && (fc.running || fc.queue.length || fc.active); i += 1) await sleep(10);
+  assert.deepStrictEqual(sent.sort(), ['hola 10', 'hola 11', 'hola 7', 'hola 8', 'hola 9'], '只自动翻最近 5 条');
+  assert.strictEqual(peak, 3, '同时翻 3 条');
+  const v = fc.viewOf('A').items;
+  assert(v.slice(0, 7).every((it) => it.state === 'manual'), `更早的留着「翻译」按钮：${v.map((it) => it.state)}`);
+  assert.strictEqual(cloud.calls.length, 5, '更早的消息不在后台发给来财');
+  // 自动翻译暂时失败：没有免费的路，不自动再翻，直接显示报错和「重试」
+  const fc2 = new FloatCore({ translate: async () => ({ error: '来财那边出错了，请稍后再试', kind: 'server' }) });
+  fc2.deps.hasFree = () => false;
+  fc2.ingest('B', { title: 'Ana', msgs: [{ id: 'false_222@c.us_ID222N1', out: false, text: 'hola' }] }, { auto: true, dailyCap: 500 });
+  await sleep(30);
+  assert.deepStrictEqual([fc2.viewOf('B').items[0].state, fc2.viewOf('B').items[0].err], ['error', '来财那边出错了，请稍后再试']);
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log('免费服务商同时翻、先到先用自检通过');
+  console.log('收到的消息走来财、并行翻译自检通过');
 })().catch((e) => { console.error(e); process.exit(1); });
