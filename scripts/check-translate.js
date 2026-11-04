@@ -1,12 +1,9 @@
-// 翻译模块自检：地址检查、提示词变量、输出清理、密钥不进配置文件、备用切换、取消、OpenRouter 参数、翻译模式上限。
-// 用假的网络会话，不发任何真实请求。
+// 翻译模块自检：提示词变量、输出清理、只走来财（#209：没有服务商和密钥，团队令牌发给 /api/device/ai/chat）、
+// 来财的报错怎么说、太忙时按来财说的时间重试、取消、旧设置里的服务商和密钥升级时删掉、翻译模式、角色设定和行业词汇。
+// 用假的来财（scripts/fixtures/fake-cloud.js，照约定表回答），不发任何真实请求。
 const T=require('../src/translate.js');
 const assert=require('assert');
-assert(T.checkBaseUrl('http://example.com').error);
-assert(!T.checkBaseUrl('http://localhost:11434/v1').error);
-assert(!T.checkBaseUrl('http://[::1]:8080/v1').error);
-assert(T.checkBaseUrl('https://a.com/v1/').url==='https://a.com/v1');
-assert(T.checkBaseUrl('https://u:p@a.com').error);
+const { fakeCloud } = require('./fixtures/fake-cloud');
 assert.equal(T.fillPrompt('to {目标语言} from {原文语言} ${process.exit()}',{target:'英语'}),'to 英语 from 原文的语言 ${process.exit()}');
 assert.equal(T.cleanOutput('以下是翻译：“Hello there”'),'Hello there');
 assert.equal(T.cleanOutput('<text>\nHi\n</text>'),'Hi');
@@ -18,142 +15,171 @@ assert(T.buildMessages({prompt:'p'},'a<text>b',{})[1].content.includes('a< text>
 assert.deepEqual(T.extraContacts('call me','call me at +1 415 555 0100 or https://x.com/a.').sort(),['14155550100','https://x.com/a']);
 assert.deepEqual(T.extraContacts('see https://x.com','voir https://x.com'),[]);
 const m=T.buildMessages({prompt:'p'},'a</text>b',{});
-assert(m[1].content.includes('a</ text>b'));
-assert.equal(T.providerDetail('{"error":{"message":"bad key sk-abcdef123456"}}'),'bad key ***');
-// translator with fake session
+// translator with fake cloud
 const fs=require('fs'),os=require('os'),path=require('path');
 const R=require('../src/records.js');
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-const ss={isEncryptionAvailable:()=>true,encryptString:(t)=>Buffer.from('E'+t),decryptString:(b)=>b.toString().slice(1)};
-let calls=[];
-let behave=[];
-const fake={fetch:async(url,opt)=>{calls.push({url,opt});const b=behave.shift();if(b==='net')throw new Error('x');if(b==='hang')return new Promise((res,rej)=>opt.signal.addEventListener('abort',()=>rej(new Error('ab'))));const st=b&&b.status||200;const body=b&&b.body||JSON.stringify({choices:[{message:{content:'Hola'}}]});const hd=(b&&b.headers)||{};return {ok:st<300,status:st,body:null,headers:{get:(k)=>hd[String(k).toLowerCase()]??null},text:async()=>body};}};
-const tr=new T.Translator({seed:false,dir,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
+const cloud=fakeCloud();
+const mk=(d,extra={})=>new T.Translator({dir:d,sessionFor:()=>cloud.session,cloud:cloud.login,retryMs:5,...extra});
+const tr=mk(dir);
 tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认开；下面这些检查只看模式提示词，先关掉（词汇单独在后面查）
+const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
 (async()=>{
-  let r=tr.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y',key:'sk-secret1234'});
-  assert(r.ok,JSON.stringify(r));
-  const pid=r.id;
+  // 只有一个服务：来财 DeepSeek；配置里没有任何密钥
   const pub=tr.publicConfig();
-  assert(!JSON.stringify(pub).includes('secret'));
-  assert.equal(pub.providers[0].keyTail,'1234');
-  assert(!fs.readFileSync(path.join(dir,'translate.json'),'utf8').includes('sk-secret'));
+  assert.deepEqual(pub.providers,[{id:'cloud',preset:'cloud',name:'来财',model:'DeepSeek'}]);
+  assert.equal(pub.primaryId,'cloud'); assert.equal(pub.fixId,'cloud'); assert.equal(pub.fallbackId,'');
+  assert(!('network' in pub) && !('presets' in pub) && !('canEncrypt' in pub), JSON.stringify(Object.keys(pub)));
+  assert.equal(pub.loggedIn,true);
+  for (const k of ['saveProvider','deleteProvider','restoreProvider','setRoles','addZhipuForFix','setNetwork','test','callDeepl','asrProvider','freeProvider']) assert.equal(typeof tr[k],'undefined',k);
+  assert.equal(tr.provider('cloud').name,'来财'); assert.equal(tr.provider('x'),null);
   const mode={prompt:'to {目标语言}'};
-  r=await tr.translate({text:'你好',mode,target:'西班牙语'});
-  assert.equal(r.text,'Hola');
-  assert.equal(r.provider,'OpenRouter'); assert.equal(r.model,'x/y'); // 点译文时间显示「OpenRouter x/y」
-  const body=JSON.parse(calls[0].opt.body);
-  assert.deepEqual(body.provider,{data_collection:'deny'});
-  assert.equal(calls[0].opt.redirect,'error');
-  assert.equal(calls[0].opt.headers.Authorization,'Bearer sk-secret1234');
-  assert(body.messages[0].content.startsWith('to 西班牙语'));
-  // fallback
-  r=tr.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k2'});
-  tr.setRoles({primaryId:pid,fallbackId:r.id});
-  assert.equal(tr.freeProvider().id,r.id); // 后台补翻更早的消息用免费的：智谱优先
-  behave=['net',null]; calls=[];
-  let q=await tr.translate({text:'你好',mode});
-  assert(q.fallback && q.text==='Hola', JSON.stringify(q));
-  behave=[{status:401,body:'{"error":{"message":"invalid"}}'}]; calls=[];
-  q=await tr.translate({text:'你好',mode});
-  assert.equal(q.kind,'auth'); assert.equal(calls.length,1);
-  // 服务商的英文原话不进正文，放进 detail（界面上收在“详细信息”里）
-  assert(!q.error.includes('invalid') && /invalid/.test(q.detail||''), JSON.stringify(q));
-  // 密钥错：点名是哪个服务商，并带上它的 id（界面“去填密钥”打开它的表单）
-  assert.equal(q.providerId,pid); assert(q.error.includes('密钥不对'), q.error);
-  // 服务商把密钥原样写进错误里（智谱的密钥不是 sk- 开头）：要被遮住
-  behave=[{status:401,body:'{"error":{"message":"key sk-secret1234 is invalid"}}'}];
-  q=await tr.translate({text:'你好',mode}); assert(!q.error.includes('secret1234'), q.error);
-  behave=[{status:503},{status:200}]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(q.fallback);
-  // 429 太忙：原地重试，成功就不换备用
-  const busy={status:429,body:'{"error":{"message":"The model service is currently busy or has reached its serving capacity limit."}}'};
+  let r=await tr.translate({text:'你好',mode,target:'西班牙语'});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  assert.equal(r.provider,'来财'); assert.equal(r.model,'DeepSeek'); // 点译文时间显示「来财 DeepSeek」
+  let c=chats()[0];
+  assert.equal(c.url,'https://cloud.example/api/device/ai/chat');
+  assert.equal(c.opt.redirect,'error'); assert.equal(c.opt.method,'POST');
+  assert.equal(c.opt.headers.Authorization,'Bearer device-token-123');
+  assert.equal(c.body.v,1); assert.equal(c.body.purpose,'translate'); assert.equal(c.body.temperature,0.3);
+  assert(Number.isInteger(c.body.max_tokens) && c.body.max_tokens>=256, JSON.stringify(c.body));
+  assert.deepEqual(c.body.messages.map((m)=>m.role),['system','user']);
+  assert(c.body.messages[0].content.startsWith('to 西班牙语'));
+  assert.deepEqual(Object.keys(c.body).sort(),['max_tokens','messages','purpose','temperature','v'],'只发约定里的字段（没有模型名、密钥）');
+  // 纠错：purpose fix，带上 draft
+  cloud.reset();
+  r=await tr.translate({text:'Hallo',mode:{prompt:'校对',temperature:0.2},target:'中文',draft:'你好',context:[{out:false,text:'Preis?'}],fix:true});
+  assert.equal(r.text,'Hola'); c=chats()[0];
+  assert.equal(c.body.purpose,'fix'); assert.equal(c.body.temperature,0.2);
+  assert(c.body.messages[0].content.startsWith('校对')&&c.body.messages[1].content.includes('<draft>\n你好')&&c.body.messages[1].content.includes('客户：Preis?'));
+  // 最长的一次（4000 字 + 上下文 + 草稿 + 角色设定）也在来财的上限里（≤ 24000 字，≤ 64 KB）
+  assert(tr.setRolePrompt('x'.repeat(4000)).ok);
+  cloud.reset();
+  r=await tr.translate({text:'长'.repeat(4000),mode,target:'英语',draft:'d'.repeat(4000),context:Array.from({length:8},()=>({text:'y'.repeat(300)}))});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  assert(chats()[0].body.max_tokens<=8192);
+  assert(tr.setRolePrompt('').ok);
+  // 来财的回答原样拿来清理（去引号、前缀）
+  cloud.reset(); cloud.next({status:200,body:{ok:true,text:'以下是翻译：“Hello there”',usage:{input_tokens:1,output_tokens:1}}});
+  r=await tr.translate({text:'你好',mode}); assert.equal(r.text,'Hello there');
+  cloud.reset(); cloud.next({status:200,body:{ok:true,text:'  '}});
+  r=await tr.translate({text:'你好',mode}); assert.equal(r.kind,'empty');
+  // 没登录团队：不发请求，只说先登录（没有「去填密钥」要的 providerId）
+  cloud.logout(); cloud.reset();
+  r=await tr.translate({text:'你好',mode});
+  assert.deepEqual(r,{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0);
+  assert.equal(tr.publicConfig().loggedIn,false); assert.deepEqual(tr.raceSet(),[]);
+  assert.equal(await tr.raceFree({text:'你好',mode}),null,'没登录：不走并行通道');
+  cloud.loginAgain();
+  // 来财的每种报错 -> 界面上的一句话（约定表）
+  const cases=[
+    [{status:401,error:'login_required'},'auth','团队登录失效，请重新登录'],
+    [{status:403,error:'revoked'},'auth','团队登录失效，请重新登录'],
+    [{status:409,error:'no_key'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
+    [{status:409,error:'not_set_up'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
+    [{status:402,error:'over_budget'},'quota','本月翻译额度用完了，请找管理员'],
+    [{status:402,error:'no_balance'},'quota','DeepSeek 余额不足，请找管理员'],
+    [{status:422,error:'bad_key'},'config','来财的 DeepSeek key 不对，请找管理员'],
+    [{status:400,error:'upstream_rejected'},'bad','来财那边拒绝了这次请求（可能文字太长）'],
+    [{status:400,error:'bad_input'},'bad','来财那边拒绝了这次请求（可能文字太长）'],
+    [{status:413,error:'too_large'},'bad','文字太长，请分几次翻译'],
+    [{status:426,error:'old_version'},'config','这个版本太旧，请更新 WAswitch'],
+    [{status:504,error:'timeout'},'timeout','来财那边超时了，请稍后再试'],
+    [{status:502,error:'unreachable'},'server','来财连不上 DeepSeek，请稍后再试'],
+    [{status:502,error:'empty'},'empty','来财没有返回译文'],
+    [{status:500,error:'x'},'server','来财那边出错了，请稍后再试'],
+  ];
+  for (const [ans,kind,text] of cases) {
+    cloud.reset(); cloud.next(ans);
+    r=await tr.translate({text:'你好',mode});
+    assert.deepEqual([r.kind,r.error],[kind,text],JSON.stringify([ans,r]));
+    assert(!('providerId' in r),'报错不带服务商');
+    assert.equal(cloud.calls.length,1,`${ans.status} ${ans.error} 不重试`);
+  }
+  // 连不上来财
+  cloud.reset(); cloud.next('net');
+  r=await tr.translate({text:'你好',mode}); assert.deepEqual([r.kind,r.error],['network','连不上来财']); assert(r.detail);
+  // 429 太忙：原地重试，成功就用
+  const busy={status:429,error:'rate_limited'};
   const busyN=(n)=>Array(n).fill(busy);
-  behave=[busy,null]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(!q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
-  // 最多重试 3 次：第 3 次重试成功还是用默认服务商
+  cloud.reset(); cloud.next(busy);
+  r=await tr.translate({text:'你好',mode}); assert(r.text==='Hola' && chats().length===2, JSON.stringify(r));
+  // 最多重试 3 次：没给等多久就 5、10、20 毫秒（retryMs:5），各自上下 15%；每次等完告诉界面 0
   let waits=[];
-  behave=[...busyN(3),null]; calls=[];
-  q=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(!q.fallback && q.text==='Hola' && calls.length===4, JSON.stringify(q));
-  // 没给 Retry-After：5、10、20 毫秒（retryMs:5），各自上下 15%；每次等完告诉界面 0
+  cloud.reset(); cloud.next(...busyN(3));
+  r=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(r.text==='Hola' && chats().length===4, JSON.stringify(r));
   const w=waits.filter((x)=>x>0);
   assert.equal(w.length,3,JSON.stringify(waits)); assert.deepEqual(waits.map((x)=>x>0),[true,false,true,false,true,false],JSON.stringify(waits));
   [5,10,20].forEach((b,i)=>assert(w[i]>=Math.floor(b*0.85)&&w[i]<=Math.ceil(b*1.15),JSON.stringify(waits)));
-  // 重试 3 次还忙就换备用
-  behave=[...busyN(4),null]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===5, JSON.stringify(q));
-  // 服务商给了 Retry-After（秒）：按它等，只往后加一点随机
-  waits=[]; behave=[{...busy,headers:{'retry-after':'0.08'}},null]; calls=[];
+  // 重试 3 次还忙：只说一句太忙
+  cloud.reset(); cloud.next(...busyN(4));
+  r=await tr.translate({text:'你好',mode}); assert.deepEqual([r.kind,r.error,chats().length],['overload','来财请求太频繁，请重试',4]);
+  // 来财给了 retry_after_s：按它等，只往后加一点随机
+  waits=[]; cloud.reset(); cloud.next({...busy,extra:{retry_after_s:0.08}});
   let t0=Date.now();
-  q=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(!q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
+  r=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(r.text==='Hola' && chats().length===2, JSON.stringify(r));
   assert(waits[0]>=80 && waits[0]<=92, JSON.stringify(waits)); assert(Date.now()-t0>=75, String(Date.now()-t0));
+  // 没有 retry_after_s 时看 Retry-After 头
+  waits=[]; cloud.reset(); cloud.next({...busy,headers:{'retry-after':'0.06'}});
+  r=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(r.text==='Hola' && waits[0]>=60 && waits[0]<=70, JSON.stringify(waits));
   // HTTP 日期格式的 Retry-After 也认
   assert(Math.abs(T.retryAfterMs(new Date(Date.now()+5000).toUTCString())-5000)<=1500); assert.equal(T.retryAfterMs('3'),3000); assert.equal(T.retryAfterMs('soon'),null); assert.equal(T.retryAfterMs(''),null);
   assert.equal(T.backoffMs(2,null,1500,()=>0.5),6000); assert.equal(T.backoffMs(0,null,1500,()=>0),1275); assert.equal(T.backoffMs(0,4000,1500,()=>0),4000);
   assert.equal(T.backoffMs(1,0,1500,()=>0.5),3000); // Retry-After 0 或过去的日期：当没给
-  // 要等超过 20 秒的不等，直接换备用
-  waits=[]; behave=[{...busy,headers:{'retry-after':'60'}},null]; calls=[];
+  // 要等超过 20 秒的不等
+  waits=[]; cloud.reset(); cloud.next({...busy,extra:{retry_after_s:60}});
   t0=Date.now();
-  q=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(q.fallback && calls.length===2 && !waits.length && Date.now()-t0<1000, JSON.stringify(q));
+  r=await tr.translate({text:'你好',mode,onWait:(ms)=>waits.push(ms)}); assert(r.kind==='overload' && chats().length===1 && !waits.length && Date.now()-t0<1000, JSON.stringify(r));
   // 等着重试时点取消：立刻停，不再发请求
-  waits=[]; behave=[{...busy,headers:{'retry-after':'5'}},null]; calls=[];
+  waits=[]; cloud.reset(); cloud.next({...busy,extra:{retry_after_s:5}});
   t0=Date.now();
   const pc=tr.translate({text:'你好',mode,onWait:(ms)=>{ waits.push(ms); if(ms>0) setTimeout(()=>tr.cancel(),20); }});
-  q=await pc; assert.equal(q.kind,'cancel'); assert.equal(calls.length,1); assert(Date.now()-t0<1000, String(Date.now()-t0)); assert.deepEqual(waits.map((x)=>x>0),[true,false],JSON.stringify(waits));
-  behave=[];
-  // 全都忙：中文提示，不带英文原话
-  // 翻译页指定服务商：只用它，失败也不换备用；找不到就报错，不偷偷用默认的
-  const pinId=tr.load().fallbackId;
-  behave=[null]; calls=[];
-  q=await tr.translate({text:'你好',mode,providerId:pinId});
-  assert(q.text==='Hola' && !q.fallback && calls[0].url.startsWith('https://open.bigmodel.cn'), JSON.stringify(q));
-  behave=['net',null]; calls=[];
-  q=await tr.translate({text:'你好',mode,providerId:pinId});
-  assert.equal(q.kind,'network'); assert.equal(calls.length,1);
-  calls=[]; q=await tr.translate({text:'你好',mode,providerId:'gone'});
-  assert.equal(q.kind,'config'); assert.equal(calls.length,0);
-  behave=busyN(8); calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(calls.length,8); assert.equal(q.kind,'overload'); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.detail, JSON.stringify(q));
-  // 429 但说的是余额不足（智谱 1113）：不原地重试，直接换备用
-  const broke={status:429,body:'{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}'};
-  behave=[broke,null]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(q.fallback && q.text==='Hola' && calls.length===2, JSON.stringify(q));
-  // 备用也没余额：只说一句，不接服务商原话
-  behave=[broke,broke]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.kind,'quota'); assert.equal(calls.length,2);
-  assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!/余额|充值/.test(JSON.stringify(q)), JSON.stringify(q));
-  // 只有 code 1113、没有中文说明：也算没余额
-  behave=[{status:429,body:'{"error":{"code":"1113"}}'},null]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(q.fallback && calls.length===2, JSON.stringify(q));
-  // 402 没余额：也换备用
-  behave=[{status:402,body:'{}'},null]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert(q.fallback, JSON.stringify(q));
-  // 没设备用：只说一句，不教人去设置
-  const fbKeep=tr.load().fallbackId; tr.setRoles({primaryId:pid,fallbackId:''});
-  behave=busyN(4); calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'OpenRouter 请求太频繁，请重试'); assert.equal(calls.length,4);
-  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
-  // 出厂配置：智谱默认、DeepL 备用但没填密钥。智谱没余额：不换到没密钥的备用，还是只说智谱那句
-  const dlNo=tr.saveProvider({preset:'deepl'}); assert(dlNo.ok, JSON.stringify(dlNo));
-  tr.setRoles({primaryId:fbKeep,fallbackId:dlNo.id});
-  behave=[broke]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,1);
-  behave=busyN(4); calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert.equal(q.kind,'overload'); assert.equal(calls.length,4);
-  // 备用有密钥但不对：报默认服务商的错，不报备用的
-  tr.setRoles({primaryId:fbKeep,fallbackId:pid});
-  behave=[broke,{status:401,body:'{}'}]; calls=[];
-  q=await tr.translate({text:'你好',mode}); assert.equal(q.error,'智谱请求太频繁，请重试'); assert(!q.providerId, JSON.stringify(q)); assert.equal(calls.length,2);
-  tr.deleteProvider(dlNo.id);
-  tr.setRoles({primaryId:pid,fallbackId:fbKeep});
-  // cancel
-  behave=['hang']; calls=[];
+  r=await pc; assert.equal(r.kind,'cancel'); assert.equal(chats().length,1); assert(Date.now()-t0<1000, String(Date.now()-t0)); assert.deepEqual(waits.map((x)=>x>0),[true,false],JSON.stringify(waits));
+  // 翻译中取消
+  cloud.reset(); cloud.next('hang');
   const p=tr.translate({text:'你好',mode}); setTimeout(()=>tr.cancel(),20);
-  q=await p; assert.equal(q.kind,'cancel', JSON.stringify(q)); assert.equal(calls.length,1);
-  // url change clears key
-  tr.saveProvider({id:pid,preset:'custom',baseUrl:'https://evil.example/v1',model:'m'});
-  const pp=tr.publicConfig().providers.find(x=>x.id===pid);
-  assert(!pp.hasKey);
+  r=await p; assert.equal(r.kind,'cancel', JSON.stringify(r)); assert.equal(cloud.calls.length,1);
+  // 指定服务商的老参数（翻译页以前用）不再起作用：照样走来财
+  cloud.reset(); r=await tr.translate({text:'你好',mode,providerId:'gone'}); assert.equal(r.text,'Hola');
+  // 收到的消息：登录着就在自己的通道上翻（raceSet 只有来财），可以同时几条
+  assert.deepEqual(tr.raceSet().map((x)=>x.id),['cloud']);
+  cloud.reset(); cloud.next({delay:40,ok:true},{delay:40,ok:true});
+  t0=Date.now();
+  const both=await Promise.all([tr.raceFree({text:'a',mode,target:'中文'}),tr.raceFree({text:'b',mode,target:'中文'})]);
+  assert(both.every((x)=>x.text==='Hola') && Date.now()-t0<75, `两条同时翻 ${Date.now()-t0}ms`);
+  assert(!tr.busy,'并行通道不占本体');
+  const ac=new AbortController(); cloud.reset(); cloud.next('hang');
+  const pr=tr.raceFree({text:'a',mode},{signal:ac.signal}); setTimeout(()=>ac.abort(),20);
+  assert.equal((await pr).kind,'cancel');
+  // 设置页：来财开通了没有
+  cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:false});
+  assert.equal(cloud.calls[0].route,'ai/status'); assert.deepEqual(cloud.calls[0].body,{v:1});
+  cloud.next({status:200,body:{ok:true,ready:false,over_budget:false}}); assert.deepEqual(await tr.cloudStatus(),{ready:false,overBudget:false});
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:true}}); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:true});
+  cloud.next({status:403,error:'revoked'}); assert.deepEqual(await tr.cloudStatus(),{error:'团队登录失效，请重新登录',kind:'auth'});
+  cloud.next('net'); assert.equal((await tr.cloudStatus()).kind,'network');
+  cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
+  // 不认识的老设置文件内容：旧服务商、加密后的密钥、DeepL 用量、翻译网络一次删掉，别的设置照旧
+  const dOld=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  fs.writeFileSync(path.join(dOld,'translate.json'),JSON.stringify({providers:[
+    {id:'z1',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',keyEnc:Buffer.from('Esecret-zp').toString('base64'),keyTail:'t-zp'},
+    {id:'d1',preset:'deepl',name:'DeepL',baseUrl:'https://api.deepl.com/v2',model:'',keyEnc:'RWRsLWtleQ==',keyTail:'y:fx'}],primaryId:'z1',fallbackId:'d1',fixId:'z1',
+    network:{mode:'proxy',proxyUrl:'socks5://127.0.0.1:7891'},deeplUsage:{month:'2026-10',chars:42},deeplCap:15000,seeded:true,seedVer:3,
+    rolePrompt:'贴牌 = private label',dailyCap:200,accountLang:{a1:'德语'},accountAuto:{a2:false},autoDefaultOn:true,termsDefaultOn:true,wigTerms:false,lashTerms:true,trPlace:'panel',trPlaceInlineDefault:true,
+    chatLang:{'a1:0123456789abcdef':{lang:'德语',src:'manual',at:1}},float:{dx:30,dy:70,collapsed:true},floatInMode:'m1'}));
+  const tOld=mk(dOld);
+  const cOld=tOld.publicConfig();
+  assert.deepEqual(cOld.providers.map((x)=>x.id),['cloud']);
+  const rawOld=fs.readFileSync(path.join(dOld,'translate.json'),'utf8');
+  for (const k of ['providers','primaryId','fallbackId','fixId','network','deeplUsage','deeplCap','seeded','seedVer','keyEnc','keyTail']) assert(!rawOld.includes(`"${k}"`),`升级后 translate.json 里没有 ${k}`);
+  assert(!rawOld.includes('c2VjcmV0') && !rawOld.includes('RWRsLWtleQ') && !rawOld.includes('智谱'),'旧密钥（加密后的）也删了');
+  assert.equal(cOld.rolePrompt,'贴牌 = private label'); assert.equal(cOld.dailyCap,200); assert.deepEqual(cOld.accountLang,{a1:'德语'}); assert.deepEqual(cOld.accountAuto,{a2:false});
+  assert.equal(cOld.wigTerms,false); assert.equal(cOld.trPlace,'panel'); assert.equal(cOld.floatInMode,'m1'); assert.deepEqual(tOld.chatLang('a1:0123456789abcdef'),{lang:'德语',src:'manual'});
+  // 只重写一次：再读不再改文件
+  const mtime=fs.statSync(path.join(dOld,'translate.json')).mtimeMs;
+  await new Promise((ok)=>setTimeout(ok,20));
+  mk(dOld).load(); assert.equal(fs.statSync(path.join(dOld,'translate.json')).mtimeMs,mtime,'第二次打开不再重写');
+  fs.rmSync(dOld,{recursive:true,force:true});
   // 翻译模式：默认 4 个，最多 200 个
   const ms=new R.Records(dir,'tmodes');
   ms.seed(T.DEFAULT_MODES);
@@ -216,7 +242,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(dl('ok'),'');
   assert.equal(dl('👍👍'),'');
   // 对话记住的语言：认出来的不盖手动选的，键里没有号码
-  const t2=new T.Translator({seed:false,dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  const t2=mk(dir);
   const key='a1:0123456789abcdef';
   assert.equal(t2.setChatLang(key,'印尼语','detected'),true);
   assert.deepEqual(t2.chatLang(key),{lang:'印尼语',src:'detected'});
@@ -226,107 +252,24 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(t2.chatLang(key).lang,'马来语');
   assert.equal(t2.setChatLang('a1:+8613800000000','英语','manual'),false);
   assert.equal(t2.setChatLang(key,'火星语','manual'),false);
-  const t3=new T.Translator({seed:false,dir,safeStorage:{isEncryptionAvailable:()=>false}});
+  const t3=mk(dir);
   assert.equal(t3.chatLang(key).lang,'马来语'); // 存盘读回
   t3.forgetAccount('a1');
   assert.equal(t3.chatLang(key),null);
   assert.equal(t3.setChatLang(key,'英语','manual'),true);
   assert.equal(t3.setChatLang(key,'','manual'),true); // 回到自动
   assert.equal(t3.chatLang(key),null);
-  // 混元：只能选 hy-mt2-plus / hy-mt2-lite；旧配置迁移；hy-mt 模型用单条 user 消息
-  const d2=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  fs.writeFileSync(path.join(d2,'translate.json'),JSON.stringify({providers:[
-    {id:'h1',preset:'hunyuan',name:'混元',baseUrl:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest',keyEnc:'xx',keyTail:'1234'},
-    {id:'h2',preset:'hunyuan',name:'混元2',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:Buffer.from('Ek5678').toString('base64'),keyTail:'5678'}],primaryId:'h1'}));
-  const th=new T.Translator({seed:false,dir:d2,safeStorage:ss,sessionFor:()=>fake});
-  th.setLashTerms(false); th.setWigTerms(false);
-  const [h1,h2]=th.load().providers;
-  assert.equal(h1.model,'hy-mt2-plus'); assert.equal(h1.baseUrl,T.PRESETS.hunyuan.baseUrl);
-  assert.equal(h1.keyEnc,''); // 换地址：密钥清掉
-  assert.equal(h2.model,'hy-mt2-lite'); assert(h2.keyEnc);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(d2,'translate.json'),'utf8')).providers[0].model,'hy-mt2-plus');
-  assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hunyuan-turbos-latest'}).error);
-  assert(th.saveProvider({id:'h2',preset:'hunyuan',baseUrl:T.PRESETS.hunyuan.baseUrl,model:'hy-mt2-plus'}).ok);
-  assert.equal(th.freeProvider().id,'h2'); // 没有智谱就用有密钥的混元（h1 没密钥不算）
-  assert(T.isMtModel('hy-mt2-lite')&&!T.isMtModel('glm-4-flash'));
-  const mt=T.buildMessages({prompt:'p'},'Hallo',{target:'中文'},[{out:false,text:'Preis?'},{out:true,text:'10 Euro'}],'草稿','hy-mt2-plus');
-  assert.equal(mt.length,1); assert.equal(mt[0].role,'user');
-  assert(mt[0].content.includes('客户：Preis?\n我：10 Euro\n参考上面的信息，把下面的文本翻译成中文')&&mt[0].content.endsWith('\nHallo'));
-  assert.equal(T.buildMessages({prompt:'p'},'Hi',{target:'德语'},undefined,'','hy-mt2-lite')[0].content,'把下面的文本翻译成德语，不要额外解释。\n\nHi');
-  calls=[]; th.setRoles({primaryId:'h2'});
-  r=await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert.equal(r.text,'Hola',JSON.stringify(r));
-  const sent=JSON.parse(calls[0].opt.body);
-  assert.equal(sent.model,'hy-mt2-plus'); assert.equal(sent.messages.length,1);
-  assert.equal(calls[0].url,'https://tokenhub.tencentmaas.com/v1/chat/completions');
-  // 纠错专用服务商：fix 时先用它（完整校对提示词 + draft），平时不用；没设时 fix 用默认的
-  // 智谱只能选 glm-4-flash（4.7-flash 免费版常限流，250414 效果差）
-  assert.equal(T.PRESETS.zhipu.model,'glm-4-flash'); assert.deepEqual(T.PRESETS.zhipu.models,['glm-4-flash']);
-  assert(th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',key:'kz'}).error);
-  assert(th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',key:'kz'}).error);
-  r=th.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'});
-  const zid=r.id;
-  calls=[]; r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',fix:true});
-  assert.equal(JSON.parse(calls[0].opt.body).model,'hy-mt2-plus'); // 没设纠错服务商：照旧
-  th.setRoles({fixId:zid}); assert.equal(th.publicConfig().fixId,zid); assert.equal(th.load().primaryId,'h2');
-  calls=[];
-  r=await th.translate({text:'Hallo',mode:{prompt:'校对'},target:'中文',draft:'你好',context:[{out:false,text:'Preis?'}],fix:true});
-  assert.equal(r.text,'Hola',JSON.stringify(r));
-  const fx=JSON.parse(calls[0].opt.body);
-  assert.equal(fx.model,'glm-4-flash'); assert(calls[0].url.startsWith('https://open.bigmodel.cn/')); assert(!fx.thinking);
-  assert(fx.messages[0].content.startsWith('校对')&&fx.messages[1].content.includes('<draft>\n你好')&&fx.messages[1].content.includes('客户：Preis?'));
-  calls=[]; await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert.equal(JSON.parse(calls[0].opt.body).model,'hy-mt2-plus'); // 平时翻译不用纠错服务商
-  // 纠错服务商连不上：换备用（备用逻辑不变）
-  th.setRoles({primaryId:'h2',fallbackId:'h2'}); // 和默认一样的备用会被清掉
-  assert.equal(th.load().fallbackId,'');
-  th.setRoles({primaryId:zid,fallbackId:'h2',fixId:zid}); behave=['net',null]; calls=[];
-  r=await th.translate({text:'Hallo',mode:{prompt:'p'},target:'中文',draft:'x',fix:true});
-  assert(r.fallback&&calls.length===2,JSON.stringify(r));
-  th.setRoles({primaryId:'h2',fallbackId:'',fixId:zid});
-  th.deleteProvider(zid); assert.equal(th.load().fixId,'');
-  th.setRoles({fixId:'nope'}); assert.equal(th.load().fixId,'');
-  fs.rmSync(d2,{recursive:true,force:true});
-  // 智谱旧配置里的其他模型名（含 glm-4.7-flash、250414）都改成 glm-4-flash
-  const d3=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  fs.writeFileSync(path.join(d3,'translate.json'),JSON.stringify({providers:[
-    {id:'z1',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-plus',keyEnc:Buffer.from('Ekz123').toString('base64'),keyTail:'z123'},
-    {id:'z2',preset:'zhipu',name:'智谱2',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4.7-flash',keyEnc:'',keyTail:''},
-    {id:'z3',preset:'zhipu',name:'智谱3',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash-250414',keyEnc:'',keyTail:''}],primaryId:'z1'}));
-  const tz=new T.Translator({seed:false,dir:d3,safeStorage:ss,sessionFor:()=>fake});
-  const [z1,z2,z3]=tz.load().providers;
-  assert.equal(z1.model,'glm-4-flash'); assert(z1.keyEnc); assert.equal(z2.model,'glm-4-flash'); assert.equal(z3.model,'glm-4-flash');
-  calls=[]; r=await tz.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert.equal(r.text,'Hola',JSON.stringify(r));
-  const zb=JSON.parse(calls[0].opt.body);
-  assert.equal(zb.model,'glm-4-flash'); assert(!zb.thinking);
-  fs.rmSync(d3,{recursive:true,force:true});
-  // 深度思考：禁用/启用/默认（不传）；OpenRouter 用 reasoning
-  assert.equal(T.glossaryPairs('睫毛盘 = lash tray\n随便写\n贴牌= private label',false).join('|'),'睫毛盘 翻译成 lash tray|贴牌 翻译成 private label');
-  assert.equal(T.glossaryPairs('睫毛盘 = lash tray',true)[0],'lash tray 翻译成 睫毛盘');
-  const rm=T.buildMessages({prompt:'p'},'hi',{target:'德语'},undefined,'','glm-4.7-flash','你是{目标语言}专家');
+  // 角色设定：放在 system 最前面，跟着目标语言替换变量
+  const rm=T.buildMessages({prompt:'p'},'hi',{target:'德语'},undefined,'','你是{目标语言}专家');
   assert(rm[0].content.startsWith('你是德语专家\n\np'));
-  const rmt=T.buildMessages({prompt:'p'},'Hi',{target:'英语'},undefined,'','hy-mt2-plus','睫毛盘 = lash tray');
-  assert.equal(rmt[0].content,'参考下面的翻译：\n睫毛盘 翻译成 lash tray\n\n把下面的文本翻译成英语，不要额外解释。\n\nHi');
   const d4=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  const t4=new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake});
-  r=t4.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'kz'}); assert.equal(t4.provider(r.id).thinking,'disabled'); t4.deleteProvider(r.id);
-  r=t4.saveProvider({preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',key:'kd',thinking:'disabled'}); const p4=r.id;
-  assert.equal(t4.provider(p4).thinking,'disabled');
+  const t4=mk(d4);
   assert(t4.setRolePrompt('贴牌 = private label').ok); assert(t4.setRolePrompt('x'.repeat(5000)).error);
-  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  let b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.thinking,{type:'disabled'}); assert(b4.messages[0].content.startsWith('贴牌 = private label'));
-  t4.saveProvider({id:p4,preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',thinking:'enabled'});
-  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert.deepEqual(JSON.parse(calls[0].opt.body).thinking,{type:'enabled'});
-  t4.saveProvider({id:p4,preset:'custom',baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat',thinking:''});
-  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert(!('thinking' in JSON.parse(calls[0].opt.body)));
-  r=t4.saveProvider({preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'deepseek/deepseek-chat',key:'ko'}); t4.setRoles({primaryId:r.id});
-  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  b4=JSON.parse(calls[0].opt.body); assert.deepEqual(b4.reasoning,{enabled:false}); assert(!b4.thinking);
-  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().rolePrompt,'贴牌 = private label');
-  // 假发词汇：默认开（和睫毛一样）；跟在角色设定后面，用户写了同一个词的用用户的；混元也拿到；开关存盘
+  const sys=()=>chats().at(-1).body.messages[0].content;
+  cloud.reset(); await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert(sys().startsWith('贴牌 = private label'));
+  assert.equal(mk(d4).load().rolePrompt,'贴牌 = private label');
+  // 假发词汇：默认开（和睫毛一样）；跟在角色设定后面，用户写了同一个词的用用户的；开关存盘
   let rt;
   assert.equal(t4.publicConfig().wigTerms,true); assert.equal(t4.load().wigTerms,true);
   rt=t4.roleText(); assert(rt.startsWith('贴牌 = private label\n\n睫毛、假发行业固定译法') && rt.includes('发帘 = Bundle') && rt.includes('密排 = Lash trays'),rt);
@@ -336,7 +279,7 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   rt=t4.roleText();
   assert(rt.startsWith('贴牌 = private label\n\n睫毛行业固定译法') && rt.includes('密排 = Lash trays\n假睫毛 = Lash trays\n睫毛 = Lash') && rt.includes('Lash trays → 密排\nLash → 睫毛') && !rt.includes('→ 假睫毛') && !rt.includes('头套'),rt);
   assert(t4.setLashTerms(false).ok); assert.equal(t4.publicConfig().lashTerms,false);
-  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().lashTerms,false);
+  assert.equal(mk(d4).load().lashTerms,false);
   assert.equal(t4.publicConfig().wigTerms,false); assert.equal(t4.roleText(),'贴牌 = private label');
   assert.equal(t4.publicConfig().wigList.length,8);
   assert(t4.setWigTerms(true).ok);
@@ -346,9 +289,9 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   // 头套排第一行（glm-4-flash 实测排在全蕾丝头套后面会翻错），wig 不译假发点名说了
   assert(rt.indexOf('头套 = Wig')<rt.indexOf('全蕾丝头套 = Full lace wig') && rt.indexOf('全蕾丝头套 = Full lace wig')<rt.indexOf('配件 = Closure'),rt);
   assert(rt.includes('wig 一律译成头套，不译成假发'));
-  calls=[]; await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
-  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('处女发 = Virgin hair'));
-  assert.equal(new T.Translator({seed:false,dir:d4,safeStorage:ss,sessionFor:()=>fake}).load().wigTerms,true);
+  cloud.reset(); await t4.translate({text:'Hallo',mode:{prompt:'p'},target:'中文'});
+  assert(sys().includes('处女发 = Virgin hair'));
+  assert.equal(mk(d4).load().wigTerms,true);
   rt=T.roleWithWig('配件 = Accessory\n假发 = wig',true);
   assert(!rt.includes('配件 = Closure') && !rt.includes('头套 = Wig') && !rt.includes('Wig → 头套') && rt.includes('前头 = Frontal'),rt);
   assert(!rt.includes('不译成假发'),rt); // 用户自己定了 wig 的译法，就不再说 wig 要译成头套
@@ -360,9 +303,6 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   // 用户把 8 个词全定了：词表一行不加，角色设定原样
   const all8='头套 = a\n全蕾丝头套 = b\n配件 = c\n前头 = d\n发帘 = e\n胶片发 = f\n辫发 = g\n处女发 = h';
   assert.equal(T.roleWithWig(all8,true),all8);
-  const wm=T.buildMessages({prompt:'p'},'I want a closure',{target:'中文'},undefined,'','hy-mt2-plus',T.roleWithWig('',true));
-  assert(wm[0].content.includes('Closure 翻译成 配件') && wm[0].content.includes('Virgin hair 翻译成 处女发') && !wm[0].content.includes('假发行业'),wm[0].content);
-  assert.equal(T.glossaryPairs(T.roleWithWig('',true),false).length,8); // 反方向的箭头行混元不当词条
   assert(T.roleWithWig('',true).includes('Closure → 配件') && !rt.includes('Closure → 配件'));
   // 翻成法语等英语以外的外语：多一句“整句用那种语言、英文词原样保留”；翻成中文、英语或不传：原来的写法
   const fr=T.roleWithWig('',true,'法语');
@@ -372,19 +312,14 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(T.roleWithWig('',true,'火星语'),T.roleWithWig('',true));
   assert(!T.roleWithWig('',true).includes('整句'));
   assert(!T.roleWithWig('头套 = a\n全蕾丝头套 = b',true,'法语').includes('“头套”')); // 例子只用还在词表里的词
-  calls=[]; await t4.translate({text:'头套',mode:{prompt:'p'},target:'法语'});
-  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('整句必须用法语写'));
-  calls=[]; await t4.translate({text:'wig',mode:{prompt:'p'},target:'中文'});
-  assert(JSON.parse(calls[0].opt.body).messages[0].content.includes('Wig → 头套'));
-  assert.equal(T.glossaryPairs(fr,false).length,8);
+  cloud.reset(); await t4.translate({text:'头套',mode:{prompt:'p'},target:'法语'});
+  assert(sys().includes('整句必须用法语写'));
+  cloud.reset(); await t4.translate({text:'wig',mode:{prompt:'p'},target:'中文'});
+  assert(sys().includes('Wig → 头套'));
   assert(t4.setWigTerms(false).ok); assert.equal(t4.roleText(),'贴牌 = private label');
-  // 两套都开：合成一段，头句写“睫毛、假发”，睫毛在前（混元实测假发在前会把睫毛翻成 Lash trays）；用户写过睫毛的用用户的
+  // 两套都开：合成一段，头句写“睫毛、假发”，睫毛在前（实测假发在前会把睫毛翻成 Lash trays）；用户写过睫毛的用用户的
   rt=T.roleWithTerms('',{wig:true,lash:true});
   assert(rt.startsWith('睫毛、假发行业固定译法') && rt.indexOf('睫毛 = Lash\n')<rt.indexOf('头套 = Wig') && rt.indexOf('头套 = Wig')<rt.indexOf('全蕾丝头套') && rt.includes('Lash → 睫毛') && rt.includes('wig 一律译成头套'),rt);
-  assert.equal(T.glossaryPairs(rt,true).length,10); assert.equal(T.glossaryPairs(rt,false).length,11);
-  // 混元：中译英 假睫毛、密排 都给 Lash trays；英译中 Lash trays 只给 密排
-  assert(T.glossaryPairs(rt,false).includes('假睫毛 翻译成 Lash trays') && T.glossaryPairs(rt,true).includes('Lash trays 翻译成 密排') && !T.glossaryPairs(rt,true).includes('Lash trays 翻译成 假睫毛'));
-  assert.deepEqual(T.glossaryPairs('a = X\nb = x',true),['X 翻译成 a']); assert.equal(T.glossaryPairs('a = X\nb = x',false).length,2);
   rt=T.roleWithTerms('睫毛 = eyelash',{lash:true});
   assert(rt.includes('密排 = Lash trays') && !rt.split('\n').includes('睫毛 = Lash') && rt.includes('\n睫毛行业'),rt);
   assert.equal(T.roleWithTerms('密排 = a\n假睫毛 = c\n睫毛 = b',{lash:true}),'密排 = a\n假睫毛 = c\n睫毛 = b');
@@ -397,239 +332,81 @@ tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认
   assert.equal(T.roleWithTerms('x',{}),'x');
   // 老设置没有 lashTerms：默认开；开关打开后存盘
   const dL=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dL,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:true}));
-  const tL=new T.Translator({seed:false,dir:dL,safeStorage:ss,sessionFor:()=>fake});
+  const tL=mk(dL);
   assert.equal(tL.publicConfig().lashTerms,true); assert(tL.roleText().startsWith('睫毛、假发行业'));
   assert(tL.setLashTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dL,'translate.json'),'utf8')).lashTerms,true);
   fs.rmSync(dL,{recursive:true,force:true});
   // 老设置没有 wigTerms：默认开（发帘不再被睫毛词表带成 Lash trays）；存过 false 的仍关
   const dW=fs.mkdtempSync(path.join(os.tmpdir(),'tr')); fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',lashTerms:true}));
-  let tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  let tW=mk(dW);
   assert.equal(tW.publicConfig().wigTerms,true); assert(tW.roleText().includes('发帘 = Bundle') && tW.roleText().startsWith('睫毛、假发行业'));
   // 0.5.12/0.5.13 的设置：wigTerms:false 是默认关时顺手存进去的（睫毛可能也关着）→ 升级时打开一次并存盘
   fs.writeFileSync(path.join(dW,'translate.json'),JSON.stringify({rolePrompt:'',wigTerms:false,lashTerms:false,seeded:true,seedVer:3,autoDefaultOn:true,chatLang:{}}));
-  tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  tW=mk(dW);
   assert.equal(tW.publicConfig().wigTerms,true); assert.equal(tW.publicConfig().lashTerms,true); assert(tW.roleText().startsWith('睫毛、假发行业'));
   let sW=JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')); assert.equal(sW.termsDefaultOn,true); assert.equal(sW.wigTerms,true); assert.equal(sW.lashTerms,true);
   // 迁移之后用户自己关掉：重开不会再打开
   assert(tW.setWigTerms(false).ok); assert(tW.setLashTerms(false).ok);
-  tW=new T.Translator({seed:false,dir:dW,safeStorage:ss,sessionFor:()=>fake});
+  tW=mk(dW);
   assert.equal(tW.publicConfig().wigTerms,false); assert.equal(tW.publicConfig().lashTerms,false); assert(!tW.roleText().includes('发帘'));
   // 新装（没有设置文件）：默认开，标记一起存上，之后关掉也不会被打开
   const dN=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  let tN=new T.Translator({seed:false,dir:dN,safeStorage:ss,sessionFor:()=>fake});
+  let tN=mk(dN);
   assert.equal(tN.publicConfig().wigTerms,true); assert(tN.setWigTerms(false).ok);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dN,'translate.json'),'utf8')).termsDefaultOn,true);
-  tN=new T.Translator({seed:false,dir:dN,safeStorage:ss,sessionFor:()=>fake}); assert.equal(tN.publicConfig().wigTerms,false); assert.equal(tN.publicConfig().lashTerms,true);
+  tN=mk(dN); assert.equal(tN.publicConfig().wigTerms,false); assert.equal(tN.publicConfig().lashTerms,true);
   fs.rmSync(dN,{recursive:true,force:true});
   assert(tW.setWigTerms(true).ok); assert.equal(JSON.parse(fs.readFileSync(path.join(dW,'translate.json'),'utf8')).wigTerms,true);
   fs.rmSync(dW,{recursive:true,force:true});
-  // 翻译代理：socks:// 在 Chromium 里按 SOCKS4 走（域名在本机解析），一律改成 socks5://，老配置读出来也改
-  const dP=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  const tP=new T.Translator({seed:false,dir:dP,safeStorage:ss,sessionFor:()=>fake});
-  assert(tP.setNetwork({mode:'proxy',proxyUrl:'socks://127.0.0.1:7891'}).ok);
-  assert.equal(tP.publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
-  assert(tP.setNetwork({mode:'proxy',proxyUrl:'socks5://127.0.0.1:7891'}).ok); assert.equal(tP.publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
-  assert(tP.setNetwork({mode:'proxy',proxyUrl:'http://127.0.0.1:7890'}).ok); assert.equal(tP.publicConfig().network.proxyUrl,'http://127.0.0.1:7890');
-  fs.writeFileSync(path.join(dP,'translate.json'),JSON.stringify({network:{mode:'proxy',proxyUrl:'socks://127.0.0.1:7891'}}));
-  assert.equal(new T.Translator({seed:false,dir:dP,safeStorage:ss,sessionFor:()=>fake}).publicConfig().network.proxyUrl,'socks5://127.0.0.1:7891');
-  fs.rmSync(dP,{recursive:true,force:true});
   assert(t4.setLashTerms(true).ok); assert(t4.roleText().includes('睫毛 = Lash'));
   fs.rmSync(d4,{recursive:true,force:true});
-  // 出厂默认：新装的直接有智谱（默认、纠错）+ DeepL（备用），没有密钥；删光了不再放回来
-  const d5=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  let t5=new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake});
-  let c5=t5.publicConfig();
-  assert.equal(c5.providers.length,2);
-  const hy5=c5.providers.find(p=>p.id===c5.fallbackId), zp5=c5.providers.find(p=>p.id===c5.primaryId);
-  assert.equal(hy5.preset,'deepl'); assert.equal(hy5.model,''); assert(!hy5.hasKey);
-  assert.equal(zp5.preset,'zhipu'); assert.equal(zp5.model,'glm-4-flash'); assert.equal(c5.fixId,zp5.id);
-  calls=[];
-  q=await t5.translate({text:'你好',mode:{prompt:'p'}}); assert.equal(q.kind,'auth'); assert.equal(calls.length,0);
-  // 没填密钥：报错写明是智谱，带上它的 id；needsKey 认得出两个都没密钥
-  assert.equal(q.error,'智谱还没填密钥'); assert.equal(q.providerId,zp5.id);
-  { const raw=t5.load(); assert(raw.providers.every(T.needsKey)); }
-  assert(!T.needsKey({preset:'custom',baseUrl:'http://127.0.0.1:11434/v1'}), '本机接口不用密钥');
-  assert(T.needsKey({preset:'deepl',baseUrl:'http://127.0.0.1:1'}), 'DeepL 一定要密钥');
-  t5.deleteProvider(hy5.id); t5.deleteProvider(zp5.id);
-  assert.equal(new T.Translator({dir:d5,safeStorage:ss,sessionFor:()=>fake}).load().providers.length,0);
-  fs.rmSync(d5,{recursive:true,force:true});
-  // 老用户：已有服务商不动，只在备用/纠错没设、默认是混元 hy-mt 时补上智谱
-  const d6=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
-    {id:'h',preset:'hunyuan',name:'我的混元',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-lite',keyEnc:'',keyTail:''},
-    {id:'z',preset:'zhipu',name:'智谱',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',keyEnc:'',keyTail:''}],primaryId:'h'}));
-  let c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
-  assert.equal(c6.providers.length,2); assert.equal(c6.providers[0].model,'hy-mt2-lite'); assert.equal(c6.providers[0].name,'我的混元');
-  assert.equal(c6.fallbackId,'z'); assert.equal(c6.fixId,'z'); assert.equal(c6.seeded,true);
-  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
-    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus'},
-    {id:'z',preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'},
-    {id:'o',preset:'openrouter',baseUrl:'https://openrouter.ai/api/v1',model:'x/y'}],primaryId:'h',fallbackId:'o',fixId:'h'}));
-  c6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake}).load();
-  assert.equal(c6.fallbackId,'o'); assert.equal(c6.fixId,'h'); // 用户自己设过的不改
-  // 0.5.2 老用户（seeded 过，只有混元）：升级后补上智谱；还是出厂那套，再改成默认智谱、备用 DeepL；删了以后不再补
-  fs.writeFileSync(path.join(d6,'translate.json'),JSON.stringify({providers:[
-    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus'}],primaryId:'h',seeded:true}));
-  let t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
-  c6=t6.publicConfig();
-  const zp6=c6.providers.find(p=>p.preset==='zhipu'), dl6=c6.providers.find(p=>p.preset==='deepl');
-  assert(zp6); assert.equal(zp6.model,'glm-4-flash'); assert(!zp6.hasKey); assert(dl6);
-  assert.equal(c6.primaryId,zp6.id); assert.equal(c6.fallbackId,dl6.id); assert.equal(c6.fixId,zp6.id);
-  assert(c6.providers.some(p=>p.id==='h')); // 混元还在列表里
-  t6.deleteProvider(zp6.id); t6.deleteProvider(dl6.id);
-  t6=new T.Translator({dir:d6,safeStorage:ss,sessionFor:()=>fake});
-  assert.equal(t6.publicConfig().providers.length,1);
-  // 纠错下拉里“添加智谱”：新建并只设纠错，备用不动
-  t6.setRoles({fallbackId:''});
-  assert.equal(t6.addZhipuForFix().ok,true);
-  c6=t6.publicConfig();
-  const zp7=c6.providers.find(p=>p.preset==='zhipu');
-  assert.equal(c6.fixId,zp7.id); assert.equal(c6.fallbackId,''); assert.equal(c6.providers.length,2);
-  assert.equal(t6.addZhipuForFix().ok,true); assert.equal(t6.publicConfig().providers.length,2); // 有了就不重复加
-  fs.rmSync(d6,{recursive:true,force:true});
-  // 0.5.3 出厂设置（seedVer 2：混元默认、智谱备用+纠错）-> 智谱默认、DeepL 备用；自己改过的不动
-  const d8=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  const v2=(extra)=>JSON.stringify({providers:[
-    {id:'h',preset:'hunyuan',baseUrl:'https://tokenhub.tencentmaas.com/v1',model:'hy-mt2-plus',keyEnc:'x',keyTail:'1111'},
-    {id:'z',preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'}],primaryId:'h',fallbackId:'z',fixId:'z',seeded:true,seedVer:2,...extra});
-  fs.writeFileSync(path.join(d8,'translate.json'),v2({}));
-  let c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
-  const dl8=c8.providers.find(p=>p.preset==='deepl');
-  assert(dl8); assert.equal(c8.primaryId,'z'); assert.equal(c8.fallbackId,dl8.id); assert.equal(c8.fixId,'z'); assert.equal(c8.seedVer,3);
-  assert.equal(c8.providers.find(p=>p.id==='h').keyTail,'1111');
-  fs.writeFileSync(path.join(d8,'translate.json'),v2({fixId:'h'}));
-  c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
-  assert.equal(c8.primaryId,'h'); assert(!c8.providers.some(p=>p.preset==='deepl')); assert.equal(c8.seedVer,3);
-  fs.writeFileSync(path.join(d8,'translate.json'),JSON.stringify({...JSON.parse(v2({})),primaryId:'z',fallbackId:'h'}));
-  c8=new T.Translator({dir:d8,safeStorage:ss,sessionFor:()=>fake}).load();
-  assert.equal(c8.primaryId,'z'); assert.equal(c8.fallbackId,'h');
-  fs.rmSync(d8,{recursive:true,force:true});
-  // DeepL：免费密钥走 api-free，付费走 api；目标语言代码、上下文、太忙时智谱 -> DeepL
-  const d9=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  const t9=new T.Translator({seed:false,dir:d9,safeStorage:ss,sessionFor:()=>fake,retryMs:5});
-  const zid9=t9.saveProvider({preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',key:'zk'}).id;
-  let dr=t9.saveProvider({preset:'deepl',baseUrl:'https://evil.example.com',model:'x',key:'abc-123:fx',thinking:'enabled'});
-  assert(dr.ok,JSON.stringify(dr));
-  const dp=t9.provider(dr.id);
-  assert.equal(dp.baseUrl,T.PRESETS.deepl.baseUrl); assert.equal(dp.model,''); assert.equal(dp.thinking,'');
-  t9.setRoles({primaryId:zid9,fallbackId:dr.id});
-  calls=[]; behave=[{status:429,body:'{"error":{"message":"busy"}}'},{status:429,body:'{}'},{status:429,body:'{}'},{status:429,body:'{}'},{body:JSON.stringify({translations:[{text:'Hallo'}]})}];
-  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'德语',source:'中文',context:[{text:'Wie geht es?'},{out:true,text:'好'}]});
-  assert.equal(q.text,'Hallo'); assert.equal(q.fallback,true); assert.equal(q.provider,'DeepL'); assert.equal(q.model,''); // DeepL 没有模型名，点译文时间只写 DeepL
-  assert.equal(calls.length,5); assert.equal(calls[4].url,'https://api-free.deepl.com/v2/translate');
-  assert.equal(calls[4].opt.headers.Authorization,'DeepL-Auth-Key abc-123:fx');
-  const db=JSON.parse(calls[4].opt.body);
-  assert.deepEqual(db.text,['你好']); assert.equal(db.target_lang,'DE'); assert.equal(db.source_lang,'ZH'); assert.equal(db.context,'Wie geht es?\n好');
-  t9.saveProvider({id:dr.id,preset:'deepl',key:'paid-key'});
-  t9.setRoles({primaryId:dr.id,fallbackId:''});
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
-  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'英语'});
-  assert.equal(calls[0].url,'https://api.deepl.com/v2/translate'); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'EN-US');
-  calls=[]; q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'菲律宾语'});
-  assert.equal(q.kind,'lang'); assert.equal(calls.length,0);
-  calls=[]; behave=[{status:456,body:'{"message":"Quota exceeded"}'}];
-  q=await t9.translate({text:'你好',mode:{prompt:'p'},target:'英语'}); assert.equal(q.kind,'quota');
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'你好'}]})}];
-  q=await t9.test(dr.id); assert(q.ok); assert.equal(JSON.parse(calls[0].opt.body).target_lang,'ZH-HANS');
-  fs.rmSync(d9,{recursive:true,force:true});
-  // DeepL 每个使用者每月 10 万字符（固定，不能改）：成功才记数，超了不发请求、换备用；每月 1 号清零；换密钥、加第二个 DeepL 都接着算
-  const d10=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  let now10=new Date(2026,9,28,12).getTime();
-  const t10=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  const zid10=t10.saveProvider({preset:'zhipu',baseUrl:T.PRESETS.zhipu.baseUrl,model:'glm-4-flash',key:'zk'}).id;
-  const did10=t10.saveProvider({preset:'deepl',key:'k1:fx'}).id;
-  t10.setRoles({primaryId:did10,fallbackId:zid10});
-  const use10=(id=did10)=>t10.publicConfig().providers.find(p=>p.id===id).usage;
-  assert.deepEqual(use10(),{used:0,cap:100000}); assert(!('deeplCap' in t10.publicConfig()),'上限不再是设置');
-  assert(!('usage' in t10.publicConfig().providers.find(p=>p.id===zid10)));
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hello'}]})}];
-  q=await t10.translate({text:'你好😀',mode:{prompt:'p'},target:'英语'}); assert.equal(q.text,'Hello');
-  assert.equal(use10().used,3,'按字符数（表情算 1 个）');
-  calls=[]; behave=[{status:500,body:'{}'},{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
-  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'}); assert.equal(use10().used,3,'失败不记数');
-  // 换密钥接着算；第二个 DeepL 服务商看到的是同一个数
-  t10.saveProvider({id:did10,preset:'deepl',key:'k2:fx'});
-  const did10b=t10.saveProvider({preset:'deepl',name:'DeepL 2',key:'k3:fx'}).id;
-  assert.equal(use10().used,3); assert.equal(use10(did10b).used,3);
-  t10.load().deeplUsage.chars=99999;
-  calls=[]; behave=[{body:JSON.stringify({choices:[{message:{content:'Hi'}}]})}];
-  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语'});
-  assert.equal(q.text,'Hi'); assert.equal(q.fallback,true); assert.equal(calls.length,1); assert(!calls[0].url.includes('deepl'),'超额不发给 DeepL');
-  q=await t10.translate({text:'你好',mode:{prompt:'p'},target:'英语',providerId:did10b});
-  assert.equal(q.kind,'quota'); assert(q.error.includes('10 万'),q.error);
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
-  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert.equal(q.text,'Hi'); assert.equal(use10().used,100000,'正好用满还能翻');
-  // 上限固定：没有改上限的入口，表单里传 monthCap 也不起作用
-  assert.equal(typeof t10.setDeeplCap,'undefined'); assert.equal(typeof t10.validCap,'undefined');
-  t10.saveProvider({id:did10,preset:'deepl',monthCap:250000}); assert.equal(use10().cap,100000,'表单传上限不生效');
-  assert(!('deeplCap' in t10.load()));
-  calls=[]; behave=[{body:JSON.stringify({translations:[{text:'Hi'}]})}];
-  q=await t10.translate({text:'好',mode:{prompt:'p'},target:'英语',providerId:did10}); assert(q.error.includes('10 万字符'),'用满后不能再翻：'+q.error);
-  now10=new Date(2026,10,1,0,5).getTime();
-  assert.equal(use10().used,0,'11 月 1 号清零');
-  const raw10=JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'));
-  assert(!('deeplCap' in raw10)); assert.equal(raw10.deeplUsage.month,'2026-10');
-  assert(!JSON.stringify(raw10).includes('k1:fx'),'不存明文密钥');
-  // 重新读文件后用量和上限还在；#216 那版按密钥分开记的，同一个月合起来
-  t10.load().deeplUsage={month:'2026-11',chars:42}; t10.save();
-  const t10b=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.used,42); assert.equal(t10b.publicConfig().providers.find(p=>p.id===did10).usage.cap,100000);
-  fs.writeFileSync(path.join(d10,'translate.json'),JSON.stringify({...raw10,deeplCap:15000,deeplUsage:{aaaaaaaaaaaaaaaa:{month:'2026-10',chars:9},bbbbbbbbbbbbbbbb:{month:'2026-11',chars:5},cccccccccccccccc:{month:'2026-11',chars:7}}}));
-  const t10c=new T.Translator({seed:false,dir:d10,safeStorage:ss,sessionFor:()=>fake,now:()=>now10});
-  assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.used,12); assert.equal(t10c.publicConfig().providers.find(p=>p.id===did10).usage.cap,100000,'旧文件里自定义的上限被丢掉，仍是 10 万');
-  assert(!('deeplCap' in JSON.parse(fs.readFileSync(path.join(d10,'translate.json'),'utf8'))),'旧上限已从文件里清掉');
-  fs.rmSync(d10,{recursive:true,force:true});
   // 自动翻译默认开：新号开；老设置里确认过但没开着的号（手动关过）保留关，其他都开；关掉的记住
   const d7=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(d7,'translate.json'),JSON.stringify({accountAuto:{a:true},autoConsent:{a:true,b:true},consented:{x:true}}));
-  let t7=new T.Translator({seed:false,dir:d7,safeStorage:ss,sessionFor:()=>fake});
+  let t7=mk(d7);
   assert.deepEqual(t7.load().accountAuto,{b:false}); assert.equal(t7.load().autoDefaultOn,true);
   t7.setFloat({accId:'c',auto:false}); t7.setFloat({accId:'b',auto:true});
   const raw7=JSON.parse(fs.readFileSync(path.join(d7,'translate.json'),'utf8'));
   assert.deepEqual(raw7.accountAuto,{c:false}); assert(!('autoConsent' in raw7) && !('consented' in raw7));
-  t7=new T.Translator({seed:false,dir:d7,safeStorage:ss,sessionFor:()=>fake});
+  t7=mk(d7);
   assert.deepEqual(t7.load().accountAuto,{c:false}); // 迁移只做一次
   t7.forgetAccount('c'); assert.deepEqual(t7.load().accountAuto,{});
   fs.rmSync(d7,{recursive:true,force:true});
   // 译文显示位置默认「消息下面」：新装是 inline；1.0.4 存下的值升级时一次性改成 inline，之后用户自己选的 panel 保留
   const dPl=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
-  let tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  let tPl=mk(dPl);
   assert.equal(tPl.publicConfig().trPlace,'inline'); // 新装
   fs.writeFileSync(path.join(dPl,'translate.json'),JSON.stringify({seeded:true,seedVer:3,termsDefaultOn:true,autoDefaultOn:true,trPlace:'panel'}));
-  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  tPl=mk(dPl);
   assert.equal(tPl.publicConfig().trPlace,'inline'); // 升级：旧的 panel 改成 inline
   assert.equal(JSON.parse(fs.readFileSync(path.join(dPl,'translate.json'),'utf8')).trPlaceInlineDefault,true);
   tPl.setFloat({place:'panel'});
-  tPl=new T.Translator({seed:false,dir:dPl,safeStorage:ss,sessionFor:()=>fake});
+  tPl=mk(dPl);
   assert.equal(tPl.publicConfig().trPlace,'panel'); // 用户自己改的不再覆盖
   fs.rmSync(dPl,{recursive:true,force:true});
-  // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置和 DeepL 用量共用一份
+  // 翻译页单独一条通道（lane）：工作台在翻时翻译页照样能翻，取消只取消自己；配置共用一份
   const dLn=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
+  const tLn=mk(dLn);
+  cloud.reset();
   const hangs=[];
-  const fakeLn={fetch:async(url,opt)=>{const body=JSON.parse(opt.body);const t=body.text?body.text[0]:body.messages[body.messages.length-1].content;
-    if(/慢/.test(t))return new Promise((res,rej)=>{hangs.push(()=>res({ok:true,status:200,body:null,text:async()=>JSON.stringify({choices:[{message:{content:'slow done'}}]})}));opt.signal.addEventListener('abort',()=>rej(new Error('ab')));});
-    return {ok:true,status:200,body:null,text:async()=>body.text?JSON.stringify({translations:[{text:'Hallo'}]}):JSON.stringify({choices:[{message:{content:'fast'}}]})};}};
-  const tLn=new T.Translator({seed:false,dir:dLn,safeStorage:ss,sessionFor:()=>fakeLn});
-  const zLn=tLn.saveProvider({preset:'zhipu',baseUrl:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash',key:'k1'}).id;
-  tLn.setRoles({primaryId:zLn});
+  cloud.next(()=>({delay:60000}));
   const page=tLn.lane();
   const work=tLn.translate({text:'慢一点',mode:{prompt:'p'},target:'英语'});
   assert(tLn.busy,'工作台在翻');
-  q=await page.translate({text:'快',mode:{prompt:'p'},target:'英语',providerId:zLn});
-  assert.equal(q.text,'fast','工作台在翻时翻译页不用排队'); assert(tLn.busy && !page.busy);
-  const pageSlow=page.translate({text:'慢慢',mode:{prompt:'p'},target:'英语',providerId:zLn});
+  let q=await page.translate({text:'快',mode:{prompt:'p'},target:'英语'});
+  assert.equal(q.text,'Hola','工作台在翻时翻译页不用排队'); assert(tLn.busy && !page.busy);
+  cloud.next('hang');
+  const pageSlow=page.translate({text:'慢慢',mode:{prompt:'p'},target:'英语'});
   assert(page.busy && tLn.busy);
   assert.equal(page.cancel(),true);
   q=await pageSlow; assert.equal(q.kind,'cancel','翻译页取消只取消自己');
   assert(tLn.busy,'工作台那条还在翻');
-  hangs[0](); q=await work; assert.equal(q.text,'slow done');
+  assert.equal(tLn.cancel(),true); q=await work; assert.equal(q.kind,'cancel');
   assert.equal(page.cancel(),false,'没在翻时取消什么也不做');
-  // 配置是同一份：本体加的服务商、通道里记的 DeepL 用量，两边都看得到，也写进同一个文件
-  const dlLn=tLn.saveProvider({preset:'deepl',baseUrl:'https://api-free.deepl.com',model:'',key:'k:fx'}).id;
-  assert(page.provider(dlLn),'通道看得到本体新加的服务商');
-  q=await page.translate({text:'你好',mode:{prompt:'p'},target:'德语',providerId:dlLn}); assert.equal(q.text,'Hallo',JSON.stringify(q));
-  assert.equal(tLn.deeplUsed(),2,'通道记的用量本体也看得到');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dLn,'translate.json'),'utf8')).deeplUsage.chars,2);
+  // 配置是同一份：本体改的角色设定，通道翻译时也带上，也写进同一个文件
+  assert(tLn.setRolePrompt('贴牌 = OEM').ok);
+  cloud.reset(); q=await page.translate({text:'你好',mode:{prompt:'p'},target:'德语'}); assert.equal(q.text,'Hola',JSON.stringify(q));
+  assert(chats()[0].body.messages[0].content.startsWith('贴牌 = OEM'),'通道用的是本体的角色设定');
   assert(!Object.prototype.hasOwnProperty.call(page,'cfg'),'通道不自己存配置');
   fs.rmSync(dLn,{recursive:true,force:true});
   fs.rmSync(dir,{recursive:true,force:true});

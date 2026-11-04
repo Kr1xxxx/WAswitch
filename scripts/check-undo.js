@@ -1,4 +1,4 @@
-// 撤销（src/undo.js）：删除、清空以后能放回去。话术 / 客户 / 翻译模式、翻译服务商（连同密钥和用途）、连接记录。
+// 撤销（src/undo.js）：删除、清空以后能放回去。话术 / 客户 / 翻译模式、连接记录。
 const assert = require('assert');
 const Module = require('module');
 // 第 5 部分要加载真的 translate-ipc.js：换成假的 electron 模块
@@ -68,27 +68,13 @@ log.restore(old);
 assert.deepEqual(log.load().map((e) => e.kind + e.id), ['downa1', 'upa1', 'downa2']);
 assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'net.json'), 'utf8')).length, 3, '放回后马上写盘');
 
-// 4. 翻译服务商：放回原位置，密钥和“默认 / 纠错”用途都回来
-const ss = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`E${t}`), decryptString: (b) => b.toString().slice(1) };
-const tr = new T.Translator({ seed: false, dir, safeStorage: ss, sessionFor: () => ({}) });
-const a = tr.saveProvider({ preset: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', key: 'kz-1234' }).id;
-const b = tr.saveProvider({ preset: 'deepl', key: 'dk-5678' }).id;
-tr.setRoles({ primaryId: a, fallbackId: b, fixId: a });
-const psnap = tr.deleteProvider(a);
-assert.equal(tr.load().primaryId, b);
-assert.equal(tr.load().fixId, '');
-assert(tr.restoreProvider(psnap));
-const cfg = tr.load();
-assert.deepEqual(cfg.providers.map((p) => p.id), [a, b], '回到原来的位置');
-assert.equal(cfg.primaryId, a);
-assert.equal(cfg.fallbackId, b);
-assert.equal(cfg.fixId, a);
-assert.equal(tr.publicConfig().providers[0].hasKey, true, '密钥一起回来');
-assert.equal(tr.restoreProvider(psnap), false, '已经有了不重复放');
-assert.equal(tr.deleteProvider('nope'), null);
+// 4. 翻译服务商的删除和撤销没有了（#209：只走来财，没有服务商可删）
+const tr = new T.Translator({ dir, sessionFor: () => ({}), cloud: () => null });
+assert.equal(typeof tr.deleteProvider, 'undefined');
+assert.equal(typeof tr.restoreProvider, 'undefined');
 assert.equal(cs.restore({ id: 'empty', name: '', phone: '' }), false, '空记录不放回');
 
-// 5. 经过真的 translate-ipc 接口：删翻译模式、删服务商，再撤销，内容一样
+// 5. 经过真的 translate-ipc 接口：删翻译模式再撤销，内容一样；删服务商的接口没有了
 const { setupTranslateIpc } = require('../src/translate-ipc');
 const handlers = {};
 const offers = [];
@@ -101,9 +87,7 @@ assert.equal(modes.get(m.id), null);
 assert.equal(offers.at(-1).text, '已删除「Formal German」', '撤销条显示名字');
 offers.at(-1).fn();
 assert.equal(modes.get(m.id).prompt, 'Translate into formal German (Sie).', '撤销后提示词还在');
-handlers['tr:provider:delete'](b);
-assert.equal(offers.at(-1).text, '已删除「DeepL」');
-offers.at(-1).fn();
-assert.equal(tr.provider(b).keyTail, '5678');
+for (const n of ['tr:provider:save', 'tr:provider:delete', 'tr:roles', 'tr:fix:zhipu', 'tr:network', 'tr:test']) assert.equal(handlers[n], undefined, `${n} 已删`);
+assert.equal(typeof handlers['tr:cloud-status'], 'function');
 
 console.log('check-undo: ok');

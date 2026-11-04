@@ -46,7 +46,7 @@ function fakeHooks() {
     translate: async (args) => {
       state.trCalls.push(args);
       if (state.trDelay) await new Promise((r) => setTimeout(r, state.trDelay));
-      return state.trAnswers.shift() || { text: `[${args.target}] ${args.text}`, provider: '智谱', fallback: false, ms: 5, warn: [] };
+      return state.trAnswers.shift() || { text: `[${args.target}] ${args.text}`, provider: '来财', ms: 5, warn: [] };
     },
   };
 }
@@ -116,7 +116,7 @@ async function main() {
   // ---------- 翻译 ----------
   const t1 = json(await call('translate_text', { text: 'Thanks, I will send the invoice today.', target: 'de' }));
   const c1 = st.trCalls[st.trCalls.length - 1];
-  check(t1.text === '[德语] Thanks, I will send the invoice today.' && t1.target === '德语' && t1.provider === '智谱', '翻译走软件设置，de 换成 德语');
+  check(t1.text === '[德语] Thanks, I will send the invoice today.' && t1.target === '德语' && t1.provider === '来财', '翻译走软件设置，de 换成 德语');
   check(c1.mode.name === '标准' && /\{目标语言\}/.test(c1.mode.prompt) && c1.source === '' && !('context' in c1), '没给模式时忠实直译，不带对话上下文');
   await call('translate_text', { text: 'Bonjour', target: 'English', source: 'fr', mode: '商务正式' });
   const c2 = st.trCalls[st.trCalls.length - 1];
@@ -127,10 +127,13 @@ async function main() {
   const t5 = await call('translate_text', { text: '   ', target: 'de' });
   check(t3.isError && /不认识目标语言/.test(t3.content[0].text) && t4.isError && /商务正式/.test(t4.content[0].text) && t5.isError && st.trCalls.length === n0,
     '语言、模式不对或文字是空的直接说明，不去翻译');
-  st.trAnswers.push({ error: '智谱还没填密钥', kind: 'auth', providerId: 'p1' });
+  st.trAnswers.push({ error: '先登录团队才能翻译', kind: 'auth' });
   const t6 = await call('translate_text', { text: 'Hello', target: 'de' });
-  check(t6.isError && /智谱还没填密钥/.test(t6.content[0].text) && /设置 › 翻译/.test(t6.content[0].text), '密钥没填时说明去 设置 › 翻译 填');
-  st.trAnswers.push({ text: 'Rufen Sie mich an: +49 30 1234567', provider: '智谱', warn: ['+49 30 1234567'] });
+  check(t6.isError && /先登录团队才能翻译/.test(t6.content[0].text) && /请用户在 WAswitch 里登录团队/.test(t6.content[0].text) && !/密钥|服务商/.test(t6.content[0].text), '没登录团队时说明请用户登录团队，不再叫人填密钥');
+  st.trAnswers.push({ error: '翻译还没开通，请找管理员在来财填 DeepSeek key', kind: 'config' });
+  const t6b = await call('translate_text', { text: 'Hello', target: 'de' });
+  check(t6b.isError && /找管理员/.test(t6b.content[0].text) && !/设置 › 翻译|密钥/.test(t6b.content[0].text), '来财没开通时照来财的话说，不叫人去设置里填');
+  st.trAnswers.push({ text: 'Rufen Sie mich an: +49 30 1234567', provider: '来财', warn: ['+49 30 1234567'] });
   const t7 = json(await call('translate_text', { text: 'Call me', target: 'de' }));
   check(/\+49 30 1234567/.test(t7.warning || ''), '译文多出原文没有的联系方式时提醒');
 

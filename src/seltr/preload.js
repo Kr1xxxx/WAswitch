@@ -14,5 +14,4 @@ contextBridge.exposeInMainWorld('seltr', {
   trFix: (text) => ipcRenderer.send('seltr:tr-fix', typeof text === 'string' ? text : ''),
   trTake: (yes) => ipcRenderer.send('seltr:tr-take', yes === true),
   trDraft: (text) => ipcRenderer.send('seltr:tr-draft', typeof text === 'string' ? text : ''),
-  trKey: () => ipcRenderer.send('seltr:tr-key'),
 });

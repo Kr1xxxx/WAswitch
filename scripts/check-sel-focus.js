@@ -99,7 +99,7 @@ app.whenReady().then(async () => {
     await wc.executeJavaScript('getSelection().removeAllRanges(); 1');
     wc.focus(); await wait(100);
     const H = 'abcdef0123456789';
-    const entry = { h: H, state: 'done', orig: true, tr: 'Hallo auf Deutsch', edited: false, fixed: false, suggest: '', err: '', errPid: '', rows: [['翻译时间', '10:02']] };
+    const entry = { h: H, state: 'done', orig: true, tr: 'Hallo auf Deutsch', edited: false, fixed: false, suggest: '', err: '', rows: [['翻译时间', '10:02']] };
     const opened = await selTr.openTr({ id: 'a1', wc, h: H, rect: { x: 20, y: 40, w: 300, h: 20 }, top: 30, entry, draft: '' });
     await wait(400);
     const ov2 = overlay();

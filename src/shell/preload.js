@@ -32,8 +32,6 @@ contextBridge.exposeInMainWorld('wa', {
   onDock: (cb) => ipcRenderer.on('dock:state', (_e, st) => cb(st)),
   // 轻量号：每条收到的消息下面显示的译文（设置里选了「消息下面」时）
   onLiteTr: (cb) => ipcRenderer.on('lite:tr', (_e, d) => cb(d)),
-  // 网页号气泡里的「去填密钥」：主进程叫界面打开这个服务商的密钥表单
-  onTrOpenKey: (cb) => ipcRenderer.on('tr:open-key', (_e, d) => cb(d)),
   // 语音转文字：主进程把下载好的语音给界面解码（见 shell/voice.js）
   onVoiceDecode: (cb) => ipcRenderer.on('voice:decode', (_e, req) => cb(req)),
   voiceDecoded: (n, r) => ipcRenderer.send('voice:decoded', n, r),
@@ -59,21 +57,17 @@ contextBridge.exposeInMainWorld('wa', {
   trPlace: (place) => ipcRenderer.invoke('tr:place', place),
   trAuto: (accountId, on) => ipcRenderer.invoke('tr:auto', { accountId, on: on === true }),
   trConfig: () => ipcRenderer.invoke('tr:config'),
-  trProviderSave: (data) => ipcRenderer.invoke('tr:provider:save', data),
-  trProviderDelete: (id) => ipcRenderer.invoke('tr:provider:delete', id),
-  trRoles: (primaryId, fallbackId, fixId) => ipcRenderer.invoke('tr:roles', { primaryId, fallbackId, fixId }),
-  trFixZhipu: () => ipcRenderer.invoke('tr:fix:zhipu'),
+  // 来财那边翻译开通了没有、这个月额度用完没有（设置 › 翻译 的提醒）
+  trCloudStatus: () => ipcRenderer.invoke('tr:cloud-status'),
   trRole: (text) => ipcRenderer.invoke('tr:role', text),
   trWig: (on) => ipcRenderer.invoke('tr:wig', on === true),
   trLash: (on) => ipcRenderer.invoke('tr:lash', on === true),
-  trNetwork: (mode, proxyUrl) => ipcRenderer.invoke('tr:network', { mode, proxyUrl }),
-  trTest: (id) => ipcRenderer.invoke('tr:test', id),
   trRun: (data) => ipcRenderer.invoke('tr:run', data),
   trCancel: () => ipcRenderer.invoke('tr:cancel'),
   selTranslate: (accountId, text) => ipcRenderer.invoke('seltr:translate', { accountId, text }),
   trPage: (data) => ipcRenderer.invoke('tr:page', data),
   trPageCancel: () => ipcRenderer.invoke('tr:page:cancel'),
-  // 服务商太忙、等着重试：{ lane: 'dock' | 'page', ms }，ms = 还要等多久，0 = 等完了
+  // 来财太忙、等着重试：{ lane: 'dock' | 'page', ms }，ms = 还要等多久，0 = 等完了
   onTrWait: (cb) => ipcRenderer.on('tr:wait', (_e, w) => cb(w)),
   trChatLang: (accountId) => ipcRenderer.invoke('tr:chatlang', accountId),
   trLang: (accountId, lang) => ipcRenderer.invoke('tr:lang', { accountId, lang }),

@@ -7,7 +7,7 @@ const { app, BrowserWindow } = require('electron');
 
 const scenario = async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  window.__trcfg = { config: { langs: ['英语', '中文', '德语', '法语', '西班牙语'], providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], primaryId: 'z', fallbackId: '' } };
+  window.__trcfg = { config: { langs: ['英语', '中文', '德语', '法语', '西班牙语'], providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], primaryId: 'cloud', fallbackId: '' } };
   window.__cbs.state({ accounts: [], groups: [], activeId: '', page: 'translate', panelOpen: false, platform: 'linux', collapsed: false });
   await wait(300);
   const input = document.querySelector('.tp-text');

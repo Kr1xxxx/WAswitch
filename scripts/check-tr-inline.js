@@ -1,12 +1,13 @@
 // 自检：设置里选了「收到的消息译文显示在：消息下面」（默认）时，网页号的译文放在 WhatsApp 气泡里、原文下面（shen 2026-10-30）。
-// 做法：本地起一个假的 web.whatsapp.com（HTTPS 自签证书 + host-resolver-rules）和一个假的翻译服务（OpenAI 兼容接口，本机地址不用密钥），
+// 做法：本地起一个假的 web.whatsapp.com（HTTPS 自签证书 + host-resolver-rules）和一个假的来财（fixtures/cloud-team.js，启动时已登录团队），
 // 用真的软件跑，查：
 //   1. 三条客户消息下面出现译文，自己发的、只有数字的不放；原来停在最下面的，放完还在最下面
 //   2. 放好以后页面不再被改（没有来回改、没有一直重读重翻），读到的原文不带译文（不重翻）
 //   3. 翻译失败的那条显示原因和「重试」，在页面里点「重试」后换成译文
 //   4. 右侧工作台的翻译页不再列消息，只留回复框；关掉工作台也照样放译文
 //   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条那一层的下面
-//   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点；密钥没填：只有「去填密钥」，点了打开设置里这个服务商的表单
+//   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点
+//   3d. 退出团队登录：新消息显示「先登录团队才能翻译」，不发给来财；重新登录后自动补上
 //   3e. WhatsApp 换成深色主题（假页面里深色字、深色气泡）：译文块换成 Radix 深色色阶，对比度够；换回浅色后 3 秒内变回来，而且还是原来那个节点
 //   5. 设置换成「右侧工作台」：页面里的译文全部拿掉，翻译页重新列出消息；换回来又放上
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
@@ -14,9 +15,8 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { teamOff } = require('./fixtures/team-off');
+const { startCloud, teamOn, CLOUD_MAIN, EMAIL, CODE } = require('./fixtures/cloud-team');
 const net = require('net');
-const http = require('http');
 const https = require('https');
 const electron = require('electron');
 
@@ -84,27 +84,19 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   const waPort = await freePort();
   await new Promise((r) => server.listen(waPort, '127.0.0.1', r));
 
-  // 假翻译服务：按消息里的「Nummer N」回中文；第 3 条第一次回 500
+  // 假来财：按消息里的「Nummer N」回中文；第 3 条第一次回 502（来财连不上 DeepSeek）
   const calls = [];
   let fail3 = true;
   let failAll = false;
-  const trServer = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => {
-      let text = '';
-      try { const j = JSON.parse(body); text = (j.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n'); } catch {}
-      // 带着上下文（前面几条）：要翻的那条在最后
-      const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
-      calls.push(n || '?');
-      if (failAll) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"busy"}}'); return; }
-      if (n === '3' && fail3) { fail3 = false; res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":{"message":"busy"}}'); return; }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: ANSWER[n] || '（看不懂）' } }] }));
-    });
-  });
-  const trPort = await freePort();
-  await new Promise((r) => trServer.listen(trPort, '127.0.0.1', r));
+  const cloud = await startCloud({ chat: (body) => {
+    const text = (body.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    // 带着上下文（前面几条）：要翻的那条在最后
+    const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
+    calls.push(n || '?');
+    if (failAll) return { status: 502, body: { ok: false, error: 'unreachable' } };
+    if (n === '3' && fail3) { fail3 = false; return { status: 502, body: { ok: false, error: 'unreachable' } }; }
+    return { status: 200, body: { ok: true, text: ANSWER[n] || '（看不懂）', usage: { input_tokens: 10, output_tokens: 5 } } };
+  } });
 
   const dir = path.join(home, 'waswitch');
   fs.mkdirSync(dir, { recursive: true });
@@ -112,15 +104,12 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     id: '1', name: '测试号', color: '#16A34A', proxy: '', mode: 'web', primary: true,
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'SG', seed: 1 },
   }]));
-  fs.writeFileSync(path.join(dir, 'translate.json'), JSON.stringify({
-    seeded: true, seedVer: 3, termsDefaultOn: true, autoDefaultOn: true, network: { mode: 'direct', proxyUrl: '' },
-    providers: [{ id: 'local', preset: 'custom', name: '本地测试', baseUrl: `http://127.0.0.1:${trPort}/v1`, model: 'test' }], primaryId: 'local',
-  }));
+  fs.writeFileSync(path.join(dir, 'translate.json'), JSON.stringify({ termsDefaultOn: true, autoDefaultOn: true }));
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOn(dir, cloud.url) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
-    `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });
+    `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, CLOUD_MAIN], { env, stdio: 'ignore' });
   const list = async () => (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   let failures = 0;
   const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -245,34 +234,30 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     const ok5 = await waitFor(async () => (await trOf('IN5')) === ANSWER[2], 10000);
     check(ok5 >= 0, `服务恢复后再点「重试」，第 5 条换成了译文（${ok5} 毫秒）`);
 
-    // 3d. 默认服务商没填密钥：只有「去填密钥」，没有红字和「重试」；点了打开设置里这个服务商的表单；换回有密钥的服务商后自动补上
-    const saved = await shellC.evaluate("window.wa.trProviderSave({ preset: 'zhipu', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' })");
-    check(!!saved && saved.ok === true && !!saved.id, '加了一个没填密钥的智谱');
-    const localId = await shellC.evaluate("window.wa.trConfig().then((r) => r.config.primaryId)");
-    await shellC.evaluate(`window.wa.trRoles(${JSON.stringify(saved.id)}, '', '')`);
+    // 3d. 退出团队登录：新消息只显示「先登录团队才能翻译」和「重试」，没有「去填密钥」，不发给来财；重新登录后自动补上
+    const out = await shellC.evaluate('window.wa.teamLogout()');
+    check(!!out, '退出了团队登录');
+    const before6 = calls.length;
     await pageC.evaluate(`(() => {
       const app = document.querySelector('[role="application"]');
       app.insertAdjacentHTML('beforeend', ${JSON.stringify(msgIn('IN6', '10:10', 'Und Nummer 1 in Blond?'))});
       const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
       return 1;
     })()`);
-    const k6 = await waitFor(async () => (await trOf('IN6')) !== null, 10000);
+    const k6 = await waitFor(async () => /先登录团队/.test((await trOf('IN6')) || ''), 10000);
     const kp = await pageC.evaluate(`(() => {
       const n = document.querySelector('[data-id$="_IN6"] [data-wasw-tr]');
-      return n ? { text: n.textContent, bad: !!n.querySelector('[data-wasw-bad]'), btns: [...n.querySelectorAll('button')].map((b) => b.textContent) } : null;
+      return n ? { text: n.textContent, btns: [...n.querySelectorAll('button:not([data-wasw-edit])')].map((b) => b.textContent) } : null;
     })()`);
-    check(k6 >= 0 && !!kp && kp.btns.length === 1 && kp.btns[0] === '去填密钥' && !kp.bad && !/还没填密钥|重试/.test(kp.text), `没填密钥时只有「去填密钥」按钮（${kp && kp.text}）`);
-    await shot('inline-nokey');
-    await pageC.evaluate(`document.querySelector('[data-id$="_IN6"] [data-wasw-tr] button').click()`);
-    const opened = await waitFor(() => shellC.evaluate("s.page === 'settings' && settingsTab === 'translate' && !!document.querySelector('input[type=password][aria-label^=\"智谱\"]')"), 6000);
-    check(opened >= 0, '点「去填密钥」打开了设置里智谱的密钥表单');
-    if (opened < 0) console.log(await shellC.evaluate("JSON.stringify({ page: s.page, tab: settingsTab })"));
-    const stillLive = await waitFor(() => pageC.evaluate(`(() => { const b = document.querySelector('[data-id$="_IN6"] [data-wasw-tr] button'); return !!b && !b.disabled; })()`), 5000);
-    check(stillLive >= 0, '点过「去填密钥」后按钮还能再点');
+    check(k6 >= 0 && !!kp && !kp.btns.includes('去填密钥') && kp.btns.includes('重试'), `没登录时显示「先登录团队才能翻译」和「重试」（${kp && kp.text}）`);
+    check(calls.length === before6, '没登录时不发给来财');
+    await shot('inline-nologin');
+    const sent = await shellC.evaluate(`window.wa.teamCode({ email: ${JSON.stringify(EMAIL)} })`);
+    const relog = await shellC.evaluate(`window.wa.teamLogin({ email: ${JSON.stringify(EMAIL)}, code: ${JSON.stringify(CODE)} })`);
+    check(!!sent && !!relog && relog.ok === true, `重新登录了团队（${JSON.stringify(relog)}）`);
     await shellC.evaluate("window.wa.showPage('account')");
-    await shellC.evaluate(`window.wa.trRoles(${JSON.stringify(localId)}, '', '')`);
     const fixed6 = await waitFor(async () => (await trOf('IN6')) === ANSWER[1], 10000);
-    check(fixed6 >= 0, `默认服务商换成能用的后，第 6 条自动补上了译文（${fixed6} 毫秒）`);
+    check(fixed6 >= 0, `重新登录后第 6 条自动补上了译文（${fixed6} 毫秒）`);
 
     // 3e. WhatsApp 换成深色主题：译文块换成 Radix 深色色阶（唯一的深色例外，只给气泡里的译文块），换回浅色后变回来，不重建
     {
@@ -339,7 +324,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     const fc = await waitFor(async () => (await card())?.focus, 2000);
     check(fc >= 0, '小窗打开后光标在框里');
     let cd = await card();
-    check(!!cd && JSON.stringify(cd.btns) === JSON.stringify(['纠错', '保存']) && /翻译时间/.test(cd.info) && /模型本地测试 test/.test(cd.info), `小窗里有翻译信息和「纠错」「保存」（${cd && cd.info}）`);
+    check(!!cd && JSON.stringify(cd.btns) === JSON.stringify(['纠错', '保存']) && /翻译时间/.test(cd.info) && /模型来财 DeepSeek/.test(cd.info), `小窗里有翻译信息和「纠错」「保存」（${cd && cd.info}）`);
     // 打字进了小窗，没进 WhatsApp 的输入框
     await sc.send('Input.insertText', { text: '（改）' });
     cd = await card();
@@ -468,7 +453,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   } finally {
     child.kill();
     server.close();
-    trServer.close();
+    cloud.close();
   }
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);

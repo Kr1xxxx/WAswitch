@@ -1,8 +1,8 @@
 // 语音转文字自检（不发真实请求）：
-// 1) asr.js：切段（每段 ≤ 28 秒，切在安静处，最多 5 分钟）、wav 头、multipart
-// 2) Translator.transcribe：用智谱密钥、分段请求拼起来；余额不足（1113）、没密钥、密钥错、太忙重试、没听出话
+// 1) asr.js：切段（15 秒以内整段，更长的每段 ≤ 14 秒，切在安静处，最多 5 分钟）、wav 头
+// 2) Translator.transcribe：发给假的来财（照 #209 约定表），分段请求拼起来；没登录、额度、太忙重试、语音服务用不了、没听出话
 // 3) FloatCore：轻量号语音行显示、自动转写后翻译、按「voice:+消息编号」存（重开不再转）、没开自动只给按钮、失败可重试、
-//    超过 5 分钟不自动转、更早的语音不在后台补、自己发的语音不显示
+//    超过 5 分钟不自动转、更早的语音不在后台补、自己发的语音不显示、没登录团队的登录后自动重转
 // 4) FloatCore 网页号语音：按 data-id 去拿、时长回填、重开不再转、连续 3 条读不到就不再自动读（成功一次恢复）、
 //    超过 5 分钟退回按钮并退额度、一条慢语音不挡后面的文字翻译
 // 用法：node scripts/check-asr.js
@@ -14,103 +14,111 @@ const asr = require('../src/asr');
 const T = require('../src/translate');
 const { FloatCore, fromLite, VOICE_MAX_S, VOICE_TRIP, msgKey } = require('../src/floatcore');
 const { TrStore, textKey } = require('../src/trstore');
+const { fakeCloud } = require('./fixtures/fake-cloud');
 
 const R = asr.RATE;
 const tone = (sec, amp = 4000) => { const a = new Int16Array(Math.round(sec * R)); for (let i = 0; i < a.length; i += 1) a[i] = Math.round(amp * Math.sin(i / 7)); return a; };
 
 function splitting() {
   assert.deepStrictEqual(asr.splitPcm(tone(10)).map((c) => c.length), [10 * R]);
-  // 60 秒，在 24 秒处有 200 毫秒的安静：第一刀切在安静处
-  const a = tone(60);
-  a.fill(0, 24 * R, 24.2 * R);
+  // 15 秒以内整段发（来财的 Worker 每次 CPU 时间很少，一段别太大）
+  assert.deepStrictEqual(asr.splitPcm(tone(15)).map((c) => c.length), [15 * R]);
+  assert.strictEqual(asr.CHUNK_MAX_S, 14);
+  // 40 秒，在 12 秒处有 200 毫秒的安静：第一刀切在安静处（每段最后 5 秒里找）
+  const a = tone(40);
+  a.fill(0, 12 * R, 12.2 * R);
   const parts = asr.splitPcm(a);
-  assert(parts.every((c) => c.length <= asr.CHUNK_MAX_S * R), '每段不超过 28 秒');
-  assert(Math.abs(parts[0].length / R - 24.1) < 0.11, `切在安静处：${parts[0].length / R}`);
+  assert(parts.every((c) => c.length <= asr.CHUNK_MAX_S * R), '每段不超过 14 秒');
+  assert(Math.abs(parts[0].length / R - 12.1) < 0.11, `切在安静处：${parts[0].length / R}`);
   assert.strictEqual(parts.reduce((n, c) => n + c.length, 0), a.length, '切完一样长');
-  // 28.5 秒：最后半秒并进去，不单独发一段
-  assert.deepStrictEqual(asr.splitPcm(tone(28.5)).map((c) => c.length), [28.5 * R]);
+  // 剩下的不超过 15 秒就不再切：15.5 秒 = 14 + 1.5
+  assert.strictEqual(asr.splitPcm(tone(15.5)).length, 2);
+  assert.deepStrictEqual(asr.splitPcm(tone(25)).map((c) => c.length <= 15 * R), [true, true]);
   // 超过 5 分钟只转前 5 分钟
   const long = asr.splitPcm(tone(400, 100));
   assert.strictEqual(long.reduce((n, c) => n + c.length, 0), asr.MAX_SECONDS * R);
-  assert(long.length <= Math.ceil(asr.MAX_SECONDS / 23), `最多 ${long.length} 段`); // 每段至少 23 秒
+  assert(long.length <= Math.ceil(asr.MAX_SECONDS / 9), `最多 ${long.length} 段`); // 每段至少 9 秒
+  // 一段的 base64 远低于来财的上限（1.4 MB）
+  assert(asr.wavOf(tone(15)).toString('base64').length < 0.7 * 1024 * 1024);
   const wav = asr.wavOf(new Int16Array([1, -1, 2]));
   assert.strictEqual(wav.toString('ascii', 0, 4), 'RIFF');
   assert.strictEqual(wav.readUInt32LE(24), R);
   assert.strictEqual(wav.readUInt32LE(40), 6);
   assert.strictEqual(wav.length, 50);
-  const f = asr.formOf(wav);
-  const s = f.body.toString('latin1');
-  assert(/^multipart\/form-data; boundary=/.test(f.type));
-  assert(s.includes('name="model"\r\n\r\nglm-asr-2512') && s.includes('filename="voice.wav"') && s.includes('Content-Type: audio/wav'));
+  assert.strictEqual(typeof asr.formOf, 'undefined', '不再拼智谱的 multipart');
+  assert.strictEqual(asr.textOf('{"ok":true,"text":" Hallo "}'), 'Hallo');
+  assert.strictEqual(asr.textOf('{"ok":true,"text":""}'), '');
   assert.strictEqual(asr.clock(23), '0:23');
   assert.strictEqual(asr.clock(412), '6:52');
 }
 
 async function translator() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-'));
-  const ss = { isEncryptionAvailable: () => true, encryptString: (t) => Buffer.from(`E${t}`), decryptString: (b) => b.toString().slice(1) };
-  const calls = [];
-  let behave = [];
-  const fake = { fetch: async (url, opt) => {
-    calls.push({ url, opt });
-    const b = behave.shift() || {};
-    if (b === 'net') throw new Error('net::ERR_CONNECTION_RESET');
-    const st = b.status || 200;
-    return { ok: st < 300, status: st, body: null, headers: { get: () => null }, text: async () => (b.body !== undefined ? b.body : JSON.stringify({ text: 'Hello' })) };
-  } };
-  const tr = new T.Translator({ seed: false, dir, safeStorage: ss, sessionFor: () => fake, retryMs: 1, random: () => 0 });
+  const cloud = fakeCloud();
+  const tr = new T.Translator({ dir, sessionFor: () => cloud.session, cloud: cloud.login, retryMs: 1, random: () => 0 });
+  const calls = () => cloud.calls.filter((c) => c.route === 'ai/transcribe');
+  // 没登录团队：不发请求
+  cloud.logout();
   let r = await tr.transcribe(tone(2));
-  assert.strictEqual(r.kind, 'config', '没有智谱：提示先添加');
-  const zp = tr.saveProvider({ preset: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' });
-  assert(zp.ok);
-  r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.kind, r.providerId, r.error], ['auth', zp.id, '智谱还没填密钥']);
-  assert.strictEqual(calls.length, 0, '没密钥不发请求');
-  tr.saveProvider({ id: zp.id, preset: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', key: 'zp-key-123456' });
-  // 两段：分别请求，文字拼起来
-  behave = [{ body: JSON.stringify({ text: 'Hello, is the wig' }) }, { body: JSON.stringify({ text: ' still available?' }) }];
+  assert.deepStrictEqual([r.kind, r.error, cloud.calls.length], ['auth', '先登录团队才能翻译', 0]);
+  assert(!('providerId' in r));
+  cloud.loginAgain();
+  // 40 秒切成几段：分别请求，文字拼起来；每段带自己的真实时长
+  const n40 = asr.splitPcm(tone(40)).length;
+  assert(n40 >= 3, `40 秒至少 3 段：${n40}`);
+  const words = Array.from({ length: n40 }, (_, i) => `w${i}`);
+  cloud.next(...words.map((w) => ({ status: 200, body: { ok: true, text: ` ${w} ` } })));
   r = await tr.transcribe(tone(40));
-  assert.deepStrictEqual(r, { text: 'Hello, is the wig still available?', seconds: 40 });
-  assert.strictEqual(calls.length, 2);
-  assert.strictEqual(calls[0].url, 'https://open.bigmodel.cn/api/paas/v4/audio/transcriptions');
-  assert.strictEqual(calls[0].opt.headers.Authorization, 'Bearer zp-key-123456');
-  assert(calls[0].opt.body instanceof Uint8Array && /boundary=/.test(calls[0].opt.headers['Content-Type']), '发的是 multipart');
-  // 余额不足：智谱 1113 是 HTTP 429，不重试
-  calls.length = 0;
-  behave = [{ status: 429, body: '{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}' }];
+  assert.deepStrictEqual(r, { text: words.join(' '), seconds: 40 });
+  assert.strictEqual(calls().length, n40);
+  const c0 = calls()[0];
+  assert.strictEqual(c0.url, 'https://cloud.example/api/device/ai/transcribe');
+  assert.strictEqual(c0.opt.headers.Authorization, 'Bearer device-token-123');
+  assert.deepStrictEqual(Object.keys(c0.body).sort(), ['audio', 'seconds', 'v']);
+  assert.strictEqual(Buffer.from(c0.body.audio, 'base64').toString('ascii', 0, 4), 'RIFF', '发的是 base64 的 wav');
+  const secs = calls().map((c) => c.body.seconds);
+  assert(secs.every((x) => x > 0 && x <= 15), JSON.stringify(secs));
+  assert(Math.abs(secs.reduce((a, b) => a + b, 0) - 40) < 0.05, `各段时长加起来是 40 秒：${secs}`);
+  cloud.reset();
+  r = await tr.transcribe(tone(2.5));
+  assert.strictEqual(calls()[0].body.seconds, 2.5, '时长可以带小数');
+  // 额度用完：不重试
+  cloud.reset(); cloud.next({ status: 402, error: 'over_budget' });
   r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.kind, r.error, calls.length], ['quota', '智谱余额不足，语音转文字要先充值', 1]);
+  assert.deepStrictEqual([r.kind, r.error, calls().length], ['quota', '本月翻译额度用完了，请找管理员', 1]);
   // 太忙：重试，第二次成功
-  calls.length = 0;
-  behave = [{ status: 429, body: '{"error":{"code":"1302","message":"rate limit"}}' }, { body: '{"text":"Danke"}' }];
+  cloud.reset(); cloud.next({ status: 429, error: 'rate_limited', extra: { retry_after_s: 0.01 } }, { status: 200, body: { ok: true, text: 'Danke' } });
   r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.text, calls.length], ['Danke', 2]);
-  // 密钥错：带上服务商，界面给「去填密钥」
-  behave = [{ status: 401, body: '{"error":{"message":"invalid key zp-key-123456"}}' }];
+  assert.deepStrictEqual([r.text, calls().length], ['Danke', 2]);
+  // 来财的语音服务今天用不了（503 no_ai）：不重试，说一句
+  cloud.reset(); cloud.next({ status: 503, error: 'no_ai', extra: { retry_after_s: 60 } });
   r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.kind, r.providerId], ['auth', zp.id]);
-  assert(!JSON.stringify(r).includes('zp-key-123456'), '报错里不带密钥');
+  assert.deepStrictEqual([r.error, calls().length], ['语音转文字暂时用不了，请稍后再试', 1]);
+  cloud.reset(); cloud.next({ status: 502, error: 'asr_failed' });
+  r = await tr.transcribe(tone(2));
+  assert.deepStrictEqual([r.kind, r.error], ['server', '语音转文字失败，请稍后再试']);
+  // 登录失效
+  cloud.reset(); cloud.next({ status: 401, error: 'login_required' });
+  r = await tr.transcribe(tone(2));
+  assert.deepStrictEqual([r.kind, r.error], ['auth', '团队登录失效，请重新登录']);
+  assert(!JSON.stringify(r).includes('device-token'), '报错里不带令牌');
   // 网络断了：这一段就地重试一次，还断才算失败
-  calls.length = 0;
-  behave = ['net', 'net'];
+  cloud.reset(); cloud.next('net', 'net');
   r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.kind, calls.length], ['network', 2]);
-  calls.length = 0;
-  behave = ['net', { body: '{"text":"Danke"}' }];
+  assert.deepStrictEqual([r.kind, cloud.calls.length], ['network', 2]);
+  cloud.reset(); cloud.next('net', { status: 200, body: { ok: true, text: 'Danke' } });
   r = await tr.transcribe(tone(2));
-  assert.deepStrictEqual([r.text, calls.length], ['Danke', 2], '断一次重试一次就好');
-  // 长语音中间一段断了：只重发这一段，前面转好的不再付钱
-  calls.length = 0;
-  behave = [{ body: '{"text":"Hello, is the wig"}' }, 'net', { body: '{"text":" still available?"}' }];
-  r = await tr.transcribe(tone(40));
-  assert.deepStrictEqual([r.text, calls.length], ['Hello, is the wig still available?', 3]);
+  assert.deepStrictEqual([r.text, cloud.calls.length], ['Danke', 2], '断一次重试一次就好');
+  // 长语音中间一段断了：只重发这一段，前面转好的不再用额度
+  cloud.reset(); cloud.next({ status: 200, body: { ok: true, text: 'Hello, is the wig' } }, 'net', { status: 200, body: { ok: true, text: 'still available?' } });
+  r = await tr.transcribe(tone(20));
+  assert.deepStrictEqual([r.text, cloud.calls.length], ['Hello, is the wig still available?', 3]);
   // 每一段各有一次重试机会，不是整条语音只有一次
-  calls.length = 0;
-  behave = ['net', { body: '{"text":"Hello"}' }, 'net', { body: '{"text":"again"}' }];
-  r = await tr.transcribe(tone(40));
-  assert.deepStrictEqual([r.text, calls.length], ['Hello again', 4]);
-  // 没听出话
-  behave = [{ body: '{"text":"  "}' }];
+  cloud.reset(); cloud.next('net', { status: 200, body: { ok: true, text: 'Hello' } }, 'net', { status: 200, body: { ok: true, text: 'again' } });
+  r = await tr.transcribe(tone(20));
+  assert.deepStrictEqual([r.text, cloud.calls.length], ['Hello again', 4]);
+  // 没听出话（来财回 text 空）
+  cloud.reset(); cloud.next({ status: 200, body: { ok: true, text: '' } });
   r = await tr.transcribe(tone(2));
   assert.deepStrictEqual([r.kind, r.error], ['empty', '没听出说的话']);
   r = await tr.transcribe(new Int16Array(0));
@@ -189,26 +197,27 @@ async function floatFlow() {
   assert.strictEqual(v.items[3].tr, '中:Bonjour V4');
   assert.strictEqual(core.accs.get('a1').day.n, before + 1);
   // 转文字失败：报错，点重试再转
-  answer = () => ({ error: '智谱余额不足，语音转文字要先充值', kind: 'quota' });
+  answer = () => ({ error: '本月翻译额度用完了，请找管理员', kind: 'quota' });
   msgs.push({ id: 'V5', me: false, ts: now - 2, text: '[语音]', voice: 3 });
   core.ingest('a1', fromLite(liteView(jid, msgs), jid), { auto: true, dailyCap: 100 });
   await settle(core);
   v = core.viewOf('a1');
   const last = v.items[v.items.length - 1];
-  assert.deepStrictEqual([last.state, last.err, last.text], ['error', '智谱余额不足，语音转文字要先充值', '']);
+  assert.deepStrictEqual([last.state, last.err, last.text], ['error', '本月翻译额度用完了，请找管理员', '']);
   answer = () => ({ text: 'Merci' });
   assert.strictEqual(core.manual('a1', last.h), true);
   await settle(core);
   assert.strictEqual(core.viewOf('a1').items.find((it) => it.h === last.h).tr, '中:Merci');
-  // 没填智谱密钥：报错带服务商，填好密钥后自动重转
-  answer = () => ({ error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' });
+  // 没登录团队：报错（没有「去填密钥」），登录后自动重转
+  answer = () => ({ error: '先登录团队才能翻译', kind: 'auth' });
   msgs.push({ id: 'V6', me: false, ts: now - 1, text: '[语音]', voice: 3 });
   core.ingest('a1', fromLite(liteView(jid, msgs), jid), { auto: true, dailyCap: 100 });
   await settle(core);
   let v6 = core.viewOf('a1').items.find((it) => it.voice === 3 && it.state === 'error');
-  assert.strictEqual(v6.errPid, 'zp');
+  assert.strictEqual(v6.err, '先登录团队才能翻译');
+  assert(!('errPid' in v6), '没有服务商可填');
   answer = () => ({ text: 'Ciao' });
-  assert.deepStrictEqual(core.retryKeyErrors({ dailyCap: 100 }), ['a1']);
+  assert.deepStrictEqual(core.retryKeyErrors({ dailyCap: 100, kinds: ['auth', 'config'], match: () => true }), ['a1']);
   await settle(core);
   v6 = core.viewOf('a1').items.find((it) => it.h === v6.h);
   assert.strictEqual(v6.tr, '中:Ciao');
@@ -409,5 +418,5 @@ async function webFlow() {
   await backfill();
   await heardKept();
   await webFlow();
-  console.log(`语音转文字自检通过（切段、wav、智谱请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻、网页号语音）`);
+  console.log(`语音转文字自检通过（切段、wav、来财请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻、网页号语音）`);
 })().catch((e) => { console.error(e); process.exit(1); });
