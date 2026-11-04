@@ -610,7 +610,8 @@ await test('停用、登录失效、退出登录时队列留着（重新登录�
   assert.ok(out.includes('team.logout()') && !out.includes('purge'), '主动退出登录不删队列（界面说退出登录能撤回）');
   assert.ok(/personChanged: \(\) => crmQueue\?\.dropBad\(\)/.test(main), '换了人登录：删上一个人解不开的旧队列');
   assert.ok(/const crmOn = [^\n]*!acc\.teamRejoin/.test(main), '重新加入的号：来财知道号码以后才采集和上传');
-  assert.ok(/if \(acc\.teamRebackfill\) \{ crmQueue\.rebackfill\(acc\.id\); delete acc\.teamRebackfill; \}/.test(rec), '队列留着的重新加入：再补传一次');
+  assert.ok(/if \(acc\.teamRebackfill\) \{ crmQueue\.rebackfill\(acc\.id\); delete acc\.teamRebackfill; rebackfilled = true; \}/.test(rec), '队列留着的重新加入：再补传一次');
+  assert.ok(/if \(rebackfilled\) saveAccounts\(\);/.test(rec), '补传标记清掉后马上存，重启后不再补');
   assert.ok(/crmWaitPhone: /.test(main), '等号码的号告诉团队页');
   const shell = fs.readFileSync(new URL('../src/shell/shell.js', import.meta.url), 'utf8');
   assert.ok(shell.includes("a.crmWaitPhone ? '等读到本号的号码'"), '团队页显示在等号码');
