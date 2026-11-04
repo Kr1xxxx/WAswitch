@@ -9,8 +9,8 @@ import { createRequire } from 'node:module';
 import { crmItem, textOf, backfillItems } from '../src/lite/crm.mjs';
 
 const require = createRequire(import.meta.url);
-const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, keyIdOf, cleanName, keepQueue } = require('../src/crm/queue.js');
-const { CrmUploader, pickBatch } = require('../src/crm/upload.js');
+const { CrmQueue, MAX_SEEN, MAX_AGE_MS, MAX_BYTES, HELD_RETRY_MS, BAD_RETRY_MS, keyIdOf, cleanName, keepQueue } = require('../src/crm/queue.js');
+const { CrmUploader, pickBatch, BUDGET_TEXT } = require('../src/crm/upload.js');
 const { webItem, timeOf, WebReader } = require('../src/crm/web.js');
 const { parsePre } = require('../src/wa-page.js');
 
@@ -101,13 +101,70 @@ await test('文件坏了：备份后从空队列开始', async () => {
   assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('crm-queue.bin.bad-')));
 });
 
-await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总共 1 GB', async () => {
+await test('系统还不能加密（safeStorage 没准备好）：队列文件不动、不覆盖，能加密了再读', async () => {
+  const dir = tmp();
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => T0, timers: noTimers });
+  q.enable('1');
+  q.add('1', { mid: '3EB0KEEP1', peer: '447700900123', at: T0 + 1, text: 'keep me' });
+  q.saveNow();
+  const before = fs.readFileSync(path.join(dir, 'crm-queue.bin'));
+  let ready = false;
+  const late = { ...safe(), isEncryptionAvailable: () => ready };
+  const q2 = new CrmQueue({ dir, safeStorage: late, now: () => T0, timers: noTimers });
+  assert.deepEqual(q2.enabledIds(), []);
+  q2.sweep();
+  q2.saveNow();
+  assert.deepEqual(fs.readdirSync(dir), ['crm-queue.bin'], '没改名成 .bad');
+  assert.ok(fs.readFileSync(path.join(dir, 'crm-queue.bin')).equals(before), '没被空队列覆盖');
+  ready = true;
+  assert.equal(q2.stats('1').queued, 1, '能加密了就读出来');
+  assert.equal(q2.peek('1')[0].text, 'keep me');
+});
+
+await test('解不开（钥匙环拒绝一次）：改名 .bad，之后再试最新的一个并回来；30 天后删；换了人登录时删', async () => {
+  const dir = tmp();
+  let now = T0;
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers });
+  q.enable('1');
+  q.add('1', { mid: '3EB0OLD1', peer: '447700900123', at: T0 + 1, text: 'held chat' });
+  q.saveNow();
+  let deny = true;
+  const flaky = { ...safe(), decryptString: (b) => { if (deny) throw new Error('denied'); return safe().decryptString(b); } };
+  const q2 = new CrmQueue({ dir, safeStorage: flaky, now: () => now, timers: noTimers });
+  assert.deepEqual(q2.enabledIds(), []);
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('crm-queue.bin.bad-')));
+  // 这期间来了新消息
+  q2.enable('1');
+  q2.add('1', { mid: '3EB0NEW1', peer: '447700900123', at: now + 5, text: 'new chat' });
+  deny = false;
+  q2.sweep();
+  assert.equal(q2.stats('1').queued, 1, '30 分钟内不再试');
+  now += BAD_RETRY_MS;
+  q2.sweep();
+  assert.deepEqual(q2.peek('1').map((x) => x.text), ['held chat', 'new chat'], '解开了：并回来');
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')), '并回来以后删掉 .bad');
+  assert.equal(q2.add('1', { mid: '3EB0OLD1', peer: '447700900123', at: T0 + 1, text: 'x' }), false, '去重表也并回来');
+  // 一直解不开：30 天后删
+  fs.writeFileSync(path.join(dir, `crm-queue.bin.bad-${now}`), 'garbage');
+  now += BAD_RETRY_MS;
+  q2.sweep();
+  assert.ok(fs.readdirSync(dir).some((f) => f.includes('.bad-')), '30 天内留着');
+  now += MAX_AGE_MS + 1;
+  q2.sweep();
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')), '30 天后删');
+  // 换了人登录：删
+  fs.writeFileSync(path.join(dir, `crm-queue.bin.bad-${now}`), 'garbage');
+  q2.dropBad();
+  assert.ok(!fs.readdirSync(dir).some((f) => f.includes('.bad-')));
+});
+
+await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总共约 400 MB', async () => {
   let now = T0;
   const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => now, timers: noTimers });
   q.enable('1');
   assert.equal(MAX_SEEN, 20000);
   assert.equal(MAX_AGE_MS, 30 * 24 * 3600 * 1000);
-  assert.equal(MAX_BYTES, 1024 * 1024 * 1024);
+  assert.equal(MAX_BYTES, 400 * 1024 * 1024, '整个文件要一次写成一个字符串：远低于 V8 的字符串上限');
   for (let i = 0; i < MAX_SEEN + 50; i += 1) q.add('1', { mid: `m${i}`, peer: '8613800000000', at: T0 + i, text: 'x' });
   assert.equal(q.load().get('1').seen.size, MAX_SEEN);
   assert.equal(q.add('1', { mid: 'm0', peer: '8613800000000', at: T0 + 1, text: 'x' }), true, '最早的去重记录被挤掉');
@@ -118,6 +175,37 @@ await test('上限：去重表每个号 20000 条；超过 30 天的丢掉；总
   q.add('1', { mid: 'new', peer: '8613800000000', at: now, text: 'new' });
   q.sweep();
   assert.equal(q.stats('1').queued, 1);
+});
+
+await test('超过大小上限：先丢最早的 held（等建档的），没有了再丢最早的待发；记下丢了几条；写盘照常', async () => {
+  const dir = tmp();
+  const errors = [];
+  let now = T0;
+  // 每条估算 3 * 100 + 100 = 400 字节；上限 4000 = 10 条
+  const q = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers, maxBytes: 4000, onError: (e) => errors.push(e.message) });
+  q.enable('1');
+  q.enable('2');
+  const add = (acc, i) => q.add(acc, { mid: `3EB0CAP${acc}${i}`, peer: '447700900123', at: T0 + i, text: 'x'.repeat(100) });
+  for (let i = 0; i < 4; i += 1) add('1', i);
+  q.settle('1', q.peek('1').map((x) => ({ h: x.h, status: 'held' })));
+  for (let i = 10; i < 16; i += 1) add('2', i);
+  assert.deepEqual([q.stats('1').held, q.stats('2').queued], [4, 6]);
+  add('1', 20);
+  add('2', 21);
+  assert.deepEqual([q.stats('1').held, q.stats('1').queued, q.stats('2').queued], [2, 1, 7], '先丢最早的两条 held，新的待发都在');
+  assert.equal(q.dropped.n, 2);
+  assert.ok(errors.length >= 1 && errors.every((m) => /^本机队列太大，丢掉最早的 \d+ 条$/.test(m)), '记日志（只有条数）');
+  for (let i = 30; i < 33; i += 1) add('2', i);
+  assert.deepEqual([q.stats('1').held, q.stats('1').queued + q.stats('2').queued], [0, 10], 'held 丢完了再丢最早的待发');
+  assert.equal(q.peek('2')[0].k, '3EB0CAP211', '丢的是所有号里最早的一条（3EB0CAP210）');
+  q.saveNow();
+  const q2 = new CrmQueue({ dir, safeStorage: safe(), now: () => now, timers: noTimers, maxBytes: 4000 });
+  assert.equal(q2.stats('2').queued, 9);
+  // 团队页“上次上传”那一行接一句
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const fn = main.slice(main.indexOf('function crmUploadStatus'), main.indexOf('function setupTeam'));
+  assert.ok(fn.includes('crmQueue.dropped') && /删了最早的/.test(fn));
+  assert.ok(!fn.includes('·'));
 });
 
 // ---- 轻量号 ----
@@ -396,18 +484,22 @@ await test('上传到来财：结果条数对不上就整批留着；不认识�
   await new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true }).run();
   assert.equal(q.stats('1').queued, 0, '旧后台没有 results：整批删');
 });
-await test('停用、登录失效时队列留着（重新登录接着传）；收回、不再同步、删号才删；主动退出登录全部删', async () => {
+await test('停用、登录失效、退出登录时队列留着（重新登录接着传）；收回、不再同步、删号、换人登录才删', async () => {
   const team = { teamId: '00000000-0000-0000-0000-000000000001', teamHidden: false, teamCrm: true };
-  assert.equal(keepQueue(team), true, '停用 / 401 / 没登录：号还是团队号，队列留着');
-  assert.equal(keepQueue({ ...team, teamHidden: true }), false, '收回（换人登录时也会先收起）');
+  assert.equal(keepQueue(team), true, '停用 / 401 / 退出登录 / 没登录：号还是团队号，队列留着');
+  assert.equal(keepQueue({ ...team, teamHidden: true }), false, '收回');
   assert.equal(keepQueue({ ...team, teamCrm: false }), false, '来财不再同步这个号');
-  assert.equal(keepQueue({ ...team, teamId: '' }), false, '不是团队号');
+  assert.equal(keepQueue({ ...team, teamId: '' }), false, '不是团队号（换人登录时 login() 清掉 teamId）');
+  assert.equal(keepQueue({ ...team, teamId: '', teamCrm: false, teamRejoin: true, teamKeepQueue: true }), true, '同一个人换设备、升级换后台：重新加入期间留着');
+  assert.equal(keepQueue({ ...team, teamHidden: true, teamKeepQueue: true }), false, '重新加入时被收回：删');
   assert.equal(keepQueue(undefined), false, '号删了');
   const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const rec = main.slice(main.indexOf('function crmReconcile'), main.indexOf('async function crmReadWeb'));
   assert.ok(/if \(keepQueue\(acc\)\) continue;\s*crmQueue\.purge\(id\)/.test(rec), 'crmReconcile 先看 keepQueue 再删');
   const out = main.slice(main.indexOf("handleShell('team:logout'"), main.indexOf("onShell('team:later'"));
-  assert.ok(out.includes('crmQueue.purge(id)'), '主动退出登录时删队列');
+  assert.ok(out.includes('team.logout()') && !out.includes('purge'), '主动退出登录不删队列（界面说退出登录能撤回）');
+  assert.ok(/personChanged: \(\) => crmQueue\?\.dropBad\(\)/.test(main), '换了人登录：删上一个人解不开的旧队列');
+  assert.ok(/const crmOn = [^\n]*!acc\.teamRejoin/.test(main), '重新加入的号：来财知道号码以后才采集和上传');
   // 停用、401 不改团队号的字段：TeamSync 的 doSync / tokenGone 不碰 teamCrm、teamHidden
   const idx = fs.readFileSync(new URL('../src/team/index.js', import.meta.url), 'utf8');
   for (const fn of ['tokenGone(why) {', 'offline(why']) {
@@ -416,6 +508,36 @@ await test('停用、登录失效时队列留着（重新登录接着传）；�
   }
   const rv = idx.slice(idx.indexOf('if (r.status === 403 && r.data && r.data.revoked === true'), idx.indexOf("if (r.status === 401)"));
   assert.ok(rv.length > 0 && !/teamCrm|teamHidden/.test(rv), '403 revoked 不收回号');
+});
+await test('来财今天的上传额度用完（429 budget）：说明天继续，所有号都停，聊天留着，过 retry_after_s 再传；别的 429 照旧', async () => {
+  let now = T0;
+  const q = new CrmQueue({ dir: tmp(), safeStorage: safe(), now: () => now, timers: noTimers });
+  const accs = [{ id: '1', teamId: 'a' }, { id: '2', teamId: 'b' }];
+  for (const a of accs) { q.enable(a.id); q.add(a.id, { mid: `3EB0BUD${a.id}`, peer: '447700900123', at: T0 + 1, text: 'x' }); }
+  let team = fakeTeam([{ status: 429, data: { ok: false, error: 'budget', retry_after_s: 3600 } }]);
+  const up = new CrmUploader({ queue: q, team, accounts: () => accs, crmOn: () => true, now: () => now });
+  const r = await up.run();
+  assert.equal(r.budget, true);
+  assert.equal(team.calls.length, 1, '第二个号也不传了');
+  assert.equal(up.last.error, BUDGET_TEXT);
+  assert.equal(BUDGET_TEXT, '今天的上传额度用完了，明天继续');
+  assert.deepEqual([q.stats('1').queued, q.stats('2').queued], [1, 1]);
+  now += 3599 * 1000;
+  assert.equal(up.due(), false, '没到时间不传');
+  up.team = team = fakeTeam([]);
+  assert.equal((await up.run()).skipped, true);
+  assert.equal(team.calls.length, 0);
+  now += 1000;
+  assert.equal(up.due(), true);
+  await up.run();
+  assert.deepEqual([q.stats('1').queued, q.stats('2').queued], [0, 0]);
+  assert.equal(up.last.error, '');
+  // 别的 429：还是“太频繁”，只停这个号
+  q.add('1', { mid: '3EB0BUD9', peer: '447700900123', at: now, text: 'y' });
+  up.team = team = fakeTeam([{ status: 429, data: { ok: false, error: 'rate', retry_after_s: 30 } }]);
+  await up.run();
+  assert.equal(up.last.error, '太频繁，稍后再传');
+  assert.equal(up.due(), true);
 });
 await test('上传：一个号一轮最多 3 次（新的和先留着的合计），来财限每个号每 10 分钟 20 次', async () => {
   let now = T0;

@@ -7,10 +7,14 @@
 //   - 不认识的结果当 held（留着、每小时再传，30 天后删）
 //   - 每次最多约 200 KB、500 条；每个号每轮最多传 3 次（来财限制每个号每 10 分钟 20 次）
 //   - 503（来财还没开、推送暂停）：这一轮停，聊天留在本机；409（这个号没开）、429（太频繁）：这个号下一轮再传
+//   - 429 + error 'budget'（来财今天的上传额度用完了）：所有号都停，聊天留在本机，过 retry_after_s 秒再传
 //   - 不跟随跳转、不走账号代理（用 TeamSync.post）
 const MAX_BODY = 200 * 1024;
 const MAX_ITEMS = 500;
 const PER_ACCOUNT = 3;
+const BUDGET_WAIT_S = 3600; // 额度用完但没说等多久：1 小时后再试
+const BUDGET_MAX_S = 2 * 24 * 3600;
+const BUDGET_TEXT = '今天的上传额度用完了，明天继续';
 
 function pickBatch(items) {
   const out = [];
@@ -37,10 +41,12 @@ class CrmUploader {
     this.now = now;
     this.running = null;
     this.last = { at: 0, error: '' };
+    this.waitUntil = 0; // 来财的上传额度用完了：这之前不传
   }
 
   // 有没有要传的（待发的，或者先留着、到了再传时间的）
   due() {
+    if (this.now() < this.waitUntil) return false;
     return this.accounts().some((acc) => this.crmOn(acc) && (this.queue.peek(acc.id, 1).length || this.queue.peekHeld(acc.id, 1).length));
   }
 
@@ -51,6 +57,7 @@ class CrmUploader {
 
   async doRun() {
     if (!this.team.enrolled()) return { skipped: true };
+    if (this.now() < this.waitUntil) return { skipped: true, budget: true };
     const token = this.team.tokenPlain();
     if (!token) return { skipped: true };
     let sent = 0;
@@ -96,6 +103,12 @@ class CrmUploader {
             this.last = { at: this.now(), error: '来财暂时不收，聊天先留在本机' };
             return { paused: true, sent, held };
           }
+          if (r.status === 429 && errorOf(d) === 'budget') {
+            const s = Number.isInteger(d.retry_after_s) && d.retry_after_s > 0 ? Math.min(d.retry_after_s, BUDGET_MAX_S) : BUDGET_WAIT_S;
+            this.waitUntil = this.now() + s * 1000;
+            this.last = { at: this.now(), error: BUDGET_TEXT };
+            return { budget: true, sent, held };
+          }
           // 409 这个号没开（坐席同步会关掉本机开关并清队列）、429 太频繁、其它错误：这个号下一轮再传
           this.last = { at: this.now(), error: r.status === 429 || errorOf(d) === 'rate' ? '太频繁，稍后再传' : `上传失败（${r.status}）` };
           calls = PER_ACCOUNT;
@@ -107,4 +120,4 @@ class CrmUploader {
   }
 }
 
-module.exports = { CrmUploader, pickBatch };
+module.exports = { CrmUploader, pickBatch, BUDGET_TEXT };
