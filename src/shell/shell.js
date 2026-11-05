@@ -787,7 +787,7 @@ function problemButtons(acc) {
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
-    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); })];
+    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }, true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
