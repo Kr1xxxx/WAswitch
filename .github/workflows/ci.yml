@@ -179,7 +179,8 @@ jobs:
         run: |
           grep -q '^sha512: ' dist/latest.yml
           ls dist/*.exe.blockmap
-          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+          grep -q 'provider: generic' dist/win-unpacked/resources/app-update.yml
+          grep -q 'laicrm.com/api/device/update' dist/win-unpacked/resources/app-update.yml
       - name: 安装包里没有 MCP 代码和它的库，只有校验值和设置窗口的页面
         run: node scripts/check-packaged-mcp.js dist/win-unpacked/resources/app.asar
       - name: 打包后启动冒烟
