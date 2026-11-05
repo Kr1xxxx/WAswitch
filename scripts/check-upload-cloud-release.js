@@ -1,6 +1,6 @@
 // 自检：scripts/upload-cloud-release.mjs（发版时把更新文件传到来财）。
 // 用本机的假后台（node:http）当来财的上传接口和 GitHub 的 OIDC 令牌接口，不联网。
-// 查：传哪些文件（不传 dmg、blockmap）、ymls 最后传、全部传完才 publish、分块拼回来和原文件一样、
+// 查：传哪些文件（不传 blockmap）、ymls 最后传、全部传完才 publish、分块拼回来和原文件一样、
 // 每个请求带 OIDC 令牌（audience 对）、401 时换新令牌、5xx 重试、一直失败时取消上传并非 0 退出、
 // 4xx 不重试、缺 yml 时不传、上传地址只认来财或本机、输出里没有令牌。
 // 运行：node scripts/check-upload-cloud-release.js
@@ -126,7 +126,7 @@ function makeDir() {
   for (const [n, b] of Object.entries(files)) fs.writeFileSync(path.join(dir, n), b);
   return { dir, files };
 }
-const UPLOADED = ['WAswitch-1.0.7-arm64.zip', 'WAswitch-Setup-1.0.7.exe', 'mcp-module.json', 'waswitch-mcp-1.0.7.js', 'latest.yml', 'latest-mac.yml'];
+const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswitch-Setup-1.0.7.exe', 'mcp-module.json', 'waswitch-mcp-1.0.7.js', 'latest.yml', 'latest-mac.yml'];
 
 (async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -139,7 +139,7 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.zip', 'WAswitch-Setup-1.0.7.exe', 'mcp-m
     const starts = st.calls.filter((c) => c.route === 'start').length;
     check(starts === UPLOADED.length && [...st.files.keys()].join() === UPLOADED.join(), `只传安装包、zip、MCP 文件和两个 yml，yml 最后（${[...st.files.keys()].join(' ')}）`);
     check(UPLOADED.every((n) => st.files.get(n) && st.files.get(n).equals(files[n])), '分块拼回来和原文件一模一样');
-    check(st.calls.filter((c) => c.route === 'part').length === 3 + 2 + 4, '按来财给的块大小分块（3 + 2 + 每个小文件 1 块）');
+    check(st.calls.filter((c) => c.route === 'part').length === 3 + 2 + 5, '按来财给的块大小分块（3 + 2 + 每个小文件 1 块）');
     check(st.published && st.published.version === '1.0.7' && st.published.files.length === UPLOADED.length && st.calls[st.calls.length - 1].route === 'publish', '全部传完才 publish，版本号去掉了 v');
     check(st.oidc.length >= 1 && st.oidc.every((o) => o.audience === 'laicrm-waswitch-release' && o.apiVersion === '2.0' && o.auth === 'bearer req-tok'), 'OIDC 令牌：audience 对、原来的查询参数还在、带 GitHub 给的请求令牌');
     check(st.tokensIssued === 1 && st.calls.every((c) => c.auth === 'Bearer jwt-secret-1'), '令牌没过 4 分钟就一直用同一个，每个请求都带');

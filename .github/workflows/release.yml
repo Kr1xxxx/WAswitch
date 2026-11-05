@@ -24,6 +24,11 @@ on:
   # 手动运行只认 main，版本号的 tag 不能已经存在；tag 由下面发布时建在这次运行的提交上
   workflow_dispatch:
 
+# 同一时间只跑一次发版：两次同时往来财传同一个版本会互相覆盖
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -137,7 +142,7 @@ jobs:
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
-      # 已装的软件从来财更新：传安装包、zip、MCP 文件和两个 yml（不传 dmg、blockmap），最后让来财换成新版本。
+      # 已装的软件从来财更新：传安装包、zip、dmg、MCP 文件和两个 yml（不传 blockmap），最后让来财换成新版本。
       # 来财只认 Kr1xxxx/WAswitch 的 OIDC 令牌，所以只在没拆仓库时运行
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: env.SAME_REPO == 'true'

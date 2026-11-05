@@ -2,8 +2,8 @@
 // release.yml 的 publish 这一步在发 GitHub Release 之后运行：
 //   node scripts/upload-cloud-release.mjs dist v1.0.7
 //
-// 传哪些：目录里的 *.exe、*.zip、waswitch-mcp-*.js、mcp-module.json，最后传 latest.yml 和 latest-mac.yml，
-// 全部传完再 publish（来财这时才换成新版本，并只留新旧两个版本）。不传 dmg 和 blockmap（更新用不到）。
+// 传哪些：目录里的 *.exe、*.zip、*.dmg、waswitch-mcp-*.js、mcp-module.json，最后传 latest.yml 和 latest-mac.yml，
+// 全部传完再 publish（来财这时才换成新版本，并只留新旧两个版本）。不传 blockmap（更新用不到）。dmg 要传：latest-mac.yml 里列着它，来财 publish 时逐个核对。
 // 认证：GitHub Actions 的 OIDC 令牌（audience laicrm-waswitch-release），不用密钥。job 要有 id-token: write。
 // 令牌超过 4 分钟或来财回 401 时重新取。
 // 每个文件分块传（块大小按来财回的 part_size，现在是 6 MiB：Caddy 只收 8 MB 以内的请求），
@@ -155,7 +155,7 @@ async function uploadFile(base, version, file) {
 // 要传的文件：先安装包和 MCP 文件，最后 latest.yml、latest-mac.yml
 function pickFiles(dir) {
   const names = fs.readdirSync(dir).filter((n) => fs.statSync(path.join(dir, n)).isFile());
-  const want = names.filter((n) => /\.(exe|zip)$/i.test(n) || /^waswitch-mcp-.+\.js$/.test(n) || n === 'mcp-module.json').sort();
+  const want = names.filter((n) => /\.(exe|zip|dmg)$/i.test(n) || /^waswitch-mcp-.+\.js$/.test(n) || n === 'mcp-module.json').sort();
   const missing = YMLS.filter((y) => !names.includes(y));
   if (missing.length) throw new Error(`缺少 ${missing.join('、')}`);
   const bad = [...want, ...YMLS].filter((n) => !NAME_RE.test(n));
