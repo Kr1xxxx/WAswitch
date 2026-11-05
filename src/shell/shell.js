@@ -777,7 +777,6 @@ window.addEventListener('resize', placeUndo);
 
 // ---------- 卡片里的页面 ----------
 
-const RELEASES = 'https://github.com/Kr1xxxx/WAswitch/releases';
 
 // 按出错的类型配按钮：重连没用的情况不给“重新连接”，直连号不提代理和 Clash
 function problemButtons(acc) {
@@ -788,7 +787,7 @@ function problemButtons(acc) {
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
-    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
+    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); })];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
