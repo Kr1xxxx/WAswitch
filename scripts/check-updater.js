@@ -1,5 +1,5 @@
 // 自检：自动更新模块。
-// 1. 静态检查：updater 不碰任何账号的会话；和团队同步一样跟随系统代理（不用任何账号的代理）；不再连 GitHub。
+// 1. 静态检查：updater 不碰任何账号的会话；和团队同步一样直连（不用系统代理，也不用任何账号的代理）；不再连 GitHub。
 // 2. 只允许来财的更新地址（laicrm.com/api/device/update/）；版本比较；解析 latest-mac.yml；失败原因的中文（401、403、下载时的 status 401）。
 // 3. Mac 流程（自己下载 zip、解压、App 退出后脚本替换）：用假的 electron.net 跑一遍——每个请求带设备令牌、没登录团队不检查、
 //    正常下载并校验通过、sha512 不对时删掉、任何重定向都失败、已是最新版时不下载、连续失败 3 次标黄、新版本还在上传（404）时不算失败。
@@ -21,7 +21,7 @@ const code = src.replace(/\/\/.*$/gm, ''); // 去掉注释再查
 check(!/persist:/.test(code) && !/wa-/.test(code), 'updater 不引用账号分区（persist: / wa-）');
 check(!/require\(['"]\.\/proxy['"]\)/.test(code), 'updater 不引用 proxy 模块');
 check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话跟随系统代理）');
-check((code.match(/setProxy\(\{ mode: 'system' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'system' \})/.test(code), 'Mac 和 Windows 两条路都跟随系统代理（和团队同步一样），不设任何别的代理');
+check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都直连（和团队同步一样），不设任何别的代理');
 check(/redirect:\s*'manual'/.test(code) && !/requestWith\([^)]*next/.test(code), 'Mac 下载不跟重定向（令牌不会带到别处）');
 check(!/github|releases\.atom|releases\/download/i.test(code), 'updater 不再连 GitHub');
 check(/require\('\.\/team'\)/.test(code) && /const FEED = `\$\{TEAM_SERVER\}\/api\/device\/update\/`/.test(code), '更新地址和团队同步是同一个来财（TEAM_SERVER）');
@@ -199,7 +199,7 @@ const updatesDir = path.join(home, 'updates');
   check(requested.length === 2 && requested[0] === ymlUrl && requested[1] === asset && requested.every((x) => allowedUrl(x)), `Mac：只请求来财的 latest-mac.yml 和 zip（${requested.join(' ')}）`);
   check(sentHeaders.length === 2 && sentHeaders.every((h) => h.authorization === 'Bearer tok-1'), 'Mac：每个请求都带设备令牌');
 
-  check(proxies.length === 1 && proxies[0][0] === UPDATER_PARTITION && proxies[0][1] === 'system', `Mac：更新专用会话跟随系统代理（${JSON.stringify(proxies)}）`);
+  check(proxies.length === 1 && proxies[0][0] === UPDATER_PARTITION && proxies[0][1] === 'direct', `Mac：更新专用会话直连（${JSON.stringify(proxies)}）`);
   check(usedSessions.size === 1 && usedSessions.has(UPDATER_PARTITION), 'Mac：所有请求都走更新专用会话（不走默认会话）');
 
   // 已下载并校验过：不再下载
@@ -288,7 +288,7 @@ const updatesDir = path.join(home, 'updates');
     check(filtered('https://github.com/Kr1xxxx/WAswitch/releases/download/v1.0.7/latest.yml') && filtered('https://laicrm.com/api/device/join'), 'Windows：拦下 GitHub 和来财别的接口');
     fakeAuto.removeAllListeners();
   }
-  // Windows：会话跟随系统代理；检查前换上令牌；找不到 latest.yml 不算失败
+  // Windows：会话直连；检查前换上令牌；找不到 latest.yml 不算失败
   {
     const winProxy = [];
     const w = make();
@@ -299,7 +299,7 @@ const updatesDir = path.join(home, 'updates');
       async checkForUpdates() { seen = this.requestHeaders; const e = new Error('Cannot find latest.yml'); e.code = 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'; throw e; },
     };
     await w.check();
-    check(winProxy.join() === 'system', 'Windows：检查前把 electron-updater 的会话设成跟随系统代理');
+    check(winProxy.join() === 'direct', 'Windows：检查前把 electron-updater 的会话设成直连');
     check(seen && seen.authorization === 'Bearer tok-1', 'Windows：检查（和随后的下载）带设备令牌');
     check(w.state.status === 'none' && w.state.failures === 0 && w.pendingTimer, `Windows：latest.yml 还没传上去时不算失败（${w.state.lastResult}）`);
     clearTimeout(w.pendingTimer);

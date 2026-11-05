@@ -3,7 +3,7 @@
 // 只连来财（laicrm.com）的 /api/device/update/：地址和团队同步是同一个后台（src/team 的 TEAM_SERVER）。
 // 每个请求带团队登录的设备令牌（Authorization: Bearer），没登录团队就不检查（不算失败）。
 // 来财不跳转：任何重定向、别的主机或别的路径一律当失败，令牌不会发到别处。
-// 网络和团队同步、翻译去来财一样：用更新专用的内存会话，跟随电脑的系统代理（Clash 开系统代理时走 Clash），
+// 网络和团队同步去来财一样：用更新专用的内存会话直连，不走电脑的系统代理，
 // 不用任何账号的代理，不带任何账号的 cookie。
 // 新版本刚发布时安装包还在上传，这时 latest*.yml 是 404：不算失败，过一会儿自己再查。
 // 401（登录过期）、403（这台电脑被停用）按失败记，提示用户重新登录或找管理员。
@@ -45,12 +45,12 @@ const MAC_QUIT_WAIT_S = 25; // 替换脚本最多等旧版本退出这么久
 const APP_ID = 'com.waswitch.app';
 const UPDATER_PARTITION = 'waswitch-updater'; // 更新专用的临时会话（不是 persist:，不碰账号）
 
-// 更新专用会话：跟随系统代理（和团队同步、翻译去来财一样），不用任何账号的代理
+// 更新专用会话：直连（和团队同步去来财一样，团队同步用的 Node fetch 不读系统代理），不用任何账号的代理
 let netSession = null;
 async function updaterSession() {
   if (!netSession) {
     const ses = session.fromPartition(UPDATER_PARTITION, { cache: false });
-    await ses.setProxy({ mode: 'system' });
+    await ses.setProxy({ mode: 'direct' });
     netSession = ses;
   }
   return netSession;
@@ -367,10 +367,10 @@ class Updater {
     try { return String((this.hooks.deviceToken && this.hooks.deviceToken()) || ''); } catch { return ''; }
   }
 
-  // Windows：electron-updater 自己的会话也跟随系统代理（和 Mac、团队同步一样）。设不上就抛错，这次不查
+  // Windows：electron-updater 自己的会话也直连（和 Mac、团队同步一样）。设不上就抛错，这次不查
   async useNetWindows() {
     if (this.netReady) return;
-    await this.updater.netSession.setProxy({ mode: 'system' });
+    await this.updater.netSession.setProxy({ mode: 'direct' });
     this.netReady = true;
   }
 
