@@ -1,18 +1,21 @@
 # 打 tag（例如 v0.2.0）时自动打包 Windows 和 macOS 安装包，发到公开的 Kr1xxxx/WAswitch 的 Releases。
 # 也可以在 Actions 里对 main 手动运行：tag 取 package.json 的版本号，发布时建（推不了 tag 的环境用）。
 # 源码在私有仓库 Kr1xxxx/WAswitch-src；公开的 WAswitch 只放安装包和下载说明，永远不放源码。
-# 已装的软件认的是「Kr1xxxx/WAswitch」这个名字（package.json 的 build.publish、src/updater.js、MCP 下载地址），
-# 所以更新和下载都从公开仓库拿。发到那里用密钥 RELEASES_TOKEN（只能写 Kr1xxxx/WAswitch 的 Contents），
-# 本仓库自带的 GITHUB_TOKEN 只读。
+# 已装的软件（1.0.7 起）从来财（laicrm.com/api/device/update/）更新、下载 MCP 文件，带团队登录的设备令牌
+# （package.json 的 build.publish、src/updater.js、src/mcp-module.js）。GitHub Releases 只留历史。
+# 发完 GitHub Release 后，scripts/upload-cloud-release.mjs 把安装包、Mac 的 zip、MCP 文件和 latest.yml / latest-mac.yml
+# 传到来财，再让来财换成新版本（来财只留新旧两个版本）。认证用 GitHub Actions 的 OIDC 令牌（publish 有 id-token: write），
+# 来财只认本仓库 main 或 v* tag 上的 release.yml，不用密钥。传不上去时整个 job 失败。
+# 1.0.6 及更早的版本只认 GitHub，更新不到 1.0.7：要手动装一次 1.0.7（覆盖安装，数据都在）。
+# 拆仓库时发到公开仓库用密钥 RELEASES_TOKEN（只能写 Kr1xxxx/WAswitch 的 Contents），本仓库自带的 GITHUB_TOKEN 只读。
 # 所有 action 按 commit 固定版本。
-# 自动更新只认这里上传的文件：安装包、latest.yml / latest-mac.yml（含 sha512）和 blockmap。
-# 不要手动往 Release 里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
+# 不要手动往 Release 或来财里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
 # MCP 接口不在安装包里：先在一台机器上打成单独的文件 waswitch-mcp-<版本>.js（mcp-module），
 # 两个安装包都带上它的 sha512（src/mcp-module.json），用户在设置里下载时按这个校验。
 # 构建产物（upload-artifact）只在 job 之间传文件用，留 1 天：私有仓库只有 500 MB 存储，每次约 351 MB。
 # 没拆仓库时（源码和安装包都在 Kr1xxxx/WAswitch，私有，2026-11-03 决定先不拆）：发到本仓库自己的 Releases，
 # 用本仓库的 GITHUB_TOKEN（publish 这一步给写权限），不同步下载说明（会盖掉源码的 README），也不做不登录下载检查
-# （私有仓库不登录下不了）。已装的软件这时自动更新不了，新版要手动卸载旧版再装。
+# （私有仓库不登录下不了）。
 name: release
 
 on:
@@ -103,6 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write # 传到来财用的 OIDC 令牌
     env:
       PUBLIC_REPO: Kr1xxxx/WAswitch
       SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
@@ -133,6 +137,15 @@ jobs:
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
+      # 已装的软件从来财更新：传安装包、zip、MCP 文件和两个 yml（不传 dmg、blockmap），最后让来财换成新版本。
+      # 来财只认 Kr1xxxx/WAswitch 的 OIDC 令牌，所以只在没拆仓库时运行
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.SAME_REPO == 'true'
+        with:
+          node-version: 22
+      - name: 传到来财（已装的软件从这里更新）
+        if: env.SAME_REPO == 'true'
+        run: node scripts/upload-cloud-release.mjs dist "$TAG"
       - name: 同步下载说明和 Clash 说明到公开仓库
         if: env.SAME_REPO != 'true'
         run: scripts/sync-public-repo.sh "$PUBLIC_REPO"

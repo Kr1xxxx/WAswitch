@@ -6,9 +6,9 @@
 
 ## 仓库
 
-源码在私有仓库 `Kr1xxxx/WAswitch-src`。公开的 [`Kr1xxxx/WAswitch`](https://github.com/Kr1xxxx/WAswitch) 只放安装包（Releases）和下载说明，永远不放源码。已装的软件从公开仓库检查更新、下载 MCP 文件，所以这个仓库名和 Releases 里的文件不能动。
+源码在私有仓库 `Kr1xxxx/WAswitch-src`。公开的 [`Kr1xxxx/WAswitch`](https://github.com/Kr1xxxx/WAswitch) 只放安装包（Releases）和下载说明，永远不放源码。已装的软件（1.0.7 起）从来财（laicrm.com）检查更新、下载 MCP 文件，GitHub Releases 只留历史。
 
-发版：给 `v*` 标签后（没拆仓库时发到本仓库自己的 Releases，不同步、不检查，见 release.yml 开头），`.github/workflows/release.yml` 打包并用密钥 `RELEASES_TOKEN`（只能写 `Kr1xxxx/WAswitch` 的 Contents）把安装包和 `latest*.yml` 发到公开仓库，同时把 `build/public-repo/README.md` 和 `docs/clash.md` 同步过去（公开仓库里的 `README.md` 和 `docs/clash.md` 以这里为准，不要在那边改），最后不登录下载一遍确认更新文件能下。
+发版：给 `v*` 标签后（没拆仓库时发到本仓库自己的 Releases，不同步、不检查，见 release.yml 开头），`.github/workflows/release.yml` 打包并用密钥 `RELEASES_TOKEN`（只能写 `Kr1xxxx/WAswitch` 的 Contents）把安装包和 `latest*.yml` 发到公开仓库，同时把 `build/public-repo/README.md` 和 `docs/clash.md` 同步过去（公开仓库里的 `README.md` 和 `docs/clash.md` 以这里为准，不要在那边改），最后不登录下载一遍确认更新文件能下。发完 GitHub Release 后，`scripts/upload-cloud-release.mjs` 用 GitHub Actions 的 OIDC 令牌（不用密钥）把安装包、Mac 的 zip、MCP 文件和 `latest*.yml` 传到来财，再让来财换成新版本（只留新旧两个版本）。
 
 ## 原理
 
@@ -31,7 +31,9 @@
 
 ### 自动更新
 
-启动 1 分钟后检查一次，之后每小时检查一次，只连 GitHub，不走任何账号的代理。进度和上次检查的结果在 设置 › 关于。
+启动 1 分钟后检查一次，之后每小时检查一次。更新从来财（laicrm.com）下，要先登录团队：没登录时不检查，关于页写“登录团队后才能检查更新”；登录过期、电脑被停用时也会写出来。网络和团队同步一样跟随电脑的系统代理，不走任何账号的代理。进度和上次检查的结果在 设置 › 关于。
+
+**1.0.6 和更早的版本**只会到 GitHub 找更新，仓库改成私有后找不到了：这些电脑要手动装一次 1.0.7（直接覆盖安装，账号和聊天数据都在），之后点“检查并更新”就能自动更新。
 
 - **Windows**：自动下载。点“立即更新”马上静默安装并自动重新打开，不弹确认；或者窗口缩在托盘、没有未读、10 分钟没有新消息时自动静默安装并重启，重启后回到托盘。窗口开着时不会自己重启。点过“立即更新”或“检查并更新”之后，正在打字、编辑账号、扫码、发消息或页面还在加载时，等这些结束再装。退出软件时也会顺手装上。
 - **macOS**：没有签名证书，不走系统自带的更新，由 WAswitch 自己替换。自动下载新版 `.zip` 并按 sha512 校验、解压、核对版本号；安装时机和 Windows 一样（缩到托盘且空闲时自动，或点“立即更新”）：WAswitch 退出后替换“应用程序”里的 WAswitch.app、清掉“已损坏”标记、重新打开。WAswitch 不在“应用程序”里（比如直接在安装盘里运行）或没有写入权限时，改成弹通知，点“打开安装包”后把新的 WAswitch 拖进“应用程序”。
@@ -173,7 +175,7 @@ npx electron scripts/check-isolation.js
 
 开启后，本机的 AI 客户端（Claude Desktop、Claude Code 等）可以通过 [MCP](https://modelcontextprotocol.io) 管理 WAswitch 里的账号。
 
-MCP 不在安装包里。开启方法：设置 › AI 接口 → 点“下载”（约 0.7 MB，从 GitHub 直连下载，按安装包里带的 sha512 校验）→ 下载后打开“开启 MCP”开关。点“详细设置…”（或托盘图标右键 →“MCP 接口设置…”）会生成 Claude Code 的添加命令和 Claude Desktop 的配置，复制即可。
+MCP 不在安装包里。开启方法：设置 › AI 接口 → 点“下载”（约 0.7 MB，从来财下载，要先登录团队，按安装包里带的 sha512 校验）→ 下载后打开“开启 MCP”开关。点“详细设置…”（或托盘图标右键 →“MCP 接口设置…”）会生成 Claude Code 的添加命令和 Claude Desktop 的配置，复制即可。
 
 - MCP 文件的版本跟着软件走：软件更新后，下载过的电脑会自动在后台下配套的新文件，开关状态不变。
 - 下载的文件放在软件数据目录的 `modules/mcp/` 下，每次加载前都再校验一次，对不上就删掉、不加载。
@@ -259,7 +261,7 @@ npm run dist
 
 推送 `v` 开头的 tag（例如 `v0.2.0`）时，GitHub Actions 会自动打包 Windows 和 macOS 安装包并发布到 Releases（标为预发布）。
 
-自动更新依赖这一步上传的 `latest.yml`、`latest-mac.yml` 和 `.blockmap`。发布新版时：先改 `package.json` 的 `version`（必须比上一版大，更新只升不降），再推送同名 tag（带 `v`）。不要手动往 Release 里传安装包。建议给 GitHub 账号开两步验证并保护 `v*` tag：能发布 Release 就等于能给所有电脑装软件。
+自动更新依赖这一步传到来财的 `latest.yml`、`latest-mac.yml`、安装包和 zip（`.blockmap` 和 dmg 不传，更新用不到）。发布新版时：先改 `package.json` 的 `version`（必须比上一版大，更新只升不降），再推送同名 tag（带 `v`）。不要手动往 Release 里传安装包。建议给 GitHub 账号开两步验证并保护 `v*` tag：能发布 Release 就等于能给所有电脑装软件。
 
 ## 后续计划
 

@@ -1,9 +1,13 @@
 // 自动更新。
 //
-// 只连 GitHub：github.com 和它放安装包的 objects.githubusercontent.com / release-assets.githubusercontent.com，
-// 重定向到别的地方一律当失败。只走电脑本机网络直连：不用任何账号的代理，也不用系统代理设置
-// （Clash 等的“系统代理”）。系统级 VPN / TUN 模式在网卡层接管流量，软件绕不开。
-// 新版本刚发布时安装包还在打包上传（约 10 分钟），这时 latest*.yml 是 404：不算失败，过一会儿自己再查。
+// 只连来财（laicrm.com）的 /api/device/update/：地址和团队同步是同一个后台（src/team 的 TEAM_SERVER）。
+// 每个请求带团队登录的设备令牌（Authorization: Bearer），没登录团队就不检查（不算失败）。
+// 来财不跳转：任何重定向、别的主机或别的路径一律当失败，令牌不会发到别处。
+// 网络和团队同步、翻译去来财一样：用更新专用的内存会话，跟随电脑的系统代理（Clash 开系统代理时走 Clash），
+// 不用任何账号的代理，不带任何账号的 cookie。
+// 新版本刚发布时安装包还在上传，这时 latest*.yml 是 404：不算失败，过一会儿自己再查。
+// 401（登录过期）、403（这台电脑被停用）按失败记，提示用户重新登录或找管理员。
+// 1.0.6 及更早的版本只认 GitHub，更新不到 1.0.7，要手动装一次 1.0.7（覆盖安装，数据都在）。
 // 启动 1 分钟后查一次，之后每 1 小时查一次，有新版就自动下载。
 //
 // Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
@@ -12,7 +16,7 @@
 //   - 都没点：窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
 //     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）。窗口开着不会自己重启。
 // macOS：没有签名证书，electron-updater 的 Mac 流程（Squirrel.Mac）用不了，自己做：
-//   下载 zip，按 latest-mac.yml 里的 sha512 校验，用 ditto 解压，确认是 WAswitch.app、版本号对得上。
+//   从来财下载 latest-mac.yml 和里面写的 zip，按 latest-mac.yml 里的 sha512 校验，用 ditto 解压，确认是 WAswitch.app、版本号对得上。
 //   App 在「应用程序」里且有写权限时，和 Windows 一样的安装时机：App 退出后由一个小脚本替换旧的 WAswitch.app、
 //   清掉“已损坏”标记（xattr -cr）、重新打开。替换失败会放回旧版并重新打开，下次改成手动安装。
 //   App 不在「应用程序」里、在安装盘里直接运行、或者没有写权限时，提示用户把新的 WAswitch.app 拖进「应用程序」。
@@ -22,10 +26,12 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const errtext = require('./errtext');
+const { TEAM_SERVER } = require('./team');
 
-const OWNER = 'Kr1xxxx';
-const REPO = 'WAswitch';
-const ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']);
+// 更新文件的地址：来财的 /api/device/update/<文件名>（Windows 的 latest.yml 和安装包、Mac 的 latest-mac.yml 和 zip、MCP 文件）
+const FEED = `${TEAM_SERVER}/api/device/update/`;
+const FEED_URL = new URL(FEED);
+const ALLOWED_HOSTS = new Set([FEED_URL.hostname]);
 const FIRST_CHECK_MS = 60 * 1000;
 const CHECK_EVERY_MS = 60 * 60 * 1000;
 const IDLE_POLL_MS = 60 * 1000;
@@ -39,15 +45,15 @@ const MAC_QUIT_WAIT_S = 25; // 替换脚本最多等旧版本退出这么久
 const APP_ID = 'com.waswitch.app';
 const UPDATER_PARTITION = 'waswitch-updater'; // 更新专用的临时会话（不是 persist:，不碰账号）
 
-// 更新专用会话：强制直连，不读系统代理
-let directSession = null;
+// 更新专用会话：跟随系统代理（和团队同步、翻译去来财一样），不用任何账号的代理
+let netSession = null;
 async function updaterSession() {
-  if (!directSession) {
+  if (!netSession) {
     const ses = session.fromPartition(UPDATER_PARTITION, { cache: false });
-    await ses.setProxy({ mode: 'direct' });
-    directSession = ses;
+    await ses.setProxy({ mode: 'system' });
+    netSession = ses;
   }
-  return directSession;
+  return netSession;
 }
 
 // 正在运行的 WAswitch.app 的路径（/Applications/WAswitch.app/Contents/MacOS/WAswitch → /Applications/WAswitch.app）
@@ -107,15 +113,19 @@ const macOps = {
   },
 };
 
-// 最新版本的 latest*.yml 还没传上去（GitHub 404）
+// 最新版本的 latest*.yml 还没传上去（来财 404）
 class PendingError extends Error {}
 
+// 只放行来财的更新地址：https、laicrm.com、默认端口、/api/device/update/ 下面
 function allowedUrl(raw) {
   try {
     const u = new URL(raw);
-    return u.protocol === 'https:' && ALLOWED_HOSTS.has(u.hostname);
+    return u.protocol === 'https:' && ALLOWED_HOSTS.has(u.hostname) && !u.port && !u.username && !u.password
+      && u.pathname.startsWith(FEED_URL.pathname) && !u.pathname.slice(FEED_URL.pathname.length).includes('/');
   } catch { return false; }
 }
+
+function feedUrl(name) { return FEED + encodeURIComponent(name); }
 
 // 版本号比较：1.2.3 / 1.2.3-beta.1。返回正数表示 a 比 b 新
 function compareVersions(a, b) {
@@ -133,12 +143,6 @@ function compareVersions(a, b) {
   if (!x.pre) return 1; // 正式版比同号的预发布版新
   if (!y.pre) return -1;
   return x.pre.localeCompare(y.pre, 'en', { numeric: true });
-}
-
-// releases.atom 里最新的版本 tag（按发布时间倒序，第一个就是最新的，含预发布版）
-function latestTagFromAtom(xml) {
-  const m = String(xml).match(/\/releases\/tag\/(v[0-9][^"<\s]*)"/);
-  return m ? decodeURIComponent(m[1]) : null;
 }
 
 // latest-mac.yml 只需要 version 和 files 里的 url / sha512 / size，格式固定，不引入 yaml 库
@@ -159,12 +163,12 @@ function parseLatestYml(text) {
   return { version, files };
 }
 
-// 从 GitHub 下载：只用默认会话，手动跟重定向，每一跳都检查主机
+// 从来财下载：只用更新专用会话，不跟重定向（来财不跳转，跳转就当失败，令牌不会带到别处）
 async function request(url, opts = {}) {
   return requestWith(await updaterSession(), url, opts);
 }
-// signal：可选的 AbortSignal，用户点“取消”时中断下载
-function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects = 5, idleMs = IDLE_TIMEOUT_MS, signal } = {}) {
+// signal：可选的 AbortSignal，用户点“取消”时中断下载；headers：额外的请求头（设备令牌）
+function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, idleMs = IDLE_TIMEOUT_MS, signal, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     if (!allowedUrl(url)) { reject(new Error(`不允许的下载地址：${safeHost(url)}`)); return; }
     if (signal?.aborted) { reject(Object.assign(new Error('已取消'), { cancelled: true })); return; }
@@ -178,20 +182,19 @@ function requestWith(ses, url, { onData, maxBytes = 512 * 1024 * 1024, redirects
     signal?.addEventListener('abort', onAbort);
     const arm = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => { req.abort(); bad(new Error('连接 GitHub 超时')); }, idleMs);
+      timer = setTimeout(() => { req.abort(); bad(new Error('连接来财超时')); }, idleMs);
     };
     arm();
     req.setHeader('User-Agent', `WAswitch/${app.getVersion()}`);
+    for (const [k, v] of Object.entries(headers)) if (v) req.setHeader(k, v);
     req.on('redirect', (_status, _method, next) => {
-      clearTimeout(timer); // 下一跳有自己的超时
       req.abort();
-      if (redirects <= 0) { bad(new Error('重定向次数太多')); return; }
-      requestWith(ses, next, { onData, maxBytes, redirects: redirects - 1, idleMs, signal }).then(ok, bad);
+      bad(new Error(`更新地址被跳转到 ${safeHost(next)}，已停止`));
     });
     req.on('response', (res) => {
       if (res.statusCode !== 200) {
         res.resume?.();
-        const e = new Error(`GitHub 返回 ${res.statusCode}`);
+        const e = new Error(`来财返回 ${res.statusCode}`);
         e.statusCode = res.statusCode;
         bad(e);
         return;
@@ -227,6 +230,7 @@ class Updater {
   //   beforeInstall() -> Promise,       安装前（轻量模式写盘、记下要不要回托盘）
   //   installFailed() -> Promise,       安装没成功（恢复轻量模式、取消退出状态）
   //   notify(title, body, onClick),     系统通知
+  //   deviceToken() -> string,          团队登录的设备令牌；空字符串表示没登录团队（不检查）
   // }
   constructor(hooks) {
     this.hooks = hooks;
@@ -243,6 +247,7 @@ class Updater {
       manual: this.mac, // Mac 只能手动安装（打开 Finder 把新版拖进「应用程序」）
       userAsked: false, // 用户点了“检查并更新”：下好后不等空闲就安装并重新打开，不用再点一次（只等用户停手）
       waitReason: '', // 用户点了更新、已经下好，但还在打字：等停手再更新
+      needLogin: false, // 没登录团队，这次没检查（来财要设备令牌）
     };
     this.updater = null;
     this.ops = hooks.macOps || macOps;
@@ -327,15 +332,20 @@ class Updater {
   async check() {
     if (this.state.status === 'dev' || this.state.status === 'off' || this.state.status === 'checking' || this.state.status === 'downloading') return;
     if (this.state.status === 'downloaded') return; // 已经下好了，等安装
-    this.set({ status: 'checking' });
+    const token = this.token();
+    // 没登录团队：来财不给下，不查，也不算失败（登录后下一次照常查）
+    if (!token) { this.succeed('none', NO_TOKEN_TEXT, { needLogin: true }); return; }
+    this.set({ status: 'checking', needLogin: false });
     const failuresBefore = this.state.failures;
     try {
-      if (this.mac) await this.checkMac();
+      if (this.mac) await this.checkMac(token);
       else {
-        await this.useDirectWindows();
+        await this.useNetWindows();
+        // 每次检查前换上当前的令牌：检查和随后的自动下载都带着它
+        this.updater.requestHeaders = { authorization: `Bearer ${token}` };
         if (!(await this.updater.checkForUpdates())) {
           // 这种安装方式 updater 不工作（比如 Linux 不是 AppImage），不当作失败
-          this.set({ status: 'off', lastCheckAt: Date.now(), lastResult: '这种安装方式不支持自动更新，请到 Releases 页面下载新版' });
+          this.set({ status: 'off', lastCheckAt: Date.now(), lastResult: '这种安装方式不支持自动更新，请手动安装新版' });
         }
       }
     } catch (e) {
@@ -353,11 +363,15 @@ class Updater {
     this.pendingTimer.unref?.();
   }
 
-  // Windows：electron-updater 自己的会话也强制直连。设不上就抛错，这次不查（不会退回走代理）
-  async useDirectWindows() {
-    if (this.directReady) return;
-    await this.updater.netSession.setProxy({ mode: 'direct' });
-    this.directReady = true;
+  token() {
+    try { return String((this.hooks.deviceToken && this.hooks.deviceToken()) || ''); } catch { return ''; }
+  }
+
+  // Windows：electron-updater 自己的会话也跟随系统代理（和 Mac、团队同步一样）。设不上就抛错，这次不查
+  async useNetWindows() {
+    if (this.netReady) return;
+    await this.updater.netSession.setProxy({ mode: 'system' });
+    this.netReady = true;
   }
 
   // ---------- Windows：electron-updater ----------
@@ -365,15 +379,19 @@ class Updater {
   setupElectronUpdater() {
     const { autoUpdater } = require('electron-updater');
     this.updater = autoUpdater;
+    // 从来财下：generic 方式读 <FEED>latest.yml，安装包也在同一个地址下面
+    autoUpdater.setFeedURL({ provider: 'generic', url: FEED });
     autoUpdater.autoDownload = true;
-    autoUpdater.allowPrerelease = true; // 现在的版本都发成预发布版
+    autoUpdater.allowPrerelease = true; // 以前的版本发成预发布版；来财只放一份 latest.yml，这个设置不影响
+    autoUpdater.disableDifferentialDownload = true; // 增量下载要一次取多段，来财不支持，整包下
+    autoUpdater.disableWebInstaller = true;
     autoUpdater.allowDowngrade = false;
     autoUpdater.autoInstallOnAppQuit = true; // 用户自己退出时顺手装上，下次打开就是新版
     autoUpdater.logger = { info: () => {}, debug: () => {}, warn: (m) => console.warn(`[更新] ${m}`), error: (m) => console.warn(`[更新] ${m}`) };
-    // updater 用自己的独立会话联网：只放行 GitHub 的地址，其他一律拦下
+    // updater 用自己的独立会话联网：只放行来财的更新地址，其他一律拦下
     autoUpdater.netSession.webRequest.onBeforeRequest((details, callback) => {
       const ok = allowedUrl(details.url);
-      if (!ok) console.warn(`[更新] 拦下了非 GitHub 地址：${safeHost(details.url)}`);
+      if (!ok) console.warn(`[更新] 拦下了不是来财更新的地址：${safeHost(details.url)}`);
       callback({ cancel: !ok });
     });
     autoUpdater.on('update-available', (info) => this.set({ status: 'downloading', version: info.version, percent: 0 }));
@@ -448,19 +466,16 @@ class Updater {
     return this.installing;
   }
 
-  // ---------- macOS：自己下载 dmg 并校验 ----------
+  // ---------- macOS：自己下载 zip 并校验 ----------
 
-  async checkMac() {
+  async checkMac(token) {
     const idleMs = this.idleMs;
-    const atom = (await request(`https://github.com/${OWNER}/${REPO}/releases.atom`, { maxBytes: 2 * 1024 * 1024, idleMs })).toString('utf8');
-    const tag = latestTagFromAtom(atom);
-    if (!tag) throw new Error('没找到任何版本');
-    if (compareVersions(tag, app.getVersion()) <= 0) { this.succeed('none', '已是最新版本'); return; }
+    const headers = { authorization: `Bearer ${token}` };
     let yml;
     try {
-      yml = (await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/latest-mac.yml`, { maxBytes: 256 * 1024, idleMs })).toString('utf8');
+      yml = (await request(feedUrl('latest-mac.yml'), { maxBytes: 256 * 1024, idleMs, headers })).toString('utf8');
     } catch (e) {
-      if (e.statusCode === 404) { const p = new PendingError('新版本还在上传'); p.version = tag.replace(/^v/, ''); throw p; }
+      if (e.statusCode === 404) throw new PendingError('新版本还在上传');
       throw e;
     }
     const info = parseLatestYml(yml);
@@ -482,8 +497,9 @@ class Updater {
     const out = fs.createWriteStream(part);
     const hash = crypto.createHash('sha512');
     try {
-      await request(`https://github.com/${OWNER}/${REPO}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, {
+      await request(feedUrl(name), {
         idleMs,
+        headers,
         onData: (c, got, total) => {
           hash.update(c);
           out.write(c);
@@ -576,18 +592,29 @@ class Updater {
   }
 }
 
-// 检查更新失败的原因说人话：自己写的中文原样用；网络错误、electron-updater 的英文换成中文，原话放 lastDetail
+const NO_TOKEN_TEXT = '登录团队后才能检查更新';
+
+// 失败里的 HTTP 状态码：自己的请求有 statusCode；electron-updater 检查时是 HttpError 403，
+// 下载时只有一句 "Cannot download …, status 401: …"
+function httpStatusOf(e, raw) {
+  const m = /HttpError:?\s*(\d{3})/.exec(raw) || /status (\d{3})/.exec(raw);
+  return (e && Number(e.statusCode)) || (m ? Number(m[1]) : 0);
+}
+
+// 检查更新失败的原因说人话：先看状态码；自己写的中文原样用；网络错误、electron-updater 的英文换成中文，原话放 lastDetail
 function updateErrorText(e, msg) {
-  if (errtext.hasChinese(msg)) return { text: msg, detail: '' };
   const raw = errtext.rawOf(e) || msg;
-  const m = /HttpError:?\s*(\d{3})/.exec(raw);
-  const status = (e && Number(e.statusCode)) || (m ? Number(m[1]) : 0);
-  if (status === 404) return { text: '找不到更新文件，新版本可能还在发布中，过几分钟再试', detail: raw };
-  if (status === 403 || status === 429) return { text: 'GitHub 暂时限制了访问，过一会儿再试', detail: raw };
-  if (status >= 500) return { text: 'GitHub 那边暂时出错，过一会儿再试', detail: raw };
+  const status = httpStatusOf(e, `${msg}\n${raw}`);
+  const detail = errtext.hasChinese(raw) ? '' : raw;
+  if (status === 401) return { text: '登录已过期，重新登录后再检查更新', detail };
+  if (status === 403) return { text: '这台电脑已被停用', detail };
+  if (status === 404) return { text: '找不到更新文件，新版本可能还在发布中，过几分钟再试', detail };
+  if (status === 429) return { text: '检查得太频繁，过一会儿再试', detail };
+  if (status >= 500) return { text: '来财那边暂时出错，过一会儿再试', detail };
+  if (errtext.hasChinese(msg)) return { text: msg, detail: '' };
   const kind = errtext.netKind(raw);
   if (kind === 'other' && !/net::|ERR_|\bE[A-Z]{4,}\b|fetch failed|socket/.test(raw)) return { text: '检查更新出错了，过一会儿再试', detail: raw };
-  return { text: `连不上 GitHub（${errtext.netReason(raw)}）`, detail: raw };
+  return { text: `连不上来财（${errtext.netReason(raw)}）`, detail: raw };
 }
 
 // 新版本的 yml 还没传上去：Mac 是自己的 PendingError；Windows 是 electron-updater 找不到 latest.yml
@@ -602,4 +629,4 @@ function sha512Of(file) {
   });
 }
 
-module.exports = { Updater, request, OWNER, REPO, UPDATER_PARTITION, MAC_INSTALL_SCRIPT, appBundlePath, replaceBlocker, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml, ALLOWED_HOSTS };
+module.exports = { Updater, request, FEED, feedUrl, NO_TOKEN_TEXT, UPDATER_PARTITION, MAC_INSTALL_SCRIPT, appBundlePath, replaceBlocker, allowedUrl, compareVersions, parseLatestYml, updateErrorText, ALLOWED_HOSTS };
