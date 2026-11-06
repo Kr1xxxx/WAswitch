@@ -561,7 +561,7 @@ function setupTranslateIpc(ctx) {
     const v = floatCore.viewOf(accId);
     if (!v.chatKey || !v.items.length) return false;
     const lang = detectLang(v.items.slice(-5).map((it) => it.text).join('\n'));
-    if (!lang || lang === '中文') return false;
+    if (!lang) return false;
     return ctx.translator.setChatLang(`${accId}:${v.chatKey}`, lang, 'detected');
   }
   // 发出的目标语言和它的来源：手动选的 > 客户名单里填的 > 认出来的 > 这个号的默认语言

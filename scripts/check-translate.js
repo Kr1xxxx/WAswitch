@@ -252,6 +252,10 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   assert.equal(t2.setChatLang(key,'印尼语','detected'),true);
   assert.deepEqual(t2.chatLang(key),{lang:'印尼语',src:'detected'});
   assert.equal(t2.setChatLang(key,'印尼语','detected'),false); // 没变不写盘
+  assert.equal(t2.setChatLang(key,'中文','detected'),true); // 对方写中文也记（自动选择时中文不翻）
+  assert.deepEqual(t2.chatLang(key),{lang:'中文',src:'detected'});
+  assert.equal(t2.setChatLang(key,'印尼语','detected'),true);
+  assert(!/function rememberDetected[\s\S]*?\n  }/.exec(fs.readFileSync(path.join(__dirname,'..','src','translate-ipc.js'),'utf8'))[0].includes('中文'),'rememberDetected 不能再跳过中文');
   assert.equal(t2.setChatLang(key,'马来语','manual'),true);
   assert.equal(t2.setChatLang(key,'英语','detected'),false);
   assert.equal(t2.chatLang(key).lang,'马来语');

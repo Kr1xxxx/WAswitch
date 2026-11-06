@@ -247,13 +247,14 @@ function dockLangs(text = dk.text) {
   const st = dk.st;
   const lt = dockLt();
   const r = ReplyLang.pick({ text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target });
-  return { source: lt.src, target: r.target };
+  return { source: lt.src, target: r.target, same: ReplyLang.noTr({ text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target }) };
 }
 // 纠错：AI 对照中文原文和上下文校对现在的译文
 function dockFix() {
   if (dk.busy || !dk.st || !dk.out.trim()) return;
   if (!dk.text.trim()) return dockSay('先写原文，纠错要对照它', true);
-  const { source, target } = dockLangs();
+  const { source, target, same } = dockLangs();
+  if (same) return dockSay('对方写中文，没有译文可纠错');
   return dockRun({ req: { text: dk.text, fix: true, draft: dk.out, target, source, ctxAccount: dk.st.accountId }, insert: false, acc: dk.st.accountId, title: dk.st.title });
 }
 // insert=true：翻译完直接放进输入框（不发送）。对话在翻译期间换了就不放
@@ -262,9 +263,15 @@ async function dockTranslate(insert = false, fresh = false) {
   if (dk.busy || !dk.st) return;
   const text = dk.text.trim();
   if (!text) return dockSay('先写要发的话', true);
+  const { source, target, same } = dockLangs();
+  // 对方写中文：原文就是要发的话，不调模型，不记译文
+  if (same) {
+    Object.assign(dk, { out: dk.text, src: dk.text, edited: false, fixed: false, suggest: '', warn: [], forTitle: dk.st.title });
+    if (!insert) return dockSay('对方写中文，不用翻');
+    return dockInsert();
+  }
   const modeId = outModeId();
   if (!modeId) return dockSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
-  const { source, target } = dockLangs();
   const req = { text: dk.text, modeId, target, source, ctxAccount: dk.st.accountId, fresh };
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
@@ -294,7 +301,9 @@ async function dockInsert() {
 }
 // 放进输入框：有译文就放（改过的就放改过的）；原文改了又没手动改译文，先重新翻
 function dockInsertKey() {
-  if (dk.out.trim() && (dk.edited || dk.src === dk.text)) return dockInsert();
+  // 上次是“对方写中文，没翻”，现在要翻了（手动选了别的语言）：不能把中文原样放进去
+  const untranslated = !dk.edited && dk.out === dk.src && dk.src === dk.text && !dockLangs().same;
+  if (dk.out.trim() && !untranslated && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
 }
 // ---- 界面 ----
@@ -306,6 +315,7 @@ function dockLangBar() {
   const manual = dockManual(st);
   const lt = dockLt();
   const toCustomer = ReplyLang.pick({ text: '中', autoTarget: st.autoTarget || st.target }).target;
+  const noTr = toCustomer === '中文';
   const autoTip = { detected: '从客户发来的消息认出来的', customer: `客户资料里「${st.targetFrom}」填的`, default: '认不出客户的语言，先用英语' };
   const srcLangs = ['中文', ...st.langs.filter((l) => l !== '中文')];
   const src = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '原文是哪种语言', title: '自动检测：写中文就当中文，写别的就交给模型认（只管这个对话）', onchange: (e) => {
@@ -322,7 +332,8 @@ function dockLangBar() {
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
     title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
-      : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
+      : noTr ? '自动选择：对方写中文，写中文就不翻，写外文翻成中文'
+        : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
     onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
   h('option', { value: '__auto' }, '自动选择'), st.langs.map((l) => h('option', { value: l }, l)));
   tgt.value = lt.tgt || (manual ? st.target : '__auto');
