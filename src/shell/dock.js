@@ -332,7 +332,7 @@ function dockLangBar() {
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
     title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
-      : noTr ? '自动选择：对方写中文，写中文就不翻，写外文翻成中文'
+      : noTr ? '自动选择：对方用中文，写中文不翻，写外文翻成中文'
         : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
     onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
   h('option', { value: '__auto' }, '自动选择'), st.langs.map((l) => h('option', { value: l }, l)));

@@ -350,7 +350,7 @@ app.whenReady().then(async () => {
   await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
   await w.webContents.executeJavaScript(`(${helpers})()`);
   const r5 = await w.webContents.executeJavaScript(`(${part5})()`);
-  assert(r5.tip.includes('对方写中文'), `语言条提示说明写中文不翻 ${r5.tip}`);
+  assert(r5.tip.includes('对方用中文'), `语言条提示说明写中文不翻 ${r5.tip}`);
   assert.deepStrictEqual(r5.btn, { calls: 0, out: '您好，今天发货', say: '对方写中文，不用翻' }, `中文聊天点翻译：不调模型 ${JSON.stringify(r5.btn)}`);
   assert.deepStrictEqual(r5.insert, { calls: 0, out: '您好，今天发货' }, `放进输入框也不调模型 ${JSON.stringify(r5.insert)}`);
   assert.deepStrictEqual(r5.second, { calls: 0, out: '您好，今天发货，谢谢' }, `改了原文再放进输入框：用新的原文 ${JSON.stringify(r5.second)}`);
