@@ -234,6 +234,49 @@ const part4 = async () => {
   return out;
 };
 
+// 对方写中文（shen 2026-11-06）：自动选择时写中文不调模型，原文就是译文；手动选了语言照常翻；写外文翻成中文
+const part5 = async () => {
+  const out = {};
+  window.__cbs.state({ accounts: [{ id: 'a1', name: 'Shop', color: '#3b82f6' }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
+  const calls = [];
+  window.__trRun = (a) => { calls.push(a); return Promise.resolve({ text: `TR(${a.target}):${a.text}`, warn: [] }); };
+  const say = () => { const m = document.querySelector('.dk-msg'); return m ? m.textContent : ''; };
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  await window.__wait(100);
+  out.tip = document.querySelectorAll('.dk-bar-sel')[1].title;
+  // 1) 点翻译：不调模型，原文进译文框，提示不用翻
+  window.__type('.dk-in', '您好，今天发货');
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.btn = { calls: calls.length, out: window.__box().out, say: say() };
+  // 2) 放进输入框：也不调模型
+  window.__insertResult = 'ok';
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.insert = { calls: calls.length, out: window.__box().out };
+  // 3) 回车（清掉译文，直接放）：不调模型
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  window.__type('.dk-in', '，谢谢');
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.second = { calls: calls.length, out: window.__box().out };
+  // 4) 写外文：翻成中文
+  document.querySelector('.dk-in').value = 'When can you ship?';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.foreign = { calls: calls.length, target: calls[0] && calls[0].target, out: window.__box().out };
+  // 5) 手动选了德语：中文照常翻成德语
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '德语', targetSrc: 'manual', autoTarget: '中文' });
+  document.querySelector('.dk-in').value = '您好';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.manual = { calls: calls.length, target: calls[1] && calls[1].target, out: window.__box().out };
+  window.__trRun = null;
+  return out;
+};
+
 let w = null;
 const errs = [];
 app.whenReady().then(async () => {
@@ -304,6 +347,15 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r4.acc, ['translate'], `换号，话术页回到翻译 ${JSON.stringify(r4.acc)}`);
   assert.deepStrictEqual(r4.editing, [], `填着表单时换对话、换号都不切 ${JSON.stringify(r4.editing)}`);
   assert.deepStrictEqual(r4.afterEdit, ['translate'], `表单关了以后换对话照样切 ${JSON.stringify(r4.afterEdit)}`);
+  await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
+  await w.webContents.executeJavaScript(`(${helpers})()`);
+  const r5 = await w.webContents.executeJavaScript(`(${part5})()`);
+  assert(r5.tip.includes('对方写中文'), `语言条提示说明写中文不翻 ${r5.tip}`);
+  assert.deepStrictEqual(r5.btn, { calls: 0, out: '您好，今天发货', say: '对方写中文，不用翻' }, `中文聊天点翻译：不调模型 ${JSON.stringify(r5.btn)}`);
+  assert.deepStrictEqual(r5.insert, { calls: 0, out: '您好，今天发货' }, `放进输入框也不调模型 ${JSON.stringify(r5.insert)}`);
+  assert.deepStrictEqual(r5.second, { calls: 0, out: '您好，今天发货，谢谢' }, `改了原文再放进输入框：用新的原文 ${JSON.stringify(r5.second)}`);
+  assert.deepStrictEqual(r5.foreign, { calls: 1, target: '中文', out: 'TR(中文):When can you ship?' }, `写外文照样翻成中文 ${JSON.stringify(r5.foreign)}`);
+  assert.deepStrictEqual(r5.manual, { calls: 2, target: '德语', out: 'TR(德语):您好' }, `手动选了语言照常翻 ${JSON.stringify(r5.manual)}`);
   assert.deepStrictEqual(errs, [], '页面没有报错');
   console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留、换号换对话回翻译页）');
   app.exit(0);
