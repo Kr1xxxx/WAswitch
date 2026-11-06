@@ -248,6 +248,9 @@ class Updater {
       userAsked: false, // 用户点了“检查并更新”：下好后不等空闲就安装并重新打开，不用再点一次（只等用户停手）
       waitReason: '', // 用户点了更新、已经下好，但还在打字：等停手再更新
       needLogin: false, // 没登录团队，这次没检查（来财要设备令牌）
+      pending: false, // 新版本已发布、安装包还在上传
+      errorText: '', // 失败的原因（中文），关于页标题下面显示
+      current: app.getVersion(), // 本机的版本号
     };
     this.updater = null;
     this.ops = hooks.macOps || macOps;
@@ -305,11 +308,11 @@ class Updater {
     const msg = String(e && e.message ? e.message : e).split('\n')[0].slice(0, 200);
     console.warn(`检查更新失败：${msg}`);
     const { text, detail } = updateErrorText(e, msg);
-    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${text}`, lastDetail: detail, failures: this.state.failures + 1, percent: 0, userAsked: false, waitReason: '' });
+    this.set({ status: 'error', lastCheckAt: Date.now(), lastResult: `失败：${text}`, errorText: text, lastDetail: detail, failures: this.state.failures + 1, percent: 0, userAsked: false, waitReason: '' });
   }
 
   succeed(status, lastResult, patch = {}) {
-    this.set({ status, lastCheckAt: Date.now(), lastResult, lastDetail: '', failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
+    this.set({ status, lastCheckAt: Date.now(), lastResult, lastDetail: '', errorText: '', pending: false, failures: 0, ...(status === 'none' ? { userAsked: false } : {}), ...patch });
   }
 
   // 用户点“检查并更新”“立即更新”：下好后马上安装
@@ -335,7 +338,7 @@ class Updater {
     const token = this.token();
     // 没登录团队：来财不给下，不查，也不算失败（登录后下一次照常查）
     if (!token) { this.succeed('none', NO_TOKEN_TEXT, { needLogin: true }); return; }
-    this.set({ status: 'checking', needLogin: false });
+    this.set({ status: 'checking', needLogin: false, pending: false });
     const failuresBefore = this.state.failures;
     try {
       if (this.mac) await this.checkMac(token);
@@ -357,7 +360,7 @@ class Updater {
 
   // 新版本已发布但安装包还在上传：不算失败，10 分钟后再查一次
   pending(version) {
-    this.succeed('none', `新版本${version ? ` ${version}` : ''}正在上传，稍后自动再查`);
+    this.succeed('none', `新版本${version ? ` ${version} ` : ''}正在上传，稍后自动再查`, { pending: true, version: version || '' });
     clearTimeout(this.pendingTimer);
     this.pendingTimer = setTimeout(() => this.check(), PENDING_RETRY_MS);
     this.pendingTimer.unref?.();
