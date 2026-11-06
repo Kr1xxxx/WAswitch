@@ -479,8 +479,8 @@ function checkUpdateBtn() {
     checking: '正在检查更新…',
     downloading: `正在下载 ${u && u.version}`,
     downloaded: `新版本 ${u && u.version} 已就绪`,
-    none: u && u.needLogin ? '检查更新\n登录团队后才能检查更新' : '检查更新\n已是最新版本',
-    error: '检查更新\n上次没检查成功',
+    none: u && u.needLogin ? '检查更新\n登录团队后才能检查更新' : u && u.pending ? '检查更新\n新版本正在上传' : '检查更新\n已是最新版本',
+    error: '检查更新\n上次检查失败',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
     onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheckOnly(); } }, icon('sync', 16));
@@ -1736,7 +1736,7 @@ function quickTiles() {
   const ust = u ? u.status : 'dev';
   const usub = {
     dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
-    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: u && u.needLogin ? '还没登录团队' : '已是最新', error: '上次没检查成功', idle: '每小时自动检查',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: u && u.needLogin ? '还没登录团队' : u && u.pending ? '新版本正在上传' : '已是最新', error: '上次检查失败', idle: '每小时自动检查',
   }[ust] || '';
   const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
     ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
@@ -2023,12 +2023,15 @@ function updateBox(u) {
     idle: ['自动更新已开启', '', 'idle'],
     checking: ['正在检查更新…', '', 'busy'],
     // 没登录团队时不检查（更新从来财下，要设备令牌）
-    none: u.needLogin ? ['还没登录团队', '', 'idle'] : ['已是最新版本', '', 'ok'],
+    none: u.needLogin ? ['还没登录团队', '', 'idle']
+      : u.pending ? [`新版本${u.version ? ` ${u.version} ` : ''}正在上传`, '稍后自动再查', 'idle']
+      : ['已是最新版本', u.current ? `当前版本 ${u.current}` : '', 'ok'],
     downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完自动更新') : '', 'busy'],
     downloaded: u.manual
       ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, updateWaitLine(u), 'new'],
-    error: ['这次检查没成功', '最多 1 小时后自动再试。', 'idle'],
+    // 失败不等于没有新版本：标题直说失败，下面写原因
+    error: ['检查更新失败', u.errorText || '', 'idle'],
   }[u.status] || ['软件更新', '', 'idle'];
   const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
@@ -2046,8 +2049,8 @@ function updateBox(u) {
     u.status === 'downloading' ? h('div', { class: 'upd-progress' },
       h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
       h('span', { class: 'pct' }, `${u.percent}%`)) : null,
-    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。`) : null,
-    u.status === 'dev' ? null : h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? `，${u.lastResult}` : ''}`),
+    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次检查失败，可能是网络问题。`) : null,
+    u.status === 'dev' ? null : h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult && !line && u.status !== 'error' ? `，${u.lastResult}` : ''}`),
     u.status === 'error' ? rawDetail(u.lastDetail) : null);
 }
 
