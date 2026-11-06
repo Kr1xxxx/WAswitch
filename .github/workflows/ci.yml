@@ -1,5 +1,7 @@
 # 每次 push 和 PR 自动跑全部自检；再打一个 Windows 包启动 10 秒做冒烟，确认生成了自动更新需要的文件。
 # 软件只发 Windows 和 macOS。自检放在 Ubuntu 上跑只是因为便宜、有 xvfb，不代表支持 Linux。
+# 自检跑在我们自己的 boxd 机器上（标签 boxd，和来财 CI 同两台，闲 30 分钟自动暂停）；wake 先在 GitHub 上把机器叫醒，
+# 要仓库密钥 BOXD_API_KEY。打 Windows 包仍用 GitHub 的机器。
 # 所有 action 按 commit 固定版本；只读权限。
 name: ci
 
@@ -12,8 +14,22 @@ permissions:
   contents: read
 
 jobs:
-  checks:
+  # boxd 机器闲着会暂停，只有外面连进去才会醒；这一步叫醒它们，checks 在队列里等机器回来。
+  wake:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: 叫醒 boxd 机器
+        env:
+          BOXD_API_KEY: ${{ secrets.BOXD_API_KEY }}
+        run: bash scripts/ci-wake-boxd.sh
+
+  checks:
+    runs-on: boxd
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
