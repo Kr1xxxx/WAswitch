@@ -479,7 +479,7 @@ function checkUpdateBtn() {
     checking: '正在检查更新…',
     downloading: `正在下载 ${u && u.version}`,
     downloaded: `新版本 ${u && u.version} 已就绪`,
-    none: '检查更新\n已是最新版本',
+    none: u && u.needLogin ? '检查更新\n登录团队后才能检查更新' : '检查更新\n已是最新版本',
     error: '检查更新\n上次没检查成功',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
@@ -777,7 +777,6 @@ window.addEventListener('resize', placeUndo);
 
 // ---------- 卡片里的页面 ----------
 
-const RELEASES = 'https://github.com/Kr1xxxx/WAswitch/releases';
 
 // 按出错的类型配按钮：重连没用的情况不给“重新连接”，直连号不提代理和 Clash
 function problemButtons(acc) {
@@ -788,7 +787,7 @@ function problemButtons(acc) {
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
-    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
+    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }, true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
@@ -1737,7 +1736,7 @@ function quickTiles() {
   const ust = u ? u.status : 'dev';
   const usub = {
     dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
-    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每小时自动检查',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: u && u.needLogin ? '还没登录团队' : '已是最新', error: '上次没检查成功', idle: '每小时自动检查',
   }[ust] || '';
   const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
     ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
@@ -2020,10 +2019,11 @@ function updateBox(u) {
   const when = u.lastCheckAt ? new Date(u.lastCheckAt).toLocaleString('zh-CN', { hour12: false }) : '还没检查过';
   const [title, line, tone] = {
     dev: ['开发版不检查更新', '', 'idle'],
-    off: ['不支持自动更新', '请到下载页下载新版。', 'idle'],
+    off: ['不支持自动更新', '请手动安装新版。', 'idle'],
     idle: ['自动更新已开启', '', 'idle'],
     checking: ['正在检查更新…', '', 'busy'],
-    none: ['已是最新版本', '', 'ok'],
+    // 没登录团队时不检查（更新从来财下，要设备令牌）
+    none: u.needLogin ? ['还没登录团队', '', 'idle'] : ['已是最新版本', '', 'ok'],
     downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完自动更新') : '', 'busy'],
     downloaded: u.manual
       ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
@@ -2046,7 +2046,7 @@ function updateBox(u) {
     u.status === 'downloading' ? h('div', { class: 'upd-progress' },
       h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
       h('span', { class: 'pct' }, `${u.percent}%`)) : null,
-    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。可以去下载页手动下载。`) : null,
+    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。`) : null,
     u.status === 'dev' ? null : h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? `，${u.lastResult}` : ''}`),
     u.status === 'error' ? rawDetail(u.lastDetail) : null);
 }

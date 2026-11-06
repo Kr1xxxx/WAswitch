@@ -130,6 +130,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
       - name: 自动更新自检
         run: npm run check:updater
+      - name: 发版时传到来财的脚本自检（本机假后台）
+        run: npm run check:upload-release
       - name: 代理端口检测自检
         run: npm run check:ports
       - name: 安全写文件和新账号 id 自检
@@ -177,7 +179,8 @@ jobs:
         run: |
           grep -q '^sha512: ' dist/latest.yml
           ls dist/*.exe.blockmap
-          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+          grep -q 'provider: generic' dist/win-unpacked/resources/app-update.yml
+          grep -q 'laicrm.com/api/device/update' dist/win-unpacked/resources/app-update.yml
       - name: 安装包里没有 MCP 代码和它的库，只有校验值和设置窗口的页面
         run: node scripts/check-packaged-mcp.js dist/win-unpacked/resources/app.asar
       - name: 打包后启动冒烟

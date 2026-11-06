@@ -3,8 +3,8 @@
 // 发版时 CI 先把 src/mcp 和它用的库打成一个文件（scripts/build-mcp.js），把文件名和 sha512 写进
 // src/mcp-module.json，再打安装包。所以下载来的文件和安装包本身一样可信：对不上就删掉、不加载。
 //
-// 用户在 设置 › AI 接口 点“下载”：直连 GitHub（和自动更新一样，只认 GitHub 的下载域名），
-// 下到 <userData>/modules/mcp/waswitch-mcp.js（文件名固定，Claude Desktop 配一次就不用改），
+// 用户在 设置 › AI 接口 点“下载”：从来财下（和自动更新同一个地址 /api/device/update/、同一个网络，
+// 带团队登录的设备令牌；没登录团队下不了），下到 <userData>/modules/mcp/waswitch-mcp.js（文件名固定，Claude Desktop 配一次就不用改），
 // 每次加载前再校验一次。第一次下载后 MCP 是关着的，要用户自己打开开关。
 // 软件更新后版本对不上：下载过的电脑自动在后台下配套的新文件，开关状态不变。
 // 卸载：关掉 MCP、断开客户端、删文件和 token；各项开关设置保留。
@@ -21,6 +21,8 @@ const INFO = 'installed.json';
 const BRIDGE_ARG = '--waswitch-mcp-bridge';
 const MAX_BYTES = 30 * 1024 * 1024;
 const AUTO_RETRY_MS = 30 * 60 * 1000; // 软件更新后自动下载失败：过这么久再试
+const TOKEN_WAIT_MS = 5 * 60 * 1000; // 软件更新后要补下，但还没登录团队：过这么久再看
+const NO_TOKEN_TEXT = '登录团队后才能下载';
 
 function sha512File(file) {
   return new Promise((resolve, reject) => {
@@ -35,12 +37,14 @@ function downloadErrorText(e) {
   if (['EACCES', 'EPERM', 'EROFS'].includes(e?.code)) return '无法写入模块文件夹，请检查权限后重试';
   if (['EISDIR', 'ENOTDIR', 'ENOENT', 'EEXIST', 'EIO'].includes(e?.code)) return '无法写入模块文件，请检查存储路径和磁盘后重试';
   const raw = errtext.rawOf(e) || String(e && e.message || e);
-  if (errtext.hasChinese(raw)) return raw;
   const status = Number(e && e.statusCode) || 0;
+  if (status === 401) return '登录已过期，重新登录后再下载';
+  if (status === 403) return '这台电脑已被停用';
   if (status === 404) return '找不到 MCP 文件，这个版本可能还在发布中，过几分钟再试';
-  if (status === 403 || status === 429) return 'GitHub 暂时限制了访问，过一会儿再试';
-  if (status >= 500) return 'GitHub 那边暂时出错，过一会儿再试';
-  return `连不上 GitHub（${errtext.netReason(raw)}）`;
+  if (status === 429) return '下载得太频繁，过一会儿再试';
+  if (status >= 500) return '来财那边暂时出错，过一会儿再试';
+  if (errtext.hasChinese(raw)) return raw;
+  return `连不上来财（${errtext.netReason(raw)}）`;
 }
 
 function readJson(file) {
@@ -59,7 +63,9 @@ class McpModule {
   //   dataDir    userData（mcp.json、mcp-token.json 在这里）
   //   expected   { version, file, sha512, size } | null
   //   dev        true：没有 expected 时用仓库里的 src/mcp
-  //   fetch(url, { onData, signal, maxBytes })   直连下载（updater.request）
+  //   feed       来财的更新地址（updater.FEED，以 / 结尾）
+  //   deviceToken() -> string   团队登录的设备令牌；空字符串表示没登录团队
+  //   fetch(url, { onData, signal, maxBytes, headers })   下载（updater.request，只放行来财的更新地址）
   //   start(setupMcp, { uiDir, bridgeArgs }) -> Promise<mcp>   创建并 init，返回 setupMcp 的结果
   //   stopped()  卸载后通知主程序（把 mcp 变量清空）
   //   onChange() 状态变了（刷新设置页）
@@ -164,7 +170,20 @@ class McpModule {
     clearTimeout(this.retryTimer);
     const fresh = !this.installedInfo();
     const { expected } = this.o;
-    const url = `https://github.com/${this.o.owner}/${this.o.repo}/releases/download/v${expected.version}/${expected.file}`;
+    const token = String((this.o.deviceToken && this.o.deviceToken()) || '');
+    if (!token) {
+      // 没登录团队：用户点的就提示先登录；软件更新后自动补下的不算失败，过一会儿再看
+      if (this.updating) {
+        this.retryTimer = setTimeout(() => this.download().catch(() => {}), TOKEN_WAIT_MS);
+        this.retryTimer.unref?.();
+      } else {
+        this.status = 'error';
+        this.error = NO_TOKEN_TEXT;
+      }
+      this.changed();
+      return this.view();
+    }
+    const url = `${this.o.feed}${encodeURIComponent(expected.file)}`;
     this.status = 'downloading';
     this.percent = 0;
     this.error = '';
@@ -182,6 +201,7 @@ class McpModule {
       await Promise.race([completed, this.o.fetch(url, {
         signal: this.abort.signal,
         maxBytes: MAX_BYTES,
+        headers: { authorization: `Bearer ${token}` },
         onData: (chunk, got, total) => {
           out.write(chunk);
           hash.update(chunk);

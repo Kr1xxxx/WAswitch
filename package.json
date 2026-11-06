@@ -1,6 +1,6 @@
 {
   "name": "waswitch",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
   "main": "src/main.js",
   "scripts": {
@@ -30,6 +30,7 @@
     "check:popup": "electron scripts/check-popup.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
+    "check:upload-release": "node scripts/check-upload-cloud-release.js",
     "check:ports": "node scripts/check-ports.js && node scripts/check-proxy-pass.js",
     "check:atomic": "node scripts/check-atomic.js && node scripts/check-account-id.js",
     "check:editor": "node scripts/check-editor-save.js",
@@ -153,9 +154,8 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "Kr1xxxx",
-        "repo": "WAswitch"
+        "provider": "generic",
+        "url": "https://laicrm.com/api/device/update/"
       }
     ],
     "nsis": {

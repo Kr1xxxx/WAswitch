@@ -66,8 +66,10 @@ async function checkBundle(bundle, tmp) {
 
 // 假的下载：按块把 bytes 交给 onData；hold 为 true 时停在半路等取消
 function fakeFetch(state) {
-  return async (url, { onData, signal }) => {
+  return async (url, { onData, signal, headers }) => {
     state.urls.push(url);
+    state.headers.push(headers || {});
+    if (state.status) throw Object.assign(new Error(`来财返回 ${state.status}`), { statusCode: state.status });
     const bytes = state.bytes;
     const step = Math.ceil(bytes.length / 4);
     for (let i = 0; i < bytes.length; i += step) {
@@ -92,8 +94,8 @@ function makeModule(dataDir, expected, state) {
     uiDir: path.join(root, 'src', 'mcp'),
     expected,
     dev: false,
-    owner: 'Kr1xxxx',
-    repo: 'WAswitch',
+    feed: 'https://laicrm.com/api/device/update/',
+    deviceToken: () => state.token,
     fetch: fakeFetch(state),
     loadDev: () => { throw new Error('不该用开发版'); },
     start: async (setupMcp, extra) => {
@@ -120,12 +122,27 @@ async function checkLoader(bundleFile, expected, tmp) {
   fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ enabled: true, port: 39393, layer2: true, layer2Acknowledged: true }));
   fs.writeFileSync(path.join(dataDir, 'mcp-token.json'), JSON.stringify({ token: 'x'.repeat(40), url: 'u' }));
 
-  const state = { bytes, urls: [] };
+  const state = { bytes, urls: [], headers: [], token: 'tok-1' };
   let { m, calls } = makeModule(dataDir, expected, state);
   await m.init();
   check(m.status === 'none' && !state.urls.length && !calls.start.length, '没下载过：启动时不下载、不加载');
   check(m.view().legacy === true, '旧版本开着 MCP 的人看到“现在要单独下载”的提示');
   check(m.view().sizeMB > 0, `显示大小（约 ${m.view().sizeMB} MB）`);
+
+  // 没登录团队：不下载，提示先登录
+  state.token = '';
+  await m.download();
+  check(m.status === 'error' && m.error === '登录团队后才能下载' && !state.urls.length, `没登录团队：不下载，提示先登录（${m.error}）`);
+  state.token = 'tok-1';
+  // 来财说登录过期、电脑被停用
+  state.status = 401;
+  await m.download();
+  check(m.status === 'error' && /登录已过期/.test(m.error), `401：提示重新登录（${m.error}）`);
+  state.status = 403;
+  await m.download();
+  check(m.status === 'error' && /已被停用/.test(m.error) && !/GitHub/.test(m.error), `403：提示这台电脑已被停用（${m.error}）`);
+  state.status = 0;
+  state.urls.length = 0;
 
   // 校验不通过
   state.bytes = Buffer.concat([bytes, Buffer.from('\n// 被改过')]);
@@ -148,7 +165,8 @@ async function checkLoader(bundleFile, expected, tmp) {
   await m.download();
   if (m.status !== 'ready') console.log(`  （状态 ${m.status}：${m.error}）`);
   const url = state.urls[state.urls.length - 1];
-  check(url === `https://github.com/Kr1xxxx/WAswitch/releases/download/v${expected.version}/${expected.file}`, `下载地址是同版本的 Release 文件（${url}）`);
+  check(url === `https://laicrm.com/api/device/update/${expected.file}`, `下载地址是来财上同版本的文件（${url}）`);
+  check(state.headers.length && state.headers.every((h) => h.authorization === 'Bearer tok-1'), '下载带设备令牌');
   const conf = JSON.parse(fs.readFileSync(path.join(dataDir, 'mcp.json'), 'utf8'));
   check(m.status === 'ready' && conf.enabled === false && conf.layer2 === true, '第一次下载后开关是关的（其他设置保留）');
   check(calls.start.length === 0, '开关关着时不加载 MCP 代码（不占内存）');
@@ -188,6 +206,19 @@ async function checkLoader(bundleFile, expected, tmp) {
   await m.init();
   for (let i = 0; i < 50 && m.status === 'downloading'; i += 1) await wait(10);
   check(m.status === 'ready' && state.urls.length === n + 2 && calls.start.length === 1, '本地文件被改过：不加载坏文件，自动重新下载后加载');
+
+  // 软件更新后要补下，但还没登录团队：不报错，等着，过一会儿再看
+  fs.writeFileSync(path.join(dir, 'installed.json'), JSON.stringify({ version: '0.0.1', sha512: 'old' }));
+  state.token = '';
+  {
+    const k = state.urls.length;
+    const w = makeModule(dataDir, expected, state).m;
+    await w.init();
+    await wait(10);
+    check(w.updating === true && w.status === 'none' && !w.error && state.urls.length === k && w.retryTimer, `没登录团队时补下：不报错，等着再试（${w.status} ${w.error}）`);
+    clearTimeout(w.retryTimer);
+  }
+  state.token = 'tok-1';
 
   // 软件更新后：版本对不上，自动补下，开关状态不变
   fs.writeFileSync(path.join(dataDir, 'mcp.json'), JSON.stringify({ ...conf, enabled: true }));

@@ -39,7 +39,7 @@ const { LiteHost } = require('./lite/host');
 const { fillLite } = require('./trfill');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
-const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
+const { Updater, request: updateRequest, FEED: UPDATE_FEED } = require('./updater');
 const { TeamSync } = require('./team');
 const { CrmQueue, keepQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
@@ -2092,7 +2092,7 @@ const LITE_PROBLEMS = {
   outdated: () => ({
     title: 'WhatsApp 拒绝了旧版本',
     short: '需要更新',
-    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。请更新 WAswitch：到 设置 › 关于 检查更新，或到 Releases 页面下载新版。',
+    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。请更新 WAswitch：到 设置 › 关于 检查更新。',
   }),
   authError: () => ({
     title: '这个号的本机数据读不出来',
@@ -2606,6 +2606,8 @@ function setupUpdater() {
       refresh();
     },
     notify: (title, body, onClick) => notifier.notifyApp(title, body, onClick),
+    // 更新从来财下，带团队登录的设备令牌；没登录团队时是空的，不检查
+    deviceToken: () => (team ? team.tokenPlain() : ''),
   });
   updater.start();
   setInterval(maybeMoveData, 10 * 60 * 1000).unref?.();
@@ -2956,9 +2958,10 @@ app.whenReady().then(async () => {
     // 从源码运行时总是用仓库里的 src/mcp（即使本地打过 mcp-module.json）
     expected: app.isPackaged ? loadExpected(path.join(__dirname, 'mcp-module.json')) : null,
     dev: !app.isPackaged,
-    owner: GH_OWNER,
-    repo: GH_REPO,
-    fetch: directRequest,
+    // 和自动更新同一个来财地址、同一个设备令牌
+    feed: UPDATE_FEED,
+    deviceToken: () => (team ? team.tokenPlain() : ''),
+    fetch: updateRequest,
     loadDev: () => require('./mcp'),
     start: async (setupMcp, extra) => {
       const m = setupMcp({ hooks: mcpHooks, lockLocalPage, onStatus: () => mcpModule.tick(), dataDir: dataStart.home, ...extra });
