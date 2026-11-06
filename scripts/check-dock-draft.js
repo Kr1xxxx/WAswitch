@@ -273,6 +273,28 @@ const part5 = async () => {
   [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
   await window.__wait(100);
   out.manual = { calls: calls.length, target: calls[1] && calls[1].target, out: window.__box().out };
+  // 6) 对方写中文时按回车：不调模型，直接放进输入框
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  await window.__wait(50);
+  document.querySelector('.dk-in').value = '好的';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  window.__inserted = [];
+  document.querySelector('.dk-in').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await window.__wait(100);
+  out.enter = { calls: calls.length, inserted: window.__inserted.slice() };
+  // 7) 英文对话里译文和原文一样（数字、OK）：放进输入框直接放，不再翻一遍
+  window.__push({ title: 'Emma Wilson', chatKey: 'eeeeeeeeeeeeeeee', draft: null, target: '英语', targetSrc: 'detected', autoTarget: '英语' });
+  await window.__wait(50);
+  window.__trRun = (a) => { calls.push(a); return Promise.resolve({ text: a.text, warn: [] }); };
+  document.querySelector('.dk-in').value = '10:30 ok';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  const before = calls.length;
+  window.__inserted = [];
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.same = { calls: calls.length - before, inserted: window.__inserted.slice() };
   window.__trRun = null;
   return out;
 };
@@ -356,6 +378,8 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r5.second, { calls: 0, out: '您好，今天发货，谢谢' }, `改了原文再放进输入框：用新的原文 ${JSON.stringify(r5.second)}`);
   assert.deepStrictEqual(r5.foreign, { calls: 1, target: '中文', out: 'TR(中文):When can you ship?' }, `写外文照样翻成中文 ${JSON.stringify(r5.foreign)}`);
   assert.deepStrictEqual(r5.manual, { calls: 2, target: '德语', out: 'TR(德语):您好' }, `手动选了语言照常翻 ${JSON.stringify(r5.manual)}`);
+  assert.deepStrictEqual(r5.enter, { calls: 2, inserted: ['好的'] }, `对方写中文按回车直接放进输入框 ${JSON.stringify(r5.enter)}`);
+  assert.deepStrictEqual(r5.same, { calls: 0, inserted: ['10:30 ok'] }, `译文和原文一样时放进输入框不再翻 ${JSON.stringify(r5.same)}`);
   assert.deepStrictEqual(errs, [], '页面没有报错');
   console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留、换号换对话回翻译页）');
   app.exit(0);

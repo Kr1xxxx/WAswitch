@@ -100,7 +100,7 @@ const dockTypingNow = () => Date.now() - dk.lastInput < DRAFT_TYPING_MS && docum
 function dockLoadDraft(d, title) {
   d = d || {};
   Object.assign(dk, {
-    text: d.text || '', out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
+    text: d.text || '', out: d.out || '', plain: false, src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [],
     suggest: '', forTitle: d.out ? title : null, msg: '', bad: false,
   });
   dk.draftSent = JSON.stringify(dockDraftOf());
@@ -111,7 +111,7 @@ function dockLoadDraft(d, title) {
 function dockCarry(d) {
   if (d && (d.text || '').trim()) {
     dk.text = dk.text.trim() ? `${d.text}\n${dk.text}` : d.text;
-    if (!dk.out.trim()) Object.assign(dk, { out: d.out || '', src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [] });
+    if (!dk.out.trim()) Object.assign(dk, { out: d.out || '', plain: false, src: d.src || '', edited: !!d.edited, fixed: !!d.fixed, warn: Array.isArray(d.warn) ? d.warn : [] });
     dk.redraw = true;
   }
   dk.draftSent = '';
@@ -161,7 +161,7 @@ function dockAdopt(st) {
     dk.draftUsed = '';
     // 新对话只拿这一阵打的字：接在上一个对话的原文后面打的，前面那段留给上一个对话
     if (bt && dk.text.startsWith(bt)) dk.text = dk.text.slice(bt.length).replace(/^\s+/, '');
-    if (dk.out === (base.out || '')) Object.assign(dk, { out: '', src: '', edited: false, fixed: false, warn: [], suggest: '', forTitle: null });
+    if (dk.out === (base.out || '')) Object.assign(dk, { out: '', plain: false, src: '', edited: false, fixed: false, warn: [], suggest: '', forTitle: null });
     dk.draftKey = key;
     dk.draftSent = '';
     dk.redraw = true;
@@ -175,7 +175,7 @@ function dockAdopt(st) {
 window.addEventListener('beforeunload', dockDraftFlush);
 
 function dockReset() {
-  Object.assign(dk, { text: '', out: '', src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, unread: 0, seenTitle: null, pill: false, info: null });
+  Object.assign(dk, { text: '', out: '', plain: false, src: '', edited: false, fixed: false, suggest: '', forTitle: null, warn: [], msg: '', bad: false, unread: 0, seenTitle: null, pill: false, info: null });
   dk.seen.clear();
 }
 
@@ -246,8 +246,9 @@ const dockManual = (st) => st.targetSrc === 'manual' || (!st.canRemember && !!st
 function dockLangs(text = dk.text) {
   const st = dk.st;
   const lt = dockLt();
-  const r = ReplyLang.pick({ text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target });
-  return { source: lt.src, target: r.target, same: ReplyLang.noTr({ text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target }) };
+  const p = { text, src: lt.src, manual: lt.tgt || (dockManual(st) ? st.target : ''), autoTarget: st.autoTarget || st.target };
+  const r = ReplyLang.pick(p);
+  return { source: lt.src, target: r.target, same: ReplyLang.noTr(p) };
 }
 // 纠错：AI 对照中文原文和上下文校对现在的译文
 function dockFix() {
@@ -255,6 +256,7 @@ function dockFix() {
   if (!dk.text.trim()) return dockSay('先写原文，纠错要对照它', true);
   const { source, target, same } = dockLangs();
   if (same) return dockSay('对方写中文，没有译文可纠错');
+  if (dk.plain && !dk.edited) return dockSay('先翻译，再纠错', true); // 译文框里是没翻的中文，换了语言后要先翻
   return dockRun({ req: { text: dk.text, fix: true, draft: dk.out, target, source, ctxAccount: dk.st.accountId }, insert: false, acc: dk.st.accountId, title: dk.st.title });
 }
 // insert=true：翻译完直接放进输入框（不发送）。对话在翻译期间换了就不放
@@ -266,7 +268,7 @@ async function dockTranslate(insert = false, fresh = false) {
   const { source, target, same } = dockLangs();
   // 对方写中文：原文就是要发的话，不调模型，不记译文
   if (same) {
-    Object.assign(dk, { out: dk.text, src: dk.text, edited: false, fixed: false, suggest: '', warn: [], forTitle: dk.st.title });
+    Object.assign(dk, { out: dk.text, src: dk.text, plain: true, edited: false, fixed: false, suggest: '', warn: [], forTitle: dk.st.title });
     if (!insert) return dockSay('对方写中文，不用翻');
     return dockInsert();
   }
@@ -285,7 +287,7 @@ async function dockRun(p) {
   if (!dk.st || p.acc !== dk.st.accountId || p.key !== dk.draftKey) return dockRender(true); // 换号、换对话了：作废（再翻一次直接用记下的译文）
   if (r.error) return dockSay(r.error, true, r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
-  dk.out = r.text; dk.src = p.req.text; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
+  dk.out = r.text; dk.src = p.req.text; dk.plain = false; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
   if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点“重新翻译”' : '');
   if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
   return dockInsert();
@@ -302,7 +304,7 @@ async function dockInsert() {
 // 放进输入框：有译文就放（改过的就放改过的）；原文改了又没手动改译文，先重新翻
 function dockInsertKey() {
   // 上次是“对方写中文，没翻”，现在要翻了（手动选了别的语言）：不能把中文原样放进去
-  const untranslated = !dk.edited && dk.out === dk.src && dk.src === dk.text && !dockLangs().same;
+  const untranslated = dk.plain && !dk.edited && !dockLangs().same;
   if (dk.out.trim() && !untranslated && (dk.edited || dk.src === dk.text)) return dockInsert();
   return dockTranslate(true);
 }
@@ -344,7 +346,7 @@ function dockLangBar() {
       const next = ReplyLang.swap({ text: dk.text, src: lt.src, manual: lt.tgt || (manual ? st.target : ''), autoTarget: st.autoTarget || st.target });
       Object.assign(lt, { src: next.src, tgt: next.manual, swapped: true });
     }
-    if (dk.out.trim()) Object.assign(dk, { text: dk.out, out: '', src: '', edited: false, fixed: false, suggest: '', warn: [], forTitle: null });
+    if (dk.out.trim()) Object.assign(dk, { text: dk.out, out: '', plain: false, src: '', edited: false, fixed: false, suggest: '', warn: [], forTitle: null });
     dockRender(true);
   } }, icon('swap', 18));
   swapBtn.setAttribute('aria-pressed', String(lt.swapped));
@@ -708,7 +710,7 @@ function dockCompose() {
     if (e.shiftKey) return; // 换行
     e.preventDefault();
     if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点“重新翻译”', true);
-    dockTranslate(false);
+    dockTranslate(dockLangs().same); // 对方写中文：不用翻，回车直接放进输入框
   });
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
   out.addEventListener('focus', dockFocused);
