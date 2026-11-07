@@ -196,7 +196,6 @@ async function overviewPage() {
         el('td', {}, proxyCell(a)),
         el('td', {}, exitCell(a)),
         el('td', { class: 'muted' }, a.reported_at ? ago(a.reported_at, now) : '—')))))),
-    el('p', { class: 'muted' }, '每 30 秒自动刷新。WAswitch 每 2 分钟上报一次，电脑 6 分钟没上报算离线。'),
   ];
 }
 
@@ -216,7 +215,7 @@ async function accountsPage() {
     });
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
-      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '同步到来财：已写入 / 来财没收下' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`)),
+      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '已同步到来财的聊天条数' }, `来财 ${a.crm_stored || 0}${a.crm_dropped ? ` 没收下 ${a.crm_dropped}` : ''}`)),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : ''),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
@@ -231,7 +230,6 @@ async function accountsPage() {
     : data.crm && !data.crm.push ? el('p', { class: 'muted' }, '聊天同步：推送还没开，员工电脑上的聊天先留在本机（最多 7 天）。') : null;
   return [
     crmNote,
-    el('p', { class: 'muted' }, '账号由员工在 WAswitch 里"加入团队"时自动出现在这里。分给别人后，新电脑需要自己填代理并扫码；代理和登录数据不会经过后台。'),
     el('div', { class: 'wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, ['账号', '模式', '组', '分给', '应在国家', '操作'].map((h) => el('th', {}, h)))),
       el('tbody', {}, rows))),
@@ -316,7 +314,7 @@ async function peoplePage() {
       el('td', {}, ROLE_TEXT[u.role], u.group_id ? el('div', { class: 'muted' }, groups.get(u.group_id) || '') : null),
       el('td', {}, devs.length ? devs.map((d) => deviceLine(d, now)) : el('span', { class: 'muted' }, '还没登录过')),
       el('td', {},
-        btn('让他重新登录', () => act(async () => { const r = await api('POST', `users/${u.id}/signout`); if (r.self) saveToken(''); }, '已让他重新登录')),
+        btn('要求重新登录', () => act(async () => { const r = await api('POST', `users/${u.id}/signout`); if (r.self) saveToken(''); }, '已要求重新登录')),
         btn('改邮箱', () => emailForm(box, u)),
         u.id === me.user.id ? null : btn(u.disabled_at ? '启用' : '停用', () => act(() => api('PATCH', `users/${u.id}`, { disabled: !u.disabled_at }), '已保存'), u.disabled_at ? '' : 'danger')));
   });
