@@ -182,7 +182,8 @@ async function checkDisplays() {
   assert.strictEqual(pickDisplay([L, R], L, { x: 400, y: 100, width: 500, height: 600 }), R, '跨两块：放占得多的那块');
   assert.strictEqual(pickDisplay([L], L, { x: 1900, y: 100, width: 500, height: 600 }), L, '主窗口在拔掉的屏幕上：放主屏');
   assert.strictEqual(pickDisplay([L, R], R, null), R, '没有主窗口：放主屏');
-  assert.notStrictEqual(spotOn(L, 'win32').key, spotOn({ ...L, scaleFactor: 1.5 }, 'win32').key, '缩放变了算另一块');
+  assert.notStrictEqual(spotOn(L, 'win32').key, spotOn({ ...L, scaleFactor: 1.5 }, 'win32').key, '缩放变了要重建');
+  assert.strictEqual(spotOn(L, 'win32').key, spotOn({ ...R, scaleFactor: 1 }, 'win32').key, '缩放一样的另一块屏幕：只挪不重建');
 
   // Windows 上跨缩放挪窗口第一次摆不对：读回来不对就再设一次
   const sets = [];
@@ -246,7 +247,7 @@ async function checkDisplays() {
   assert.strictEqual(p.win, w2, '主窗口还在笔记本屏上：弹窗不动');
   assert(await on(L), '还在笔记本屏右上角');
   mainBounds = { x: 700, y: 100, width: 500, height: 600 };
-  assert(await until(() => p.win !== w2 && on(R), 3000), `主窗口被挪回外接屏后，弹窗也回到外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  assert(await until(() => p.win !== w2 && on(R), 4000), `主窗口被挪回外接屏后，弹窗也回到外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
   assert(await until(() => shows('Emma Schneider')), '回去以后卡片照样显示');
   const w3 = p.win;
 
@@ -262,6 +263,15 @@ async function checkDisplays() {
   fake.displays = [L, R3];
   fake.emit('display-metrics-changed', {}, R3, ['scaleFactor']);
   assert(await until(() => p.win !== w3 && on(R3), 3000), '缩放变了：按新缩放重建窗口');
+  const w4 = p.win;
+
+  // 两块屏幕缩放一样时，主窗口被挪到另一块：弹窗只挪过去，不重建（卡片不会空一下再出现）
+  const L2 = { ...L, scaleFactor: R3.scaleFactor };
+  fake.displays = [L2, R3];
+  mainBounds = { x: 50, y: 100, width: 500, height: 600 };
+  fake.emit('display-metrics-changed', {}, L2, ['scaleFactor']);
+  assert(await until(() => on(L2), 3000), `缩放一样：挪到另一块屏幕的右上角 ${JSON.stringify(p.win.getBounds())}`);
+  assert.strictEqual(p.win, w4, '缩放一样：不重建窗口');
 
   // 卡片都收走了、窗口藏着时拔掉显示器：直接关掉，下次按新的屏幕建
   p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');

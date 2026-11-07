@@ -9,8 +9,8 @@
 // - 离开电脑超过 5 分钟（shen 2026-10-27）：卡片不再自动消失，回来后要一张一张手动点；没有“全部收起”
 // - 聊天锁打开时：不显示客户名字、头像和消息内容
 // - 勿扰打开时：新消息不弹；退出登录、断线、新版本这类提醒照弹，只是不响（不然用户开着勿扰就永远不知道号掉了）
-// - 拔掉、接上显示器或改了缩放：重新摆到该在的那块屏幕右上角；换了屏幕或缩放就把窗口整个重建
-//   （Windows 上把透明窗口挪到另一种缩放的屏幕，大小和里面卡片的位置会错）
+// - 拔掉、接上显示器或改了缩放：重新摆到该在的那块屏幕右上角；要去的地方缩放不一样就把窗口整个重建
+//   （Windows 上把透明窗口挪到另一种缩放的屏幕，大小和里面卡片的位置会错）；缩放一样只挪位置
 const { BrowserWindow, screen, powerMonitor } = require('electron');
 const path = require('path');
 const { PopupQueue } = require('./popup-queue');
@@ -44,7 +44,7 @@ class PopupWindow {
     this.now = now;
     this.idleCloseMs = idleCloseMs;
     this.screen = scr;
-    this.builtFor = ''; // 窗口是按哪块屏幕、哪种缩放建的
+    this.builtFor = ''; // 窗口是按哪种缩放建的
     this.screenWatched = false;
     this.screenTimers = [];
     this.queue = new PopupQueue({ now, durationMs: this.durationMs() });
@@ -167,7 +167,7 @@ class PopupWindow {
   }
 
   // 放在 WAswitch 主窗口所在那块屏幕的右上角（Mac 在菜单栏下面）。
-  // key 记下是哪块屏幕、哪种缩放：变了就要重建窗口，不能只挪
+  // key 记下那块屏幕的缩放：变了就要重建窗口，不能只挪
   spot() {
     const scr = this.screen;
     let mainBounds = null;
@@ -203,10 +203,10 @@ class PopupWindow {
     const w = this.win;
     if (!w || w.isDestroyed()) return;
     if (!this.queue.size) { this.closeWindow(); return; } // 藏着没有卡片：直接关掉，下次按新的屏幕重建
-    this.render(); // 换了屏幕或缩放就重建，没换就挪到新的右上角
+    this.render(); // 缩放变了就重建，没变就挪到新的右上角
   }
 
-  // 旧窗口是按原来那块屏幕建的，整个换掉；卡片都在主进程的队列里，新窗口就绪后照样画出来
+  // 旧窗口是按原来的缩放建的，整个换掉；卡片都在主进程的队列里，新窗口就绪后照样画出来
   rebuild() {
     const old = this.win;
     this.win = null;
@@ -284,7 +284,7 @@ class PopupWindow {
     }
     if (!w || w.isDestroyed()) return;
     const spot = this.spot();
-    if (spot.key !== this.builtFor) { this.rebuild(); return; } // 该去的屏幕或缩放和建窗时不一样了
+    if (spot.key !== this.builtFor) { this.rebuild(); return; } // 该去的屏幕缩放和建窗时不一样了
     if (this.ready) {
       const state = this.model();
       const sig = JSON.stringify(state);
@@ -404,7 +404,7 @@ function spotOn(display, platform) {
   return {
     x: Math.round(wa.x + wa.width - gap - CARD_W - PAD.left),
     y: Math.round(wa.y + gap - PAD.top),
-    key: `${display.id}@${display.scaleFactor}`,
+    key: String(display.scaleFactor || 1), // 只看缩放：同样缩放的两块屏幕之间挪窗口不会错，不用重建
   };
 }
 
