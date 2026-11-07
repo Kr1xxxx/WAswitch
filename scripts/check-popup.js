@@ -1,13 +1,15 @@
 // 自检：自带通知弹窗窗口（真的 Electron 窗口 + 真的弹窗页面）。
 // 检查：右上角、不抢焦点、最多 3 张 + “还有 N 条”、同一客户合并、聊天锁遮住名字和内容、
-// 点“打开”回到主进程、到时间自动收走、空闲后窗口关掉、勿扰时不弹。
+// 点“打开”回到主进程、到时间自动收走、空闲后窗口关掉、勿扰时不弹、
+// 拔掉接上显示器和改缩放后重新摆到该在的屏幕右上角（假的几块屏幕）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
 //      加 SHOT_DIR=目录 会把弹窗截图存下来（PR 里贴图用）
 const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
+const { EventEmitter } = require('events');
 const { app, ipcMain, screen } = require('electron');
-const { PopupWindow } = require('../src/popup');
+const { PopupWindow, pickDisplay, spotOn, WIN_W, WIN_H } = require('../src/popup');
 
 app.disableHardwareAcceleration(); // xvfb 下没有显卡，透明窗口截图要走软件渲染
 // 弹窗窗口空闲后会被关掉，这是测试里唯一的窗口；不接这个事件 Electron 会在窗口全关时直接退出（exit 0），后半段就不会跑
@@ -38,9 +40,10 @@ const popup = new PopupWindow({
   onLater: (c) => later.push(c),
   idleSeconds: () => idleSeconds,
 }, { idleCloseMs: 1500 });
-ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
-ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
-ipcMain.on('popup:act', (e, { uid, action } = {}) => popup.onAction(e.sender, Number(uid), action));
+const popups = [popup]; // 后面“显示器插拔”那段另建一个，事件按页面分给各自的窗口
+ipcMain.on('popup:ready', (e) => popups.forEach((p) => p.onReady(e.sender)));
+ipcMain.on('popup:hover', (e, on) => popups.forEach((p) => p.onHover(e.sender, on === true)));
+ipcMain.on('popup:act', (e, { uid, action } = {}) => popups.forEach((p) => p.onAction(e.sender, Number(uid), action)));
 
 const page = (js) => popup.win.webContents.executeJavaScript(js);
 async function until(fn, ms = 5000) {
@@ -163,6 +166,120 @@ app.whenReady().then(async () => {
   assert(await until(() => popup.win && popup.ready && popup.win.isVisible()), '关掉后来新提醒：重新建窗口');
   assert.match(await page('document.querySelector(".nt .who").textContent'), /售后 US/, '号自己的提醒：标题是账号名');
 
+  await checkDisplays();
+
   fs.writeSync(2, '通知弹窗自检通过\n'); // 写到 stderr：app.exit 会把还没刷出去的 stdout 丢掉
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });
+
+// 拔掉、接上显示器，改缩放，任务栏挪位置：弹窗要回到该在的那块屏幕右上角。
+// 用假的屏幕（两块并排放在 xvfb 的大屏里），主窗口位置也是假的
+async function checkDisplays() {
+  // 主窗口在哪块屏幕就放哪块；主窗口不在任何屏幕上（那块刚被拔掉、窗口藏在托盘里还记着旧位置）就放主屏
+  const L = { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 640, height: 1024 }, workArea: { x: 0, y: 0, width: 640, height: 984 } };
+  const R = { id: 2, scaleFactor: 2, bounds: { x: 640, y: 0, width: 640, height: 1024 }, workArea: { x: 640, y: 0, width: 640, height: 1024 } };
+  assert.strictEqual(pickDisplay([L, R], L, { x: 700, y: 100, width: 500, height: 600 }), R, '主窗口在右边那块：放右边');
+  assert.strictEqual(pickDisplay([L, R], L, { x: 400, y: 100, width: 500, height: 600 }), R, '跨两块：放占得多的那块');
+  assert.strictEqual(pickDisplay([L], L, { x: 1900, y: 100, width: 500, height: 600 }), L, '主窗口在拔掉的屏幕上：放主屏');
+  assert.strictEqual(pickDisplay([L, R], R, null), R, '没有主窗口：放主屏');
+  assert.notStrictEqual(spotOn(L, 'win32').key, spotOn({ ...L, scaleFactor: 1.5 }, 'win32').key, '缩放变了要重建');
+  assert.strictEqual(spotOn(L, 'win32').key, spotOn({ ...R, scaleFactor: 1 }, 'win32').key, '缩放一样的另一块屏幕：只挪不重建');
+
+  // Windows 上跨缩放挪窗口第一次摆不对：读回来不对就再设一次
+  const sets = [];
+  const fakeWin = {
+    b: null,
+    wrongOnce: true, // 像 Windows 那样：从另一种缩放的屏幕挪过来，第一次大小按旧缩放换算错了
+    setBounds(b) { sets.push(b); this.b = this.wrongOnce ? { ...b, width: b.width * 1.5, height: b.height * 1.5 } : { ...b }; this.wrongOnce = false; },
+    getBounds() { return this.b; },
+  };
+  popup.place(fakeWin, spotOn(L, process.platform));
+  assert.strictEqual(sets.length, 2, '第一次大小不对：再设一次');
+  const sL = spotOn(L, process.platform);
+  assert.deepStrictEqual(fakeWin.b, { x: sL.x, y: sL.y, width: WIN_W, height: WIN_H }, '再设一次后位置大小都对');
+  sets.length = 0;
+  popup.place(fakeWin, sL);
+  assert.strictEqual(sets.length, 1, '摆对了就只设一次');
+
+  class FakeScreen extends EventEmitter {
+    constructor(displays) { super(); this.displays = displays; }
+    getAllDisplays() { return this.displays; }
+    getPrimaryDisplay() { return this.displays[0]; }
+    getCursorScreenPoint() { return screen.getCursorScreenPoint(); }
+  }
+  const fake = new FakeScreen([L, R]);
+  let mainBounds = { x: 700, y: 100, width: 500, height: 600 }; // WAswitch 主窗口在外接屏（右边）上
+  const p = new PopupWindow({
+    getWindow: () => ({ isDestroyed: () => false, getBounds: () => mainBounds }),
+    account: (id) => ACC[id] || null,
+    locked: () => false,
+    settings: () => ({ popupSeconds: 0, popupSound: false, popupDnd: false }),
+    onOpen: () => {},
+    onLater: () => {},
+    idleSeconds: () => 0,
+  }, { idleCloseMs: 60 * 1000, screen: fake });
+  popups.push(p);
+  const at = (d) => { const s = spotOn(d, process.platform); return { x: s.x, y: s.y, width: WIN_W, height: WIN_H }; };
+  const on = async (d) => {
+    const w = p.win;
+    return !!(w && !w.isDestroyed() && p.ready && w.isVisible()) && JSON.stringify(w.getBounds()) === JSON.stringify(at(d));
+  };
+  const shows = async (who) => (await p.win.webContents.executeJavaScript('document.querySelector(".nt .who") && document.querySelector(".nt .who").textContent')) === who;
+
+  p.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo! Ist der Liefertermin noch der 12.11.?', count: 1 });
+  assert(await until(() => on(R)), `先弹在外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  const w1 = p.win;
+
+  // 拔掉外接屏：主窗口藏在托盘里，系统没挪它，还记着外接屏上的位置
+  fake.displays = [L];
+  fake.emit('display-removed', {}, R);
+  assert(await until(() => p.win !== w1 && on(L), 3000), `拔掉后回到剩下那块屏幕的右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  assert(w1.isDestroyed(), '旧窗口（按外接屏的缩放建的）换掉了');
+  assert(await until(() => shows('Emma Schneider')), '卡片还在，内容照样显示');
+  const w2 = p.win;
+
+  // 接上外接屏：系统过一会儿才把主窗口挪回去，第二次检查时跟过去
+  mainBounds = { x: 50, y: 100, width: 500, height: 600 }; // 拔掉时系统把主窗口挪到了笔记本屏上
+  fake.displays = [L, R];
+  fake.emit('display-added', {}, R);
+  fake.emit('display-metrics-changed', {}, L, ['workArea']);
+  await wait(800);
+  assert.strictEqual(p.win, w2, '主窗口还在笔记本屏上：弹窗不动');
+  assert(await on(L), '还在笔记本屏右上角');
+  mainBounds = { x: 700, y: 100, width: 500, height: 600 };
+  assert(await until(() => p.win !== w2 && on(R), 4000), `主窗口被挪回外接屏后，弹窗也回到外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  assert(await until(() => shows('Emma Schneider')), '回去以后卡片照样显示');
+  const w3 = p.win;
+
+  // 同一块屏幕，任务栏挪到上边（工作区变了，缩放没变）：只挪位置，不重建
+  const R2 = { ...R, workArea: { x: 640, y: 40, width: 640, height: 984 } };
+  fake.displays = [L, R2];
+  fake.emit('display-metrics-changed', {}, R2, ['workArea']);
+  assert(await until(() => on(R2), 3000), `工作区变了：挪到新的右上角 ${JSON.stringify(p.win.getBounds())}`);
+  assert.strictEqual(p.win, w3, '屏幕和缩放没变：不重建窗口');
+
+  // 改了缩放：重建
+  const R3 = { ...R2, scaleFactor: 1.5 };
+  fake.displays = [L, R3];
+  fake.emit('display-metrics-changed', {}, R3, ['scaleFactor']);
+  assert(await until(() => p.win !== w3 && on(R3), 3000), '缩放变了：按新缩放重建窗口');
+  const w4 = p.win;
+
+  // 两块屏幕缩放一样时，主窗口被挪到另一块：弹窗只挪过去，不重建（卡片不会空一下再出现）
+  const L2 = { ...L, scaleFactor: R3.scaleFactor };
+  fake.displays = [L2, R3];
+  mainBounds = { x: 50, y: 100, width: 500, height: 600 };
+  fake.emit('display-metrics-changed', {}, L2, ['scaleFactor']);
+  assert(await until(() => on(L2), 3000), `缩放一样：挪到另一块屏幕的右上角 ${JSON.stringify(p.win.getBounds())}`);
+  assert.strictEqual(p.win, w4, '缩放一样：不重建窗口');
+
+  // 卡片都收走了、窗口藏着时拔掉显示器：直接关掉，下次按新的屏幕建
+  p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');
+  assert(await until(() => p.win && !p.win.isVisible(), 2000), '收走后窗口藏起来');
+  fake.displays = [L];
+  fake.emit('display-removed', {}, R3);
+  assert(await until(() => p.win === null, 2000), '藏着的窗口在屏幕变了以后关掉');
+  p.show({ key: 'm:us:James O’Connor', kind: 'msg', accId: 'us', chat: 'James O’Connor', text: 'Thanks!', count: 1 });
+  assert(await until(() => on(L), 5000), '再来一条：建在剩下那块屏幕的右上角');
+  p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');
+}

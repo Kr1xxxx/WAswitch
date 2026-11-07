@@ -9,6 +9,8 @@
 // - 离开电脑超过 5 分钟（shen 2026-10-27）：卡片不再自动消失，回来后要一张一张手动点；没有“全部收起”
 // - 聊天锁打开时：不显示客户名字、头像和消息内容
 // - 勿扰打开时：新消息不弹；退出登录、断线、新版本这类提醒照弹，只是不响（不然用户开着勿扰就永远不知道号掉了）
+// - 拔掉、接上显示器或改了缩放：重新摆到该在的那块屏幕右上角；要去的地方缩放不一样就把窗口整个重建
+//   （Windows 上把透明窗口挪到另一种缩放的屏幕，大小和里面卡片的位置会错）；缩放一样只挪位置
 const { BrowserWindow, screen, powerMonitor } = require('electron');
 const path = require('path');
 const { PopupQueue } = require('./popup-queue');
@@ -27,16 +29,24 @@ const AWAY_AFTER_S = 5 * 60; // 离开电脑超过这么久：现有的和期间
 const HOVER_MAX_MS = 60 * 1000; // 悬停暂停最多这么久，之后当作鼠标已经不在上面（兜底）
 const READY_TIMEOUT_MS = 10 * 1000; // 建窗后这么久页面还没就绪：销毁重建
 const MAX_REBUILDS = 3; // 页面连续起不来最多重建几次，再多就等下一次 show()
+// 显示器变了以后隔多久重新摆：先等系统把各个窗口挪完、屏幕信息更新完；过一会儿再看一次，系统挪主窗口有时更晚
+const SCREEN_CHECKS_MS = [400, 2000];
+const SCREEN_EVENTS = ['display-added', 'display-removed', 'display-metrics-changed'];
 
 const isMsg = (card) => card.kind === 'msg' || card.kind === 'sample';
 
 class PopupWindow {
   // hooks: { getWindow(), account(id) -> { name, color }, locked(), settings() -> { popupSeconds, popupSound, popupDnd },
   //          onOpen(card), onLater(card), idleSeconds?() -> 系统多少秒没有键盘鼠标输入（默认用 powerMonitor） }
-  constructor(hooks, { now = () => Date.now(), idleCloseMs = IDLE_CLOSE_MS } = {}) {
+  // screen：默认 Electron 的 screen（测试里换成假的几块屏幕）
+  constructor(hooks, { now = () => Date.now(), idleCloseMs = IDLE_CLOSE_MS, screen: scr = screen } = {}) {
     this.hooks = hooks;
     this.now = now;
     this.idleCloseMs = idleCloseMs;
+    this.screen = scr;
+    this.builtFor = ''; // 窗口是按哪种缩放建的
+    this.screenWatched = false;
+    this.screenTimers = [];
     this.queue = new PopupQueue({ now, durationMs: this.durationMs() });
     this.win = null;
     this.ready = false;
@@ -110,11 +120,14 @@ class PopupWindow {
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
     if (this.win && !this.win.isDestroyed()) return;
+    this.watchScreen();
     const mac = process.platform === 'darwin';
     this.ready = false;
     this.lastSig = '';
+    const spot = this.spot();
+    this.builtFor = spot.key;
     this.win = new BrowserWindow({
-      width: WIN_W, height: WIN_H, ...this.position(),
+      width: WIN_W, height: WIN_H, x: spot.x, y: spot.y,
       show: false, frame: false, transparent: true, backgroundColor: RADIX.TRANSPARENT, hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, closable: true,
       skipTaskbar: true, focusable: false, alwaysOnTop: true, title: 'WAswitch 通知',
@@ -153,21 +166,55 @@ class PopupWindow {
     if (this.rebuilds <= MAX_REBUILDS) { this.ensureWindow(); this.render(); } else console.warn('通知弹窗页面连续起不来，先不再重建');
   }
 
-  // 放在 WAswitch 主窗口所在那块屏幕的右上角（Mac 在菜单栏下面）
-  position() {
-    const main = this.hooks.getWindow();
-    let display;
+  // 放在 WAswitch 主窗口所在那块屏幕的右上角（Mac 在菜单栏下面）。
+  // key 记下那块屏幕的缩放：变了就要重建窗口，不能只挪
+  spot() {
+    const scr = this.screen;
+    let mainBounds = null;
     try {
-      display = main && !main.isDestroyed() ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
+      const main = this.hooks.getWindow();
+      if (main && !main.isDestroyed()) mainBounds = main.getBounds();
     } catch {
-      display = screen.getPrimaryDisplay();
+      mainBounds = null;
     }
-    const wa = display.workArea;
-    const gap = process.platform === 'darwin' ? 10 : 12; // 卡片离屏幕边的距离
-    return {
-      x: Math.round(wa.x + wa.width - gap - CARD_W - PAD.left),
-      y: Math.round(wa.y + gap - PAD.top),
+    return spotOn(pickDisplay(scr.getAllDisplays(), scr.getPrimaryDisplay(), mainBounds), process.platform);
+  }
+
+  // 摆到 spot 那里。Windows 上从另一种缩放的屏幕挪过来时，系统会按原来的缩放把大小再换算一遍，
+  // 第一次常常摆不对，读回来不对就再设一次
+  place(w, spot) {
+    const want = { x: spot.x, y: spot.y, width: WIN_W, height: WIN_H };
+    w.setBounds(want);
+    if (!sameRect(w.getBounds(), want)) w.setBounds(want);
+  }
+
+  // 显示器插拔、分辨率、缩放、任务栏位置变了都会来这几个事件；一次插拔会连着来好几个，等安静下来再处理
+  watchScreen() {
+    if (this.screenWatched) return;
+    this.screenWatched = true;
+    const changed = () => {
+      for (const t of this.screenTimers) clearTimeout(t);
+      this.screenTimers = SCREEN_CHECKS_MS.map((ms) => setTimeout(() => this.screenChanged(), ms));
     };
+    for (const ev of SCREEN_EVENTS) this.screen.on(ev, changed);
+  }
+
+  screenChanged() {
+    const w = this.win;
+    if (!w || w.isDestroyed()) return;
+    if (!this.queue.size) { this.closeWindow(); return; } // 藏着没有卡片：直接关掉，下次按新的屏幕重建
+    this.render(); // 缩放变了就重建，没变就挪到新的右上角
+  }
+
+  // 旧窗口是按原来的缩放建的，整个换掉；卡片都在主进程的队列里，新窗口就绪后照样画出来
+  rebuild() {
+    const old = this.win;
+    this.win = null;
+    this.ready = false;
+    this.queue.setHover(false);
+    if (old && !old.isDestroyed()) old.destroy();
+    this.ensureWindow();
+    this.render();
   }
 
   // 鼠标现在是否真的在弹窗窗口里（页面说“鼠标停在卡上”时核对一下，窗口藏过再显示时页面记的旧位置不可信）
@@ -175,7 +222,7 @@ class PopupWindow {
     const w = this.win;
     if (!w || w.isDestroyed()) return false;
     try {
-      const p = screen.getCursorScreenPoint();
+      const p = this.screen.getCursorScreenPoint();
       const b = w.getBounds();
       return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
     } catch {
@@ -236,6 +283,8 @@ class PopupWindow {
       return;
     }
     if (!w || w.isDestroyed()) return;
+    const spot = this.spot();
+    if (spot.key !== this.builtFor) { this.rebuild(); return; } // 该去的屏幕缩放和建窗时不一样了
     if (this.ready) {
       const state = this.model();
       const sig = JSON.stringify(state);
@@ -244,7 +293,7 @@ class PopupWindow {
         if (this.pendingSound) { state.sound = true; this.pendingSound = false; }
         this.send(state);
       }
-      w.setBounds({ ...this.position(), width: WIN_W, height: WIN_H });
+      this.place(w, spot);
       if (!w.isVisible()) w.showInactive();
     }
     this.startTicker();
@@ -288,6 +337,7 @@ class PopupWindow {
   }
 
   closeWindow() {
+    clearTimeout(this.idleTimer);
     this.idleTimer = null;
     if (this.queue.size) return;
     const w = this.win;
@@ -327,6 +377,41 @@ class PopupWindow {
   }
 }
 
+// 主窗口在哪块屏幕上（重叠最多的那块）就放哪块；主窗口不在任何一块屏幕上就放主屏：
+// 那块屏幕刚被拔掉、主窗口藏在托盘里还没被系统挪回来时，它记的还是旧位置
+function pickDisplay(displays, primary, mainBounds) {
+  let best = null;
+  let most = 0;
+  if (mainBounds) {
+    for (const d of displays || []) {
+      const a = overlap(d.bounds, mainBounds);
+      if (a > most) { most = a; best = d; }
+    }
+  }
+  return best || primary;
+}
+
+function overlap(a, b) {
+  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+// 弹窗窗口在这块屏幕上的位置：卡片贴着工作区右上角（Mac 在菜单栏下面，Windows 不压任务栏）
+function spotOn(display, platform) {
+  const wa = display.workArea;
+  const gap = platform === 'darwin' ? 10 : 12; // 卡片离屏幕边的距离
+  return {
+    x: Math.round(wa.x + wa.width - gap - CARD_W - PAD.left),
+    y: Math.round(wa.y + gap - PAD.top),
+    key: String(display.scaleFactor || 1), // 只看缩放：同样缩放的两块屏幕之间挪窗口不会错，不用重建
+  };
+}
+
+function sameRect(a, b) {
+  return !!a && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
 // 头像：名字首字母，颜色按名字固定（不加载客户真实头像：那要从 WhatsApp 的服务器下载，会绕开账号的代理）
 function initials(name) {
   const words = String(name || '').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
@@ -344,4 +429,4 @@ function colorFor(name) {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
-module.exports = { PopupWindow, initials, colorFor, IDLE_CLOSE_MS, ACTIVE_WITHIN_S, AWAY_AFTER_S, TICK_MS };
+module.exports = { PopupWindow, initials, colorFor, pickDisplay, spotOn, IDLE_CLOSE_MS, ACTIVE_WITHIN_S, AWAY_AFTER_S, TICK_MS, WIN_W, WIN_H };
