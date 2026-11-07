@@ -3,7 +3,10 @@
 //
 // - 只在有卡片时才建窗口；卡片都收走后先藏起来，空闲 1 分钟就关掉，平时不常驻（省内存）
 // - 不抢焦点：窗口不能获得焦点，弹出时用 showInactive，别的软件里打字不会被打断
-// - 窗口默认“点穿”：鼠标只有停在卡片上时才接收点击，其余透明的地方点下去落在下面的软件上
+// - 窗口默认“点穿”：鼠标只有停在卡片上时才接收点击，其余透明的地方点下去落在下面的软件上。
+//   不点穿的时候整个窗口（连透明的地方）都挡点击，所以主进程每 0.1 秒自己核对鼠标还在不在卡片上，不在就马上恢复点穿。
+//   不能只靠页面报“移开了”：窗口被挪走、鼠标一下跳出去时页面收不到，透明的一大块会一直挡着下面的软件
+//   （shen 2026-11-07：拔掉显示器后主窗口右上角正好在它下面，点一下没反应，要点第二下）
 // - 倒计时只在用户在用电脑时走（shen 2026-10-27：没动鼠标、没按键就不要消失）：每半秒看一眼系统多久没输入，
 //   刚有输入才扣时间；鼠标停在弹窗上、卡片藏在“还有 N 条”后面、窗口还没显示出来时也不扣
 // - 离开电脑超过 5 分钟（shen 2026-10-27）：卡片不再自动消失，回来后要一张一张手动点；没有“全部收起”
@@ -27,6 +30,7 @@ const TICK_MS = 500; // 倒计时每多久走一步
 const ACTIVE_WITHIN_S = 5; // 这么多秒内有过键盘鼠标输入才算“在用电脑”，倒计时才走
 const AWAY_AFTER_S = 5 * 60; // 离开电脑超过这么久：现有的和期间来的卡片都不再自动消失，回来后要手动一张一张点掉
 const HOVER_MAX_MS = 60 * 1000; // 悬停暂停最多这么久，之后当作鼠标已经不在上面（兜底）
+const HOVER_POLL_MS = 100; // 窗口不点穿期间，主进程多久核对一次鼠标还在不在卡片上
 const READY_TIMEOUT_MS = 10 * 1000; // 建窗后这么久页面还没就绪：销毁重建
 const MAX_REBUILDS = 3; // 页面连续起不来最多重建几次，再多就等下一次 show()
 // 显示器变了以后隔多久重新摆：先等系统把各个窗口挪完、屏幕信息更新完；过一会儿再看一次，系统挪主窗口有时更晚
@@ -58,6 +62,8 @@ class PopupWindow {
     this.lastSound = 0;
     this.pendingSound = false;
     this.lastSig = ''; // 上次发给页面的内容，没变就不重发（页面不用重画，正按着的按钮不会丢）
+    this.cardRects = null; // 页面报来的卡片在窗口里的位置；还没报（或刚发了新内容）时当作整个窗口
+    this.hoverTimer = null;
   }
 
   durationMs() {
@@ -139,6 +145,7 @@ class PopupWindow {
       },
     });
     const w = this.win;
+    this.cardRects = null;
     w.setAlwaysOnTop(true, 'screen-saver');
     if (mac) w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     w.setIgnoreMouseEvents(true, { forward: true });
@@ -150,6 +157,8 @@ class PopupWindow {
     clearTimeout(this.readyTimer);
     this.readyTimer = setTimeout(() => { if (this.win === w && !this.ready) this.dropWindow(w, '页面一直没就绪'); }, READY_TIMEOUT_MS);
     w.on('closed', () => { if (this.win === w) { this.win = null; this.ready = false; } });
+    // 被挪了（拔掉显示器时系统挪的，或者重新摆到右上角）：鼠标多半已经不在卡片上了，马上核对
+    w.on('move', () => { if (this.win === w) this.checkHover(); });
     w.loadFile(path.join(__dirname, 'popup', 'index.html')).catch(() => {});
   }
 
@@ -211,23 +220,57 @@ class PopupWindow {
     const old = this.win;
     this.win = null;
     this.ready = false;
-    this.queue.setHover(false);
+    this.hoverOff();
     if (old && !old.isDestroyed()) old.destroy();
     this.ensureWindow();
     this.render();
   }
 
-  // 鼠标现在是否真的在弹窗窗口里（页面说“鼠标停在卡上”时核对一下，窗口藏过再显示时页面记的旧位置不可信）
-  cursorInside() {
+  // 鼠标在弹窗窗口里的哪儿（窗口里的坐标）；不在窗口里或窗口没显示时是 null；拿不到鼠标位置时是 { unknown: true }
+  cursorInWindow() {
     const w = this.win;
-    if (!w || w.isDestroyed()) return false;
+    if (!w || w.isDestroyed() || !w.isVisible()) return null;
+    let p;
+    let b;
     try {
-      const p = this.screen.getCursorScreenPoint();
-      const b = w.getBounds();
-      return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+      p = this.screen.getCursorScreenPoint();
+      b = w.getBounds();
     } catch {
-      return true;
+      return { unknown: true };
     }
+    const x = p.x - b.x;
+    const y = p.y - b.y;
+    return x >= 0 && y >= 0 && x < b.width && y < b.height ? { x, y } : null;
+  }
+
+  // 鼠标现在是否真的在某张卡片上（窗口藏过再显示、被挪走以后，页面记的旧位置不可信）；拿不到鼠标位置时信页面
+  cursorOnCard() {
+    const c = this.cursorInWindow();
+    if (!c) return false;
+    if (c.unknown || !this.cardRects) return true;
+    return this.cardRects.some((r) => c.x >= r.x && c.x < r.x + r.width && c.y >= r.y && c.y < r.y + r.height);
+  }
+
+  // 鼠标停在卡片上：窗口接收点击、倒计时暂停，主进程开始自己盯着鼠标
+  hoverOn() {
+    this.win.setIgnoreMouseEvents(false);
+    this.queue.setHover(true);
+    if (!this.hoverTimer) this.hoverTimer = setInterval(() => this.checkHover(), HOVER_POLL_MS);
+  }
+
+  // 恢复点穿、接着倒计时
+  hoverOff() {
+    this.queue.setHover(false);
+    clearInterval(this.hoverTimer);
+    this.hoverTimer = null;
+    const w = this.win;
+    if (w && !w.isDestroyed()) w.setIgnoreMouseEvents(true, { forward: true });
+  }
+
+  // 窗口不点穿期间每 0.1 秒、窗口挪动后、卡片位置变了以后：鼠标已经不在任何一张卡片上，就当作移开
+  checkHover() {
+    if (!this.queue.hoverSince) { if (this.hoverTimer) this.hoverOff(); return; }
+    if (!this.cursorOnCard()) this.resetHover();
   }
 
   // 主进程发给弹窗页面的内容：聊天锁开着时名字、头像、内容都不发过去
@@ -274,8 +317,7 @@ class PopupWindow {
       if (w && !w.isDestroyed()) {
         this.lastSig = '';
         this.send({ cards: [], more: 0, platform: process.platform });
-        this.queue.setHover(false);
-        w.setIgnoreMouseEvents(true, { forward: true });
+        this.hoverOff();
         w.hide();
         // 空闲 1 分钟就关掉窗口，不常驻
         if (!this.idleTimer) this.idleTimer = setTimeout(() => this.closeWindow(), this.idleCloseMs);
@@ -291,6 +333,7 @@ class PopupWindow {
       if (sig !== this.lastSig || this.pendingSound) {
         this.lastSig = sig;
         if (this.pendingSound) { state.sound = true; this.pendingSound = false; }
+        this.cardRects = null; // 页面重画完会报新的卡片位置
         this.send(state);
       }
       this.place(w, spot);
@@ -320,7 +363,7 @@ class PopupWindow {
     if (!w || w.isDestroyed() || !this.ready || !w.isVisible()) return; // 还没显示出来：不算
     if (this.queue.hoverSince) {
       // 页面说鼠标停在上面，但鼠标其实不在窗口里（窗口藏过再显示时页面记的是旧位置），或者停得太久：当作移开
-      if (!this.cursorInside() || now - this.queue.hoverSince > HOVER_MAX_MS) this.resetHover();
+      if (!this.cursorOnCard() || now - this.queue.hoverSince > HOVER_MAX_MS) this.resetHover();
       else return;
     }
     if (this.userAway) { this.queue.makeSticky(); return; } // 离开超过 5 分钟：这些卡都留着，回来手动点
@@ -330,9 +373,7 @@ class PopupWindow {
 
   // 悬停状态作废：恢复点穿、接着倒计时，并让页面忘掉记住的鼠标位置
   resetHover() {
-    this.queue.setHover(false);
-    const w = this.win;
-    if (w && !w.isDestroyed()) w.setIgnoreMouseEvents(true, { forward: true });
+    this.hoverOff();
     this.send({ ...this.model(), resetHover: true });
   }
 
@@ -360,9 +401,17 @@ class PopupWindow {
   onHover(sender, on) {
     if (!this.win || this.win.isDestroyed() || sender !== this.win.webContents) return;
     // 鼠标在卡片上：接收点击，暂停倒计时；离开：恢复点穿，接着倒计时
-    if (on && !this.cursorInside()) return; // 鼠标根本不在窗口里：页面记的是旧位置，不信
-    this.win.setIgnoreMouseEvents(!on, { forward: true });
-    this.queue.setHover(!!on);
+    if (!on) { this.hoverOff(); return; }
+    // 鼠标其实不在卡片上（页面记的是旧位置）：不信，并让页面也忘掉，不然它以为还停在卡上，之后真停到卡上也不再报
+    if (!this.cursorOnCard()) { this.resetHover(); return; }
+    this.hoverOn();
+  }
+
+  // 页面画完（或卡片大小变了）报来每张卡片在窗口里的位置
+  onLayout(sender, rects) {
+    if (!this.win || this.win.isDestroyed() || sender !== this.win.webContents) return;
+    this.cardRects = Array.isArray(rects) ? rects.filter(isRect).slice(0, 32) : null;
+    this.checkHover();
   }
 
   onAction(sender, uid, action) {
@@ -406,6 +455,10 @@ function spotOn(display, platform) {
     y: Math.round(wa.y + gap - PAD.top),
     key: String(display.scaleFactor || 1), // 只看缩放：同样缩放的两块屏幕之间挪窗口不会错，不用重建
   };
+}
+
+function isRect(r) {
+  return !!r && [r.x, r.y, r.width, r.height].every(Number.isFinite) && r.width > 0 && r.height > 0;
 }
 
 function sameRect(a, b) {

@@ -654,6 +654,7 @@ const popup = new PopupWindow({
 });
 ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
 ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
+ipcMain.on('popup:layout', (e, rects) => popup.onLayout(e.sender, rects));
 ipcMain.on('popup:act', (e, { uid, action } = {}) => {
   if (!['open', 'later', 'close'].includes(action)) return;
   popup.onAction(e.sender, Number(uid), action);

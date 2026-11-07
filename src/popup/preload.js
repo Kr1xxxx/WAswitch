@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld('pp', {
   onState: (cb) => ipcRenderer.on('popup:state', (_e, s) => cb(s)),
   ready: () => ipcRenderer.send('popup:ready'),
   hover: (on) => ipcRenderer.send('popup:hover', on === true),
+  layout: (rects) => ipcRenderer.send('popup:layout', rects),
   act: (uid, action) => ipcRenderer.send('popup:act', { uid: Number(uid), action: String(action) }),
 });
