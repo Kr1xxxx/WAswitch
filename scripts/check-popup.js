@@ -333,8 +333,13 @@ async function checkHoverRelease() {
   // 鼠标跳到最下面那张卡片下方的透明处，页面没报“移开了”
   fake.cursor = below(second);
   assert(await until(released, 500), '鼠标到了透明处：0.5 秒内恢复点穿');
+  let resets = 0;
+  const send = p.send.bind(p);
+  p.send = (st) => { if (st && st.resetHover) resets += 1; return send(st); };
   assert(!hover(), '鼠标在透明处时页面说“停在卡上”：不信');
   assert.strictEqual(ignoring, true, '还是点穿');
+  assert.strictEqual(resets, 1, '不信时让页面也忘掉“停在卡上”，之后真停到卡上还会再报');
+  p.send = send;
 
   // 鼠标停在卡片上时窗口被挪走（拔掉显示器时系统会挪它），鼠标没动
   fake.cursor = onCard(top);

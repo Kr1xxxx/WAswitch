@@ -226,21 +226,29 @@ class PopupWindow {
     this.render();
   }
 
-  // 鼠标现在是否真的在某张卡片上（页面说“鼠标停在卡上”时核对一下：窗口藏过再显示、被挪走以后，页面记的旧位置不可信）
-  cursorOnCard() {
+  // 鼠标在弹窗窗口里的哪儿（窗口里的坐标）；不在窗口里或窗口没显示时是 null；拿不到鼠标位置时是 { unknown: true }
+  cursorInWindow() {
     const w = this.win;
-    if (!w || w.isDestroyed() || !w.isVisible()) return false;
+    if (!w || w.isDestroyed() || !w.isVisible()) return null;
+    let p;
+    let b;
     try {
-      const p = this.screen.getCursorScreenPoint();
-      const b = w.getBounds();
-      const x = p.x - b.x;
-      const y = p.y - b.y;
-      if (x < 0 || y < 0 || x >= b.width || y >= b.height) return false;
-      if (!this.cardRects) return true;
-      return this.cardRects.some((r) => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+      p = this.screen.getCursorScreenPoint();
+      b = w.getBounds();
     } catch {
-      return true;
+      return { unknown: true };
     }
+    const x = p.x - b.x;
+    const y = p.y - b.y;
+    return x >= 0 && y >= 0 && x < b.width && y < b.height ? { x, y } : null;
+  }
+
+  // 鼠标现在是否真的在某张卡片上（窗口藏过再显示、被挪走以后，页面记的旧位置不可信）；拿不到鼠标位置时信页面
+  cursorOnCard() {
+    const c = this.cursorInWindow();
+    if (!c) return false;
+    if (c.unknown || !this.cardRects) return true;
+    return this.cardRects.some((r) => c.x >= r.x && c.x < r.x + r.width && c.y >= r.y && c.y < r.y + r.height);
   }
 
   // 鼠标停在卡片上：窗口接收点击、倒计时暂停，主进程开始自己盯着鼠标
@@ -394,7 +402,8 @@ class PopupWindow {
     if (!this.win || this.win.isDestroyed() || sender !== this.win.webContents) return;
     // 鼠标在卡片上：接收点击，暂停倒计时；离开：恢复点穿，接着倒计时
     if (!on) { this.hoverOff(); return; }
-    if (!this.cursorOnCard()) return; // 鼠标根本不在卡片上：页面记的是旧位置，不信
+    // 鼠标其实不在卡片上（页面记的是旧位置）：不信，并让页面也忘掉，不然它以为还停在卡上，之后真停到卡上也不再报
+    if (!this.cursorOnCard()) { this.resetHover(); return; }
     this.hoverOn();
   }
 
