@@ -163,13 +163,24 @@ app.whenReady().then(async () => {
     popup.show({ key: 'k1', kind: 'msg', accId: 'a', chat: 'Emma Schmidt', text: 'Hello, is the order shipped?' });
     await wait(1500);
   });
+  const reshow = async (k) => { if (!popup.queue.size) { popup.show({ key: k, kind: 'msg', accId: 'a', chat: 'Emma Schmidt', text: 'Hello again' }); await wait(1200); } };
+  // 记下弹窗什么时候变成能点、什么时候变回点穿
+  const wrapIgnore = () => {
+    const w = popup.win;
+    if (!w || w.__wrapped) return;
+    const orig = w.setIgnoreMouseEvents.bind(w);
+    w.setIgnoreMouseEvents = (ig, o) => { log(`    popup ignore=${ig} t=${Date.now() % 100000}`); return orig(ig, o); };
+    w.__wrapped = true;
+  };
   // B2：鼠标先经过卡片（弹窗变成能点），再去点卡片下面透明处盖着的主窗口按钮
   {
     const card = popupRect();
     const cx = Math.round(card.x + card.width / 2); const cy = Math.round(card.y + 60);
     const cs = process.platform === 'win32' ? screen.dipToScreenPoint({ x: cx, y: cy }) : { x: cx, y: cy };
+    await reshow('k-b2'); wrapIgnore();
     log('\n== B2 先经过卡片再点卡片下面的主窗口按钮');
-    for (const t of targets.filter((x) => inside(x, card))) {
+    const cardBottom = card.y + 140;
+    for (const t of targets.filter((x) => inside(x, card) && x.dip.y > cardBottom)) {
       for (const pause of [400, 120, 30]) {
         const before = (await counts())[t.id] || 0;
         await op('move', cs.x, cs.y); await wait(60); await op('move', cs.x + 2, cs.y + 2); await wait(pause);
@@ -196,6 +207,7 @@ app.whenReady().then(async () => {
   }
   // H：鼠标停在卡片上时，弹窗窗口被挪走（像拔掉显示器时系统把窗口挪到另一块屏幕上），鼠标没动
   {
+    await reshow('k-h'); wrapIgnore();
     const card = popupRect();
     const cx = Math.round(card.x + card.width / 2); const cy = Math.round(card.y + 60);
     const cs = process.platform === 'win32' ? screen.dipToScreenPoint({ x: cx, y: cy }) : { x: cx, y: cy };
