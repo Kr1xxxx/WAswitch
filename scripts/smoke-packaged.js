@@ -9,7 +9,7 @@ const bin = process.argv[2];
 if (!bin || !fs.existsSync(bin)) { console.error(`找不到可执行文件：${bin}`); process.exit(1); }
 // 临时诊断（合并前删掉）：Windows 上真鼠标点击
 if (process.platform === 'win32') {
-  const electron = path.join(__dirname, '..', 'node_modules', 'electron', 'dist', 'electron.exe');
+  const electron = require('electron'); // 第一次用时会下载 Electron
   const r = spawnSync(electron, [path.join(__dirname, 'diag-click.js')], { encoding: 'utf8', timeout: 240000 });
   console.log(`==== diag-click 结束 ${r.status} ${r.error || ''}\n${r.stdout}\n---- stderr\n${(r.stderr || '').split('\n').filter((l) => !/ERROR:|dbus/.test(l)).join('\n')}`);
 }

@@ -34,14 +34,15 @@ while (($l = [Console]::In.ReadLine()) -ne $null) {
   elseif ($p[0] -eq 'up') { [M]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero) }
   [Console]::Out.WriteLine('ok')
 }`;
-  ps = spawn('powershell', ['-NoProfile', '-Command', '-'], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const file = path.join(require('os').tmpdir(), `diag-click-${process.pid}.ps1`);
+  fs.writeFileSync(file, src);
+  ps = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], { stdio: ['pipe', 'pipe', 'inherit'] });
   let buf = '';
   ps.stdout.on('data', (d) => {
     buf += d.toString();
     let i;
     while ((i = buf.indexOf('\n')) >= 0) { buf = buf.slice(i + 1); const r = psQueue.shift(); if (r) r(); }
   });
-  ps.stdin.write(`${src}\n`);
   return new Promise((r) => psQueue.push(r));
 }
 function op(...a) {
