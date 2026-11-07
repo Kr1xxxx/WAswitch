@@ -1069,13 +1069,12 @@ function trWigBox(c, apply) {
   const terms = (list) => h('span', { class: 'desc' }, (list || []).flatMap((t, i) => [i ? '　' : '', h('span', { style: { whiteSpace: 'nowrap' } }, `${t.zh} = ${t.en}`)]));
   const row = (title, on, list, set) => setRow(title, '',
     sw(on, title, async (v) => { const r = await set(v); if (!r.error) trSay = v ? `${title}已打开` : `${title}已关闭`; apply(r); }), terms(list));
-  // 最后一行不画底线，提示句直接跟在下面
+  // 最后一行不画底线
   const last = row('睫毛词汇', c.lashTerms !== false, c.lashList, (v) => window.wa.trLash(v));
   last.style.borderBottom = 'none';
   return h('div', { class: 'box' },
     row('假发词汇', c.wigTerms !== false, c.wigList, (v) => window.wa.trWig(v)),
-    last,
-    h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。'));
+    last);
 }
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
@@ -1353,8 +1352,8 @@ function editorPage(id) {
         !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
-    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：德国客户，小王负责' });
-    const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24', placeholder: '登录后自动填写，也可以自己填' });
+    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '例如：德国客户' });
+    const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
     const passwordRow = h('label', { class: 'field' }, '代理密码', password);
@@ -1534,7 +1533,7 @@ function editorPage(id) {
     primary.addEventListener('change', () => { if (primary.checked && mode === 'lite') mode = 'web'; onModeChange(); });
     const sideText = () => (d.isNew
       ? [h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫码'))]
-      : [h('span', null, mode === 'lite' ? '修改代理后会重新连接，不需要重新扫码。' : '修改代理或时区后，这个账号的页面会重新加载，不需要重新扫码。')]);
+      : [h('span', null, mode === 'lite' ? '改了代理会重新连接，不用重新扫码。' : '改了代理或时区会重新加载，不用重新扫码。')]);
     const sidePanel = h('div', { class: 'side-panel' });
     proxyInput.addEventListener('input', onProxyChange);
     password.addEventListener('input', invalidateTest);
