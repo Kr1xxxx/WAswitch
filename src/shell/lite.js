@@ -41,7 +41,7 @@ function makeLitePage(id) {
   const sendBtn = h('button', { class: 'btn primary', type: 'button' }, '发送');
   const err = h('div', { class: 'lite-err', role: 'alert' });
   const conv = h('div', { class: 'lite-conv' }, title, msgs, err, h('div', { class: 'lite-compose' }, input, sendBtn));
-  const empty = h('div', { class: 'lite-empty' }, '在左边选一个对话。图片、语音等只显示类型，内容请在手机上看。');
+  const empty = h('div', { class: 'lite-empty' }, '在左边选一个对话。');
   const main = h('div', { class: 'lite-main' }, h('div', { class: 'lite-side' }, h('div', { class: 'lite-search' }, search), list), conv, empty);
   const el = h('div', { class: 'lite' }, status, main);
 
