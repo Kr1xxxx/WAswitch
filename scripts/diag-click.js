@@ -22,14 +22,20 @@ using System; using System.Runtime.InteropServices;
 public class M {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
 }
 "@
 [void][M]::SetProcessDPIAware()
+$sw = [M]::GetSystemMetrics(0); $sh = [M]::GetSystemMetrics(1)
 [Console]::Out.WriteLine('ready')
 while (($l = [Console]::In.ReadLine()) -ne $null) {
   $p = $l.Split(' ')
-  if ($p[0] -eq 'move') { [void][M]::SetCursorPos([int]$p[1], [int]$p[2]) }
+  if ($p[0] -eq 'move') {
+    # 真的鼠标移动（走系统输入，低级鼠标钩子看得到），坐标换成 0..65535
+    $nx = [int]([double]$p[1] * 65535 / ($sw - 1)); $ny = [int]([double]$p[2] * 65535 / ($sh - 1))
+    [M]::mouse_event(0x8001, [uint32]$nx, [uint32]$ny, 0, [UIntPtr]::Zero)
+  }
   elseif ($p[0] -eq 'down') { [M]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero) }
   elseif ($p[0] -eq 'up') { [M]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero) }
   [Console]::Out.WriteLine('ok')
@@ -107,7 +113,7 @@ app.whenReady().then(async () => {
     idleSeconds: () => 0,
   });
   ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
-  ipcMain.on('popup:hover', (e, on) => { log(`  popup hover ${on}`); popup.onHover(e.sender, on === true); });
+  ipcMain.on('popup:hover', (e, on) => { log(`  popup hover ${on} t=${Date.now() % 100000}`); popup.onHover(e.sender, on === true); });
   ipcMain.on('popup:act', (e, { uid, action } = {}) => popup.onAction(e.sender, uid, action));
 
   // 屏幕坐标：按钮中心（DIP），Windows 上换成物理像素
@@ -187,6 +193,31 @@ app.whenReady().then(async () => {
     const ok = after - before === 1;
     if (ok) total.ok += 1; else total.lost += 1;
     log(`  ${ok ? 'OK  ' : 'LOST'} ${t.id} clicks+${after - before} ev=${(await evs(t.view)).join(' ')}`);
+  }
+  // H：鼠标停在卡片上时，弹窗窗口被挪走（像拔掉显示器时系统把窗口挪到另一块屏幕上），鼠标没动
+  {
+    const card = popupRect();
+    const cx = Math.round(card.x + card.width / 2); const cy = Math.round(card.y + 60);
+    const cs = process.platform === 'win32' ? screen.dipToScreenPoint({ x: cx, y: cy }) : { x: cx, y: cy };
+    await op('move', cs.x, cs.y); await wait(80); await op('move', cs.x + 3, cs.y + 2); await wait(400);
+    log(`\n== H 鼠标停在卡上时弹窗被挪到 (200,120)  hoverSince=${popup.queue.hoverSince ? 'yes' : 'no'}`);
+    popup.win.setPosition(200, 120);
+    await wait(500);
+    const pr = popupRect();
+    log(`  popup now ${JSON.stringify(pr)} hoverSince=${popup.queue.hoverSince ? 'yes' : 'no'}`);
+    const hs = [...(await centers(shell, ['s1', 's5', 's9', 's13', 's17', 's21'])), ...(await centers(acc, ['a1', 'a5', 'a9', 'a13', 'a17']))].filter((t) => inside(t, pr) && (t.view === acc || !inside(t, { ...acc.getBounds(), ...{ x: acc.getBounds().x + win.getContentBounds().x, y: acc.getBounds().y + win.getContentBounds().y } })));
+    for (const t of hs) {
+      const before = (await counts())[t.id] || 0;
+      // 直接点（鼠标从远处一下跳过去，中间不经过）
+      await op('move', t.x, t.y); await wait(60);
+      await op('down'); await wait(70); await op('up'); await wait(300);
+      const after = (await counts())[t.id] || 0;
+      const ok = after - before === 1;
+      if (ok) total.ok += 1; else total.lost += 1;
+      log(`  ${ok ? 'OK  ' : 'LOST'} ${t.id} at ${t.x},${t.y} clicks+${after - before} hoverSince=${popup.queue.hoverSince ? 'yes' : 'no'} ev=${(await evs(t.view)).join(' ')}`);
+    }
+    popup.render(); // 弹窗放回右上角
+    await wait(300);
   }
   await scenario('C 弹窗收起（窗口藏着，1 分钟内还在）', async () => {
     popup.queue.removeWhere(() => true);
