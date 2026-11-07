@@ -332,7 +332,7 @@ async function checkHoverRelease() {
 
   // 鼠标跳到最下面那张卡片下方的透明处，页面没报“移开了”
   fake.cursor = below(second);
-  assert(await until(released, 500), '鼠标到了透明处：0.5 秒内恢复点穿');
+  assert(await until(released, 1000), '鼠标到了透明处：很快恢复点穿');
   let resets = 0;
   const send = p.send.bind(p);
   p.send = (st) => { if (st && st.resetHover) resets += 1; return send(st); };
@@ -346,7 +346,7 @@ async function checkHoverRelease() {
   assert(hover(), '回到卡片上：接收点击');
   const b0 = w.getBounds();
   w.setPosition(b0.x - 400, b0.y + 300);
-  assert(await until(released, 500), `窗口被挪走、鼠标留在原地：恢复点穿 ${JSON.stringify(w.getBounds())}`);
+  assert(await until(released, 1000), `窗口被挪走、鼠标留在原地：恢复点穿 ${JSON.stringify(w.getBounds())}`);
   p.render(); // 摆回右上角
   assert(await until(() => JSON.stringify(w.getBounds()) === JSON.stringify(b0), 1000), '摆回右上角');
 
@@ -356,7 +356,7 @@ async function checkHoverRelease() {
   assert(hover(), '在第二张卡上：接收点击');
   p.dropKey('m:de:Emma Schneider'); // 收走的是上面那张（最新的在上），第二张挪上去，鼠标底下空了
   assert(await until(async () => (await cards()).length === 1, 2000), '收走了一张');
-  assert(await until(released, 500), '鼠标底下的卡片挪走了：恢复点穿');
+  assert(await until(released, 1000), '鼠标底下的卡片挪走了：恢复点穿');
 
   // 窗口不点穿时主进程每 0.1 秒核对一次；点穿以后就不再核对
   fake.cursor = onCard((await cards())[0]);

@@ -7,12 +7,6 @@ const path = require('path');
 
 const bin = process.argv[2];
 if (!bin || !fs.existsSync(bin)) { console.error(`找不到可执行文件：${bin}`); process.exit(1); }
-// 临时诊断（合并前删掉）：Windows 上真鼠标点击
-if (process.platform === 'win32') {
-  const electron = require('electron'); // 第一次用时会下载 Electron
-  const r = spawnSync(electron, [path.join(__dirname, 'diag-click.js')], { encoding: 'utf8', timeout: 240000 });
-  console.log(`==== diag-click 结束 ${r.status} ${r.error || ''}\n${r.stdout}\n---- stderr\n${(r.stderr || '').split('\n').filter((l) => !/ERROR:|dbus/.test(l)).join('\n')}`);
-}
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-smoke-'));
 const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };
 // 输出经由本进程转发，不让子进程直接占着 CI 步骤的输出管道（Windows 上残留的子进程会让步骤卡住）
