@@ -215,7 +215,7 @@ async function accountsPage() {
     });
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
-      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '同步到来财：已写入 / 来财没收下' }, `来财 ${a.crm_stored || 0}${a.crm_dropped ? ` 没收下 ${a.crm_dropped}` : ''}`)),
+      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '已同步到来财的聊天条数' }, `来财 ${a.crm_stored || 0}${a.crm_dropped ? ` 没收下 ${a.crm_dropped}` : ''}`)),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : ''),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
