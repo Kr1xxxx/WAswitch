@@ -105,7 +105,19 @@
     const live = new Set(state.cards.map((c) => c.uid));
     for (const uid of seen) if (!live.has(uid)) seen.delete(uid);
     checkHover();
+    reportLayout();
   }
+
+  // 告诉主进程每张卡片（连同 Mac 上伸到卡片外面的关闭按钮）在窗口里的位置：
+  // 主进程按这个核对鼠标还在不在卡片上，不在就让窗口恢复点穿
+  function reportLayout() {
+    const rects = [...zone.querySelectorAll('.nt, .nt .x, .more')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
+    });
+    window.pp.layout(rects);
+  }
+  new ResizeObserver(reportLayout).observe(zone);
 
   // 提示音：两个很短的音，不用音频文件
   let audio = null;

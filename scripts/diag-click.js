@@ -113,8 +113,9 @@ app.whenReady().then(async () => {
     idleSeconds: () => 0,
   });
   ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
-  ipcMain.on('popup:hover', (e, on) => { log(`  popup hover ${on} t=${Date.now() % 100000}`); popup.onHover(e.sender, on === true); });
+  ipcMain.on('popup:hover', (e, on) => { log(`  popup hover ${on} t=${Date.now() % 100000} cur=${JSON.stringify(screen.getCursorScreenPoint())} b=${popup.win && JSON.stringify(popup.win.getBounds())}`); popup.onHover(e.sender, on === true); });
   ipcMain.on('popup:act', (e, { uid, action } = {}) => popup.onAction(e.sender, uid, action));
+  ipcMain.on('popup:layout', (e, rects) => popup.onLayout && popup.onLayout(e.sender, rects));
 
   // 屏幕坐标：按钮中心（DIP），Windows 上换成物理像素
   const centers = async (view, ids) => {
@@ -217,7 +218,10 @@ app.whenReady().then(async () => {
     await wait(500);
     const pr = popupRect();
     log(`  popup now ${JSON.stringify(pr)} hoverSince=${popup.queue.hoverSince ? 'yes' : 'no'}`);
-    const hs = [...(await centers(shell, ['s1', 's5', 's9', 's13', 's17', 's21'])), ...(await centers(acc, ['a1', 'a5', 'a9', 'a13', 'a17']))].filter((t) => inside(t, pr) && (t.view === acc || !inside(t, { ...acc.getBounds(), ...{ x: acc.getBounds().x + win.getContentBounds().x, y: acc.getBounds().y + win.getContentBounds().y } })));
+    const cardBottom = pr.y + Math.max(0, ...(popup.cardRects || [{ y: 0, height: 160 }]).map((r) => r.y + r.height));
+    log(`  card bottom ${cardBottom}`);
+    // 只点挪过去以后卡片下面的透明处（卡片本身挡住点击是对的）
+    const hs = [...(await centers(shell, ['s1', 's5', 's9', 's13', 's17', 's21'])), ...(await centers(acc, ['a1', 'a5', 'a9', 'a13', 'a17']))].filter((t) => inside(t, pr) && t.dip.y > cardBottom + 4 && (t.view === acc || !inside(t, { ...acc.getBounds(), ...{ x: acc.getBounds().x + win.getContentBounds().x, y: acc.getBounds().y + win.getContentBounds().y } })));
     for (const t of hs) {
       const before = (await counts())[t.id] || 0;
       // 直接点（鼠标从远处一下跳过去，中间不经过）

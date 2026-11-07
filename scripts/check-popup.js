@@ -1,7 +1,8 @@
 // 自检：自带通知弹窗窗口（真的 Electron 窗口 + 真的弹窗页面）。
 // 检查：右上角、不抢焦点、最多 3 张 + “还有 N 条”、同一客户合并、聊天锁遮住名字和内容、
 // 点“打开”回到主进程、到时间自动收走、空闲后窗口关掉、勿扰时不弹、
-// 拔掉接上显示器和改缩放后重新摆到该在的屏幕右上角（假的几块屏幕）。
+// 拔掉接上显示器和改缩放后重新摆到该在的屏幕右上角（假的几块屏幕）、
+// 鼠标不在卡片上时窗口一定点穿（页面没报“移开了”也一样：窗口被挪走、卡片收走、鼠标跳到透明处）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
 //      加 SHOT_DIR=目录 会把弹窗截图存下来（PR 里贴图用）
 const path = require('path');
@@ -43,6 +44,7 @@ const popup = new PopupWindow({
 const popups = [popup]; // 后面“显示器插拔”那段另建一个，事件按页面分给各自的窗口
 ipcMain.on('popup:ready', (e) => popups.forEach((p) => p.onReady(e.sender)));
 ipcMain.on('popup:hover', (e, on) => popups.forEach((p) => p.onHover(e.sender, on === true)));
+ipcMain.on('popup:layout', (e, rects) => popups.forEach((p) => p.onLayout(e.sender, rects)));
 ipcMain.on('popup:act', (e, { uid, action } = {}) => popups.forEach((p) => p.onAction(e.sender, Number(uid), action)));
 
 const page = (js) => popup.win.webContents.executeJavaScript(js);
@@ -167,6 +169,7 @@ app.whenReady().then(async () => {
   assert.match(await page('document.querySelector(".nt .who").textContent'), /售后 US/, '号自己的提醒：标题是账号名');
 
   await checkDisplays();
+  await checkHoverRelease();
 
   fs.writeSync(2, '通知弹窗自检通过\n'); // 写到 stderr：app.exit 会把还没刷出去的 stdout 丢掉
   app.exit(0);
@@ -282,4 +285,81 @@ async function checkDisplays() {
   p.show({ key: 'm:us:James O’Connor', kind: 'msg', accId: 'us', chat: 'James O’Connor', text: 'Thanks!', count: 1 });
   assert(await until(() => on(L), 5000), '再来一条：建在剩下那块屏幕的右上角');
   p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');
+}
+
+// 窗口不点穿时整块（连透明的地方）都挡点击。鼠标一离开卡片就要恢复点穿，不能等页面报“移开了”：
+// 窗口被挪走、鼠标一下跳出去时页面收不到（Windows 上用真鼠标测出来，拔掉显示器后主窗口右上角要点两下才响应）。
+// 这里用假的鼠标位置，页面不知道鼠标动了，只看主进程自己能不能发现
+async function checkHoverRelease() {
+  class CursorScreen extends EventEmitter {
+    constructor() { super(); this.cursor = { x: 0, y: 0 }; }
+    getAllDisplays() { return screen.getAllDisplays(); }
+    getPrimaryDisplay() { return screen.getPrimaryDisplay(); }
+    getCursorScreenPoint() { return this.cursor; }
+  }
+  const fake = new CursorScreen();
+  const p = new PopupWindow({
+    getWindow: () => null,
+    account: (id) => ACC[id] || null,
+    locked: () => false,
+    settings: () => ({ popupSeconds: 0, popupSound: false, popupDnd: false }), // 不自动消失：倒计时不走，像离开电脑后回来时那样
+    onOpen: () => {},
+    onLater: () => {},
+    idleSeconds: () => 0,
+  }, { idleCloseMs: 60 * 1000, screen: fake });
+  popups.push(p);
+  p.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo! Ist der Liefertermin noch der 12.11.?', count: 1 });
+  p.show({ key: 'm:fr:Lucas Martin', kind: 'msg', accId: 'fr', chat: 'Lucas Martin', text: 'Bonjour, pouvez-vous m’envoyer le devis ?', count: 1 });
+  const cardsDrawn = async () => !!(p.win && p.ready && p.win.isVisible() && p.cardRects && p.cardRects.length) &&
+    (await p.win.webContents.executeJavaScript('document.querySelectorAll(".nt").length')) === p.queue.size;
+  assert(await until(cardsDrawn), '弹窗显示出来，页面报了卡片位置');
+  assert.strictEqual(p.ticker, null, '卡片不自动消失：倒计时没在走（悬停兜底不能靠它）');
+  const w = p.win;
+  let ignoring = true;
+  const setIgnore = w.setIgnoreMouseEvents.bind(w);
+  w.setIgnoreMouseEvents = (ig, o) => { ignoring = ig; return setIgnore(ig, o); };
+  const cards = async () => (await p.win.webContents.executeJavaScript('[...document.querySelectorAll(".nt")].map((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })'));
+  const onCard = (r) => { const b = w.getBounds(); return { x: Math.round(b.x + r.x + r.width / 2), y: Math.round(b.y + r.y + r.height / 2) }; };
+  const below = (r) => { const b = w.getBounds(); return { x: Math.round(b.x + r.x + r.width / 2), y: Math.round(b.y + r.y + r.height + 40) }; };
+  const hover = () => { p.onHover(w.webContents, true); return !!p.queue.hoverSince && ignoring === false; };
+  const released = () => !p.queue.hoverSince && ignoring === true;
+
+  let [top, second] = await cards();
+  fake.cursor = onCard(top);
+  assert(hover(), '鼠标在卡片上：窗口接收点击');
+  await wait(400);
+  assert(!released(), '鼠标一直在卡片上：一直接收点击');
+
+  // 鼠标跳到最下面那张卡片下方的透明处，页面没报“移开了”
+  fake.cursor = below(second);
+  assert(await until(released, 500), '鼠标到了透明处：0.5 秒内恢复点穿');
+  assert(!hover(), '鼠标在透明处时页面说“停在卡上”：不信');
+  assert.strictEqual(ignoring, true, '还是点穿');
+
+  // 鼠标停在卡片上时窗口被挪走（拔掉显示器时系统会挪它），鼠标没动
+  fake.cursor = onCard(top);
+  assert(hover(), '回到卡片上：接收点击');
+  const b0 = w.getBounds();
+  w.setPosition(b0.x - 400, b0.y + 300);
+  assert(await until(released, 500), `窗口被挪走、鼠标留在原地：恢复点穿 ${JSON.stringify(w.getBounds())}`);
+  p.render(); // 摆回右上角
+  assert(await until(() => JSON.stringify(w.getBounds()) === JSON.stringify(b0), 1000), '摆回右上角');
+
+  // 鼠标停在第二张卡上时这张被收走：底下变成透明处
+  [top, second] = await cards();
+  fake.cursor = onCard(second);
+  assert(hover(), '在第二张卡上：接收点击');
+  p.dropKey('m:de:Emma Schneider'); // 收走的是上面那张（最新的在上），第二张挪上去，鼠标底下空了
+  assert(await until(async () => (await cards()).length === 1, 2000), '收走了一张');
+  assert(await until(released, 500), '鼠标底下的卡片挪走了：恢复点穿');
+
+  // 窗口不点穿时主进程每 0.1 秒核对一次；点穿以后就不再核对
+  fake.cursor = onCard((await cards())[0]);
+  assert(hover(), '接收点击');
+  assert(p.hoverTimer, '不点穿期间在核对鼠标位置');
+  p.onHover(w.webContents, false);
+  assert(released() && !p.hoverTimer, '页面报“移开了”：恢复点穿，停止核对');
+
+  p.onAction(w.webContents, p.queue.items[0].uid, 'close');
+  assert(await until(() => !w.isVisible(), 2000), '收走后窗口藏起来');
 }
