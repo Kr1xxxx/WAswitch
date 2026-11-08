@@ -22,12 +22,21 @@
     return el;
   };
 
-  function timeText(at) {
-    const s = Math.max(0, (Date.now() - at) / 1000);
+  // 一小时内写“现在”“N 分钟前”；更早的按本机日历日：今天 20:45，昨天 昨天 20:45，
+  // 今年更早 10月28日 20:45，不是今年 2025年10月28日 20:45（和 shell/tr-info.js 的 when 同一套写法）。
+  // 卡片不再自动收走，隔夜还在的卡片只写钟点会被当成今天。
+  function timeText(at, now = Date.now()) {
+    const s = Math.max(0, (now - at) / 1000);
     if (s < 60) return '现在';
     if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
     const d = new Date(at);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const n = new Date(now);
+    const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const days = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+    if (days <= 0) return clock;
+    if (days === 1) return `昨天 ${clock}`;
+    if (d.getFullYear() === n.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
   }
 
   function avatar(c) {
