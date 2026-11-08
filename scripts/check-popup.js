@@ -81,6 +81,40 @@ app.whenReady().then(async () => {
   assert.match(await page('document.querySelector(".nt .txt").textContent'), /Liefertermin/, '写最后一条消息');
   await shot('popup-stack.png');
 
+  // 时间文字：一小时内写“现在”“N 分钟前”，更早的按日历日写（隔夜还在的卡片不能只写钟点）。
+  // 页面里把 Date.now 钉在一个固定时刻，主进程这边改卡片的 at，再让页面重画；不依赖真实日期。
+  {
+    const NOW = new Date(2026, 5, 15, 9, 30).getTime(); // 本机时间 2026-06-15 09:30
+    const at = (...a) => new Date(...a).getTime();
+    const cases = [
+      [NOW - 30 * 1000, '现在'],
+      [NOW - 5 * 60 * 1000, '5 分钟前'],
+      [at(2026, 5, 15, 7, 5), '07:05'], // 今天，2 小时多前
+      [at(2026, 5, 14, 23, 50), '昨天 23:50'], // 只差 10 小时，但已是昨天
+      [at(2026, 5, 14, 9, 0), '昨天 09:00'],
+      [at(2026, 0, 3, 8, 7), '1月3日 08:07'],
+      [at(2025, 9, 28, 23, 50), '2025年10月28日 23:50'],
+    ];
+    await page(`window.__realNow = Date.now; Date.now = () => ${NOW}; 0`);
+    for (const [ts, want] of cases) {
+      popup.queue.items[0].at = ts;
+      popup.refresh();
+      assert(await until(async () => (await page('document.querySelector(".nt time").textContent')) === want), `时间文字应为“${want}”，实际“${await page('document.querySelector(".nt time").textContent')}”`);
+    }
+    // 最长的写法也要放得下：名字不被挤掉、卡片不撑宽、时间不换行
+    popup.queue.items[0].at = at(2025, 9, 28, 23, 50);
+    popup.refresh();
+    assert(await until(async () => /^2025年/.test(await page('document.querySelector(".nt time").textContent'))));
+    const fit = await page('(() => { const nt = document.querySelector(".nt"); const r = (e) => e.getBoundingClientRect(); const t = nt.querySelector("time"); const who = nt.querySelector(".who"); const l1 = nt.querySelector(".line1"); return { tH: r(t).height, lineH: parseFloat(getComputedStyle(t).lineHeight) || r(t).height, whoW: r(who).width, whoScroll: who.scrollWidth, whoRight: r(who).right, tLeft: r(t).left, tRight: r(t).right, l1Right: r(l1).right, ntRight: r(nt).right }; })()');
+    assert(fit.tH <= fit.lineH * 1.5, `最长的时间不换行 ${JSON.stringify(fit)}`);
+    assert(fit.whoRight <= fit.tLeft + 0.5, `名字没被时间挤到一起 ${JSON.stringify(fit)}`);
+    assert(fit.tRight <= fit.ntRight + 0.5, `时间没超出卡片 ${JSON.stringify(fit)}`);
+    await shot('popup-old-time.png');
+    await page('Date.now = window.__realNow; 0'); // 还原
+    for (const c of popup.queue.items) c.at = Date.now();
+    popup.refresh();
+  }
+
   // 关闭按钮（Mac 在卡片左上角往外伸）和它的阴影要整个在窗口里；卡片在屏幕上的位置不因此挪动
   const gap = process.platform === 'darwin' ? 10 : 12;
   const geo = await page('(() => { const c = document.querySelector(".nt").getBoundingClientRect(); const x = document.querySelector(".nt .x").getBoundingClientRect(); return { cardTop: c.top, xTop: x.top, xLeft: x.left }; })()');
