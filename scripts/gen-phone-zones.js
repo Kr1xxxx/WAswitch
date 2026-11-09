@@ -22,7 +22,9 @@ const MAIN = {
 // 源数据明显不对的：爱尔兰 353 写成了伦敦
 const FORCE = { 353: 'Europe/Dublin' };
 // 源数据把全国通用的手机号段写成了某一个城市，改成“约”；昆士兰（617）不过夏令时，单独写
-const PATCH = { 614: '~Australia/Sydney', 617: 'Australia/Brisbane', 79: '~Europe/Moscow' };
+// 阿拉斯加（907）大部分用安克雷奇时间，源数据先写的 Adak 只是阿留申群岛；709 大部分在纽芬兰岛，不是哈利法克斯；
+// 哈萨克斯坦（77）现在全国同一钟点，城市显示阿拉木图（MAIN 里的 77 按国家码查不到，所以在这里写）
+const PATCH = { 614: '~Australia/Sydney', 617: 'Australia/Brisbane', 79: '~Europe/Moscow', 1907: '~America/Anchorage', 1709: '~America/St_Johns', 77: 'Asia/Almaty' };
 // 旧名字换成现在的名字（Electron 认旧名，但显示的城市名用新的）
 const RENAME = { 'America/Godthab': 'America/Nuuk', 'Pacific/Ponape': 'Pacific/Pohnpei', 'Pacific/Truk': 'Pacific/Chuuk', 'Pacific/Enderbury': 'Pacific/Kanton', 'Europe/Kiev': 'Europe/Kyiv', 'Asia/Calcutta': 'Asia/Kolkata', 'Asia/Katmandu': 'Asia/Kathmandu', 'Asia/Rangoon': 'Asia/Yangon', 'Asia/Saigon': 'Asia/Ho_Chi_Minh', 'Atlantic/Faeroe': 'Atlantic/Faroe' };
 
