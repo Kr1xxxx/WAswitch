@@ -32,6 +32,10 @@ check(same(zoneOfNumber('5511912345678'), z('America/Sao_Paulo', 'Sao Paulo')), 
 check(same(zoneOfNumber('34922123456'), z('Atlantic/Canary', 'Canary')), '西班牙 922（加那利）：Canary');
 check(same(zoneOfNumber('353851234567'), z('Europe/Dublin', 'Dublin')), '爱尔兰：Dublin（不是 London）');
 check(same(zoneOfNumber('33612345678'), z('Europe/Paris', 'Paris')), '法国：Paris');
+check(same(zoneOfNumber('19075551234'), z('America/Anchorage', 'Anchorage', true)), '阿拉斯加 907：约 Anchorage（不是阿留申的 Adak）');
+check(same(zoneOfNumber('17095551234'), z('America/St_Johns', 'St Johns', true)), '加拿大 709：约 St Johns（纽芬兰岛，不是 Halifax）');
+check(same(zoneOfNumber('77011234567'), z('Asia/Almaty', 'Almaty')), '哈萨克斯坦 +7 7：Almaty，不标“约”');
+check(same(zoneOfNumber('77131234567'), z('Asia/Aqtobe', 'Aqtobe')), '哈萨克斯坦 7713（源数据只写 Aqtobe）：Aqtobe');
 
 // 没号码 / 群聊：返回 null，顶栏照旧
 check(peerZone({ chat: '', title: 'Anna Schmidt' }) === null, '没号码（只有名字）：null');
