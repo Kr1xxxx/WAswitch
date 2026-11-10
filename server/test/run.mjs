@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { fakeD1 } from './fake-d1.mjs';
 import worker from '../src/index.js';
@@ -724,5 +725,23 @@ await test('定时任务只有一个（每 30 分钟）；每天 UTC 19:00 那�
 });
 await test('每日清理任务能跑', async () => {
   await worker.scheduled({}, env);
+});
+await test('后台页面：时间今年写「11/08 13:23」，别的年份写「12/30/25 13:23」；颜色下拉写中文名', async () => {
+  const load = (file, extra) => {
+    const ctx = vm.createContext({ module: { exports: {} }, ...extra });
+    vm.runInContext(fs.readFileSync(path.join(here, '../public/admin', file), 'utf8'), ctx);
+    return ctx.module.exports;
+  };
+  const RADIX = load('radix.js');
+  const page = load('admin.js', { RADIX });
+  const now = new Date(2026, 10, 10, 9, 0).getTime();
+  assert.equal(page.time(new Date(2026, 10, 8, 13, 23, 37).getTime(), now), '11/08 13:23');
+  assert.equal(page.time(new Date(2026, 0, 5, 9, 7, 59).getTime(), now), '01/05 09:07');
+  assert.equal(page.time(new Date(2025, 11, 30, 13, 23).getTime(), now), '12/30/25 13:23');
+  assert.equal(page.time(new Date(2009, 2, 4, 0, 5).getTime(), now), '03/04/09 00:05');
+  assert.equal(page.time(new Date(2027, 0, 1, 23, 59).getTime(), now), '01/01/27 23:59');
+  assert.deepEqual([...page.COLOR_NAMES], ['绿', '紫', '橙', '蓝', '红', '灰']);
+  assert.equal(page.COLOR_NAMES.length, RADIX.ACCOUNT_COLORS.length);
+  assert.deepEqual([...RADIX.ACCOUNT].map(([f]) => f), ['green', 'violet', 'orange', 'blue', 'crimson', 'slate'], '颜色顺序变了要同时改 COLOR_NAMES');
 });
 console.log(`全部通过（${passed} 项）`);
