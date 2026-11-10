@@ -62,3 +62,5 @@ button.btn:disabled:hover { background: var(--card); }
 .card b { display: block; font-size: var(--fs-xl); }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r-m); max-width: 90vw; }
 .device .btn { margin-left: 4px; }
+/* 框上面写名称的表单：按钮和框的底边对齐 */
+form.row.fields { align-items: flex-end; }
