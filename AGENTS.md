@@ -151,7 +151,7 @@ xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual   # 组件总览页
 
 **WhatsApp 页面的 fixture**
 
-- 读写 WhatsApp 页面的改动，要用真实结构的 fixture 测（`scripts/fixtures/wa-*.html`）：data-id 在外层包裹上、有 `span[data-icon=tail-in]`、有带 aria-label 的发送人 span、有语音行、有 `@lid` 的会话，不只是 `@c.us`。旧的简化假页面上全过，真 WhatsApp 上语音转写却一字一行。能用真账号看一眼的就看。
+- 读写 WhatsApp 页面的改动，要用真实结构的 fixture 测（照 `check-tr-inline.js` 的 `realText`、`realVoice`；`scripts/fixtures/wa-*.html` 还是旧的简化结构）：data-id 在外层包裹上、有 `span[data-icon=tail-in]`、有带 aria-label 的发送人 span、有语音行、有 `@lid` 的会话，不只是 `@c.us`。旧的简化假页面上全过，真 WhatsApp 上语音转写却一字一行。能用真账号看一眼的就看。
 - 多账号的 harness 会往错的 WhatsApp 视图里输入：注入每个视图，或者只注入当前显示的那个。
 - 记录「对不上」时别只测状态机：模拟输入层变化（同一条消息两次读出来，不可见字符、emoji 不一样），按字母和数字的骨架比较；LRU 重读时要刷新。
 
