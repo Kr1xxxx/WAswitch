@@ -22,7 +22,7 @@ function portStatus(st) {
   if (st.usedBy.length) return ['used', usedText(st.usedBy), `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP。${st.open ? '' : '（端口现在也没开）'}`];
   if (!st.open) return ['off', '没开', '这个端口现在没开：Clash 没开，或者还没在 Clash 里开这个端口'];
   if (!st.socks) return ['bad', '不能用', '端口被别的程序占着，或者要密码，不能当 socks5 代理用'];
-  return ['ok', '能用', '端口开着，可以当代理用。点“测试”看出口 IP'];
+  return ['ok', '能用', '端口开着，可以当代理用。点「测试」看出口 IP'];
 }
 let liveColor = null; // 编辑页里点了色块、还没保存的颜色（窗口背景先跟着变）
 
@@ -516,7 +516,7 @@ function updateCard() {
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
-  const ready = { line: u.manual ? '打开后把新的 WAswitch 拖进“应用程序”替换旧版。' : updateWaitLine(u) };
+  const ready = { line: u.manual ? '打开后把新的 WAswitch 拖进「应用程序」替换旧版。' : updateWaitLine(u) };
   return h('div', { class: 'updcard ready', role: 'status' },
     h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('b', { class: 'grow' }, `新版本 ${u.version} 已就绪`)),
     ready.line ? h('small', null, ready.line) : null,
@@ -530,7 +530,7 @@ function updateCard() {
 // 鼠标停在线路上：出口 IP 和上次测到的时间
 function exitTitle(acc) {
   if (acc.direct) return acc.mode === 'lite' ? '网络线路：直连（这台电脑的真实 IP）' : '网络线路：直连（跟随电脑的系统代理）';
-  if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
+  if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点「测试」，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
   const lat = acc.latency ? `\n最近一次检测用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
   return `网络线路：出口 IP ${acc.exitIp}${at}${lat}`;
@@ -698,7 +698,7 @@ function renderAi() {
     return;
   }
   const what = r.kind === 'add'
-    ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
+    ? (r.name ? `AI 想打开「添加账号」（预填「${r.name}」）` : 'AI 想打开「添加账号」')
     : `AI 想切到「${r.name}」`;
   $ai.replaceChildren(
     h('span', { class: 'grow' }, what),
@@ -898,7 +898,7 @@ async function panelInsert(text) {
   }
   const r = await window.wa.panelInsert(pn.accountId, text);
   if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
-  else if (r === 'focus') panelSay('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点“放进输入框”', true);
+  else if (r === 'focus') panelSay('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点「放进输入框」', true);
   else if (r === 'clip') panelSay('没贴上，请再点一次', true);
   else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
 }
@@ -1111,7 +1111,7 @@ function translatePage(page) {
     h('div', { class: 'box tr-form' }, trRoleBox(c, apply)),
     trWigBox(c, apply),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
-    h('p', { class: 'hint' }, '工作台的回复用排第一个的“发出”模式。'),
+    h('p', { class: 'hint' }, '工作台的回复用排第一个的「发出」模式。'),
     trModeEdit ? trModeForm() : null,
     h('div', { class: 'box' }, tr.modes.map((m) => h('div', { class: 'tr-prow' },
       h('b', { title: m.name }, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
@@ -1311,7 +1311,7 @@ function welcomePage() {
     h('h1', null, '一个窗口，同时登录多个 WhatsApp'),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色'),
-      step(2, '选网络线路', ['可以直连（几个号都直连也行，只是出口 IP 相同）；想分开 IP，就在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
+      step(2, '选网络线路', ['可以直连（几个号都直连也行，只是出口 IP 相同）；想分开 IP，就在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点「测试」。详见', clashLink(), '。']),
       step(3, '手机扫码登录', 'WhatsApp › 设置 › 已关联的设备 › 关联新设备。')),
     h('div', null, h('button', { class: 'btn primary', style: { height: '46px', padding: '0 26px' }, onclick: () => window.wa.add() }, '添加第一个账号'))));
 }
@@ -1361,7 +1361,7 @@ function editorPage(id) {
     const allowCalls = h('input', { type: 'checkbox', checked: d.allowCalls });
     const callsRow = h('div', { class: 'field' }, '通话',
       h('label', { class: 'check-row' }, allowCalls, h('span', null, '允许通话（直连号）')),
-      h('span', { class: 'hint' }, '通话走这台电脑的真实 IP。Clash 开着“系统代理”时别打开，或者把 Clash 改成 TUN 模式。'));
+      h('span', { class: 'hint' }, '通话走这台电脑的真实 IP。Clash 开着「系统代理」时别打开，或者把 Clash 改成 TUN 模式。'));
     const result = h('div', { role: 'status' });
     const region = h('select', { 'aria-label': '地区' }, d.regions.map((r) => h('option', { value: r.key }, r.label)));
     // 预设里没有的出口时区（tz:...）：加一个选项放在最前面
@@ -1442,7 +1442,7 @@ function editorPage(id) {
       const st = cur && portState ? portState[cur.port] : null;
       const lines = [];
       if (st && !st.open) {
-        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点“重新检测”或“测试”。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点「重新检测」或「测试」。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
       } else if (st && cur.socks && !st.socks) {
         lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口被别的程序占着，或者要密码，不能当 socks5 代理用。请换一个端口，详见 `, clashLink(), '。'));
       }
@@ -1461,7 +1461,7 @@ function editorPage(id) {
       const direct = mode !== 'lite' && !proxyInput.value.trim();
       region.hidden = direct;
       tags.replaceChildren(
-        h('span', { class: 'tag' }, direct ? '时区：跟随系统代理出口' : auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, direct ? '时区：跟随系统代理出口' : auto ? '时区：还没识别，点「测试」自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
         h('span', { class: 'tag' }, '浏览器：Chrome，操作系统跟随本机'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
@@ -1517,7 +1517,7 @@ function editorPage(id) {
         b.title = b.dataset.mode === 'lite' && primary.checked ? '主号只能用网页版' : '';
       }
       liteReason.textContent = !d.liteAvailable || !primary.checked ? ''
-        : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的“这是主号”后可以选轻量模式。';
+        : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的「这是主号」后可以选轻量模式。';
       proxyInput.placeholder = '留空表示直连，例如 socks5://127.0.0.1:7891';
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
@@ -1525,7 +1525,7 @@ function editorPage(id) {
       callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
-        ? ['填了代理要先“测试”通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
+        ? ['填了代理要先「测试」通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
         : ['代理连不上时这个号会暂停联网，不会改用直连。带密码的代理请用 http://。']));
       drawLiteDirect();
       sidePanel.replaceChildren(...sideText());
@@ -1571,7 +1571,7 @@ function editorPage(id) {
       saveBtn.disabled = true;
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       // 直连不用测试；填了代理的轻量号仍要先测试通过
-      if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
+      if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点「测试」，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
       const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, emoji, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked, groupId: groupRow ? groupSel.value : undefined });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
@@ -2027,7 +2027,7 @@ function updateBox(u) {
       : ['已是最新版本', u.current ? `当前版本 ${u.current}` : '', 'ok'],
     downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完自动更新') : '', 'busy'],
     downloaded: u.manual
-      ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
+      ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进「应用程序」替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, updateWaitLine(u), 'new'],
     // 失败不等于没有新版本：标题直说失败，下面写原因
     error: ['检查更新失败', u.errorText || '', 'idle'],

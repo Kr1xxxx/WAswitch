@@ -273,7 +273,7 @@ async function dockTranslate(insert = false, fresh = false) {
     return dockInsert();
   }
   const modeId = outModeId();
-  if (!modeId) return dockSay('没有“发出”方向的模式，去设置 › 翻译里加一个', true);
+  if (!modeId) return dockSay('没有「发出」方向的模式，去设置 › 翻译里加一个', true);
   const req = { text: dk.text, modeId, target, source, ctxAccount: dk.st.accountId, fresh };
   return dockRun({ req, insert, acc: dk.st.accountId, title: dk.st.title });
 }
@@ -288,8 +288,8 @@ async function dockRun(p) {
   if (r.error) return dockSay(r.error, true, r.detail);
   if (p.req.fix && dk.edited) { dk.suggest = r.text; return dockSay(''); } // 改过的不直接覆盖，给用户选
   dk.out = r.text; dk.src = p.req.text; dk.plain = false; dk.edited = false; dk.fixed = !!p.req.fix; dk.suggest = ''; dk.warn = r.warn || []; dk.forTitle = p.title;
-  if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点“重新翻译”' : '');
-  if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点“放进输入框”', true);
+  if (!p.insert) return dockSay(r.cached ? '这句以前翻过，直接用了记下的译文（没再调模型）。要换一版点「重新翻译」' : '');
+  if (dk.warn.length) return dockSay('译文里有原文没有的内容，先看一眼再点「放进输入框」', true);
   return dockInsert();
 }
 async function dockInsert() {
@@ -333,7 +333,7 @@ function dockLangBar() {
     dockRender(true);
   };
   const tgt = h('select', { class: 'dk-lang dk-bar-sel', 'aria-label': '翻成哪种语言',
-    title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选“自动选择”就恢复中英互译'
+    title: lt.tgt ? '按 ⇄ 对调出来的，只管这个对话；再按一次 ⇄ 回到原样' : manual ? '你手动选的语言，已记在这个对话上；选「自动选择」就恢复中英互译'
       : noTr ? '自动选择：对方用中文，写中文不翻，写外文翻成中文'
         : `自动选择：中文翻成${toCustomer}（${autoTip[st.targetSrc] || '客户的语言'}），英文等别的语言翻成中文`,
     onchange: (e) => setTarget(e.target.value === '__auto' ? '' : e.target.value) },
@@ -585,7 +585,7 @@ function dockPillSync(box) {
 // 自动翻译暂停的提示：消息列表底部和“译文在消息下面”时的两个框上面都用
 function dockPausedHint() {
   const st = dk.st;
-  if (st.paused === 'day') return h('p', { class: 'hint dk-hint' }, `今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点“翻译”。`);
+  if (st.paused === 'day') return h('p', { class: 'hint dk-hint' }, `今天已经自动翻了 ${st.today} 条（上限 ${st.dailyCap}），自动翻译暂停到明天；可以手动点「翻译」。`);
   if (st.paused === 'minute') return h('p', { class: 'hint dk-hint' }, '一分钟内消息太多，暂时只翻前 20 条，其余可以手动点。');
   return null;
 }
@@ -709,7 +709,7 @@ function dockCompose() {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // 输入法选字时的回车不算
     if (e.shiftKey) return; // 换行
     e.preventDefault();
-    if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点“重新翻译”', true);
+    if (dk.out && dk.edited) return dockSay('译文手动改过，不会自动覆盖。要按新内容翻，点「重新翻译」', true);
     dockTranslate(dockLangs().same); // 对方写中文：不用翻，回车直接放进输入框
   });
   const out = h('textarea', { class: 'dk-out', rows: '3', 'aria-label': '译文（可以直接改）' }, dk.out);
