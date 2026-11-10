@@ -271,7 +271,7 @@ function setupTranslateIpc(ctx) {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
-        if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
+        if (!mode) return Promise.resolve({ error: '没有「收到」方向的翻译模式', kind: 'input' });
         if (slow) return slowTranslate();
         // 登录着团队：收到的消息各走各的通道发给来财，不占用户翻译用的那条，可以同时翻好几条（见 parallel）
         if (!fix && ctx.translator.raceSet().length) {

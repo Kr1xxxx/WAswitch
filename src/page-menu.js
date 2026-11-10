@@ -5,7 +5,7 @@ function pageMenuTemplate(p, act) {
   if (p.misspelledWord) {
     for (const word of (p.dictionarySuggestions || []).slice(0, 5)) items.push({ label: word, click: () => act.replaceMisspelling(word) });
     if (!items.length) items.push({ label: '没有拼写建议', enabled: false });
-    items.push({ label: `把“${p.misspelledWord.slice(0, 30)}”加入词典`, click: () => act.addWord(p.misspelledWord) });
+    items.push({ label: `把「${p.misspelledWord.slice(0, 30)}」加入词典`, click: () => act.addWord(p.misspelledWord) });
     items.push({ type: 'separator' });
   }
   if (p.isEditable) {

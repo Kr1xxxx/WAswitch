@@ -58,7 +58,7 @@ app.whenReady().then(async () => {
   // Mac 手动
   await state(base(upd({ manual: true, mac: true })));
   c = await card();
-  assert(c.btns.join() === '稍后,打开安装包' && c.text.includes('拖进“应用程序”'), `Mac 手动卡片：${c.text}`);
+  assert(c.btns.join() === '稍后,打开安装包' && c.text.includes('拖进「应用程序」'), `Mac 手动卡片：${c.text}`);
 
   // 「稍后」只在等手上的事时通知主进程（没点过更新就没有要取消的）
   await state(base(upd()));

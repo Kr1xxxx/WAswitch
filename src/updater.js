@@ -576,7 +576,7 @@ class Updater {
     this.succeed('downloaded', `新版本 ${version} 已下载并校验通过`, { version, percent: 100 });
     if (this.macAuto) { this.maybeAutoInstall(); return; }
     if (this.state.userAsked) { this.set({ userAsked: false }); this.openMacInstaller(); return; } // 不能自动替换：直接打开安装包
-    this.hooks.notify('WAswitch 有新版本', `${version} 已下载。点这里打开，把新的 WAswitch 拖进“应用程序”替换旧版。`, () => this.openMacInstaller());
+    this.hooks.notify('WAswitch 有新版本', `${version} 已下载。点这里打开，把新的 WAswitch 拖进「应用程序」替换旧版。`, () => this.openMacInstaller());
   }
 
   // 写好替换脚本，交给一个独立进程，然后退出。脚本等这个进程退出后替换并重新打开
