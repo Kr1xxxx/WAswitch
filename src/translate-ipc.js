@@ -7,7 +7,7 @@ const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
 const { extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
-const { FloatCore, inlineEntry, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
+const { FloatCore, inlineEntry, inlineClicks, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
 const RADIX = require('./colors/radix');
 const webVoice = require('./web-voice');
 const { detectLang } = require('./langdetect');
@@ -337,7 +337,7 @@ function setupTranslateIpc(ctx) {
       if (it) done.add(h);
       const e = it ? inlineEntry(it) : null;
       // c：这条消息的按钮被点过几次。点了马上又失败（没登录、额度用完）时文字不变，靠它让页面把按钮重画成能点的
-      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClicks.get(h) || 0, o: trOpenOf(r.accId, h, e) });
+      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClickCount.get(h) || 0, o: trOpenOf(r.accId, h, e) });
     }
     // 往上翻聊天记录时屏幕上看得到的更早的客户消息（不在翻译栏里）：存过的显示译文，没翻过的给「翻译」按钮（见 FloatCore.history）
     if (Array.isArray(r.vis) && r.vis.length) {
@@ -351,12 +351,12 @@ function setupTranslateIpc(ctx) {
         const it = hist.get(h);
         // 排着后台补翻、等着自动重翻的（翻译栏里显示「翻译」）一样显示按钮
         const e = it ? inlineEntry((it.state === 'queued' && it.bg) || it.state === 'wait' ? { ...it, state: 'manual' } : it) : null;
-        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClicks.get(h) || 0, o: trOpenOf(r.accId, h, e) });
+        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClickCount.get(h) || 0, o: trOpenOf(r.accId, h, e) });
       }
     }
     return out;
   }
-  const inlineClicks = new Map();
+  const inlineClickCount = new Map();
 
   // ---- 气泡译文的编辑小窗（点译文末尾的小铅笔，shen 2026-11-02）----
   // 网页号：小窗放在选中文字翻译的那个小视图里（sel-translate.js 的 openTr，不放进 WhatsApp 页面，页面会抢键盘）；
@@ -454,17 +454,10 @@ function setupTranslateIpc(ctx) {
     let edit = null;
     try { ({ clicks, edit } = await waPage.paintTranslations(r.wc, list, inlineLook())); } finally { inlineBusy = false; }
     if (edit) trOpenWeb(r, edit, list);
-    // 点了气泡里的「翻译」「重试」：只认当前号、这次放出去的消息
-    const sent = new Set(list.map((e) => e.h));
-    let clicked = false;
-    for (const h of new Set(clicks)) {
-      if (!sent.has(h) || r.accId !== ctx.activeId) continue;
-      if (inlineClicks.size > 500) inlineClicks.clear();
-      inlineClicks.set(h, (inlineClicks.get(h) || 0) + 1);
-      clicked = true;
-      readerItem(h);
-    }
-    if (clicked) inlineAgain = true;
+    // 点了气泡里的「翻译」「重试」：只翻当前号、这次放出去的消息（换了号的不翻，但按钮要恢复能点）
+    const { run, repaint } = inlineClicks(clicks, list, r.accId, ctx.activeId, inlineClickCount);
+    for (const h of run) readerItem(h);
+    if (repaint) inlineAgain = true;
     if (inlineAgain) { inlineAgain = false; inlineSoon(); }
   }
   // 换成「右侧工作台」：所有网页号页面里放的译文都拿掉，轻量聊天页也清掉
