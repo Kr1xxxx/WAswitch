@@ -6,9 +6,9 @@
 
 ## 仓库
 
-源码在私有仓库 `Kr1xxxx/WAswitch-src`。公开的 [`Kr1xxxx/WAswitch`](https://github.com/Kr1xxxx/WAswitch) 只放安装包（Releases）和下载说明，永远不放源码。已装的软件（1.0.7 起）从来财（laicrm.com）检查更新、下载 MCP 文件，GitHub Releases 只留历史。
+源码和安装包都在私有仓库 `Kr1xxxx/WAswitch`（2026-11-03 定下不拆仓库）。已装的软件（1.0.7 起）从来财（laicrm.com）检查更新、下载 MCP 文件，GitHub Releases 只留历史。
 
-发版：给 `v*` 标签后（没拆仓库时发到本仓库自己的 Releases，不同步、不检查，见 release.yml 开头），`.github/workflows/release.yml` 打包并用密钥 `RELEASES_TOKEN`（只能写 `Kr1xxxx/WAswitch` 的 Contents）把安装包和 `latest*.yml` 发到公开仓库，同时把 `build/public-repo/README.md` 和 `docs/clash.md` 同步过去（公开仓库里的 `README.md` 和 `docs/clash.md` 以这里为准，不要在那边改），最后不登录下载一遍确认更新文件能下。发完 GitHub Release 后，`scripts/upload-cloud-release.mjs` 用 GitHub Actions 的 OIDC 令牌（不用密钥）把安装包、Mac 的 zip、MCP 文件和 `latest*.yml` 传到来财，再让来财换成新版本（只留新旧两个版本）。
+发版：给 `v*` 标签，或在 Actions 里对 main 手动运行 `.github/workflows/release.yml`。打包后发到本仓库自己的 Releases（用本仓库的 `GITHUB_TOKEN`），再由 `scripts/upload-cloud-release.mjs` 用 GitHub Actions 的 OIDC 令牌（不用密钥）把安装包、Mac 的 zip、MCP 文件和 `latest*.yml` 传到来财，让来财换成新版本（只留新旧两个版本）。release.yml 里拆仓库时用的步骤（密钥 `RELEASES_TOKEN`、同步下载说明、不登录下载检查）在本仓库不运行。
 
 ## 原理
 

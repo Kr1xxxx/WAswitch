@@ -9,6 +9,8 @@ const EVENT_TEXT = { dropped: '掉线', recovered: '恢复', exit_changed: '出�
 const ROLE_TEXT = { owner: '老板', supervisor: '主管', agent: '坐席' };
 // 和 WAswitch 侧栏的颜色一致（radix.js 由 scripts/make-colors.js 从 src/colors/radix.js 复制过来）
 const COLORS = RADIX.ACCOUNT_COLORS;
+// 编辑表单里颜色下拉显示的名字，和 COLORS 一一对应，叫法和软件侧栏一样（src/shell/shell.js 的 COLOR_NAMES）
+const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
 // 旧版存的颜色换成新的；没有颜色时用灰色
 const swatchColor = (c) => RADIX.accountColor(c) || 'var(--slate-9)';
 
@@ -54,7 +56,13 @@ function ago(ms, serverNow) {
   if (s < 86400) return `${Math.round(s / 3600)} 小时前`;
   return `${Math.round(s / 86400)} 天前`;
 }
-const time = (ms) => new Date(ms).toLocaleString('zh-CN', { hour12: false });
+// 本机时间、24 小时制、到分钟：今年的写 11/08 13:23，别的年份加两位年 12/30/25 13:23（月/日/年）
+function time(ms, now = Date.now()) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  const day = `${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+  return `${d.getFullYear() === new Date(now).getFullYear() ? day : `${day}/${p(d.getFullYear() % 100)}`} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 async function api(method, path, body) {
   const headers = method === 'GET' ? {} : { 'content-type': 'application/json', 'x-waswitch-admin': '1' };
@@ -226,7 +234,7 @@ async function accountsPage() {
         !a.device_id && me.user.role === 'owner' ? btn('删除记录', () => confirm(`删除「${a.label}」的后台记录？`) && act(() => api('DELETE', `accounts/${a.id}`), '已删除'), 'danger') : null));
   });
   const crmNote = !data.accounts.length ? null : data.crm && data.crm.auth_fail_at
-    ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${new Date(data.crm.auth_fail_at).toLocaleString()}），已暂停推送。请检查两边的推送密钥。`)
+    ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${time(data.crm.auth_fail_at)}），已暂停推送。请检查两边的推送密钥。`)
     : data.crm && !data.crm.push ? el('p', { class: 'muted' }, '聊天同步：推送还没开，员工电脑上的聊天先留在本机（最多 7 天）。') : null;
   return [
     crmNote,
@@ -240,19 +248,20 @@ async function accountsPage() {
 function editAccount(a) {
   const f = {
     label: el('input', { value: a.label, maxlength: 40 }),
-    number_label: el('input', { value: a.number_label || '', maxlength: 40, placeholder: '号码备注（手填）' }),
-    color: el('select', {}, COLORS.map((c) => el('option', { value: c, selected: c === RADIX.accountColor(a.color) }, c))),
-    expected_country: el('input', { value: a.expected_country || '', maxlength: 2, placeholder: '如 US', size: 4 }),
-    note: el('input', { value: a.note || '', maxlength: 500, placeholder: '备注（会显示给员工）', size: 30 }),
+    number_label: el('input', { value: a.number_label || '', maxlength: 40 }),
+    color: el('select', {}, COLORS.map((c, i) => el('option', { value: c, selected: c === RADIX.accountColor(a.color) }, COLOR_NAMES[i]))),
+    expected_country: el('input', { value: a.expected_country || '', maxlength: 2, size: 4 }),
+    note: el('input', { value: a.note || '', maxlength: 500, size: 30 }),
   };
+  const names = { label: '账号', number_label: '号码备注', color: '颜色', expected_country: '应在国家', note: '备注' };
   const group = me.user.role === 'owner' ? el('select', {}, el('option', { value: '' }, '未分组'), me.groups.map((g) => el('option', { value: g.id, selected: g.id === a.group_id }, g.name))) : null;
-  const form = el('form', { class: 'row', onsubmit: (e) => {
+  const form = el('form', { class: 'row fields', onsubmit: (e) => {
     e.preventDefault();
     const body = Object.fromEntries(Object.entries(f).map(([k, n]) => [k, n.value.trim()]));
     body.expected_country = body.expected_country.toUpperCase();
     if (group) body.group_id = group.value;
     act(() => api('PATCH', `accounts/${a.id}`, body), '已保存');
-  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
+  } }, el('b', {}, `编辑「${a.label}」`), Object.entries(f).map(([k, n]) => field(names[k], n)), group && field('组', group), el('button', { class: 'btn primary', type: 'submit' }, '保存'));
   document.getElementById('detail').replaceChildren(form);
 }
 
@@ -272,7 +281,7 @@ function deviceLine(d, now) {
     el('span', { class: `dot ${d.revoked_at ? 'bad' : !d.logged_out_at && now - d.last_seen_at < 6 * 60 * 1000 ? 'good' : ''}` }),
     d.name, el('span', { class: `seg ${d.revoked_at ? 'bad' : 'muted'}` }, status), el('span', { class: 'muted seg' }, `v${d.app_version || '?'} ${d.platform}`),
     d.revoked_at ? btn('恢复', () => act(() => api('POST', `devices/${d.id}/restore`), '已恢复'))
-      : btn('停用', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
+      : btn('停用电脑', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
     btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); }),
     d.held_hides ? el('div', { class: 'warn' }, `这台电脑一次要收回 ${d.held_hides} 个号（超过一半），已暂停执行。`,
       d.confirm_hides ? el('span', { class: 'muted' }, ' 已确认，等电脑下次同步。')
@@ -318,7 +327,7 @@ async function peoplePage() {
         btn('改邮箱', () => emailForm(box, u)),
         u.id === me.user.id ? null : btn(u.disabled_at ? '启用' : '停用', () => act(() => api('PATCH', `users/${u.id}`, { disabled: !u.disabled_at }), '已保存'), u.disabled_at ? '' : 'danger')));
   });
-  return [el('h2', {}, '添加人员'), add, el('h2', {}, '人员和电脑'), box,
+  return [el('h2', {}, '添加人员'), add, box,
     el('div', { class: 'wrap' }, el('table', {}, el('thead', {}, el('tr', {}, ['人', '角色', '电脑', '操作'].map((h) => el('th', {}, h)))), el('tbody', {}, rows)))];
 }
 
@@ -356,4 +365,5 @@ async function render() {
   if (tab === 'overview') timer = setTimeout(() => { if (!document.hidden) render(); else timer = setTimeout(render, 30000); }, 30000);
 }
 
-render();
+if (typeof module === 'object' && module.exports) module.exports = { time, COLOR_NAMES }; // 给 server/test/run.mjs 用
+else render();
