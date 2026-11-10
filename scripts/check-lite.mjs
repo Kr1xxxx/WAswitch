@@ -308,6 +308,13 @@ try {
   sock4.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 401 } } } });
   await sleep(20);
   check('被退出登录（401）后不再重连，并删掉本机凭据', statusOf('4') === 'loggedOut' && !s4.retryTimer && !fs.existsSync(path.join(tmp, '4', 'auth.enc')));
+  // 退出登录那一刻旧连接还在发对话、联系人、群名的变化：本机缓存已经删了，不能抛错让后台进程重启
+  const lateErrs = [];
+  for (const [name, arg] of [['chats.upsert', [{ id: jid, unreadCount: 1 }]], ['chats.update', [{ id: jid, unreadCount: 2 }]], ['chats.delete', [jid]],
+    ['contacts.upsert', [{ id: jid, notify: 'Anna' }]], ['contacts.update', [{ id: jid, notify: 'Anna M.' }]], ['groups.update', [{ id: '120363000000000001@g.us', subject: 'Order team' }]]]) {
+    try { sock4.ev.emit(name, arg); } catch (e) { lateErrs.push(`${name}: ${e.message}`); }
+  }
+  check('退出登录后旧连接晚到的对话、联系人、群名变化不报错', !lateErrs.length, lateErrs.join('; '));
   let outMsg = '';
   try { await s4.send(jid, 'hi'); } catch (e) { outMsg = e.message; }
   check('退出登录后发消息提示重新扫码（不是报错）', /重新扫码/.test(outMsg), outMsg);
