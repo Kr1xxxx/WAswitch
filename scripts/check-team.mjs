@@ -730,4 +730,52 @@ await test('401 login_required（管理员按了“重新登录”）：回到�
   assert.equal(M.team.loginState(), 'disabled');
   assert.equal(M.team.snapshot().lastError, '这台电脑已被管理员停用');
 });
+// 来财没有删除接口：本机删掉的团队号，坐席还留在后台。重新登录（cursor 归零）或管理员改了这个号，同步时都不能再建回来
+await test('本机删掉的团队号：后台改资料、重新登录、重启后都不再建回来；换人登录后清掉记录', async () => {
+  await boss('POST', 'users', { name: 'Sophie Laurent', email: 'sophie@example.com' });
+  const D = machine('del', [acc('301', 'Sophie 主号', { phone: '+33 6 12 34 56 78' }), acc('302', 'Sophie 小号', { phone: '+33 6 98 76 54 32' })]);
+  assert.deepEqual(await signIn(D, 'sophie@example.com'), { ok: true });
+  await D.team.syncNow();
+  await D.team.syncNow();
+  const gone = D.accounts.find((a) => a.id === '302');
+  assert.ok(gone.teamId, '先加入团队');
+  // 软件里删号（main.js removeAccount）
+  D.team.forget(gone);
+  D.accounts = D.accounts.filter((a) => a.id !== '302');
+  const creates = () => D.log.filter((x) => x.startsWith('create'));
+  D.log.length = 0;
+  clock.t += 3 * 60 * 1000;
+  await D.team.syncNow();
+  const seat = (await boss('GET', 'overview')).accounts.find((x) => x.id === gone.teamId);
+  assert.ok(seat, '后台的坐席还在');
+  assert.equal((await boss('PATCH', `accounts/${seat.id}`, { note: 'VIP' })).ok, true);
+  clock.t += 3 * 60 * 1000;
+  await D.team.syncNow();
+  assert.deepEqual(creates(), [], '管理员改了资料：不建回来');
+  await D.team.logout();
+  assert.deepEqual(await signIn(D, 'sophie@example.com'), { ok: true });
+  assert.equal(D.team.state.cursor, 0);
+  await D.team.syncNow();
+  assert.deepEqual(creates(), [], '重新登录从头拿坐席：不建回来');
+  // 重启软件：记录在 team.json 里
+  const again = machine('del2', D.accounts, D.dir);
+  await again.team.syncNow();
+  assert.deepEqual(again.log.filter((x) => x.startsWith('create')), [], '重启后也不建回来');
+  assert.ok(again.team.state.removed.includes(gone.teamId));
+  assert.ok(D.accounts.some((a) => a.id === '301' && a.teamId), '没删的号照常');
+  // 换人登录：上一个人删过的记录不带过去
+  await again.team.logout();
+  assert.deepEqual(await signIn(again, 'emma@example.com'), { ok: true });
+  assert.deepEqual(again.team.state.removed, []);
+});
+// 号还没收到 /join 的回答就被删了：来财按本机编号（local_id）给回的坐席也不建
+await test('还没加入完就删掉的号：按本机编号给回的坐席不建', async () => {
+  const E = machine('del3', []);
+  E.team.state.removed = [];
+  E.team.forget({ id: '401', teamId: '' });
+  E.team.applySeats([{ team_id: '11111111-2222-4333-8444-555555555555', local_id: '401', visible: true, name: 'x' }], false);
+  assert.deepEqual(E.log.filter((x) => x.startsWith('create')), []);
+  E.team.applySeats([{ team_id: '11111111-2222-4333-8444-666666666666', local_id: '402', visible: true, name: 'y' }], false);
+  assert.equal(E.log.filter((x) => x.startsWith('create')).length, 1, '别的坐席照常建');
+});
 console.log(`全部通过（${passed} 项）`);

@@ -2384,6 +2384,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   if (trIpc.floatCore) trIpc.floatCore.forget(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
+  if (team) team.forget(acc); // 来财那边坐席还在：记下来，同步时不再建回来
   const wasPrimary = acc.primary;
   accounts = accounts.filter((a) => a.id !== id);
   trIpc.forgetDrafts(id); // 号已经不在了：之后晚到的草稿不再收

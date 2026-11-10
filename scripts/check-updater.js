@@ -216,6 +216,22 @@ const updatesDir = path.join(home, 'updates');
   check(u.state.status === 'error' && /校验不通过/.test(u.state.lastResult), `Mac：sha512 不一致时报错（${u.state.lastResult}）`);
   check(!fs.existsSync(file) && !fs.existsSync(`${file}.part`), 'Mac：校验不通过的文件已删除');
 
+  // 写盘出错（磁盘满、没权限）：报更新失败，不能是没人接的 error 事件（会弹错并重启软件）
+  {
+    serve();
+    fs.mkdirSync(`${file}.part`, { recursive: true }); // 占住 .part：写文件流一打开就出错
+    const uncaught = [];
+    const onUncaught = (e) => uncaught.push(e);
+    process.on('uncaughtException', onUncaught);
+    const uw = make();
+    await uw.check();
+    await new Promise((r) => setTimeout(r, 100));
+    process.off('uncaughtException', onUncaught);
+    check(!uncaught.length, `Mac：写盘出错不崩（${uncaught.map((e) => e.code || e.message).join(' ')}）`);
+    check(uw.state.status === 'error' && uw.state.failures === 1 && /磁盘/.test(uw.state.lastResult), `Mac：写盘出错时提示更新失败（${uw.state.status} ${uw.state.lastResult}）`);
+    check(!fs.existsSync(`${file}.part`) && !fs.existsSync(file), 'Mac：写盘出错后不留 .part');
+  }
+
   // 重定向到别的主机：失败，不请求那个地址（令牌不会带过去）
   serve({ zipLocation: 'https://evil.example/dmg' });
   requested.length = 0;

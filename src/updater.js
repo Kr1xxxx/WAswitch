@@ -25,6 +25,7 @@ const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { finished } = require('stream/promises');
 const errtext = require('./errtext');
 const { TEAM_SERVER } = require('./team');
 
@@ -497,24 +498,33 @@ class Updater {
     }
     this.set({ status: 'downloading', version: info.version, percent: 0 });
     const part = `${dest}.part`;
+    // 写盘出错（磁盘满、没权限）要走 fail()，不能变成没人接的 error 事件把软件弄崩（照 mcp-module.js 的写法）
     const out = fs.createWriteStream(part);
+    const written = finished(out);
+    const stop = new AbortController();
     const hash = crypto.createHash('sha512');
     try {
-      await request(feedUrl(name), {
+      await Promise.race([written, request(feedUrl(name), {
         idleMs,
         headers,
+        signal: stop.signal,
         onData: (c, got, total) => {
           hash.update(c);
-          out.write(c);
+          if (!out.destroyed) out.write(c);
           const all = total || file.size || 0;
           const percent = all ? Math.min(99, Math.floor((got / all) * 100)) : 0;
           if (percent !== this.state.percent) this.set({ percent });
         },
-      });
-      await new Promise((resolve, reject) => out.end((e) => (e ? reject(e) : resolve())));
+      })]);
+      out.end();
+      await written;
     } catch (e) {
+      stop.abort();
       out.destroy();
-      fs.rmSync(part, { force: true });
+      await written.catch(() => {});
+      fs.rmSync(part, { recursive: true, force: true });
+      // 写文件流的错（带 syscall）不是网络问题
+      if (e && e.syscall && !e.cancelled) throw new Error('安装包存不下来，磁盘满了或没有写入权限');
       throw e;
     }
     if (hash.digest('base64') !== file.sha512) {
