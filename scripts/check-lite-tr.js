@@ -194,6 +194,20 @@ app.whenReady().then(async () => {
     check((await trs())[0] === '你好！这款假发有 24 英寸的吗？', '别的号的消息不影响这个号');
     await page("window.__liteTr({ accountId: '', list: [] })");
     check(JSON.stringify(await trs()) === JSON.stringify([null, null, null, null, null]), '换成右侧工作台（空列表）后全部拿掉');
+    // 对话满 200 条后补进来一条更早的消息（条数和最后一条都没变）：也要重画出来
+    const cap = await page(`(() => {
+      const jid = 'cap@s.whatsapp.net';
+      const base = Array.from({ length: 200 }, (_, i) => ({ id: 'C' + i, me: false, text: 'Message ' + i, ts: 1793370000 + i * 60 }));
+      const acc = { id: 'l1', proxyLabel: 'DE 7891', direct: false };
+      const chats = [{ jid, name: 'Lena Fischer', ts: 0, unread: 0, preview: 'Hi' }];
+      litePage(acc, { id: 'l1', status: 'open', openJid: jid, view: { rev: 50, jid, title: 'Lena Fischer', chats, messages: base } });
+      const before = document.querySelectorAll('.lite-msg').length;
+      const more = [...base.slice(1, 100), { id: 'OLD', me: false, text: 'Older message from yesterday', ts: 1793370000 + 99 * 60 }, ...base.slice(100)];
+      litePage(acc, { id: 'l1', status: 'open', openJid: jid, view: { rev: 51, jid, title: 'Lena Fischer', chats, messages: more } });
+      const ids = [...document.querySelectorAll('.lite-msg')].map((m) => m.dataset.id);
+      return { before, n: ids.length, old: ids.includes('OLD'), first: ids[0] };
+    })()`);
+    check(cap.before === 200 && cap.n === 200 && cap.old && cap.first === 'C1', `满 200 条后补进来的旧消息也画出来（${JSON.stringify(cap)}）`);
   } catch (e) {
     console.log(`失败：出错 ${e && e.stack}`);
     failures += 1;
