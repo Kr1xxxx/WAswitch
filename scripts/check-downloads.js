@@ -81,6 +81,51 @@ check('下载文件夹写不进去：不设路径，交给系统“另存为”'
   downloadsRoot = path.join(tmp, 'Downloads');
 });
 
+check('长文件名：名字被截短，扩展名 .pdf 留着，总长不超过 80', () => {
+  const name = 'Proforma Invoice PI-2026-1105 Maison des Cils Paris lash trays and tweezers order final v3.pdf';
+  assert.ok(name.length > 80);
+  const item = downloadAnna(name);
+  const base = path.basename(item.savePath);
+  assert.ok(base.endsWith('.pdf'), base);
+  assert.ok(base.length <= 80, `${base.length}`);
+  assert.ok(base.startsWith('Proforma Invoice PI-2026-1105'));
+  item.finish();
+  const again = downloadAnna(name);
+  const base2 = path.basename(again.savePath);
+  assert.ok(base2.endsWith(' (1).pdf') && base2.length <= 90, base2);
+  again.finish();
+});
+
+check('长中文文件名：扩展名 .xlsx 留着，总长不超过 80', () => {
+  const item = downloadAnna(`${'二零二六年十一月巴黎睫毛托盘与镊子订单明细汇总'.repeat(4)}.xlsx`);
+  const base = path.basename(item.savePath);
+  assert.ok(base.endsWith('.xlsx'), base);
+  assert.ok(base.length <= 80, `${base.length}`);
+  item.finish();
+});
+
+check('很长的“扩展名”不算扩展名：整体不超过 80', () => {
+  const item = downloadAnna(`a.${'x'.repeat(30)}`);
+  const base = path.basename(item.savePath);
+  assert.ok(base.length <= 80 && base === `a.${'x'.repeat(30)}`, base);
+  const long = downloadAnna(`${'n'.repeat(100)}.${'y'.repeat(30)}`);
+  assert.ok(path.basename(long.savePath).length <= 80);
+  item.finish();
+  long.finish();
+});
+
+check('Windows 保留名带扩展名：con.pdf 前面加下划线；短文件名不变', () => {
+  const reserved = downloadAnna('con.pdf');
+  assert.strictEqual(path.basename(reserved.savePath), '_con.pdf');
+  reserved.finish();
+  const short = downloadAnna('Catalog 2026 (final).pdf');
+  assert.strictEqual(path.basename(short.savePath), 'Catalog 2026 (final).pdf');
+  short.finish();
+  const none = downloadAnna('');
+  assert.strictEqual(path.basename(none.savePath), 'download');
+  none.finish();
+});
+
 check('右键菜单没有“下载文件夹”，读账号时丢掉老的 downloadDir', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
   assert.ok(!src.includes("'下载文件夹"), 'main.js 里还有“下载文件夹”菜单');

@@ -9,7 +9,14 @@ function parse(raw) {
   try { url = new URL(text); } catch { return { error: '代理地址格式不对' }; }
   const scheme = url.protocol.replace(':', '');
   if (!['http', 'https', 'socks4', 'socks5'].includes(scheme)) return { error: `不支持的代理类型：${scheme}` };
-  if (!url.hostname || !url.port) return { error: '代理地址需要包含 IP 和端口，例如 socks5://127.0.0.1:7891' };
+  // new URL() 会丢掉和协议默认值相同的端口（http 的 80、https 的 443）：用户明明写了，要从原文里补回来
+  let port = url.port;
+  if (!port) {
+    const authority = text.slice(text.indexOf('://') + 3).split(/[/?#\\]/)[0];
+    const m = /:(\d+)$/.exec(authority.slice(authority.lastIndexOf('@') + 1));
+    if (m) port = String(Number(m[1]));
+  }
+  if (!url.hostname || !port) return { error: '代理地址需要包含 IP 和端口，例如 socks5://127.0.0.1:7891' };
   const username = decodeURIComponent(url.username || '');
   const password = decodeURIComponent(url.password || '');
   if (scheme.startsWith('socks') && (username || password)) {
@@ -18,12 +25,12 @@ function parse(raw) {
   return {
     scheme,
     host: url.hostname,
-    port: Number(url.port),
-    rules: `${scheme}://${url.hostname}:${url.port}`,
+    port: Number(port),
+    rules: `${scheme}://${url.hostname}:${port}`,
     username,
     password,
     // 保存到 accounts.json 的形式：不含密码
-    display: `${scheme}://${username ? `${encodeURIComponent(username)}@` : ''}${url.hostname}:${url.port}`,
+    display: `${scheme}://${username ? `${encodeURIComponent(username)}@` : ''}${url.hostname}:${port}`,
   };
 }
 
