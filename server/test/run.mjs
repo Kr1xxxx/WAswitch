@@ -740,7 +740,8 @@ await test('后台页面：时间今年写「11/08 13:23」，别的年份写「
   assert.equal(page.time(new Date(2025, 11, 30, 13, 23).getTime(), now), '12/30/25 13:23');
   assert.equal(page.time(new Date(2009, 2, 4, 0, 5).getTime(), now), '03/04/09 00:05');
   assert.equal(page.time(new Date(2027, 0, 1, 23, 59).getTime(), now), '01/01/27 23:59');
-  assert.deepEqual([...page.COLOR_NAMES], ['绿', '紫', '橙', '蓝', '红', '灰']);
+  assert.deepEqual([...page.COLOR_NAMES], ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色']);
+  assert.match(fs.readFileSync(path.join(here, '../../src/shell/shell.js'), 'utf8'), /const COLOR_NAMES = \['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'\];/, '后台和软件侧栏的颜色叫法要一样');
   assert.equal(page.COLOR_NAMES.length, RADIX.ACCOUNT_COLORS.length);
   assert.deepEqual([...RADIX.ACCOUNT].map(([f]) => f), ['green', 'violet', 'orange', 'blue', 'crimson', 'slate'], '颜色顺序变了要同时改 COLOR_NAMES');
 });

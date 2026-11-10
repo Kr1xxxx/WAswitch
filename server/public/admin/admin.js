@@ -9,8 +9,8 @@ const EVENT_TEXT = { dropped: '掉线', recovered: '恢复', exit_changed: '出�
 const ROLE_TEXT = { owner: '老板', supervisor: '主管', agent: '坐席' };
 // 和 WAswitch 侧栏的颜色一致（radix.js 由 scripts/make-colors.js 从 src/colors/radix.js 复制过来）
 const COLORS = RADIX.ACCOUNT_COLORS;
-// 编辑表单里颜色下拉显示的名字，和 COLORS 一一对应
-const COLOR_NAMES = ['绿', '紫', '橙', '蓝', '红', '灰'];
+// 编辑表单里颜色下拉显示的名字，和 COLORS 一一对应，叫法和软件侧栏一样（src/shell/shell.js 的 COLOR_NAMES）
+const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
 // 旧版存的颜色换成新的；没有颜色时用灰色
 const swatchColor = (c) => RADIX.accountColor(c) || 'var(--slate-9)';
 
