@@ -148,6 +148,23 @@ function fromLite(view, jid) {
   return { ok: true, title: view.title || (listed && listed.name) || number, msgs, bottom: true };
 }
 
+// 网页号气泡里点了「翻译」「重试」（paintTranslations 收回来的 clicks）：要真去翻的（run）和要不要再放一遍（repaint）。
+// counts：每条被点过几次，放进 inlineList 的 c，页面按它把点过以后变灰的按钮重画成能点的。
+// 放的时候用户已经换了号（accId 不是 activeId）：不翻，次数照样加，下次放这个号时按钮恢复能点
+function inlineClicks(clicks, list, accId, activeId, counts) {
+  const sent = new Set(list.map((e) => e.h));
+  const run = [];
+  let repaint = false;
+  for (const h of new Set(clicks)) {
+    if (!sent.has(h)) continue; // 这次没放出去的：页面自己把按钮恢复（wa-page.js）
+    if (counts.size > 500) counts.clear();
+    counts.set(h, (counts.get(h) || 0) + 1);
+    repaint = true;
+    if (accId === activeId) run.push(h);
+  }
+  return { run, repaint };
+}
+
 // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| manual（「翻译」按钮）；不用翻的（skip）不显示
 function inlineEntry(it) {
   const voice = typeof it.voice === 'number' && !it.text;
@@ -1025,4 +1042,4 @@ class FloatCore {
   }
 }
 
-module.exports = { FloatCore, inlineEntry, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };
+module.exports = { FloatCore, inlineEntry, inlineClicks, viaOf, fromLite, liteText, hashOf, chatOf, msgKey, msgHash, noWords, dropGist, PER_MINUTE, BACKFILL, AUTO_MAX_CHARS, VOICE_MAX_S, VOICE_TRIP };

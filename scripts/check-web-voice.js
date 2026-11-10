@@ -170,6 +170,29 @@ app.whenReady().then(async () => {
   check(!/271828182845|4930111222|120363|CCCC3333|SECRETBODY|Hello|Emma|fake\.enc/.test(all) && !all.includes(mediaKey.toString('base64')), '日志里没有号码、编号、内容和钥匙');
   console.warn = warn;
 
+  // 11. 真实结构（data-id 在外层、气泡尾巴、隐藏的发件人标签、@lid 会话）：页面上的编号带 true_/false_ 才认成语音。
+  // 没有前缀的编号拼出来的 false_… 在 WhatsApp 存储里找不到，认成语音只会一直下载失败，还会让这个号停掉自动转写
+  const TAIL = '<span aria-hidden="true" data-icon="tail-in"><svg viewBox="0 0 8 13" width="8" height="13"><path d="M5 0H0v11z"></path></svg></span>';
+  const LABEL = '<span aria-label="Emma Schneider:"></span>';
+  const realVoice = (id) => `<div role="row"><div tabindex="-1" data-id="${id}"><div class="message-in">${TAIL}${LABEL}<div class="bubble"><div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:07</span></div><div class="meta">10:06</div></div></div></div></div>`;
+  const realText = (id, text) => `<div role="row"><div tabindex="-1" data-id="${id}"><div class="message-in">${LABEL}<div class="bubble"><div class="copyable-text" data-pre-plain-text="[10:05, 10/11/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">10:05</div></div></div></div></div>`;
+  const realPage = (rows) => `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title></head><body><div id="app"><div id="side"><div id="pane-side"><div role="grid" aria-label="Chat list"><div role="row"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div><div id="main"><header><span dir="auto" title="Emma Schneider">Emma Schneider</span></header><div class="scroll"><div role="application">${rows}</div></div></div></div></body></html>`;
+  const tmp = path.join(require('os').tmpdir(), `wa-voice-real-${process.pid}.html`);
+  require('fs').writeFileSync(tmp, realPage(realText('false_271828182845@lid_TTTT0001', 'Guten Morgen!') + realVoice('false_271828182845@lid_VVVV0002')));
+  await win.loadFile(tmp);
+  for (let i = 0; i < 100 && wc.isLoading(); i += 1) await new Promise((res) => setTimeout(res, 50));
+  let real = await waPage.readOpenChat(wc);
+  const pv = real.ok && real.msgs.find((m) => m.id.endsWith('VVVV0002'));
+  check(pv && pv.voice === 0 && pv.text === '', `真实结构、编号带前缀：认成语音（${JSON.stringify(pv)}）`);
+  require('fs').writeFileSync(tmp, realPage(realText('3EB0AAAA1111BBBB2222', 'Guten Morgen!') + realVoice('3EB0CCCC3333DDDD4444')));
+  await win.loadFile(tmp);
+  for (let i = 0; i < 100 && wc.isLoading(); i += 1) await new Promise((res) => setTimeout(res, 50));
+  real = await waPage.readOpenChat(wc);
+  const nv = real.ok && real.msgs.find((m) => (m.raw || '').endsWith('3EB0CCCC3333DDDD4444'));
+  check(real.ok && real.msgs.length === 2 && real.msgs.some((m) => m.text === 'Guten Morgen!'), `真实结构、编号没有前缀：文字照常读到（${JSON.stringify(real.msgs || real)}）`);
+  check(nv && nv.voice === undefined, `真实结构、编号没有前缀：不认成语音（${JSON.stringify(nv)}）`);
+  require('fs').rmSync(tmp, { force: true });
+
   await page(dropDb);
   console.error(failures ? `网页号语音自检：${failures} 项失败` : 'WEB_VOICE_PASS');
   app.exit(failures ? 1 : 0);

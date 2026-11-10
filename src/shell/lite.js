@@ -151,7 +151,8 @@ function makeLitePage(id) {
   function drawMessages(view) {
     lastView = view;
     const items = view.messages || [];
-    const key = `${view.jid}:${items.length}:${items.length ? items[items.length - 1].id : ''}`;
+    // 每条的编号都算进去：满 200 条后中间补进一条旧消息时，条数和最后一条都不变
+    const key = `${view.jid}:${items.map((m) => m.id).join(',')}`;
     if (key === lastMsgKey) { patchTrs(); return; } // 消息没变，最多是译文变了
     const switched = !lastMsgKey.startsWith(`${view.jid}:`);
     lastMsgKey = key;

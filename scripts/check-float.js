@@ -2,7 +2,7 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, inlineEntry, fromLite, hashOf, msgHash, msgKey, chatOf } = require('../src/floatcore');
+const { FloatCore, inlineEntry, inlineClicks, fromLite, hashOf, msgHash, msgKey, chatOf } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 消息编号带上对话（真 WhatsApp 的消息编号各不相同；按消息编号认消息，不同对话不能撞号）
@@ -1930,6 +1930,22 @@ async function scrollStable(w, waPage) {
   assert(fc.ingest('L', await waPage.readOpenChat(w.webContents), opts));
   assert.deepStrictEqual(texts(), [...start, 'msg 120']);
   console.log('上下滑聊天记录时翻译栏不变自检通过');
+}
+
+// 网页号气泡里点了「翻译」「重试」，放的时候用户已经换到别的号：不翻，但按钮不能一直灰着（点过次数加一，下次放这个号时重画成能点的）
+{
+  const counts = new Map();
+  const list = [{ h: 'h1' }, { h: 'h2' }];
+  let p = inlineClicks(['h1', 'h1'], list, 'A', 'A', counts);
+  assert.deepStrictEqual(p, { run: ['h1'], repaint: true }, '当前号：点了就翻，同一条点两下算一次');
+  assert.strictEqual(counts.get('h1'), 1);
+  p = inlineClicks(['h2'], list, 'A', 'B', counts);
+  assert.deepStrictEqual(p.run, [], '换了号：不翻');
+  assert.strictEqual(counts.get('h2'), 1, '换了号：点过次数照样加，按钮下次重画成能点的');
+  assert.strictEqual(p.repaint, true);
+  p = inlineClicks(['gone'], list, 'A', 'A', counts);
+  assert.deepStrictEqual(p, { run: [], repaint: false }, '这次没放出去的：交给页面自己恢复');
+  console.log('气泡按钮点了以后换号自检通过');
 }
 
 core().then(() => {

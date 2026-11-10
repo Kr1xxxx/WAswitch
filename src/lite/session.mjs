@@ -221,13 +221,15 @@ export class Session {
       this.changed();
     });
     // 在线时的对话变化：unreadCount 正数是 Baileys 这一批新增的条数，新消息的未读由下面 messages.upsert 一条条加（见 store.liveChat）
-    ev.on('chats.upsert', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
-    ev.on('chats.update', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
-    ev.on('chats.delete', (ids) => { for (const id of ids) this.store.remove(id); this.changed(); });
-    const names = (list) => { for (const c of list) this.store.setName(c.id, c.name || c.notify || c.verifiedName); this.changed(); };
+    // 都只认当前连接：退出登录后 store 是 null，旧连接晚到的事件不能让后台进程抛错重启
+    const live = (fn) => (arg) => { if (sock === this.sock && this.store) fn(arg); };
+    ev.on('chats.upsert', live((list) => { for (const c of list) this.store.liveChat(c); this.changed(); }));
+    ev.on('chats.update', live((list) => { for (const c of list) this.store.liveChat(c); this.changed(); }));
+    ev.on('chats.delete', live((ids) => { for (const id of ids) this.store.remove(id); this.changed(); }));
+    const names = live((list) => { for (const c of list) this.store.setName(c.id, c.name || c.notify || c.verifiedName); this.changed(); });
     ev.on('contacts.upsert', names);
     ev.on('contacts.update', names);
-    ev.on('groups.update', (list) => { for (const g of list) if (g.subject) this.store.updateChat({ id: g.id, subject: g.subject }); this.changed(); });
+    ev.on('groups.update', live((list) => { for (const g of list) if (g.subject) this.store.updateChat({ id: g.id, subject: g.subject }); this.changed(); }));
     ev.on('messages.upsert', ({ messages, type }) => {
       if (sock !== this.sock) return;
       for (const m of messages) {
@@ -260,6 +262,7 @@ export class Session {
       this.changed();
       // 群名称
       sock.groupFetchAllParticipating().then((groups) => {
+        if (sock !== this.sock || !this.store) return;
         for (const g of Object.values(groups || {})) this.store.updateChat({ id: g.id, subject: g.subject });
         this.changed();
       }, () => {});
