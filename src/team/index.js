@@ -389,7 +389,7 @@ class TeamSync {
       ...this.state, deviceId: d.device_id, token: this.safe.encryptString(d.token).toString('base64'), devices,
       cursor: 0, revoked: false, held: [], events: sameDevice ? this.state.events : [], allowPrivate: d.allow_private !== false,
       joinSent: sameDevice ? this.state.joinSent : [],
-      removed: otherPerson ? [] : this.state.removed,
+      removed: this.state.removed, // 换人也不清：编号不会撞，同一台电脑换回原来的人时删掉的号也不能回来
       lastError: '', lastErrorDetail: '', lastOkAt: this.now(), userName: '', email: addr,
     };
     this.setUserName(d.user);
@@ -658,7 +658,7 @@ class TeamSync {
   // 本机还对不上的可见坐席（按 team_id 和 local_id 都找不到本机的号）
   unknownSeats(seats) {
     const accs = this.hooks.accounts();
-    return (Array.isArray(seats) ? seats : []).filter((s) => s && s.visible === true && UUID_RE.test(s.team_id) && !this.seatAccount(accs, s));
+    return (Array.isArray(seats) ? seats : []).filter((s) => s && s.visible === true && UUID_RE.test(s.team_id) && !this.seatAccount(accs, s) && !this.isRemoved(s));
   }
   // 坐席对应的本机号：先按 team_id；后台带了 local_id 时按本机编号认还没加入的号
   seatAccount(accs, s) {
@@ -675,14 +675,15 @@ class TeamSync {
     return (this.state.joinSent || []).filter((id) => accs.some((a) => a.id === id && !a.teamId));
   }
 
-  // 用户在本机删了号：来财没有删除接口，坐席还在，记下来，同步时不再把它建回来（换人登录时清掉）
+  // 用户在本机删了号：来财没有删除接口，坐席还在，记下来，同步时不再把它建回来
   forget(acc) {
     if (!acc) return;
     const ids = [acc.teamId, acc.id].filter((x) => typeof x === 'string' && x);
     if (!ids.length) return;
     this.state.removed = [...(this.state.removed || []).filter((x) => !ids.includes(x)), ...ids].slice(-MAX_REMOVED);
     this.state.joinSent = (this.state.joinSent || []).filter((x) => x !== acc.id);
-    this.persist();
+    // 写不进去（磁盘满、文件被占用）也不能让删号停在半路：内存里已经记下，下次同步时会再写
+    try { this.persist(); } catch (e) { console.warn(`记下删掉的团队号时写不进 team.json：${e.code || e.message}`); }
   }
 
   applySeats(seats, confirmHides, { skipUnknown = false } = {}) {
