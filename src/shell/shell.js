@@ -1837,6 +1837,8 @@ function settingsPage() {
             (s.popupChoices || [4, 6, 10, 0]).map((n) => h('option', { value: String(n), selected: st.popupSeconds === n }, n ? `${n} 秒` : '不自动消失')))),
         setRow('提示音', '',
           sw(st.popupSound !== false, '弹窗提示音', (v) => window.wa.setSetting('popupSound', v))),
+        setRow('稍后提醒', '',
+          sw(st.popupLater !== false, '稍后提醒', (v) => window.wa.setSetting('popupLater', v))),
         setRow('勿扰', '掉线、退出登录、有新版本照样提醒，不响。',
           sw(!!st.popupDnd, '勿扰', (v) => window.wa.setSetting('popupDnd', v))),
         setRow('测试通知', '',
