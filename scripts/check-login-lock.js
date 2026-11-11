@@ -150,7 +150,7 @@ async function launch(profile, teamServer) {
       const h1 = card.querySelector('h1');
       return { title: h1.textContent, oneLine: h1.getClientRects().length === 1 && h1.offsetHeight < 40, btns, clipped, side: document.getElementById('side').textContent, w: innerWidth, h: innerHeight };
     })()`);
-    check(ui.title === '用来财账号登录' && ui.oneLine, `标题「用来财账号登录」一行显示（${JSON.stringify(ui)}）`);
+    check(ui.title === '邮箱登录' && ui.oneLine, `标题「邮箱登录」一行显示（${JSON.stringify(ui)}）`);
     check(await shell.evaluate(`document.querySelector('.login-card label.field').firstChild.textContent`) === '公司邮箱', '邮箱框叫「公司邮箱」');
     check(ui.btns.join('|') === '获取验证码|登录', `必须登录时没有“稍后”（${ui.btns.join('|')}）`);
     check(ui.clipped.length === 0, '登录页文字没被裁');
