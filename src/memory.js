@@ -35,6 +35,7 @@ const DEFAULTS = {
   popupSeconds: 6, // 通知弹窗多少秒后自动收走，0 表示不自动收
   popupSound: true, // 弹窗时放提示音
   popupDnd: false, // 勿扰：不弹窗，只记进通知记录
+  popupLater: true, // 新消息卡片上有“稍后”按钮（10 分钟后没读再弹一次）
 };
 const POPUP_SECONDS = [4, 6, 10, 0];
 const PANEL_TABS = ['replies', 'customers', 'translate'];
@@ -94,6 +95,7 @@ function loadSettings() {
       popupSeconds: POPUP_SECONDS.includes(raw.popupSeconds) ? raw.popupSeconds : DEFAULTS.popupSeconds,
       popupSound: bool('popupSound'),
       popupDnd: bool('popupDnd'),
+      popupLater: bool('popupLater'),
       memDefaults: DEFAULTS.memDefaults,
     };
   } catch {

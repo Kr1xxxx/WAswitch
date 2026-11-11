@@ -179,6 +179,15 @@ function make(readChats, { win = null, laterMs } = {}) {
   n.update(acc, 0, { isActive: false });
   await tick(60);
   check(popup.cards.length === 0, '稍后：期间号的未读清零，不再弹');
+  current = [{ name: 'Emma Schneider', unread: 1, preview: 'Hallo' }];
+  ({ n, popup } = make(async () => current, { laterMs: 30 }));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  popup.cards.length = 0;
+  n.later(first);
+  n.cancelLater();
+  await tick(60);
+  check(popup.cards.length === 0 && n.laterTimers.size === 0, '稍后：设置里关掉稍后提醒，已经点过的也不再弹');
 
   // 号自己的提醒和软件提醒也走弹窗
   ({ n, popup } = make(async () => null));

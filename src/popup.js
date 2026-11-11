@@ -40,7 +40,7 @@ const SCREEN_EVENTS = ['display-added', 'display-removed', 'display-metrics-chan
 const isMsg = (card) => card.kind === 'msg' || card.kind === 'sample';
 
 class PopupWindow {
-  // hooks: { getWindow(), account(id) -> { name, color }, locked(), settings() -> { popupSeconds, popupSound, popupDnd },
+  // hooks: { getWindow(), account(id) -> { name, color }, locked(), settings() -> { popupSeconds, popupSound, popupDnd, popupLater },
   //          onOpen(card), onLater(card), idleSeconds?() -> 系统多少秒没有键盘鼠标输入（默认用 powerMonitor） }
   // screen：默认 Electron 的 screen（测试里换成假的几块屏幕）
   constructor(hooks, { now = () => Date.now(), idleCloseMs = IDLE_CLOSE_MS, screen: scr = screen } = {}) {
@@ -288,7 +288,7 @@ class PopupWindow {
           avatar: hide ? { lock: true } : (c.chat ? { text: initials(c.chat), color: colorFor(c.chat) } : { logo: true }),
           text: hide ? (acc ? '有新消息，聊天已锁定，解锁后查看' : '有新消息，解锁后查看') : c.text,
           count: hide ? 0 : (c.count > 1 ? c.count : 0),
-          actions: ['later', 'open'],
+          actions: this.hooks.settings().popupLater === false ? ['open'] : ['later', 'open'],
         };
       }
       const hide = locked && c.sensitive;
@@ -421,7 +421,7 @@ class PopupWindow {
     this.queue.remove(uid);
     this.render();
     if (action === 'open') this.hooks.onOpen(card);
-    else if (action === 'later') this.hooks.onLater(card);
+    else if (action === 'later' && this.hooks.settings().popupLater !== false) this.hooks.onLater(card);
     // 'close'：只是收起这一张
   }
 }

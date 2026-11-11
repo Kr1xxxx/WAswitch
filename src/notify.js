@@ -348,6 +348,12 @@ class Notifier {
     this.laterTimers.set(card.key, t);
   }
 
+  // 设置里关掉了“稍后提醒”：等着的都不弹了
+  cancelLater() {
+    for (const t of this.laterTimers.values()) clearTimeout(t);
+    this.laterTimers.clear();
+  }
+
   dropCards(id) {
     for (const [key, t] of this.laterTimers) if (key.startsWith(`m:${id}:`)) { clearTimeout(t); this.laterTimers.delete(key); }
     if (this.popup) this.popup.dropAccount(id, (c) => c.kind !== 'msg');

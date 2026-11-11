@@ -149,6 +149,19 @@ app.whenReady().then(async () => {
   await page('document.querySelector(".nt .btn:not(.pri)").click()');
   assert(await until(() => later.length === 1), '点稍后传回主进程');
 
+  // 设置里关掉“稍后提醒”：新消息卡片上只剩“打开”，按钮没了也不会再传“稍后”
+  settings.popupLater = false;
+  popup.refresh();
+  assert(await until(async () => (await page('document.querySelectorAll(".nt .btn:not(.pri)").length')) === 0), '关掉稍后提醒：卡片上没有“稍后”');
+  assert.strictEqual(await page('document.querySelectorAll(".nt .btn.pri").length'), await page('document.querySelectorAll(".nt").length'), '关掉稍后提醒：每张卡还有“打开”');
+  const c0 = popup.queue.view().shown[0];
+  popup.onAction(w.webContents, c0.uid, 'later');
+  assert.strictEqual(later.length, 1, '关掉稍后提醒：页面旧的“稍后”点击也不传回主进程');
+  popup.show({ key: c0.key, kind: c0.kind, accId: c0.accId, chat: c0.chat, text: c0.text, count: c0.count }); // 放回去，后面的检查照旧是 3 张
+  settings.popupLater = true;
+  popup.refresh();
+  assert(await until(async () => (await page('document.querySelectorAll(".nt .btn:not(.pri)").length')) > 0), '打开稍后提醒：“稍后”回来');
+
   // 页面说“鼠标停在卡上”，但鼠标其实不在窗口里（xvfb 下光标在屏幕中间）：不信，不暂停倒计时、不关点穿
   popup.onHover(w.webContents, true);
   assert.strictEqual(popup.queue.hoverSince, 0, '鼠标不在窗口里时不接受“悬停”（窗口藏过再显示时页面记的旧位置不可信）');

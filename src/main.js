@@ -2428,7 +2428,7 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton', 'popupSound', 'popupDnd'].includes(key)) {
+  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton', 'popupSound', 'popupDnd', 'popupLater'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
@@ -2441,6 +2441,7 @@ function setSetting(key, value) {
   if (key === 'recycleMB' && value > 0) settings.recycleLastMB = value; // 关掉再打开时沿用
   memory.saveSettings(settings);
   if (key === 'openAtLogin') applyLoginItem();
+  if (key === 'popupLater' && !value) notifier.cancelLater(); // 关掉：已经点过“稍后”的也不再弹
   if (key.startsWith('popup')) popup.refresh();
   notifier.refresh();
   refresh();
