@@ -1,5 +1,7 @@
 # WAswitch 团队后台
 
+**已停用（2026-11-11 定下线）。** WAswitch 1.0.5 起直接连来财（laicrm.com），不再用这个后台；线上的库里没有任何电脑登记过。Worker `waswitch-teama` 和域名 `wa.laicrm.com` 下线后不要再部署。代码和迁移留着，是因为 `check:team`、`check:audit` 拿它当假后台跑自检。下面是它还在用时的说明。
+
 Cloudflare Worker + D1。老板和主管在 `/admin/` 填邮箱收验证码登录后台网页；员工在 WAswitch 里用自己的工作邮箱收验证码登录，软件通过 `/api/device/*` 同步。没有密码。
 不上传聊天内容（聊天同步到来财另说，见下面）、通讯录、代理地址和密码，也不采集员工活动。
 

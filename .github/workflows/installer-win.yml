@@ -30,7 +30,9 @@ permissions:
   contents: read
 
 jobs:
+  # 2026-11-11 起先不跑：shen 说暂时不打 Windows 包，要打包时再打开（删掉下面两个 if 这一行）。和 ci.yml 的 package-win 一样。
   installer:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -55,6 +57,7 @@ jobs:
 
   # 账号数据放哪（src/datadir.js）。单独一个 job：两件事互不连累，哪个红一看就知道
   datadir:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
