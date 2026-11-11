@@ -58,6 +58,6 @@ read -rsp "注册码（已经装过就直接回车）：" TOKEN; echo
 boxd machine get "$MACHINE" >/dev/null 2>&1 \
   || boxd machine new "$MACHINE" --isolated --vcpu 4 --auto-hibernate-timeout=0 --auto-suspend-timeout=0
 boxd machine cp "$0" "$MACHINE:boxd-runner.sh"
-printf '%s' "$TOKEN" | boxd machine cp - "$MACHINE:.runner-token"
+[ -z "$TOKEN" ] || printf '%s' "$TOKEN" | boxd machine cp - "$MACHINE:.runner-token"
 boxd machine exec "$MACHINE" --timeout 900 -e BOXD_MACHINE="$MACHINE" -- bash boxd-runner.sh --inside
 echo "装好了。去 $REPO_URL/settings/actions/runners 看 $MACHINE 是不是 Idle。"
