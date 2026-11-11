@@ -192,7 +192,9 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswi
     const wf = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
     const pub = wf.slice(wf.indexOf('\n  publish:'));
     check(/id-token: write/.test(pub) && /contents: write/.test(pub), 'release.yml：publish 有 id-token: write 和 contents: write');
-    check(pub.indexOf('upload-cloud-release.mjs dist "$TAG"') > pub.indexOf('action-gh-release'), 'release.yml：发完 GitHub Release 后传到来财');
+    const edit = pub.indexOf('gh release edit "$TAG" --repo "$PUBLIC_REPO" --draft=false');
+    check(edit > 0 && pub.indexOf('upload-cloud-release.mjs dist "$TAG"') > edit, 'release.yml：发完 GitHub Release 后传到来财');
+    check(!/upload-artifact|download-artifact/.test(wf), 'release.yml：job 之间不用构建产物（私有仓库存储按月累计，会满）');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     server.close();
