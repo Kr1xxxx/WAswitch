@@ -1264,7 +1264,7 @@ function loginPage() {
       else submit();
     } }, '重试');
     loginEl = h('div', { class: 'center login-page' }, h('div', { class: 'login-card' },
-      h('h1', null, '用来财账号登录'),
+      h('h1', null, '邮箱登录'),
       h('label', { class: 'field' }, '公司邮箱', h('div', { class: 'login-row' }, email, getCode)),
       sent,
       h('label', { class: 'field' }, '验证码', code),
