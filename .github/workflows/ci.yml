@@ -13,10 +13,10 @@ permissions:
 
 jobs:
   checks:
-    # 默认用 GitHub 自带的机器。仓库 Actions 变量 CHECKS_RUNNER 设成 ["self-hosted","boxd"] 就换到 boxd 上的机器
-    # （scripts/boxd-runner.sh 装的），删掉变量就换回来。
-    runs-on: ${{ fromJSON(vars.CHECKS_RUNNER || '"ubuntu-latest"') }}
-    # 只有一台自己的机器时，卡住的自检会让后面的检查一直排队
+    # 只用 GitHub 自带的机器，写死，不读仓库变量。仓库公开后外人的 PR 也会跑这个 job，
+    # 换到自己的机器（self-hosted）等于让外人在那台机器上跑任意代码。要换机器先把仓库改回私有。
+    runs-on: ubuntu-latest
+    # 卡住的自检不占着机器
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
