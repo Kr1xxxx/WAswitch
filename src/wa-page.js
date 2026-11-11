@@ -34,7 +34,7 @@ const SELECTORS = {
   // 新版的名字 span 可能没有 title、下面那行却有，只找 span[title] 会读到下面那行，一会儿一变（shen 2026-11-02「一会会自动重新翻译一遍」），
   // 所以第一条按页面顺序取第一个带 title 或 dir="auto" 的 span（querySelector 一组选择器时按页面顺序返回）
   chatTitle: ['#main header span[title], #main header span[dir="auto"]', '#main header [title]'],
-  // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
+  // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的；新版（2026-10 起）只有 32 位十六进制的消息编号，没有前缀和号码）
   message: '[data-id]',
   // 消息正文：带 data-pre-plain-text 的 copyable-text 里的 selectable-text。
   // data-pre-plain-text 本身含时间和群发送人，不读它
@@ -43,6 +43,8 @@ const SELECTORS = {
   // 没有 true_/false_ 前缀时，用气泡的 class 认方向
   messageIn: '.message-in',
   messageOut: '.message-out',
+  // 新版（2026-10 起）没有 .message-in/.message-out，气泡是 msg-container：没有正文的消息（语音）按它量位置、放译文
+  bubble: '[data-testid="msg-container"]',
   // 认不出方向时再看：只有自己发的消息才带发送状态的勾（单勾、双勾、发送中的钟）
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
@@ -195,7 +197,7 @@ function chatIdentity(main) {
 }
 const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, bubble: SELECTORS.bubble, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   const chat = (${chatIdentity.toString()})(main);
@@ -247,7 +249,7 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   const mr = main.getBoundingClientRect();
   const sideOf = (n) => {
     if (mr.width < 200) return null;
-    const r = (first(n, S.body) || n).getBoundingClientRect();
+    const r = (first(n, S.body) || n.querySelector(S.bubble) || n).getBoundingClientRect();
     if (!r.width || r.width > mr.width - 48) return null;
     const left = r.left - mr.left;
     const right = mr.right - r.right;
@@ -282,7 +284,8 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
     if (!id) continue;
     if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
     const out = dirOf(n, id);
-    if (out === null && !n.querySelector('[data-pre-plain-text]')) continue; // 既认不出方向也没有正文，多半不是消息
+    // 既认不出方向也没有正文、也没有气泡，多半不是消息。新版没有 .message-in/.message-out，语音这类没有正文的只能靠气泡（msg-container）认，方向后面按位置定
+    if (out === null && !n.querySelector('[data-pre-plain-text]') && !n.querySelector(S.bubble)) continue;
     top.push({ n, rawId: id, out });
   }
   resolve(top);
@@ -333,10 +336,10 @@ const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
     const r = textOf(n);
     const text = r.text.slice(0, 4000);
     if (text.length > room) return null;
-    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），
-    // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
+    // 客户发来的语音：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），带 voice（时长认不准，给 0，以 WhatsApp 存的为准）。
+    // 下载要用页面上的编号：带 true_/false_ 的整条，或者新版只有消息自己的编号（一串十六进制，web-voice.js 按它在存储里找）；按内容算的编号不算
     const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
-    const voice = !out && /^(true|false)_/.test(domId || '') && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
+    const voice = !out && /^((true|false)_|[0-9A-Fa-f]{16,}$)/.test(domId || '') && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
     return voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw };
   };
   const msgs = [];
@@ -527,7 +530,9 @@ const TR_CSS = (K) => [
 const PAINT_CODE = (list, look) => `(() => {
   const L = ${JSON.stringify(list)};
   const CSS_BY_TONE = ${JSON.stringify({ light: TR_CSS((look && look.light) || {}), dark: TR_CSS((look && look.dark) || {}) })};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, voice: SELECTORS.voiceMark })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, bubble: SELECTORS.bubble, voice: SELECTORS.voiceMark })};
+  // 收到的消息的气泡：旧版是 .message-in，新版是 msg-container；都没有就是整条消息
+  const bubOf = (msg) => (msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg.querySelector(S.bubble) || msg);
   const w = window.__wsTr || (window.__wsTr = { clicks: [] });
   const clicks = w.clicks.splice(0, 50);
   const edit = w.edit || null;
@@ -555,7 +560,7 @@ const PAINT_CODE = (list, look) => `(() => {
     if (!msg) continue;
     let el = null;
     for (const sel of S.body) { for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip) && !b.closest('[data-wasw-tr]')) { el = b; break; } if (el) break; }
-    if (!el) { if (!firstBubble) firstBubble = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg; continue; }
+    if (!el) { if (!firstBubble) firstBubble = bubOf(msg); continue; }
     const l = luma(getComputedStyle(el).color);
     if (l === null) continue;
     if (l > 0.4) darkN += 1; else lightN += 1;
@@ -612,7 +617,7 @@ const PAINT_CODE = (list, look) => `(() => {
   const flexRow = (el) => { const cs = getComputedStyle(el); return cs.display.includes('flex') && cs.flexDirection.startsWith('row'); };
   const anchorOf = (msg) => {
     for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return { parent: b, after: null };
-    const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+    const bub = bubOf(msg);
     const mark = [...bub.querySelectorAll(S.voice)].find((x) => !x.closest('[data-wasw-tr]'));
     // 页面没排版（宽 0，比如页面被隐藏）时不看尺寸，只看标记
     const sized = bub.getBoundingClientRect().width > 0;
@@ -674,7 +679,7 @@ const PAINT_CODE = (list, look) => `(() => {
       const blk = b.closest('[data-wasw-tr]');
       const msg = b.closest('[data-id]');
       if (!blk || !msg) return;
-      const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
+      const bub = bubOf(msg);
       const r = blk.getBoundingClientRect();
       w.edit = { h, rect: { x: r.left, y: r.top, w: r.width, h: r.height }, top: bub.getBoundingClientRect().top };
       if (window.__wsChatWatch) window.__wsChatWatch.hit();
