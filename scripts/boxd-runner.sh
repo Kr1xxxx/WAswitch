@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 在 boxd 上开一台 Linux 机器，装 GitHub Actions runner，给 ci.yml 的 checks 用。
 #
-# 在自己电脑上跑（先装好 boxd 并 boxd auth login）：
-#   bash scripts/boxd-runner.sh
+# 在自己电脑上（先装好 boxd 并 boxd auth login），或者在 boxd 网页里任意一台普通机器的终端里跑
+# （机器里的 boxd 命令已经登录好了）：
+#   bash boxd-runner.sh
 # 它会问注册码：https://github.com/Kr1xxxx/WAswitch/settings/actions/runners/new?arch=x64&os=linux
 # 页面里 ./config.sh 那行 --token 后面那串，一小时内有效。注册码不进命令行和 shell 历史。
 #
@@ -55,7 +56,8 @@ if [ "${1:-}" = "--inside" ]; then inside; exit; fi
 command -v boxd >/dev/null || { echo "先装 boxd：curl -fsSL https://boxd.sh/downloads/install.sh | sh"; exit 1; }
 read -rsp "注册码（已经装过就直接回车）：" TOKEN; echo
 # 4 核 16G；runner 一直连着 GitHub，不让它休眠，不然检查会一直排队
-boxd machine get "$MACHINE" >/dev/null 2>&1 \
+# 机器里的 boxd 没有 machine get，用 list 判断是否已经建过
+boxd machine list | grep -w "$MACHINE" >/dev/null \
   || boxd machine new "$MACHINE" --isolated --vcpu 4 --auto-hibernate-timeout=0 --auto-suspend-timeout=0
 boxd machine cp "$0" "$MACHINE:boxd-runner.sh"
 [ -z "$TOKEN" ] || printf '%s' "$TOKEN" | boxd machine cp - "$MACHINE:.runner-token"
