@@ -75,6 +75,8 @@ const today = (now) => { const d = new Date(now); return `${d.getFullYear()}-${d
 
 // 客户发来的语音（voice 是时长，秒；网页号认不出时长是 0）：没有文字也显示在翻译栏上
 const isVoice = (m) => !!m && typeof m.voice === 'number';
+// 网页号的语音去 WhatsApp 存储里找要用页面上真正的编号：新版页面的编号没有 true_/false_ 前缀（raw），带前缀的就是 id 本身
+const webSrc = (m) => (m.id.startsWith('false_') ? { dataId: typeof m.raw === 'string' && m.raw ? m.raw : m.id } : null);
 // 翻译栏显示的消息：客户发来的，有文字或是语音
 const shown = (m) => !m.out && (!!String(m.text || '').trim() || isVoice(m));
 
@@ -380,7 +382,7 @@ class FloatCore {
         // 网页号：下载要用 data-id（只留在主进程）；时长认不出（0）时用以前存下的
         // 以前按整条 data-id 存（vOld）：找到就按新键再存一份，以后换了编号也认得出
         const vOld = textKey(`voice:${m.id}`);
-        Object.assign(item, { text: '', voice: m.voice, src: m.src || (m.id.startsWith('false_') ? { dataId: m.id } : null), k: textKey(`voice:${msgKey(m.id)}`) });
+        Object.assign(item, { text: '', voice: m.voice, src: m.src || webSrc(m), k: textKey(`voice:${msgKey(m.id)}`) });
         if (this.deps.store && this.deps.store.copyKey && vOld !== item.k) this.deps.store.copyKey(accId, item.ck, vOld, item.k);
         if (!item.voice && this.deps.store && this.deps.store.getView) {
           const x = this.deps.store.getView(accId, item.ck).find((v) => (v.k === item.k || v.k === vOld) && v.v > 0);
@@ -1009,7 +1011,7 @@ class FloatCore {
     const store = this.deps.store;
     const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '', hist: true, ctx };
     if (isVoice(m)) {
-      Object.assign(item, { text: '', voice: m.voice, src: m.id.startsWith('false_') ? { dataId: m.id } : null, k: textKey(`voice:${msgKey(m.id)}`) });
+      Object.assign(item, { text: '', voice: m.voice, src: m.src || webSrc(m), k: textKey(`voice:${msgKey(m.id)}`) });
       const saved = store ? store.getKey(accId, item.ck, item.k) : null;
       if (saved && typeof saved.text === 'string' && saved.text.trim()) {
         return Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });

@@ -170,27 +170,106 @@ app.whenReady().then(async () => {
   check(!/271828182845|4930111222|120363|CCCC3333|SECRETBODY|Hello|Emma|fake\.enc/.test(all) && !all.includes(mediaKey.toString('base64')), '日志里没有号码、编号、内容和钥匙');
   console.warn = warn;
 
-  // 11. 真实结构（data-id 在外层、气泡尾巴、隐藏的发件人标签、@lid 会话）：页面上的编号带 true_/false_ 才认成语音。
-  // 没有前缀的编号拼出来的 false_… 在 WhatsApp 存储里找不到，认成语音只会一直下载失败，还会让这个号停掉自动转写
+  // 11. 真实结构（data-id 在外层、气泡尾巴、隐藏的发件人标签、@lid 会话）：页面上的编号带 true_/false_，或者只有消息自己的编号（十六进制），都认成语音。
+  // 没有前缀时带出页面上的编号（raw），下载按它在存储里找
   const TAIL = '<span aria-hidden="true" data-icon="tail-in"><svg viewBox="0 0 8 13" width="8" height="13"><path d="M5 0H0v11z"></path></svg></span>';
   const LABEL = '<span aria-label="Emma Schneider:"></span>';
   const realVoice = (id) => `<div role="row"><div tabindex="-1" data-id="${id}"><div class="message-in">${TAIL}${LABEL}<div class="bubble"><div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:07</span></div><div class="meta">10:06</div></div></div></div></div>`;
   const realText = (id, text) => `<div role="row"><div tabindex="-1" data-id="${id}"><div class="message-in">${LABEL}<div class="bubble"><div class="copyable-text" data-pre-plain-text="[10:05, 10/11/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span></div></div><div class="meta">10:05</div></div></div></div></div>`;
-  const realPage = (rows) => `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title></head><body><div id="app"><div id="side"><div id="pane-side"><div role="grid" aria-label="Chat list"><div role="row"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div><div id="main"><header><span dir="auto" title="Emma Schneider">Emma Schneider</span></header><div class="scroll"><div role="application">${rows}</div></div></div></div></body></html>`;
+  const realPage = (rows, head = '<span dir="auto" title="Emma Schneider">Emma Schneider</span>', css = '') => `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title><style>${css}</style></head><body><div id="app"><div id="side"><div id="pane-side"><div role="grid" aria-label="Chat list"><div role="row"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div><div id="main"><header>${head}</header><div class="scroll"><div role="application">${rows}</div></div></div></div></body></html>`;
   const tmp = path.join(require('os').tmpdir(), `wa-voice-real-${process.pid}.html`);
-  require('fs').writeFileSync(tmp, realPage(realText('false_271828182845@lid_TTTT0001', 'Guten Morgen!') + realVoice('false_271828182845@lid_VVVV0002')));
-  await win.loadFile(tmp);
-  for (let i = 0; i < 100 && wc.isLoading(); i += 1) await new Promise((res) => setTimeout(res, 50));
+  const open = async (html) => {
+    require('fs').writeFileSync(tmp, html);
+    await win.loadFile(tmp);
+    for (let i = 0; i < 100 && wc.isLoading(); i += 1) await new Promise((res) => setTimeout(res, 50));
+  };
+  await open(realPage(realText('false_271828182845@lid_TTTT0001', 'Guten Morgen!') + realVoice('false_271828182845@lid_VVVV0002')));
   let real = await waPage.readOpenChat(wc);
   const pv = real.ok && real.msgs.find((m) => m.id.endsWith('VVVV0002'));
-  check(pv && pv.voice === 0 && pv.text === '', `真实结构、编号带前缀：认成语音（${JSON.stringify(pv)}）`);
-  require('fs').writeFileSync(tmp, realPage(realText('3EB0AAAA1111BBBB2222', 'Guten Morgen!') + realVoice('3EB0CCCC3333DDDD4444')));
-  await win.loadFile(tmp);
-  for (let i = 0; i < 100 && wc.isLoading(); i += 1) await new Promise((res) => setTimeout(res, 50));
+  check(pv && pv.voice === 0 && pv.text === '' && pv.raw === undefined, `真实结构、编号带前缀：认成语音（${JSON.stringify(pv)}）`);
+  await open(realPage(realText('3EB0AAAA1111BBBB2222', 'Guten Morgen!') + realVoice('3EB0CCCC3333DDDD4444')));
   real = await waPage.readOpenChat(wc);
-  const nv = real.ok && real.msgs.find((m) => (m.raw || '').endsWith('3EB0CCCC3333DDDD4444'));
+  let nv = real.ok && real.msgs.find((m) => (m.raw || '').endsWith('3EB0CCCC3333DDDD4444'));
   check(real.ok && real.msgs.length === 2 && real.msgs.some((m) => m.text === 'Guten Morgen!'), `真实结构、编号没有前缀：文字照常读到（${JSON.stringify(real.msgs || real)}）`);
-  check(nv && nv.voice === undefined, `真实结构、编号没有前缀：不认成语音（${JSON.stringify(nv)}）`);
+  check(nv && nv.voice === 0 && nv.text === '' && nv.raw === '3EB0CCCC3333DDDD4444', `真实结构、编号没有前缀：认成语音，带页面上的编号（${JSON.stringify(nv)}）`);
+
+  // 12. 新版 WhatsApp（2026-10 起，照别人在真号上记下的结构）：没有 .message-in/.message-out，class 都是乱码，
+  // data-id 只有 32 位十六进制的消息编号（没有对方号码），气泡是 msg-container，语音有 ptt-status 图标、「播放语音消息」按钮、语音滑条
+  const K_TEXT = '0B1C2D3E4F5A6B7C8D9E0F1A2B3C4D5E';
+  const K_VOICE = '3A5F0C2B9D8E7F6A1B2C3D4E5F6A7B8C';
+  const K_GROUP = '4B6A1D3C0E9F8A7B2C3D4E5F6A7B8C9D';
+  const K_OWN = '5C7B2E4D1F0A9B8C3D4E5F6A7B8C9D0E';
+  const K_QUOTE = '6D8C3F5E2A1B0C9D4E5F6A7B8C9D0E1F';
+  const K_GONE = '7E9D4A6F3B2C1D0E5F6A7B8C9D0E1F2A';
+  const K_BARE = '8F0E5B7A4C3D2E1F6A7B8C9D0E1F2A3B';
+  const NEW_CSS = `body{margin:0;font:14px sans-serif} #app{display:flex;width:1000px} #side{width:300px} #main{width:700px}
+    .r{display:flex;justify-content:flex-start;padding:2px 60px} .r.o{justify-content:flex-end}
+    [data-testid="msg-container"]{background:#fff;border-radius:8px;padding:6px;max-width:420px;position:relative}
+    .p{display:flex;align-items:center;gap:8px} .p canvas{width:200px;height:30px} .a{width:48px;height:48px;position:relative} .m{display:flex;justify-content:space-between;font-size:11px}
+    [data-icon="tail-in"]{position:absolute;left:-8px;top:0}`;
+  const voiceRow = (k, label = '播放语音消息', mine = false) => `<div role="row"><div tabindex="-1" data-id="${k}" data-testid="conv-msg-${k}" class="x1n2onr6"><div data-virtualized="false" class="_amjv"><div class="r${mine ? ' o' : ''}"><div data-testid="msg-container" class="x9f619">${mine ? '' : TAIL}<div class="p"><button class="x1c4vz4f" aria-label="${label}"><span data-icon="audio-play"><svg viewBox="0 0 34 34" width="34" height="34"></svg></span></button><div role="slider" aria-label="语音消息" aria-valuetext="0:00/0:11" aria-valuemax="11"><canvas></canvas></div><button class="xspd" aria-label="播放速度">1×</button><div class="a"><img alt="" width="48" height="48"><span data-icon="ptt-status" data-testid="ptt-status"><svg viewBox="0 0 19 26" width="19" height="26"></svg></span></div></div><div class="m"><span>0:11</span><div data-testid="msg-meta"><span>06:30</span>${mine ? '<span data-icon="msg-dblcheck"></span>' : ''}</div></div></div></div></div></div></div>`;
+  const textRow = (k, text, quote = '') => `<div role="row"><div tabindex="-1" data-id="${k}" data-testid="conv-msg-${k}" class="x1n2onr6"><div data-virtualized="false" class="_amjv"><div class="r"><div data-testid="msg-container" class="x9f619">${TAIL}<div class="copyable-text" data-pre-plain-text="[06:29, 11/11/2026] Emma Schneider: ">${quote}<div><span dir="ltr" data-testid="selectable-text"><span>${text}</span></span></div></div><div class="m"><span></span><div data-testid="msg-meta"><span>06:29</span></div></div></div></div></div></div></div>`;
+  const quoteVoice = '<div data-testid="quoted-message" role="button" aria-label="引用的消息"><span data-icon="ptt-status"></span><span>语音消息（0:11）</span></div>';
+  const head = '<div data-testid="conversation-info-header-chat-title"><span dir="auto">Emma Schneider</span></div>';
+  await open(realPage(textRow(K_TEXT, 'Guten Morgen!') + voiceRow(K_VOICE) + voiceRow(K_OWN, '播放语音消息', true) + textRow(K_QUOTE, 'Hast du sie gehört?', quoteVoice) + voiceRow(K_GROUP, 'Play voice message'), head, NEW_CSS));
+  real = await waPage.readOpenChat(wc);
+  const of = (k) => real.ok && real.msgs.find((m) => m.raw === k);
+  nv = of(K_VOICE);
+  check(nv && nv.voice === 0 && nv.text === '' && nv.out === false && nv.id === `false_chat:Emma Schneider_${K_VOICE}`, `新版页面：客户的语音认成语音（${JSON.stringify(nv)}）`);
+  check(of(K_GROUP) && of(K_GROUP).voice === 0, '新版页面、英文界面的语音也认得出');
+  check(of(K_OWN) && of(K_OWN).out === true && of(K_OWN).voice === undefined, `新版页面：自己发的语音不算（${JSON.stringify(of(K_OWN))}）`);
+  check(of(K_QUOTE) && of(K_QUOTE).voice === undefined && of(K_QUOTE).text === 'Hast du sie gehört?', `新版页面：引用了语音的回复照常是文字（${JSON.stringify(of(K_QUOTE))}）`);
+  check(of(K_TEXT) && of(K_TEXT).text === 'Guten Morgen!' && of(K_TEXT).out === false, '新版页面：文字照常读到');
+
+  // 存储里的编号还是整条（false_对方_消息编号，群里后面跟着发送人）：按页面上的编号找到这一条。
+  // 前面放 1 万多条别的客户消息，要翻过几页才找得到
+  await page(dropDb);
+  await page(`new Promise((ok, bad) => {
+    const r = indexedDB.open('model-storage', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('message', { keyPath: 'id' }); };
+    r.onsuccess = () => {
+      const tx = r.result.transaction('message', 'readwrite');
+      const s = tx.objectStore('message');
+      for (let i = 0; i < 12000; i += 1) s.put({ id: 'false_1' + String(i).padStart(11, '0') + '@c.us_' + (0x10000000 + i).toString(16).toUpperCase() + 'A0B1C2D3E4F5A6B7C8D9E0F1', type: 'chat' });
+      s.put({ id: 'true_271828182845@lid_${K_OWN}', type: 'ptt' });
+      ${rec(`false_271828182845@lid_${K_VOICE}`, { duration: 11 })}
+      ${rec(`false_120363000000000001@g.us_${K_GROUP}_4930111222@lid`, { duration: 4 })}
+      ${rec(K_BARE, { duration: 6 })}
+      tx.oncomplete = () => { r.result.close(); ok(true); };
+      tx.onerror = () => bad(tx.error);
+    };
+    r.onerror = () => bad(r.error);
+  })`);
+  const logs2 = [];
+  console.warn = (...a) => { logs2.push(a.join(' ')); };
+  const before2 = await page('document.documentElement.outerHTML');
+  const t0 = Date.now();
+  r = await wv.fetchVoice(wc, okFetch(), (nv && nv.raw) || K_VOICE, { accId: 'a2' });
+  check(r.ok && r.data.subarray(0, 4).toString('latin1') === 'OggS' && r.seconds === 11, `新版页面：按消息编号在存储里找到、解密出 OGG（${r.ok ? r.seconds : r.code}，${Date.now() - t0} ms）`);
+  r = await wv.fetchVoice(wc, okFetch(), K_GROUP, { accId: 'a2' });
+  check(r.ok && r.seconds === 4, `新版页面：群里的语音（编号后面还跟着发送人）也找得到（${r.ok ? r.seconds : r.code}）`);
+  r = await wv.fetchVoice(wc, okFetch(), K_BARE, { accId: 'a2' });
+  check(r.ok && r.seconds === 6, `存储里也只用消息编号当编号：直接找到（${r.ok ? r.seconds : r.code}）`);
+  naps = 0;
+  r = await wv.fetchVoice(wc, okFetch(), K_GONE, { accId: 'a2', wait: [1, 1], sleep: async () => { naps += 1; } });
+  check(r.kind === 'nomedia' && r.code === 'W2 not_found' && naps === 2, `新版页面：存储里没有这条：查 3 次后报读不到（${r.code}）`);
+  r = await wv.fetchVoice(wc, okFetch(), K_OWN, { accId: 'a2', ...noWait });
+  check(r.code === 'W2 not_found', '自己发的（true_ 开头）不在找的范围里');
+  check(await page('document.documentElement.outerHTML') === before2, '找的时候页面 HTML 不变');
+  check(logs2.length === 1 && /keyShape/.test(logs2[0]) && /"keyShape":"false_(#|KEY)@(c\.us|lid|g\.us)_KEY"/.test(logs2[0]) && !/1000000|271828|120363|4930111222|3A5F0C2B|7E9D4A6F/.test(logs2[0]), `找不到时日志只记编号的形状（${logs2.join(' | ')}）`);
+  console.warn = warn;
+
+  // 新版页面：语音的译文放在气泡（msg-container）里、播放条那一行的下面
+  await waPage.paintTranslations(wc, [{ id: K_VOICE, h: '0123456789abcdef', k: 'done', t: '你好，C 色还有吗？' }], {});
+  const place = await page(`(() => {
+    const m = document.querySelector('[data-id="${K_VOICE}"]');
+    const n = m && m.querySelector('[data-wasw-tr]');
+    if (!n) return null;
+    const bub = m.querySelector('[data-testid="msg-container"]');
+    const row = bub.querySelector('.p');
+    return { inBubble: bub.contains(n), notInRow: !row.contains(n), below: n.getBoundingClientRect().top >= row.getBoundingClientRect().bottom - 1, text: n.textContent };
+  })()`);
+  check(place && place.inBubble && place.notInRow && place.below && place.text.includes('你好'), `新版页面：语音译文在气泡里、播放条下面（${JSON.stringify(place)}）`);
   require('fs').rmSync(tmp, { force: true });
 
   await page(dropDb);

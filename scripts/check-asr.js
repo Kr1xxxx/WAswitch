@@ -411,6 +411,27 @@ async function webFlow() {
   assert(translated.includes('Danke'));
 }
 
+// 网页号、新版页面（2026-10 起）：页面上的编号只有消息自己的编号（raw，一串十六进制），读页面时补成 false_chat:<标题>_<编号>。
+// 去 WhatsApp 存储里找语音要用 raw，不能用补出来的那条（存储里没有这种编号，一定找不到，连着 3 条还会停掉自动转写）
+async function webNewIds() {
+  const KEY = '3A5F0C2B9D8E7F6A1B2C3D4E5F6A7B8C';
+  const calls = [];
+  const core = new FloatCore({
+    store: new TrStore(fs.mkdtempSync(path.join(os.tmpdir(), 'asr-web-raw-'))),
+    transcribe: async (acc, src) => { calls.push(src); return { text: 'Hallo, ist die Farbe C noch da?', seconds: 11 }; },
+    translate: async (t) => ({ text: `中:${t}`, warn: [] }),
+  });
+  const msgs = [
+    { id: 'false_chat:Emma Schneider_0123456789ABCDEF0123456789ABCDEF', out: false, text: 'Guten Morgen!', t: null, raw: '0123456789ABCDEF0123456789ABCDEF' },
+    { id: `false_chat:Emma Schneider_${KEY}`, out: false, text: '', voice: 0, t: null, raw: KEY },
+  ];
+  core.ingest('w', { title: 'Emma Schneider', msgs }, { auto: true, dailyCap: 100 });
+  await settle(core);
+  assert.deepStrictEqual(calls.map((c) => c.dataId), [KEY], '按页面上的编号去找语音');
+  const v = core.viewOf('w');
+  assert.deepStrictEqual([v.items[1].state, v.items[1].voice, v.items[1].tr], ['done', 11, '中:Hallo, ist die Farbe C noch da?'], '转写后翻译');
+}
+
 (async () => {
   splitting();
   await translator();
@@ -418,5 +439,6 @@ async function webFlow() {
   await backfill();
   await heardKept();
   await webFlow();
+  await webNewIds();
   console.log(`语音转文字自检通过（切段、wav、来财请求和报错、转写后翻译 ${n} 次、存记录不重转、转了没翻成也不重转、额度、重试、补翻、网页号语音）`);
 })().catch((e) => { console.error(e); process.exit(1); });
