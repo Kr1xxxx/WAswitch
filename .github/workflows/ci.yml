@@ -160,7 +160,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # 2026-11-11 起先不跑：shen 说要打包时再打开（删掉 if 这一行）。发版打包在 release.yml，不受影响。
   package-win:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
