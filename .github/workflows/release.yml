@@ -12,7 +12,9 @@
 # 不要手动往 Release 或来财里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
 # MCP 接口不在安装包里：先在一台机器上打成单独的文件 waswitch-mcp-<版本>.js（mcp-module），
 # 两个安装包都带上它的 sha512（src/mcp-module.json），用户在设置里下载时按这个校验。
-# 构建产物（upload-artifact）只在 job 之间传文件用，留 1 天：私有仓库只有 500 MB 存储，每次约 351 MB。
+# job 之间不用 Actions 的构建产物（artifact）传文件：私有仓库的 500 MB 存储按整月累计，2026-11 被旧产物用完后发不了版。
+# 改成先建一个草稿 Release，MCP 文件和安装包都直接传到草稿上，下一步再从草稿下载；最后把草稿发出去（这时才建 tag）。
+# Release 里的文件不占 Actions 存储。上次失败留下的同名草稿会先删掉重建。
 # 没拆仓库时（源码和安装包都在 Kr1xxxx/WAswitch，私有，2026-11-03 决定先不拆）：发到本仓库自己的 Releases，
 # 用本仓库的 GITHUB_TOKEN（publish 这一步给写权限），不同步下载说明（会盖掉源码的 README），也不做不登录下载检查
 # （私有仓库不登录下不了）。
@@ -35,8 +37,14 @@ permissions:
 jobs:
   mcp-module:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 建草稿 Release
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+    env:
+      PUBLIC_REPO: Kr1xxxx/WAswitch
+      SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
+      GH_TOKEN: ${{ github.repository == 'Kr1xxxx/WAswitch' && secrets.GITHUB_TOKEN || secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -59,12 +67,23 @@ jobs:
           echo "tag=$v" >> "$GITHUB_OUTPUT"
       - name: 打包 MCP 模块并自检
         run: npm run check:mcp
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: mcp-module
-          path: dist-mcp/*
-          if-no-files-found: error
-          retention-days: 1
+      # 拆开后 target 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上。
+      # 没拆时 tag 在本仓库：打 tag 运行时已经有了，手动运行时发布那一刻建在这次运行的提交上。
+      - name: 建草稿 Release，传上 MCP 文件
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TARGET: ${{ github.repository == 'Kr1xxxx/WAswitch' && github.sha || 'main' }}
+        run: |
+          draft=$(gh release view "$TAG" --repo "$PUBLIC_REPO" --json isDraft -q .isDraft 2>/dev/null || true)
+          if [ "$draft" = true ]; then
+            echo "删掉上次失败留下的草稿 $TAG"
+            gh release delete "$TAG" --repo "$PUBLIC_REPO" --yes
+            draft=
+          fi
+          if [ -z "$draft" ]; then
+            gh release create "$TAG" --repo "$PUBLIC_REPO" --draft --prerelease --target "$TARGET" --title "$TAG" --notes ""
+          fi
+          gh release upload "$TAG" --repo "$PUBLIC_REPO" --clobber dist-mcp/*
 
   build:
     needs: mcp-module
@@ -72,6 +91,12 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # 读草稿、往草稿上传安装包
+    env:
+      PUBLIC_REPO: Kr1xxxx/WAswitch
+      TAG: ${{ needs.mcp-module.outputs.tag }}
+      GH_TOKEN: ${{ github.repository == 'Kr1xxxx/WAswitch' && secrets.GITHUB_TOKEN || secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -83,10 +108,9 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: mcp-module
-          path: dist-mcp
+      - name: 从草稿 Release 下载 MCP 文件的校验值
+        shell: bash
+        run: gh release download "$TAG" --repo "$PUBLIC_REPO" -p mcp-module.json -D dist-mcp
       - name: 安装包带上 MCP 文件的校验值
         shell: bash
         run: cp dist-mcp/mcp-module.json src/mcp-module.json && cat src/mcp-module.json
@@ -94,17 +118,14 @@ jobs:
       - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: installer-${{ matrix.os }}
-          path: |
-            dist/*.exe
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest*.yml
-          if-no-files-found: error
-          retention-days: 1
+      - name: 安装包传到草稿 Release
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(dist/*.exe dist/*.dmg dist/*.zip dist/*.blockmap dist/latest*.yml)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::dist 里没有安装包"; exit 1; }
+          ls -l "${files[@]}"
+          gh release upload "$TAG" --repo "$PUBLIC_REPO" --clobber "${files[@]}"
 
   publish:
     needs: [mcp-module, build]
@@ -126,22 +147,16 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: dist
-          merge-multiple: true
-      # 拆开后 target_commitish 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上。
-      # 没拆时 tag 在本仓库：打 tag 运行时已经有了，手动运行时建在这次运行的提交上。
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          repository: ${{ env.PUBLIC_REPO }}
-          token: ${{ env.GH_TOKEN }}
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ env.SAME_REPO == 'true' && github.sha || 'main' }}
-          files: dist/*
-          draft: false
-          prerelease: true
-          fail_on_unmatched_files: true
+      - name: 从草稿 Release 下载全部文件
+        run: |
+          gh release download "$TAG" --repo "$PUBLIC_REPO" -D dist
+          ls -l dist
+          for f in 'WAswitch-Setup-*.exe' '*.dmg' '*.zip' 'latest.yml' 'latest-mac.yml' 'waswitch-mcp-*.js' 'mcp-module.json'; do
+            compgen -G "dist/$f" >/dev/null || { echo "::error::草稿 Release 里缺 $f"; exit 1; }
+          done
+      # 草稿发出去：这时才建 tag（手动运行时建在草稿记下的这次运行的提交上）
+      - name: 发布 GitHub Release
+        run: gh release edit "$TAG" --repo "$PUBLIC_REPO" --draft=false --prerelease
       # 已装的软件从来财更新：传安装包、zip、dmg、MCP 文件和两个 yml（不传 blockmap），最后让来财换成新版本。
       # 来财只认 Kr1xxxx/WAswitch 的 OIDC 令牌，所以只在没拆仓库时运行
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
