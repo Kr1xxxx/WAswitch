@@ -201,6 +201,7 @@ app.whenReady().then(async () => {
   const K_OWN = '5C7B2E4D1F0A9B8C3D4E5F6A7B8C9D0E';
   const K_QUOTE = '6D8C3F5E2A1B0C9D4E5F6A7B8C9D0E1F';
   const K_GONE = '7E9D4A6F3B2C1D0E5F6A7B8C9D0E1F2A';
+  const K_BARE = '8F0E5B7A4C3D2E1F6A7B8C9D0E1F2A3B';
   const NEW_CSS = `body{margin:0;font:14px sans-serif} #app{display:flex;width:1000px} #side{width:300px} #main{width:700px}
     .r{display:flex;justify-content:flex-start;padding:2px 60px} .r.o{justify-content:flex-end}
     [data-testid="msg-container"]{background:#fff;border-radius:8px;padding:6px;max-width:420px;position:relative}
@@ -233,6 +234,7 @@ app.whenReady().then(async () => {
       s.put({ id: 'true_271828182845@lid_${K_OWN}', type: 'ptt' });
       ${rec(`false_271828182845@lid_${K_VOICE}`, { duration: 11 })}
       ${rec(`false_120363000000000001@g.us_${K_GROUP}_4930111222@lid`, { duration: 4 })}
+      ${rec(K_BARE, { duration: 6 })}
       tx.oncomplete = () => { r.result.close(); ok(true); };
       tx.onerror = () => bad(tx.error);
     };
@@ -246,6 +248,8 @@ app.whenReady().then(async () => {
   check(r.ok && r.data.subarray(0, 4).toString('latin1') === 'OggS' && r.seconds === 11, `新版页面：按消息编号在存储里找到、解密出 OGG（${r.ok ? r.seconds : r.code}，${Date.now() - t0} ms）`);
   r = await wv.fetchVoice(wc, okFetch(), K_GROUP, { accId: 'a2' });
   check(r.ok && r.seconds === 4, `新版页面：群里的语音（编号后面还跟着发送人）也找得到（${r.ok ? r.seconds : r.code}）`);
+  r = await wv.fetchVoice(wc, okFetch(), K_BARE, { accId: 'a2' });
+  check(r.ok && r.seconds === 6, `存储里也只用消息编号当编号：直接找到（${r.ok ? r.seconds : r.code}）`);
   naps = 0;
   r = await wv.fetchVoice(wc, okFetch(), K_GONE, { accId: 'a2', wait: [1, 1], sleep: async () => { naps += 1; } });
   check(r.kind === 'nomedia' && r.code === 'W2 not_found' && naps === 2, `新版页面：存储里没有这条：查 3 次后报读不到（${r.code}）`);

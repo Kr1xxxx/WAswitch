@@ -1011,7 +1011,7 @@ class FloatCore {
     const store = this.deps.store;
     const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '', hist: true, ctx };
     if (isVoice(m)) {
-      Object.assign(item, { text: '', voice: m.voice, src: webSrc(m), k: textKey(`voice:${msgKey(m.id)}`) });
+      Object.assign(item, { text: '', voice: m.voice, src: m.src || webSrc(m), k: textKey(`voice:${msgKey(m.id)}`) });
       const saved = store ? store.getKey(accId, item.ck, item.k) : null;
       if (saved && typeof saved.text === 'string' && saved.text.trim()) {
         return Object.assign(item, { state: 'done', text: saved.text, tr: saved.edited ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });

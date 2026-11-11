@@ -49,12 +49,13 @@ const READ_CODE = (dataId) => `(async (ID, DB, PAGE, MAX) => {
       if (!stores.includes('message')) { out.why = 'no_message_store'; out.info.stores = stores.slice(0, 60); return out; }
       const store = () => db.transaction('message', 'readonly').objectStore('message');
       let key = ID;
-      // 新版页面只有消息自己的编号：存储里的编号是 false_对方_消息编号（群里后面还跟着发送人），在客户发来的（false_ 开头的）里找。
-      // 只比编号，不读别的消息
-      if (!/^(true|false)_/.test(ID)) {
+      // 新版页面只有消息自己的编号：存储里也只用它当编号的话直接就有；不然存储里的编号是 false_对方_消息编号（群里后面还跟着发送人），
+      // 在客户发来的（false_ 开头的）里找。只比编号，不读别的消息
+      if (!/^(true|false)_/.test(ID) && !(await req(store().count(ID)))) {
         key = '';
         const hit = (k) => typeof k === 'string' && (k.endsWith('_' + ID) || k.includes('_' + ID + '_'));
-        let range = IDBKeyRange.bound('false_', 'false\`', false, true);
+        const incoming = IDBKeyRange.bound('false_', 'false\`', false, true);
+        let range = incoming;
         for (let n = 0; n < MAX && !key; n += 1) {
           const keys = await req(store().getAllKeys(range, PAGE));
           key = keys.find(hit) || '';
@@ -63,7 +64,8 @@ const READ_CODE = (dataId) => `(async (ID, DB, PAGE, MAX) => {
         }
         if (!key) {
           out.why = 'not_found';
-          const one = await req(store().getAllKeys(null, 1));
+          // 记一个编号的形状：先拿客户发来的，没有再拿随便一条
+          const one = (await req(store().getAllKeys(incoming, 1))).concat(await req(store().getAllKeys(null, 1)));
           out.info.keyShape = one.length ? shape(one[0]) : 'empty';
           return out;
         }
