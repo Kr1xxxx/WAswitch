@@ -7,13 +7,9 @@ const litePages = new Map(); // 账号 id -> 页面
 const LITE_TR_HOLD_MS = 15000; // 用户选着字时，译文更新最多压这么久
 
 // 秒级时间戳 → 今天显示“14:05”，更早显示“10-21”
-function liteTime(ts) {
+function liteTime(ts, full) {
   if (!ts) return '';
-  const d = new Date(ts * 1000);
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  if (d.toDateString() === now.toDateString()) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return full ? TrInfo.when(ts * 1000) : TrInfo.day(ts * 1000);
 }
 
 // 文字里的链接变成可点的（只认 http、https、mailto、tel，主进程还会再检查一次）
@@ -173,7 +169,7 @@ function makeLitePage(id) {
         m.from ? h('small', { class: 'from' }, m.from) : null,
         h('span', { class: 'text' }, linkify(m.text)),
         trLine(m.id, m.me),
-        h('small', { class: 'time' }, liteTime(m.ts)));
+        h('small', { class: 'time' }, liteTime(m.ts, true)));
     }));
     if (!items.length) msgs.append(h('div', { class: 'lite-none' }, '这个对话在本机还没有消息记录。'));
     if (switched || nearBottom) msgs.scrollTop = msgs.scrollHeight;

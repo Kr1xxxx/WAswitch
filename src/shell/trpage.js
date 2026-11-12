@@ -420,9 +420,7 @@ function tpAsk(row, onYes, byKey) {
 }
 
 function tpTime(at) {
-  const d = new Date(at);
-  const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  return TrInfo.when(at);
 }
 
 async function tpRun() {
