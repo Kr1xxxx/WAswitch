@@ -32,6 +32,7 @@ const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./trans
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
+const { pasteToCompose } = require('./compose-insert');
 const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
@@ -3098,9 +3099,8 @@ handleShell('cust:delete', (id) => {
 });
 // 返回有没有真的写进剪贴板：界面只在成功时打对勾
 handleShell('panel:copy', (text) => copyText(text));
-// 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
-// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里。
-// 焦点不在对话下方的输入框（比如在搜索框）就不贴，返回 'focus' 让用户先点一下输入框
+// 插入到聊天框（翻译页的「放进输入框」、话术的「插入」）：做法见 compose-insert.js。
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
 const insertBlocked = (accountId) => {
   const acc = findAcc(accountId);
   if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
@@ -3110,19 +3110,12 @@ const insertBlocked = (accountId) => {
 };
 async function insertText(accountId, text) {
   if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
-  const blocked = insertBlocked(accountId);
-  if (blocked) return blocked;
-  const focus = await waPage.composeFocus(views.get(accountId).webContents);
-  const after = insertBlocked(accountId); // 读焦点期间可能换号、锁定
-  if (after) return after;
-  if (focus !== 'compose') return 'focus';
-  const view = views.get(accountId);
-  // 剪贴板是异步的，别的程序占着时可能悄悄写不进去：写完读回来确认（和复制按钮同一套），没写上就不贴，免得把剪贴板里的旧内容贴进客户的输入框
-  if (!(await copyText(text))) return 'clip';
-  if (insertBlocked(accountId)) return 'changed';
-  view.webContents.focus();
-  view.webContents.paste();
-  return 'ok';
+  return pasteToCompose(text, {
+    blocked: () => insertBlocked(accountId),
+    wc: () => views.get(accountId).webContents,
+    copyText,
+    focusCompose: waPage.focusCompose,
+  });
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 // 导出导入：[文件名前缀, 保存框标题, 打开框标题]

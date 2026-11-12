@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WhatsApp</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; }
+  #app { display: flex; height: 100vh; }
+  #side { width: 220px; }
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  [data-testid="conversation-panel-messages"] { flex: 1; overflow-y: auto; }
+  [data-testid="msg-container"] { position: relative; width: fit-content; margin: 6px 20px; padding: 6px 8px; }
+  footer { padding: 8px; }
+  [data-testid="compose-box"] { display: flex; align-items: center; gap: 8px; }
+  .lexical-rich-text-input { flex: 1; position: relative; }
+  #compose { min-height: 20px; outline: none; white-space: pre-wrap; }
+  #compose p { margin: 0; }
+</style></head><body>
+<!-- 新版 WhatsApp 网页版（2026-10 起）打开一个对话时的结构，给「放进输入框」的自检用（scripts/check-draft.js 第 D 部分）。
+     按公开的实测记录写：消息的 data-id 只有 32 位十六进制编号、可以获得焦点（tabindex=-1）；没有 .message-in/.message-out，气泡是 msg-container；
+     左上角搜索是普通 input；输入框是 Lexical 编辑器（footer 里的 contenteditable，带 data-testid 和 data-lexical-editor，空的时候是 <p><br></p>）。
+     记下所有按键、发送按钮的点击和 Enter，用来证明只放进输入框、没有发送。 -->
+<div id="app">
+  <div id="side">
+    <div data-testid="chat-list-search-container"><input id="search" type="text" role="textbox" aria-label="搜索或开始新对话" placeholder="搜索或开始新对话"></div>
+    <div id="pane-side"><div role="grid" aria-label="对话列表" aria-rowcount="1"><div role="row" data-testid="list-item-0"><div data-testid="cell-frame-title"><span dir="auto" title="Emma Schneider">Emma Schneider</span></div></div></div></div>
+  </div>
+  <div id="main">
+    <header data-testid="conversation-header"><div data-testid="conversation-info-header-chat-title"><span dir="auto">Emma Schneider</span></div></header>
+    <div data-testid="conversation-panel-messages"><div role="application">
+      <div role="row"><div tabindex="-1" data-id="3EB0C4A1F2D3E4B5A6978869504A3B2C" data-testid="conv-msg-3EB0C4A1F2D3E4B5A6978869504A3B2C"><div data-virtualized="false">
+        <div data-testid="msg-container"><span aria-hidden="true" data-icon="tail-in"></span><span aria-label="Emma Schneider:"></span>
+          <div class="copyable-text" data-pre-plain-text="[05:43, 12/11/2026] Emma Schneider: "><div><span data-testid="selectable-text" dir="ltr" class="selectable-text copyable-text"><span>Is size M still in stock?</span></span></div></div>
+          <div data-testid="msg-meta"><span>05:43</span></div></div></div></div></div>
+      <div role="row"><div tabindex="-1" data-id="A1B2C3D4E5F60718293A4B5C6D7E8F90" data-testid="conv-msg-A1B2C3D4E5F60718293A4B5C6D7E8F90"><div data-virtualized="false">
+        <div data-testid="msg-container"><span aria-label="Emma Schneider:"></span>
+          <div role="group"><button aria-label="播放语音消息"><span data-icon="audio-play"></span></button><div role="slider" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0"></div><span aria-label="语音消息"></span></div>
+          <div data-testid="msg-meta"><span>05:44</span></div></div></div></div></div>
+    </div></div>
+    <footer>
+      <div data-testid="compose-box">
+        <button id="attach" aria-label="附加">+</button>
+        <div class="lexical-rich-text-input"><div id="compose" contenteditable="true" role="textbox" spellcheck="true" aria-label="输入消息" tabindex="10" data-tab="10" data-lexical-editor="true" data-testid="conversation-compose-box-input" aria-autocomplete="list"><p class="selectable-text copyable-text" dir="auto"><br></p></div></div>
+        <button id="send" aria-label="发送">➤</button>
+      </div>
+    </footer>
+  </div>
+</div>
+<div id="dialog" role="dialog" aria-modal="true" hidden><button id="dialog-ok">确定</button></div>
+<script>
+  window.__ev = { keys: 0, enter: 0, sendClicks: 0, sent: [] };
+  document.addEventListener('keydown', (e) => { window.__ev.keys += 1; if (e.key === 'Enter') window.__ev.enter += 1; }, true);
+  const compose = document.getElementById('compose');
+  const send = () => { window.__ev.sent.push(compose.innerText); compose.innerHTML = '<p class="selectable-text copyable-text" dir="auto"><br></p>'; };
+  document.getElementById('send').addEventListener('click', () => { window.__ev.sendClicks += 1; send(); });
+  compose.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  // 弹窗开着时，WhatsApp 会把焦点拉回弹窗里
+  document.addEventListener('focusin', (e) => {
+    const dlg = document.getElementById('dialog');
+    if (!dlg.hidden && !dlg.contains(e.target)) document.getElementById('dialog-ok').focus();
+  });
+</script>
+</body></html>
