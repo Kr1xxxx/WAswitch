@@ -3,7 +3,7 @@
 // 查：传哪些文件（不传 blockmap）、ymls 最后传、全部传完才 publish、分块拼回来和原文件一样、
 // 每个请求带 OIDC 令牌（audience 对）、401 时换新令牌、5xx 重试、一直失败时取消上传并非 0 退出、
 // 4xx 不重试、缺 yml 时不传、上传地址只认来财或本机、输出里没有令牌；
-// --mac-only 时不传 exe 和 latest.yml、publish 带 mac_only，release.yml 的 WINDOWS 开关关着时只打 Mac。
+// --mac-only 时不传 exe 和 latest.yml、publish 带 mac_only，release.yml 的 WINDOWS 开关关着时只打 Mac（2026-11-12 起开着）。
 // 运行：node scripts/check-upload-cloud-release.js
 const fs = require('fs');
 const os = require('os');
@@ -228,7 +228,7 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswi
     check(!/upload-artifact|download-artifact/.test(wf), 'release.yml：job 之间不用构建产物（私有仓库存储按月累计，会满）');
     // Windows 开关（2026-11-11 起关着）：只打 Mac，草稿里不要求 exe 和 latest.yml，传来财带 --mac-only
     const sw = /^env:\n(?:\s*#.*\n)*\s+WINDOWS: '(true|false)'$/m.exec(wf);
-    check(sw && sw[1] === 'false', `release.yml：开关 WINDOWS 在顶层、现在是 'false'（${sw && sw[1]}）`);
+    check(sw, `release.yml：开关 WINDOWS 在顶层，是 'true' 或 'false'（现在 ${sw && sw[1]}）`);
     check(/os: \$\{\{ fromJSON\(needs\.mcp-module\.outputs\.os\) \}\}/.test(wf) && /os=\["macos-latest"\]/.test(wf) && /os=\["windows-latest","macos-latest"\]/.test(wf), 'release.yml：打包的系统跟着开关（关着只有 macos-latest）');
     check(/need=\([^)]*latest-mac\.yml[^)]*\)/.test(pub) && !/need=\([^)]*(\.exe|'latest\.yml')[^)]*\)/.test(pub) && /\[ "\$WINDOWS" = true \] && need\+=\('WAswitch-Setup-\*\.exe' 'latest\.yml'\)/.test(pub), 'release.yml：exe 和 latest.yml 只在开关开着时才要求');
     check(/upload-cloud-release\.mjs dist "\$TAG" \$\(\[ "\$WINDOWS" = true \] \|\| echo --mac-only\)/.test(pub), 'release.yml：开关关着时传来财带 --mac-only');
