@@ -259,7 +259,7 @@ npm run dist
 
 产物在 `dist/` 目录。
 
-推送 `v` 开头的 tag（例如 `v0.2.0`）时，GitHub Actions 会自动打包 Windows 和 macOS 安装包并发布到 Releases（标为预发布）。
+推送 `v` 开头的 tag（例如 `v0.2.0`）时，GitHub Actions 会自动打包 macOS 安装包并发布到 Releases（标为预发布）。Windows 安装包现在不打：`release.yml` 顶上的 `WINDOWS` 改成 `'true'` 才打。不打时来财只换 Mac 的更新，Windows 用户停在上一个 Windows 版本。
 
 自动更新依赖这一步传到来财的 `latest.yml`、`latest-mac.yml`、安装包、zip 和 dmg（`.blockmap` 不传，更新用不到）。发布新版时：先改 `package.json` 的 `version`（必须比上一版大，更新只升不降），再推送同名 tag（带 `v`）。不要手动往 Release 里传安装包。建议给 GitHub 账号开两步验证并保护 `v*` tag：能发布 Release 就等于能给所有电脑装软件。
 

@@ -1,9 +1,12 @@
 // 把一个版本的更新文件传到来财（laicrm.com），已装的软件从那里更新（src/updater.js、src/mcp-module.js）。
 // release.yml 的 publish 这一步在发 GitHub Release 之后运行：
 //   node scripts/upload-cloud-release.mjs dist v1.0.7
+//   node scripts/upload-cloud-release.mjs dist v1.0.11 --mac-only   （release.yml 的开关 WINDOWS 关着时）
 //
 // 传哪些：目录里的 *.exe、*.zip、*.dmg、waswitch-mcp-*.js、mcp-module.json，最后传 latest.yml 和 latest-mac.yml，
 // 全部传完再 publish（来财这时才换成新版本，并只留新旧两个版本）。不传 blockmap（更新用不到）。dmg 要传：latest-mac.yml 里列着它，来财 publish 时逐个核对。
+// --mac-only：不传 exe 和 latest.yml，publish 带 mac_only: true，来财只换 latest-mac.yml，线上的 latest.yml 和它列的
+// Windows 文件原样留着（Windows 用户停在上一个 Windows 版本）。来财不认 mac_only 时会回 missing_yml，什么都不换。
 // 认证：GitHub Actions 的 OIDC 令牌（audience laicrm-waswitch-release），不用密钥。job 要有 id-token: write。
 // 令牌超过 4 分钟或来财回 401 时重新取。
 // 每个文件分块传（块大小按来财回的 part_size，现在是 6 MiB：Caddy 只收 8 MB 以内的请求），
@@ -153,28 +156,32 @@ async function uploadFile(base, version, file) {
 }
 
 // 要传的文件：先安装包和 MCP 文件，最后 latest.yml、latest-mac.yml
-function pickFiles(dir) {
+function pickFiles(dir, macOnly = false) {
   const names = fs.readdirSync(dir).filter((n) => fs.statSync(path.join(dir, n)).isFile());
-  const want = names.filter((n) => /\.(exe|zip|dmg)$/i.test(n) || /^waswitch-mcp-.+\.js$/.test(n) || n === 'mcp-module.json').sort();
-  const missing = YMLS.filter((y) => !names.includes(y));
+  const kinds = macOnly ? /\.(zip|dmg)$/i : /\.(exe|zip|dmg)$/i;
+  const ymls = macOnly ? ['latest-mac.yml'] : YMLS;
+  const want = names.filter((n) => kinds.test(n) || /^waswitch-mcp-.+\.js$/.test(n) || n === 'mcp-module.json').sort();
+  const missing = ymls.filter((y) => !names.includes(y));
   if (missing.length) throw new Error(`缺少 ${missing.join('、')}`);
-  const bad = [...want, ...YMLS].filter((n) => !NAME_RE.test(n));
+  const bad = [...want, ...ymls].filter((n) => !NAME_RE.test(n));
   if (bad.length) throw new Error(`文件名不合规：${bad.join('、')}`);
-  return [...want, ...YMLS];
+  return [...want, ...ymls];
 }
 
 async function main() {
-  const [dir, tag] = process.argv.slice(2);
-  if (!dir || !tag) fail('用法：node scripts/upload-cloud-release.mjs <目录> <tag，例如 v1.0.7>');
+  const args = process.argv.slice(2);
+  const macOnly = args.includes('--mac-only');
+  const [dir, tag, ...rest] = args.filter((a) => a !== '--mac-only');
+  if (!dir || !tag || rest.length) fail('用法：node scripts/upload-cloud-release.mjs <目录> <tag，例如 v1.0.7> [--mac-only]');
   const version = String(tag).replace(/^v/, '');
   if (!VERSION_RE.test(version)) fail(`版本号不对：${tag}`);
   const base = baseUrl();
   let files;
-  try { files = pickFiles(dir); } catch (e) { fail(e.message); }
-  console.log(`上传 ${version} 到来财：${files.length} 个文件`);
+  try { files = pickFiles(dir, macOnly); } catch (e) { fail(e.message); }
+  console.log(`上传 ${version} 到来财${macOnly ? '（只有 Mac）' : ''}：${files.length} 个文件`);
   try {
     for (const name of files) await uploadFile(base, version, path.join(dir, name));
-    const r = await api(base, 'POST', 'publish', { json: { v: 1, version } });
+    const r = await api(base, 'POST', 'publish', { json: macOnly ? { v: 1, version, mac_only: true } : { v: 1, version } });
     const pruned = Array.isArray(r.pruned) ? r.pruned.length : Number(r.pruned) || 0;
     console.log(`来财已换成 ${r.version || version}，删掉了 ${pruned} 个旧文件`);
   } catch (e) {
