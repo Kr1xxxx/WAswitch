@@ -72,6 +72,37 @@ async function loginState(wc) {
   }
 }
 
+// 页面上有没有画出东西：'shown' | 'empty' | 'unknown'（还在加载、页面没回话）。
+// 开机时网络切换会掐断 WhatsApp 脚本的下载：页面外壳到了（did-finish-load 照样触发），但一个字、一个图都没有，
+// 深色外观下是一整块 #121212。还在转圈、扫码页、对话列表都算画出来了。
+const SHOWN_CODE = `(() => {
+  const has = (list) => list.some((s) => document.querySelector(s));
+  if (has(${JSON.stringify([...SELECTORS.loggedIn, ...SELECTORS.needsQr])})) return 'shown';
+  const b = document.body;
+  if (!b) return 'empty';
+  if ((b.innerText || '').trim()) return 'shown';
+  const seen = [...b.querySelectorAll('svg, canvas, img, video, progress')].some((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+  return seen ? 'shown' : 'empty';
+})()`;
+
+async function pageShown(wc, { timeout = 3000 } = {}) {
+  if (wc.isDestroyed() || wc.isLoading()) return 'unknown';
+  // 主框架的请求被掐断时页面停在空地址上，这时在页面里跑脚本会一直等不到回音
+  if (!/^https:\/\/web\.whatsapp\.com\//.test(wc.getURL())) return 'empty';
+  let timer;
+  try {
+    const r = await Promise.race([
+      wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: SHOWN_CODE }]),
+      new Promise((resolve) => { timer = setTimeout(() => resolve('unknown'), timeout); }),
+    ]);
+    return ['shown', 'empty'].includes(r) ? r : 'unknown';
+  } catch {
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 读左侧对话列表里当前已经显示出来的对话。只用 querySelector 读文字和属性：
 // 不点击、不滚动、不改 DOM、不触发任何事件。
 // 返回 { ok: true, chats, filtered } 或 { ok: false, reason }。
@@ -1031,5 +1062,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, focusCompose, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, pageShown, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, focusCompose, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

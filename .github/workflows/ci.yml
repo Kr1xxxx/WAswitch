@@ -116,6 +116,8 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-login-lock.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
+      - name: 页面加载完却一直空白（开机时网络切换掐断脚本）时自动重新加载，慢的页面不刷新
+        run: xvfb-run -a node scripts/check-blank-view.js
       - name: 没打开对话时点开一个对话，翻译页 1 秒内显示消息
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
       - name: 译文显示在 WhatsApp 消息下面（失败重试、换回右侧工作台）

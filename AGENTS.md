@@ -140,6 +140,7 @@ xvfb-run -a -s "-screen 0 1920x2000x24" npm run check:visual   # 组件总览页
 - 新建的 WebContentsView 在 did-start-loading 时就抢键盘焦点（隐藏的也抢），用到时才建的浮层会抢走页面的 Ctrl+C：浮层没收到 mouseDown 就把焦点还回去，用 XTest 测。
 - `sendInputEvent` 可能比后面的 executeJavaScript 晚到：等页面确实收到事件再往下。`ipcRenderer.invoke` 的回复也可能比后面的 `webContents.send` 晚到（探了 3000 次，505 次如此）：别让 invoke 结果直接盖掉推送来的状态，主进程给状态编号，留最新的（#310 工作台的 `seq`）。
 - xvfb 下查 focus-visible 要先 `win.focus()` 再 `webContents.focus()`。
+- 测断开连接（`ses.closeAllConnections()`，网络切换时会调）的假服务要用 HTTP/2：HTTP/1.1 正在下的请求不会被打断，测不出页面脚本被掐断（`check-blank-view.js`）。开发版设 `WASWITCH_TEST_NET_SIGNAL` 后给主进程发 SIGUSR2 就当网络变了。
 - 往输入框填字要一个个加（`value += 'x'`），整段赋值会藏住 bug。
 - 整个列表跟着状态重画会清掉用户的选区，复制就失败（#293 修过，#291 又带回来）：只改变了的节点，选区在里面时先不重画，并加一条检查「更新之后选区还在」。Electron fixture 没有 `#content{user-select:text}`，测选区前先设 `host.style.userSelect = 'text'`。
 - 点击后会禁用的按钮，别用「内容没变就不重画」的守卫：重试失败、文字没变时按钮会一直灰着（#296）。记住点过，主进程下一条消息来时一定重画。

@@ -24,6 +24,7 @@
     "check:panel-tab": "node scripts/check-panel-tab.js",
     "check:login-lock": "node scripts/check-login-lock.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
+    "check:blank-view": "node scripts/check-blank-view.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
     "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js",
