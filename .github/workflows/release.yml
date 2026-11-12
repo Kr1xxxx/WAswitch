@@ -1,4 +1,4 @@
-# 打 tag（例如 v0.2.0）时自动打包 Windows 和 macOS 安装包，发到公开的 Kr1xxxx/WAswitch 的 Releases。
+# 打 tag（例如 v0.2.0）时自动打包 macOS 安装包（Windows 看下面的开关 WINDOWS），发到公开的 Kr1xxxx/WAswitch 的 Releases。
 # 也可以在 Actions 里对 main 手动运行：tag 取 package.json 的版本号，发布时建（推不了 tag 的环境用）。
 # 源码和安装包都在公开仓库 Kr1xxxx/WAswitch（2026-11-03 决定不拆仓库）。下面「拆仓库时」的步骤只在源码另放一个仓库时运行，现在不跑。
 # 已装的软件（1.0.7 起）从来财（laicrm.com/api/device/update/）更新、下载 MCP 文件，带团队登录的设备令牌
@@ -34,6 +34,12 @@ concurrency:
 permissions:
   contents: read
 
+# 打不打 Windows 安装包。2026-11-11 起暂停（shen：「暂时 windows 不打包，打包的时候我再通知你」），要打时改成 'true'。
+# 关着时只打 Mac：草稿里不要求 exe 和 latest.yml，来财只换 latest-mac.yml（upload-cloud-release.mjs --mac-only），
+# 线上的 latest.yml 和它列的 Windows 安装包原样留着，Windows 用户停在上一个 Windows 版本。
+env:
+  WINDOWS: 'false'
+
 jobs:
   mcp-module:
     runs-on: ubuntu-latest
@@ -41,6 +47,7 @@ jobs:
       contents: write # 建草稿 Release
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      os: ${{ steps.tag.outputs.os }}
     env:
       PUBLIC_REPO: Kr1xxxx/WAswitch
       SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
@@ -65,6 +72,11 @@ jobs:
             fi
           fi
           echo "tag=$v" >> "$GITHUB_OUTPUT"
+          case "$WINDOWS" in
+            true) echo 'os=["windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT" ;;
+            false) echo 'os=["macos-latest"]' >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::WINDOWS 只能是 'true' 或 'false'"; exit 1 ;;
+          esac
       - name: 打包 MCP 模块并自检
         run: npm run check:mcp
       # 拆开后 target 用公开仓库的 main：私有仓库的提交号在那边不存在，tag 会建在公开仓库的 main 上。
@@ -89,7 +101,7 @@ jobs:
     needs: mcp-module
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        os: ${{ fromJSON(needs.mcp-module.outputs.os) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write # 读草稿、往草稿上传安装包
@@ -151,13 +163,15 @@ jobs:
         run: |
           gh release download "$TAG" --repo "$PUBLIC_REPO" -D dist
           ls -l dist
-          for f in 'WAswitch-Setup-*.exe' '*.dmg' '*.zip' 'latest.yml' 'latest-mac.yml' 'waswitch-mcp-*.js' 'mcp-module.json'; do
+          need=('*.dmg' '*.zip' 'latest-mac.yml' 'waswitch-mcp-*.js' 'mcp-module.json')
+          [ "$WINDOWS" = true ] && need+=('WAswitch-Setup-*.exe' 'latest.yml')
+          for f in "${need[@]}"; do
             compgen -G "dist/$f" >/dev/null || { echo "::error::草稿 Release 里缺 $f"; exit 1; }
           done
       # 草稿发出去：这时才建 tag（手动运行时建在草稿记下的这次运行的提交上）
       - name: 发布 GitHub Release
         run: gh release edit "$TAG" --repo "$PUBLIC_REPO" --draft=false --prerelease
-      # 已装的软件从来财更新：传安装包、zip、dmg、MCP 文件和两个 yml（不传 blockmap），最后让来财换成新版本。
+      # 已装的软件从来财更新：传安装包、zip、dmg、MCP 文件和两个 yml（不传 blockmap；开关 WINDOWS 关着时只传 Mac 的和 latest-mac.yml），最后让来财换成新版本。
       # 来财只认 Kr1xxxx/WAswitch 的 OIDC 令牌，所以只在没拆仓库时运行
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: env.SAME_REPO == 'true'
@@ -165,7 +179,7 @@ jobs:
           node-version: 22
       - name: 传到来财（已装的软件从这里更新）
         if: env.SAME_REPO == 'true'
-        run: node scripts/upload-cloud-release.mjs dist "$TAG"
+        run: node scripts/upload-cloud-release.mjs dist "$TAG" $([ "$WINDOWS" = true ] || echo --mac-only)
       - name: 同步下载说明和 Clash 说明到公开仓库
         if: env.SAME_REPO != 'true'
         run: scripts/sync-public-repo.sh "$PUBLIC_REPO"
