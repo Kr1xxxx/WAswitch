@@ -1,7 +1,8 @@
 // MCP「起草回复」在主进程这边的做法：把 AI 写的草稿放进输入框，永远不发送。
 //
-//   网页版：和侧栏“插入”一样，等于帮用户按一次 Ctrl+V（剪贴板 + paste），不往 WhatsApp 页面注入脚本、
+//   网页版：和侧栏“插入”一样，等于帮用户按一次 Ctrl+V（剪贴板 + paste），不往 WhatsApp 页面打字、
 //          不模拟按键；放之前只读确认打开的对话就是要回的那个、焦点在输入框里，放完确认生效后把剪贴板换回去。
+//          自动放时焦点不在输入框就不放；用户点了“放进输入框”时先把光标放进输入框（wa-page.js 的 focusCompose）。
 //   轻量模式：输入框在软件自己的界面里，直接填进去，不碰剪贴板。
 //
 // 什么时候直接放：这个号正显示着、窗口开着、没锁、用户 30 秒内没打字、要回的对话正开着、输入框是空的。
@@ -82,7 +83,7 @@ const WHY = {
 const NOTE = {
   no_chat: (c) => `先在 WhatsApp 里打开和「${c}」的对话，再点「放进输入框」`,
   other_chat: (c) => `先在 WhatsApp 里打开和「${c}」的对话，再点「放进输入框」`,
-  focus: () => '先点一下对话下方写消息的地方，再点「放进输入框」',
+  focus: () => '没能把光标放进聊天输入框，没有放',
   not_found: (c) => `轻量模式里没找到「${c}」这个对话（或有重名的），没有放`,
   not_empty: () => '输入框里已经有文字，没有放',
   changed: () => '页面还没准备好，稍后再点「放进输入框」',
@@ -94,7 +95,7 @@ const NOTE = {
 //   autoBlock(id) -> '' 可以直接放 | WHY 里的键
 //   stillShown(id) -> boolean            读页面期间换号、锁定就不放
 //   webContents(id) -> wc | null          网页版账号的页面
-//   waPage: { readChatPeer, composeState }
+//   waPage: { readChatPeer, composeState, focusCompose }
 //   clipboard, ClipboardItem            Electron 的剪贴板（异步接口）
 //   liteOpenChat(id) -> { jid, title } | null
 //   liteChats(id) -> [{ jid, name }]
@@ -138,11 +139,15 @@ function createDraftPlacer(deps) {
         if (!byUser && !st.empty) return 'not_empty';
         return st.focus === 'compose' ? '' : 'focus';
       };
+      // 用户点了按钮：对话对了就把光标放进输入框（自动放时不动用户的焦点）
+      const focusBox = async () => { if (byUser && valid()) await deps.waPage.focusCompose(wc); };
+      await focusBox();
       const initialError = stateError(await deps.waPage.composeState(wc, probe));
       if (initialError) return initialError;
       saved = await saveClipboard(deps.clipboard);
       await deps.clipboard.writeText(text);
       // Clipboard IPC can take time. Recheck target, contents and focus together afterwards.
+      await focusBox();
       const finalError = stateError(await deps.waPage.composeState(wc, probe));
       if (finalError) return finalError;
       wc.focus();

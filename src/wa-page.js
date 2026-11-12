@@ -28,8 +28,8 @@ const SELECTORS = {
   filterTab: '#side [role="tab"], #side [role="tablist"] button',
   // 悬浮翻译：当前打开的对话（右侧 #main）
   chatMain: '#main',
-  // 对话下方写消息的输入框。“放进输入框”只在焦点在这里时才粘贴
-  composeBox: ['#main footer [contenteditable="true"]'],
+  // 对话下方写消息的输入框。新版（2026-10 起）的输入框带 data-testid，以防哪天不在 footer 里
+  composeBox: ['#main footer [contenteditable="true"]', '#main [data-testid="conversation-compose-box-input"]'],
   // 顶栏的对话名字：名字那个 span 在前，下面一行（「在线」「正在输入…」「最后上线时间」「点击这里查看联系人信息」）在后。
   // 新版的名字 span 可能没有 title、下面那行却有，只找 span[title] 会读到下面那行，一会儿一变（shen 2026-11-02「一会会自动重新翻译一遍」），
   // 所以第一条按页面顺序取第一个带 title 或 dir="auto" 的 span（querySelector 一组选择器时按页面顺序返回）
@@ -906,19 +906,46 @@ async function readOwnNumber(wc) {
   }
 }
 
-// 页面里当前的焦点是不是聊天输入框。只读 document.activeElement，不移动焦点、不改页面。
-// 返回 'compose'（在输入框里）| 'other'（在搜索框等别处，或哪里都不在）| 'unknown'（页面在加载或读不到）
-const FOCUS_CODE = `(() => {
-  const el = document.activeElement;
-  if (!el || !el.isContentEditable) return 'other';
-  return ${JSON.stringify(SELECTORS.composeBox)}.some((s) => el.closest(s)) ? 'compose' : 'other';
+// 「放进输入框」前把光标放进对话下方的输入框（用户点过消息、在搜索框里时焦点不在那里）。
+// 光标已经在输入框里就不动（用户可能把光标放在了中间）；不在就 focus()，并把光标放到已有文字的最后。
+// 只移动焦点和光标，不打字、不按键、不改页面内容。调用前先 wc.focus()：页面没有焦点时 focus() 的焦点事件要等页面拿到焦点才发，
+// 弹窗把焦点拉回去这种情况就查不出来，所以先等页面真的有了焦点（最多约 300 毫秒）。
+// 返回 'compose'（光标在输入框里了）| 'none'（没有打开对话，或输入框看不见）| 'other'（放不进去，比如被弹窗挡住）| 'unknown'（页面在加载或读不到）
+const FOCUS_COMPOSE_CODE = `(async () => {
+  for (let i = 0; i < 20 && !document.hasFocus(); i += 1) await new Promise((r) => setTimeout(r, 15));
+  let box = null;
+  for (const s of ${JSON.stringify(SELECTORS.composeBox)}) {
+    for (const el of document.querySelectorAll(s)) {
+      const edit = el.isContentEditable ? el : el.querySelector('[contenteditable="true"]');
+      if (edit && edit.getClientRects().length) { box = edit; break; }
+    }
+    if (box) break;
+  }
+  if (!box) return 'none';
+  const inBox = () => { const a = document.activeElement; return !!a && (a === box || box.contains(a)); };
+  if (inBox()) return 'compose';
+  box.focus();
+  if (!inBox()) return 'other';
+  // 光标放到最后一段文字的末尾。没有文字时不动：空的输入框里 focus() 放的位置就对，自己放反而可能多出一个空行
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let last = null;
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.data) last = n;
+  const sel = document.getSelection();
+  if (last && sel) {
+    const r = document.createRange();
+    r.setStart(last, last.data.length);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  return 'compose';
 })()`;
 
-async function composeFocus(wc) {
+async function focusCompose(wc) {
   if (wc.isDestroyed() || wc.isLoading()) return 'unknown';
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: FOCUS_CODE }]);
-    return ['compose', 'other'].includes(r) ? r : 'unknown';
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: FOCUS_COMPOSE_CODE }]);
+    return ['compose', 'none', 'other'].includes(r) ? r : 'unknown';
   } catch {
     return 'unknown';
   }
@@ -1004,5 +1031,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, focusCompose, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 
