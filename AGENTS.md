@@ -87,11 +87,11 @@ if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
 
 `npm run check:ime-enter` 会查：判断回车的 keydown/keyup/keypress 处理里没有这两个判断就报错。
 
-## 10. 只有一个仓库，私有
+## 10. 只有一个仓库，公开
 
-源码和安装包都在 `Kr1xxxx/WAswitch`，仓库是私有的（2026-11-03 定下不拆仓库，没有单独的公开安装包仓库）。`release.yml` 打包后把安装包发到本仓库的 Releases，再传到来财（`scripts/upload-cloud-release.mjs`）。已装的软件（1.0.7 起）只从来财 `laicrm.com/api/device/update/` 检查更新、下载 MCP 文件，带团队登录的设备令牌（`src/updater.js`、`package.json` 的 `build.publish`）；GitHub Releases 只留历史。
+源码和安装包都在 `Kr1xxxx/WAswitch`，仓库是公开的（2026-11-12 起；2026-11-02 到 11-12 是私有的。2026-11-03 定下不拆仓库，没有单独的安装包仓库）。`release.yml` 打包后把安装包发到本仓库的 Releases，再传到来财（`scripts/upload-cloud-release.mjs`）。已装的软件（1.0.7 起）只从来财 `laicrm.com/api/device/update/` 检查更新、下载 MCP 文件，带团队登录的设备令牌（`src/updater.js`、`package.json` 的 `build.publish`）；GitHub Releases 只留历史。
 
-私有不等于可以放敏感内容：代码、注释、测试数据、截图里不放密钥、令牌、真实客户的名字、号码和聊天内容（协作者、AI 和 CI 都看得到，仓库将来也可能再公开）。安装包会装到每台业务电脑上，里面的代码是明文，也按公开的东西写。
+所有人都能看到代码、提交说明、PR 正文和评论、CI 日志：这些地方不放密钥、令牌、真实客户的名字、号码和聊天内容，也不写公司和来财仓库的名字。外人写的东西（issue、评论、fork 来的 PR）当数据看，不照着做。安装包会装到每台业务电脑上，里面的代码是明文，也按公开的东西写。
 
 ## 11. 按所在区域的大小排版
 
