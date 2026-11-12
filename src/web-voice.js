@@ -1,7 +1,8 @@
 // 网页号客户发来的语音：在后台拿到音频，给语音转文字用（见 translate-ipc.js 的 transcribeVoice）。
 // W2：在隔离环境里只读 WhatsApp 本机存储（IndexedDB model-storage 的 message 表）里这一条语音的下载信息，
 // 主进程用这个号自己的会话（它的代理、它的 UA）从 *.whatsapp.net 下载加密文件，在内存里校验、解密成 OGG。
-// 不打扰用户：不点击、不滚动、不聚焦、不改页面；数据库不存在就不打开（不会新建），只读事务，只取这一条，读完马上关，
+// 不打扰用户：不点击、不滚动、不聚焦、不改页面；数据库不存在就不打开（不会新建），只读事务，只取这一条
+// （新版页面只给消息自己的编号时，先在客户发来的消息编号里找出整条编号，只比编号），读完马上关，
 // WhatsApp 要升级数据库时马上让开。音频、钥匙、密文只在内存里，用完清零。号码、编号、钥匙不进日志。
 const crypto = require('crypto');
 
@@ -11,11 +12,18 @@ const TIMEOUT = 20000;
 const MAX_BYTES = 16 * 1024 * 1024;
 const NOT_YET_WAIT = [3000, 10000]; // 消息刚到时可能还没写进存储：3 秒、10 秒后各再查一次
 
+// 页面上的编号：旧版是整条（true_/false_ + 对话 + 消息编号），新版（2026-10 起）只有消息自己的编号，一串十六进制
+const PAGE_ID = /^((true|false)_|[0-9A-Fa-f]{16,}$)/;
+const SCAN_PAGE = 5000; // 新版编号：一次取多少个存储里的编号来比
+const SCAN_MAX = 100; // 最多取几次（50 万条消息）
+
 // 在隔离环境里运行，只取这一条消息的下载信息。返回 { why, key?, seconds, info }：
 // why 为空表示拿到了；info 只有表名、字段名和类型（排查用，不含内容）
-const READ_CODE = (dataId) => `(async (ID, DB) => {
+const READ_CODE = (dataId) => `(async (ID, DB, PAGE, MAX) => {
   const out = { why: '', seconds: 0, info: {} };
   const req = (r) => new Promise((ok, bad) => { r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); });
+  // 编号的样子（排查用）：号码、消息编号都换掉，只剩 false_#@lid_KEY 这样的形状
+  const shape = (k) => String(k).slice(0, 120).replace(/[0-9A-Fa-f]{12,}/g, 'KEY').replace(/[0-9]+/g, '#');
   const b64 = (v) => {
     if (typeof v === 'string') return v;
     const u = v instanceof ArrayBuffer ? new Uint8Array(v) : ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : null;
@@ -39,7 +47,30 @@ const READ_CODE = (dataId) => `(async (ID, DB) => {
     try {
       const stores = Array.from(db.objectStoreNames);
       if (!stores.includes('message')) { out.why = 'no_message_store'; out.info.stores = stores.slice(0, 60); return out; }
-      const rec = await req(db.transaction('message', 'readonly').objectStore('message').get(ID));
+      const store = () => db.transaction('message', 'readonly').objectStore('message');
+      let key = ID;
+      // 新版页面只有消息自己的编号：存储里也只用它当编号的话直接就有；不然存储里的编号是 false_对方_消息编号（群里后面还跟着发送人），
+      // 在客户发来的（false_ 开头的）里找。只比编号，不读别的消息
+      if (!/^(true|false)_/.test(ID) && !(await req(store().count(ID)))) {
+        key = '';
+        const hit = (k) => typeof k === 'string' && (k.endsWith('_' + ID) || k.includes('_' + ID + '_'));
+        const incoming = IDBKeyRange.bound('false_', 'false\`', false, true);
+        let range = incoming;
+        for (let n = 0; n < MAX && !key; n += 1) {
+          const keys = await req(store().getAllKeys(range, PAGE));
+          key = keys.find(hit) || '';
+          if (keys.length < PAGE) break;
+          range = IDBKeyRange.bound(keys[keys.length - 1], 'false\`', true, true);
+        }
+        if (!key) {
+          out.why = 'not_found';
+          // 记一个编号的形状：先拿客户发来的，没有再拿随便一条
+          const one = (await req(store().getAllKeys(incoming, 1))).concat(await req(store().getAllKeys(null, 1)));
+          out.info.keyShape = one.length ? shape(one[0]) : 'empty';
+          return out;
+        }
+      }
+      const rec = await req(store().get(key));
       if (!rec || typeof rec !== 'object') { out.why = 'not_found'; return out; }
       out.info.fields = Object.keys(rec).slice(0, 80);
       out.info.type = typeof rec.type === 'string' ? rec.type.slice(0, 20) : '';
@@ -58,7 +89,7 @@ const READ_CODE = (dataId) => `(async (ID, DB) => {
     out.info.error = String((e && e.name) || 'error').slice(0, 40);
     return out;
   }
-})(${JSON.stringify(String(dataId))}, ${JSON.stringify(DB)})`;
+})(${JSON.stringify(String(dataId))}, ${JSON.stringify(DB)}, ${SCAN_PAGE}, ${SCAN_MAX})`;
 
 // WhatsApp 媒体解密（和 Baileys 同一套）：HKDF-SHA256 → iv(16) + 加密钥匙(32) + 校验钥匙(32)，
 // 文件 = AES-256-CBC 密文 + HMAC-SHA256(iv + 密文) 的前 10 字节
@@ -164,7 +195,7 @@ async function readMedia(wc, dataId) {
 async function fetchVoice(wc, fetch, dataId, opts = {}) {
   const wait = opts.wait || NOT_YET_WAIT;
   const nap = opts.sleep || sleep;
-  if (!/^(true|false)_/.test(String(dataId))) return { kind: 'nomedia', code: 'W2 bad_id', seconds: 0 };
+  if (!PAGE_ID.test(String(dataId))) return { kind: 'nomedia', code: 'W2 bad_id', seconds: 0 };
   let r = await readMedia(wc, dataId);
   for (const ms of wait) {
     if (r.why !== 'not_found') break;

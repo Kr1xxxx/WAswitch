@@ -22,7 +22,7 @@ function portStatus(st) {
   if (st.usedBy.length) return ['used', usedText(st.usedBy), `「${st.usedBy.join('」「')}」已经在用这个端口，两个号会是同一个出口 IP。${st.open ? '' : '（端口现在也没开）'}`];
   if (!st.open) return ['off', '没开', '这个端口现在没开：Clash 没开，或者还没在 Clash 里开这个端口'];
   if (!st.socks) return ['bad', '不能用', '端口被别的程序占着，或者要密码，不能当 socks5 代理用'];
-  return ['ok', '能用', '端口开着，可以当代理用。点“测试”看出口 IP'];
+  return ['ok', '能用', '端口开着，可以当代理用。点「测试」看出口 IP'];
 }
 let liveColor = null; // 编辑页里点了色块、还没保存的颜色（窗口背景先跟着变）
 
@@ -54,6 +54,7 @@ const ICONS = {
   swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
   voice: '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
+  edit: '<path d="M5 19h3.6L18.8 8.8a2.3 2.3 0 0 0-3.6-3.6L5 15.4z"/><path d="M13.6 6.8l3.6 3.6"/>',
 };
 
 function icon(name, size = 16) {
@@ -170,7 +171,7 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
-// 报错的原话（英文错误码、服务商原话）收在“详细信息”里，平时不占地方，排查时点开看。
+// 报错的原话（英文错误码、对方的原话）收在“详细信息”里，平时不占地方，排查时点开看。
 // 界面经常整块重画，点开过的记下来，重画后还是开着
 const rawOpen = new Set();
 function rawDetail(text) {
@@ -224,8 +225,8 @@ async function runCheckNow() {
   checkRunning = true; render(true);
   try { checkResult = await window.wa.runCheck(); } finally { checkRunning = false; render(true); }
 }
-// 团队页：登记表单里填的内容（状态推送会重画页面，值存在这里不丢）
-const teamForm = { server: '', code: '', deviceName: '', picked: null, consent: false, busy: false, result: '', detail: '', showUpload: false };
+// 团队页：操作结果（状态推送会重画页面，值存在这里不丢）
+const teamForm = { result: '', detail: '', showUpload: false };
 // 缓存大小：进入“内存”设置时查一次（30 秒内不重复查）
 let cacheInfo = { mb: null, at: 0, busy: false, result: '' };
 let memClean = { busy: false, result: '' };
@@ -311,15 +312,14 @@ function accountRow(acc) {
   const on = acc.id === s.activeId && s.page === 'account';
   // 自己关了通知，或者所在分组整组关了，都显示成灰色
   const quiet = acc.muted || acc.groupMuted;
-  // 开了“同步到 CRM”的号：头像外圈蓝色、名字旁边 CRM 标记，侧栏收起时也看得到
-  const avatar = avatarOf(acc, acc.crm ? ' crm' : '');
+  const avatar = avatarOf(acc);
   // 从没登录过的号停在二维码页是正常的第一步：灰色“等待扫码”，不标红
   const waiting = acc.needsQr && !acc.everLoggedIn && !acc.problem;
   const lost = acc.needsQr && !waiting;
   if (acc.problem || lost) avatar.append(h('span', { class: 'dot bad' }, '!'));
   else if (s.collapsed && acc.unread) avatar.append(h('span', { class: `dot${quiet ? ' quiet' : ''}` }, acc.unread > 9 ? '9+' : acc.unread));
   const via = acc.mode === 'lite' ? `轻量模式，${acc.proxyLabel}` : acc.proxyLabel;
-  const tip = [acc.name, s.locked ? '' : acc.phone, via, acc.crm ? '这个号的单聊文字正在同步到公司 CRM' : '', acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
+  const tip = [acc.name, s.locked ? '' : acc.phone, via, acc.note, acc.unread ? `${acc.unread} 个未读对话` : '', acc.problem, waiting ? '等待扫码登录' : lost ? '需要扫码登录' : ''].filter(Boolean).join('\n');
   // 名字下面一行：有问题时写问题，平时写这个号登录的手机号（连接方式在悬停提示里）。锁着时不露手机号
   const sub = acc.problem ? acc.problemShort : waiting ? '等待扫码' : lost ? '需要扫码登录' : acc.primaryClash ? '和主号同一个 IP' : acc.exitChange ? '出口 IP 变了' : s.locked ? '' : acc.phone;
   const row = h('button', {
@@ -329,7 +329,7 @@ function accountRow(acc) {
   },
   avatar,
   h('span', { class: 'meta' },
-    h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name), acc.crm ? h('span', { class: 'crm-tag', title: '这个号的单聊文字正在同步到公司 CRM' }, 'CRM') : null),
+    h('span', { class: 'name' }, h('span', { class: 'name-text' }, acc.name)),
     sub ? h('span', { class: `sub${acc.problem || lost ? ' bad' : acc.primaryClash || acc.exitChange ? ' warn' : ''}` }, sub) : null),
   quiet ? h('span', { class: 'mute', title: acc.muted ? '不弹通知' : '所在分组整组不弹通知', style: { color: 'var(--slate-11)' } }, icon('mute', 13)) : null,
   acc.unread ? h('span', { class: `pill${quiet ? ' quiet' : ''}` }, acc.unread) : null);
@@ -412,6 +412,12 @@ function renderSide() {
   const mac = s.platform === 'darwin';
   $side.replaceChildren();
   $side.append(h('div', { class: 'win-drag' }));
+  // 锁成登录页：侧栏只留名字和软件更新（更新不看登录）
+  if (s.loginLocked) {
+    $side.append(...kids(h('div', { class: 'head' }, h('span', { class: 'brand' }, 'WAswitch')), h('div', { class: 'grow' }), updateCard()));
+    document.body.classList.toggle('mac', mac);
+    return;
+  }
   if (s.page === 'settings') {
     $side.append(
       h('button', { class: 'back', onclick: () => window.wa.showPage('account') }, icon('back', 14), '返回账号'),
@@ -473,8 +479,8 @@ function checkUpdateBtn() {
     checking: '正在检查更新…',
     downloading: `正在下载 ${u && u.version}`,
     downloaded: `新版本 ${u && u.version} 已就绪`,
-    none: '检查更新\n已是最新版本',
-    error: '检查更新\n上次没检查成功',
+    none: u && u.needLogin ? '检查更新\n登录团队后才能检查更新' : u && u.pending ? '检查更新\n新版本正在上传' : '检查更新\n已是最新版本',
+    error: '检查更新\n上次检查失败',
   }[st] || '检查更新';
   return h('button', { class: `icon-btn upd-check${busy ? ' busy' : ''}`, title, 'aria-label': '检查更新', disabled: st === 'dev' || st === 'off',
     onclick: () => { if (st === 'downloaded') { settingsTab = 'about'; window.wa.showPage('settings'); } else if (!busy) window.wa.updateCheckOnly(); } }, icon('sync', 16));
@@ -487,7 +493,7 @@ const updateReady = () => !!(s.update && s.update.status === 'downloaded');
 // 设置侧栏分组：最上面是快捷设置（不带分组标题），常用设置在前，诊断和其他在后。
 // 团队页只在登记过后台后常驻；没登记时从「关于 › 加入团队…」点进去才临时出现。
 function settingsGroups() {
-  const showTeam = (s.team && s.team.joined) || settingsTab === 'team';
+  const showTeam = (s.team && (s.team.joined || s.team.policy !== 'off')) || settingsTab === 'team';
   return [
     ['', [['quick', '快捷设置']]],
     ['分项设置', [['general', '通用'], ['translate', '翻译'], ['notify', '通知'], ['memory', '内存']]],
@@ -510,7 +516,7 @@ function updateCard() {
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
-  const ready = { line: u.manual ? '打开后把新的 WAswitch 拖进“应用程序”替换旧版。' : updateWaitLine(u) };
+  const ready = { line: u.manual ? '打开后把新的 WAswitch 拖进「应用程序」替换旧版。' : updateWaitLine(u) };
   return h('div', { class: 'updcard ready', role: 'status' },
     h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('b', { class: 'grow' }, `新版本 ${u.version} 已就绪`)),
     ready.line ? h('small', null, ready.line) : null,
@@ -524,7 +530,7 @@ function updateCard() {
 // 鼠标停在线路上：出口 IP 和上次测到的时间
 function exitTitle(acc) {
   if (acc.direct) return acc.mode === 'lite' ? '网络线路：直连（这台电脑的真实 IP）' : '网络线路：直连（跟随电脑的系统代理）';
-  if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点“测试”，或跑一次隔离自检';
+  if (!acc.exitIp) return '网络线路。还没测过出口 IP，可以在编辑里点「测试」，或跑一次隔离自检';
   const at = acc.exitAt ? `（上次测到：${new Date(acc.exitAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）` : '';
   const lat = acc.latency ? `\n最近一次检测用时 ${acc.latency.ms} ms（设置 › 连接记录 里有掉线和延迟记录）` : '';
   return `网络线路：出口 IP ${acc.exitIp}${at}${lat}`;
@@ -692,7 +698,7 @@ function renderAi() {
     return;
   }
   const what = r.kind === 'add'
-    ? (r.name ? `AI 想打开“添加账号”（预填「${r.name}」）` : 'AI 想打开“添加账号”')
+    ? (r.name ? `AI 想打开「添加账号」（预填「${r.name}」）` : 'AI 想打开「添加账号」')
     : `AI 想切到「${r.name}」`;
   $ai.replaceChildren(
     h('span', { class: 'grow' }, what),
@@ -771,7 +777,6 @@ window.addEventListener('resize', placeUndo);
 
 // ---------- 卡片里的页面 ----------
 
-const RELEASES = 'https://github.com/Kr1xxxx/WAswitch/releases';
 
 // 按出错的类型配按钮：重连没用的情况不给“重新连接”，直连号不提代理和 Clash
 function problemButtons(acc) {
@@ -782,7 +787,7 @@ function problemButtons(acc) {
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
-    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }), btn('去下载新版', () => window.wa.openLink(RELEASES), true)];
+    case 'outdated': return [btn('检查并更新', () => { settingsTab = 'about'; window.wa.showPage('settings'); window.wa.updateCheck(); }, true)];
     case 'loggedOut': case 'qrExpired': return [retry('重新扫码')];
     case 'teamProxy': return [btn('设置代理', () => window.wa.edit(acc.id), true)];
     case 'crashLoop': case 'crashed': return [btn('打开日志文件夹', () => window.wa.openLogs()), retry()];
@@ -893,7 +898,9 @@ async function panelInsert(text) {
   }
   const r = await window.wa.panelInsert(pn.accountId, text);
   if (r === 'ok') panelSay('已贴进聊天框（剪贴板也换成了这段），检查后自己按发送');
-  else if (r === 'focus') panelSay('光标不在聊天输入框里，没有贴。先点一下对话下方写消息的地方，再点“放进输入框”', true);
+  else if (r === 'no_chat') panelSay('先在左边打开一个对话', true);
+  else if (r === 'focus') panelSay('没能把光标放进聊天输入框，没有贴', true);
+  else if (r === 'clip') panelSay('没贴上，请再点一次', true);
   else panelSay(r === 'changed' ? '当前账号变了、已锁定或页面没打开，没有贴' : '没有贴进去', true);
 }
 const fmtDue = (t) => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -983,95 +990,37 @@ async function trLoad() {
 }
 const modesFor = (dir) => tr.modes.filter((m) => m.direction === dir || m.direction === 'both');
 // ---------- 设置 › 翻译 ----------
-let trEdit = null; // 正在编辑的服务商 { id?, preset, name, baseUrl, model, key }
+// 翻译只走来财（#209）：这页只放翻译习惯（译文位置、行业词汇、自动翻译、角色设定、模式）
 let trModeEdit = null;
 let trSay = '';
-let trTestRes = {};
-let trTestRaw = {}; // 测试失败时服务商的原话
-let trNetDraft = null; // 选了“指定代理”但代理地址还没存好：{ url }
-let trNetSay = ''; // “翻译的网络”这一行的提示：已保存 / 出错原因
-let trNetErr = false;
-let trNetTimer = 0;
-let trNetBusy = false; // 正在存：重画时旧输入框的失焦不再存一次
-let trNetLastUrl = ''; // 上次存好的代理地址：切到直连再切回来时帮你填上
-let trFocusKey = false; // 从“去填密钥”打开的表单：光标直接放进密钥框
-// 翻译页默认是简单版：只填密钥。点“详细设置”才显示服务商、网络、纠错、模式这些（记在本机）
+// 翻译页默认是简单版。点“详细设置”才显示自动翻译、每天上限、角色设定、翻译模式（记在本机）
 let trAdvanced = LS('trAdvanced') === '1';
-let trKeyFocus = ''; // 简单版里“去填密钥”：光标放进这个服务商的密钥框
-const ZHIPU_KEYS = 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys'; // 智谱开放平台的 API 密钥页
-// 翻译报“还没填密钥 / 密钥不对”时的“去填密钥”：打开 设置 › 翻译 里这个服务商的表单
-// preset：列表里还没有这个服务商时（翻译页右上角点「未启用」的混元等），直接给它开一个填密钥的地方
-async function trOpenKey(pid, preset) {
-  if (!tr.cfg) { try { const r = await window.wa.trConfig(); tr.cfg = r.config; tr.modes = r.modes; } catch {} }
-  const p = tr.cfg && tr.cfg.providers.find((x) => x.id === pid);
-  const add = !p && TR_KEY_PRESETS.includes(preset) ? preset : '';
-  if (trAdvanced) { trEdit = p ? { ...p } : add ? { preset: add } : trEdit; trFocusKey = !!(p || add); } else trKeyFocus = p ? p.id : add ? `new:${add}` : '';
-  trSay = '';
-  settingsTab = 'translate';
-  window.wa.showPage('settings');
-  if (s.page === 'settings') render(true);
-}
-function trProviderForm() {
-  const e = trEdit;
-  const presets = tr.cfg.presets;
-  const preset = h('select', { 'aria-label': '服务商' }, presets.map((p) => h('option', { value: p.id }, p.name)));
-  preset.value = e.preset || 'zhipu';
-  const name = h('input', { value: e.name || '', maxlength: '40', placeholder: '显示名称（可不填）' });
-  const base = h('input', { value: e.baseUrl || '', placeholder: 'https://…/v1' });
-  const modelIn = h('input', { value: e.model || '', placeholder: '模型名，例如 gpt-4o-mini' });
-  // 有固定模型列表的服务商（腾讯混元、智谱）只能下拉选，不能手填
-  const modelSel = h('select', { 'aria-label': '模型' });
-  const listFor = (id) => (presets.find((x) => x.id === id) || {}).models || null;
-  const model = { get value() { return listFor(preset.value) ? modelSel.value : modelIn.value; } };
-  const modelBox = h('span', { style: { display: 'contents' } });
-  const showModel = (want) => {
-    const list = listFor(preset.value);
-    if (list) {
-      modelSel.replaceChildren(...list.map((m) => h('option', { value: m }, m)));
-      modelSel.value = list.includes(want) ? want : list[0];
-      modelBox.replaceChildren(modelSel);
-    } else { modelIn.value = want || ''; modelBox.replaceChildren(modelIn); }
-  };
-  const key = h('input', { type: 'password', value: '', autocomplete: 'off', placeholder: e.hasKey ? `已保存 ••${e.keyTail}` : 'API 密钥' });
-  preset.addEventListener('change', () => {
-    const p = presets.find((x) => x.id === preset.value);
-    if (p && p.id !== 'custom') { base.value = p.baseUrl; showModel(p.model || ''); } else showModel(modelIn.value);
+// 来财那边翻译开通了没有（tr:cloud-status）：st = { ready, overBudget } 或 { error, kind }；null = 还没问过
+const trCloud = { st: null, at: 0, login: '', busy: false };
+const TR_CLOUD_TTL = 60 * 1000;
+// 进 设置 › 翻译 或快捷设置时问一次；团队登录状态变了、过了一分钟再问。没登录团队就不问了
+function trCloudLoad() {
+  const login = (s.team && s.team.login) || 'none';
+  if (trCloud.busy || (login === trCloud.login && trCloud.st && Date.now() - trCloud.at < TR_CLOUD_TTL)) return;
+  trCloud.login = login;
+  trCloud.at = Date.now();
+  if (login !== 'ok') { trCloud.st = { error: '先登录团队才能翻译', kind: 'auth' }; return; }
+  trCloud.busy = true;
+  window.wa.trCloudStatus().then((r) => r, () => null).then((r) => {
+    trCloud.busy = false;
+    trCloud.st = r && typeof r === 'object' ? r : { error: '连不上来财', kind: 'network' };
+    trCloud.at = Date.now();
+    if (s.page === 'settings' && (settingsTab === 'translate' || settingsTab === 'quick')) render(true);
   });
-  if (!e.id && !e.baseUrl) { const p = presets.find((x) => x.id === preset.value); base.value = p.baseUrl; showModel(p.model); } else showModel(e.model || '');
-  // 状态推送会重画设置页：填到一半的内容先记在 trEdit 里（密钥除外，密钥不留在界面状态里）
-  // 深度思考：默认 = 不传参数。智谱、OpenRouter 新加的默认禁用
-  const think = h('select', { 'aria-label': '深度思考' }, [['', '默认'], ['disabled', '禁用思考'], ['enabled', '启用思考']].map(([v, l]) => h('option', { value: v }, l)));
-  const thinkDefault = (id) => (id === 'zhipu' || id === 'openrouter' ? 'disabled' : '');
-  think.value = typeof e.thinking === 'string' ? e.thinking : thinkDefault(preset.value);
-  preset.addEventListener('change', () => { think.value = thinkDefault(preset.value); });
-  const keep = () => Object.assign(e, { preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, thinking: think.value });
-  for (const el of [preset, name, base, modelIn, modelSel, think]) { el.addEventListener('input', keep); el.addEventListener('change', keep); }
-  for (const el of [name, base, key]) el.style.width = '260px';
-  // 设置页可能连着重画几次：等画到页面上的那一次再把光标放进去
-  if (trFocusKey) requestAnimationFrame(() => { if (!trFocusKey || !key.isConnected) return; trFocusKey = false; key.scrollIntoView({ block: 'center' }); key.focus(); });
-  const isMt = /^hy-mt/i.test(model.value);
-  // DeepL 是机器翻译：没有地址、模型、深度思考可选；各类型的说明也不一样，换类型时重画表单
-  const deepl = preset.value === 'deepl';
-  preset.addEventListener('change', () => render(true));
-  const capIn = deepl ? trCapInput(tr.cfg) : null;
-  return h('div', { class: 'box tr-form' },
-    h('b', null, e.id ? '修改服务商' : '添加服务商'),
-    setRow('类型', deepl ? 'DeepL 不按模式改语气，也不会纠错。' : '', preset),
-    setRow('名称', '', name),
-    deepl ? null : setRow('接口地址', preset.value === 'hunyuan' ? '腾讯混元海外账号填 https://tokenhub-intl.tencentcloudmaas.com/v1。' : '', base),
-    deepl ? null : setRow('模型', listFor(preset.value) ? '' : 'OpenRouter 的模型名去它网站上复制，例如 deepseek/deepseek-chat。', modelBox),
-    setRow('API 密钥', preset.value === 'hunyuan' ? '填腾讯云 TokenHub 的密钥。' : '', key,
-      preset.value === 'zhipu' ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null),
-    deepl ? null : setRow('深度思考', isMt ? '混元翻译模型用不上这项。' : '', think),
-    deepl ? setRow('每月上限', '', h('label', { class: 'tr-cap' }, capIn, '字符')) : null,
-    h('div', { class: 'hstack', style: { paddingTop: '12px' } },
-      h('button', { class: 'btn primary', onclick: async () => {
-        const r = await window.wa.trProviderSave({ id: e.id, preset: preset.value, name: name.value, baseUrl: base.value, model: model.value, key: key.value, thinking: think.value, ...(capIn ? { monthCap: Number(capIn.value) } : {}) });
-        tr.cfg = r.config; tr.modes = r.modes;
-        if (r.error) { trSay = r.error; } else { trSay = '已保存'; trEdit = null; }
-        render(true);
-      } }, '保存'),
-      h('button', { class: 'btn', onclick: () => { trEdit = null; render(true); } }, '取消')));
+}
+// 设置 › 翻译 顶上的黄条：没登录团队、没开通、额度用完才有；能用时什么都不显示
+function trCloudWarn() {
+  const st = trCloud.st;
+  if (!st) return '';
+  if (st.error) return st.kind === 'auth' ? st.error : '';
+  if (!st.ready) return '翻译还没开通，请找管理员';
+  if (st.overBudget) return '本月翻译额度用完了，请找管理员';
+  return '';
 }
 function trModeForm() {
   const m = trModeEdit;
@@ -1121,193 +1070,37 @@ function trWigBox(c, apply) {
   const terms = (list) => h('span', { class: 'desc' }, (list || []).flatMap((t, i) => [i ? '　' : '', h('span', { style: { whiteSpace: 'nowrap' } }, `${t.zh} = ${t.en}`)]));
   const row = (title, on, list, set) => setRow(title, '',
     sw(on, title, async (v) => { const r = await set(v); if (!r.error) trSay = v ? `${title}已打开` : `${title}已关闭`; apply(r); }), terms(list));
-  // 最后一行不画底线（和 API 密钥框一样），提示句直接跟在下面
+  // 最后一行不画底线
   const last = row('睫毛词汇', c.lashTerms !== false, c.lashList, (v) => window.wa.trLash(v));
   last.style.borderBottom = 'none';
   return h('div', { class: 'box' },
     row('假发词汇', c.wigTerms !== false, c.wigList, (v) => window.wa.trWig(v)),
-    last,
-    h('span', { class: 'hint' }, '角色设定里写过的词以你写的为准。DeepL 不用词表。'));
-}
-// 简单版：每个服务商一行，只填密钥。保存时其他设置照原样带回去
-// 简单设置里总有这三个服务商的密钥框（翻译页右上角也是这三个）。列表里没有的（0.5.4 起新装的没有混元，或被删了）先占个位，填了密钥才真的加上
-// trKeyMorph：占位行保存后变成真的服务商（新 id），按钮还用原来的 key，「保存中 / 已保存 / 未通过」才接得上
-const trKeyMorph = {};
-const TR_KEY_PRESETS = ['zhipu', 'hunyuan', 'deepl'];
-const TR_KEY_NAMES = { zhipu: '智谱', hunyuan: '腾讯混元', deepl: 'DeepL' };
-const TR_KEY_MODELS = { zhipu: 'glm-4-flash', hunyuan: 'hy-mt2-plus', deepl: '' };
-function trKeyRows(c) {
-  const order = (p) => (p.id === c.primaryId ? 0 : p.id === c.fallbackId ? 1 : p.id === c.fixId ? 2 : 3);
-  const rows = [...c.providers].sort((a, b) => order(a) - order(b)).map((p) => ({ ...p, rowId: p.id }));
-  const presets = c.presets || [];
-  for (const id of TR_KEY_PRESETS) {
-    if (c.providers.some((p) => p.preset === id)) continue;
-    const pr = presets.find((x) => x.id === id) || {};
-    rows.push({ id: '', rowId: `new:${id}`, preset: id, name: pr.name || TR_KEY_NAMES[id], baseUrl: pr.baseUrl || '', model: id === 'deepl' ? '' : pr.model || TR_KEY_MODELS[id], hasKey: false, keyTail: '' });
-  }
-  return rows;
-}
-function trKeysBox(c, apply) {
-  const tag = (t) => h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, t);
-  return h('div', { class: 'box tr-keys' }, trKeyRows(c).map((p) => {
-    const key = h('input', { type: 'password', value: '', autocomplete: 'off', 'aria-label': `${p.name} 的 API 密钥`,
-      placeholder: p.hasKey ? `已保存 ••${p.keyTail}` : '粘贴 API 密钥' });
-    const save = async () => {
-      if (!key.value.trim()) { trSay = `先把「${p.name}」的密钥粘贴进来`; render(true); return null; }
-      // 占位的行：不带 id，保存时新加这个服务商（不改默认、备用、纠错）
-      const r = await window.wa.trProviderSave({ ...(p.id ? { id: p.id } : {}), preset: p.preset, name: p.name, baseUrl: p.baseUrl, model: p.model, key: key.value, ...(p.thinking !== undefined ? { thinking: p.thinking } : {}) });
-      if (r.error) { apply(r); return { ok: false }; }
-      const pid = p.id || r.id;
-      if (!p.id) trKeyMorph[pid] = p.rowId;
-      trSay = ''; trTestRes[pid] = ''; trTestRaw[pid] = '';
-      apply(r);
-      // 保存后自动测一次（每行只留「保存」一个按钮）；没通过的原因写在服务商下面
-      let t;
-      try { t = await window.wa.trTest(pid); } catch { t = { ok: false, error: '测试失败' }; }
-      if (!t.ok) { trTestRes[pid] = t.error || '测试没通过'; trTestRaw[pid] = t.detail || ''; render(true); }
-      return { ok: !!t.ok };
-    };
-    const saveBtn = morphBtn(`trKeySave:${trKeyMorph[p.id] || p.rowId}`, { idle: '保存', busy: '保存中', ok: '已保存', err: '未通过' }, save, { class: 'btn primary sm' });
-    key.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.isComposing && ev.keyCode !== 229) saveBtn.click(); });
-    if (trKeyFocus === p.rowId) requestAnimationFrame(() => { if (trKeyFocus !== p.rowId || !key.isConnected) return; trKeyFocus = ''; key.scrollIntoView({ block: 'center' }); key.focus(); });
-    const link = p.preset === 'zhipu' && !p.hasKey ? h('a', { href: '#', class: 'tr-keylink', onclick: (ev) => { ev.preventDefault(); window.wa.openLink(ZHIPU_KEYS); } }, '没有密钥？去智谱开放平台申请（glm-4-flash 免费）') : null;
-    const roles = p.id ? [p.id === c.primaryId ? tag('默认') : null, p.id === c.fallbackId ? tag('备用') : null, p.id === c.fixId ? tag('纠错') : null] : [];
-    const cap = p.preset === 'deepl' ? trCapBox(c, apply) : null;
-    return h('div', { class: 'tr-krow' },
-      h('div', { class: 'meta' },
-        h('span', { class: 'title' }, h('b', null, p.name), ...roles),
-        h('span', { class: 'desc' }, p.preset === 'deepl' ? '机器翻译' : p.model),
-        trTestRes[p.id] ? h('span', { class: 'desc' }, trTestRes[p.id]) : null,
-        link),
-      h('span', { class: 'hstack', style: { gap: '6px' } }, key, saveBtn),
-      cap);
-  }));
-}
-// DeepL 每月字符上限（整个软件一个，默认 10 万）：改完离开输入框或按回车就保存
-function trCapInput(c) {
-  return h('input', { type: 'number', class: 'tr-cap-in', min: '1000', step: '1000', value: String(c.deeplCap || 100000), 'aria-label': 'DeepL 每月字符上限' });
-}
-function trCapBox(c, apply) {
-  const box = trCapInput(c);
-  box.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.isComposing && ev.keyCode !== 229) box.blur(); });
-  box.addEventListener('change', async () => {
-    const r = await window.wa.trDeeplCap(Number(box.value));
-    trSay = r.error || 'DeepL 每月上限已保存';
-    apply(r);
-  });
-  return h('label', { class: 'tr-cap' }, '每月上限', box, '字符');
-}
-// 不会纠错的服务商：DeepL 和混元翻译模型（hy-mt）只会重翻一遍
-const trNoFix = (p) => p.preset === 'deepl' || /^hy-mt/i.test(p.model || '');
-// 服务商「测试」：结果在按钮上显示，没通过的原因写在服务商下面
-function trTestBtn(p, attrs) {
-  return morphBtn(`trTest:${p.id}`, { idle: '测试', busy: '测试中', ok: '通过', err: '未通过' }, async () => {
-    if (trTestRes[p.id]) { trTestRes[p.id] = ''; trTestRaw[p.id] = ''; render(true); }
-    const r = await window.wa.trTest(p.id);
-    if (!r.ok) { trTestRes[p.id] = r.error; trTestRaw[p.id] = r.detail || ''; }
-    render(true);
-    return { ok: !!r.ok };
-  }, attrs);
+    last);
 }
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
+  trCloudLoad();
   const c = tr.cfg;
   const apply = (r) => { tr.cfg = r.config; tr.modes = r.modes; if (r.error) trSay = r.error; render(true); };
-  const fb = h('select', { 'aria-label': '备用服务商', onchange: async (e) => apply(await window.wa.trRoles(c.primaryId, e.target.value)) },
-    h('option', { value: '' }, '不用备用'), c.providers.filter((p) => p.id !== c.primaryId).map((p) => h('option', { value: p.id }, p.name)));
-  fb.value = c.fallbackId || '';
-  const hasZhipu = c.providers.some((p) => p.preset === 'zhipu' && p.model === 'glm-4-flash');
-  const fixSel = h('select', { 'aria-label': '纠错服务商', onchange: async (e) => {
-    if (e.target.value === '+zhipu') { const r = await window.wa.trFixZhipu(); if (!r.error) trSay = '已添加智谱 glm-4-flash 并设为纠错，在上面“服务商”里点“修改”填密钥。'; apply(r); return; }
-    apply(await window.wa.trRoles(c.primaryId, c.fallbackId, e.target.value));
-  } },
-    h('option', { value: '' }, '用默认的'), c.providers.filter((p) => !trNoFix(p) || p.id === c.fixId).map((p) => h('option', { value: p.id }, p.model ? `${p.name}（${p.model}）` : p.name)),
-    hasZhipu ? null : h('option', { value: '+zhipu' }, '+ 添加智谱（glm-4-flash）'));
-  fixSel.value = c.fixId || '';
-  const fixP = c.providers.find((p) => p.id === c.fixId);
-  // 翻译的网络：改了就保存（选项一改就存，代理地址点别处或按回车存），不用再点“应用”
-  if (c.network.mode === 'proxy' && c.network.proxyUrl) trNetLastUrl = c.network.proxyUrl;
-  const netSay = h('span', { id: 'tr-net-say', class: 'hint', role: 'status', style: { color: trNetErr ? 'var(--danger)' : '' } }, trNetSay);
-  const saveNet = async (mode, url) => {
-    trNetBusy = true;
-    let r;
-    try { r = await window.wa.trNetwork(mode, url); } finally { trNetBusy = false; }
-    clearTimeout(trNetTimer);
-    if (r.error) { trNetSay = r.error; trNetErr = true; trNetDraft = mode === 'proxy' ? { url } : null; }
-    else {
-      trNetSay = '已保存'; trNetErr = false; trNetDraft = null;
-      // 两秒后把“已保存”收掉：只改这一行的文字，不重画整页（别把正在别处打字的光标弄丢）
-      trNetTimer = setTimeout(() => { if (trNetSay === '已保存') { trNetSay = ''; const el = document.getElementById('tr-net-say'); if (el) el.textContent = ''; } }, 2000);
-    }
-    tr.cfg = r.config; tr.modes = r.modes; render(true);
-  };
-  const netMode = trNetDraft ? 'proxy' : c.network.mode;
-  const netUrl = trNetDraft ? trNetDraft.url : (c.network.proxyUrl || '');
-  const netSel = h('select', { 'aria-label': '翻译走的网络', onchange: (e) => {
-    const v = e.target.value;
-    if (v !== 'proxy') { saveNet(v, ''); return; }
-    // 选了“指定代理”：框里已经有地址就直接存，没有就等填好
-    const url = (trNetDraft && trNetDraft.url) || trNetLastUrl;
-    if (url.trim()) { saveNet('proxy', url); return; }
-    trNetDraft = { url: '' }; trNetSay = ''; trNetErr = false; render(true);
-    const el = document.getElementById('tr-net-url'); if (el) el.focus();
-  } }, [['system', '跟随系统代理'], ['direct', '直连'], ['proxy', '指定代理']].map(([v, l]) => h('option', { value: v }, l)));
-  netSel.value = netMode;
-  const proxyIn = h('input', { id: 'tr-net-url', 'aria-label': '翻译代理地址', value: netUrl, placeholder: 'http://127.0.0.1:7890', style: { width: '200px', flex: 'none' },
-    oninput: (e) => { if (trNetDraft) trNetDraft.url = e.target.value; },
-    onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) e.target.blur(); },
-    onblur: (e) => {
-      if (trNetBusy || !e.target.isConnected) return;
-      const url = e.target.value;
-      if (c.network.mode === 'proxy' && !trNetDraft && url.trim() === (c.network.proxyUrl || '')) return; // 没改
-      if (!url.trim()) { trNetDraft = { url: '' }; trNetSay = '填好代理地址才会保存'; trNetErr = false; const el = document.getElementById('tr-net-say'); if (el) el.textContent = trNetSay; return; }
-      saveNet('proxy', url);
-    } });
   const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
     trAdvanced = !trAdvanced; LS('trAdvanced', trAdvanced ? '1' : '0'); trSay = '';
-    if (!trAdvanced) { trEdit = null; trModeEdit = null; }
+    if (!trAdvanced) trModeEdit = null;
     render(true);
   } }, trAdvanced ? '回到简单设置' : '详细设置');
+  const warn = trCloudWarn();
   const head = [
     h('div', { class: 'tr-head' }, h('h1', null, '翻译'), toggle),
+    warn ? h('div', { class: 'tr-warn', role: 'status' }, warn) : null,
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
-    !c.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
   ];
   if (!trAdvanced) {
     page.append(...kids(...head,
       trPlaceRow(c, apply),
-      h('h2', { class: 'ov-h2' }, 'API 密钥'),
-      trKeysBox(c, apply),
       h('h2', { class: 'ov-h2' }, '行业词汇'),
       trWigBox(c, apply)));
     return;
   }
   page.append(...kids(...head,
-    h('h2', { class: 'ov-h2' }, '服务商'),
-    h('div', { class: 'box' }, c.providers.length ? c.providers.map((p) => h('div', { class: 'tr-prow' },
-      h('span', null, h('b', null, p.name), p.id === c.primaryId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '默认') : p.id === c.fallbackId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '备用') : null,
-        p.id === c.fixId ? h('span', { class: 'pn-tag', style: { marginLeft: '6px' } }, '纠错') : null),
-      h('span', { class: 'hint' }, ...segs(p.preset === 'deepl' ? '机器翻译' : p.model, p.hasKey ? `密钥尾号 ${p.keyTail}` : '没有密钥')),
-      // 没有测试结果时不占地方，模型和密钥尾号少被截断
-      h('span', { class: 'hint', style: trTestRes[p.id] ? null : { flex: 'none' } }, trTestRes[p.id] || '', rawDetail(trTestRaw[p.id])),
-      h('span', { class: 'hstack', style: { gap: '4px' } },
-        trTestBtn(p, { class: 'pn-btn' }),
-        // 每行按钮一样多，上下对齐：已经是默认 / 纠错的，或不会纠错的（DeepL、混元翻译模型），按钮还在，只是点不了
-        h('button', { class: 'pn-btn', disabled: p.id === c.primaryId, onclick: async () => apply(await window.wa.trRoles(p.id, c.fallbackId === p.id ? '' : c.fallbackId)) }, '设为默认'),
-        h('button', { class: 'pn-btn', disabled: p.id === c.fixId || trNoFix(p), title: trNoFix(p) ? '不会纠错' : null, onclick: async () => apply(await window.wa.trRoles(undefined, undefined, p.id)) }, '设为纠错'),
-        h('button', { class: 'pn-btn', onclick: () => { trEdit = { ...p }; render(true); } }, '修改'),
-        h('button', { class: 'pn-btn', onclick: async () => apply(await window.wa.trProviderDelete(p.id)) }, '删除'))))
-      : h('span', { class: 'hint' }, '还没有。')),
-    trEdit ? trProviderForm() : h('div', null, h('button', { class: 'btn', onclick: () => { trEdit = { preset: 'zhipu' }; trSay = ''; render(true); } }, '+ 添加服务商')),
-    c.providers.length > 1 ? setRow('备用服务商', '', fb) : null,
-    c.providers.length ? setRow('纠错服务商', '',
-      h('span', { class: 'col', style: { gap: '4px' } }, fixSel,
-        fixP && trNoFix(fixP) ? h('span', { class: 'hint' }, '这个服务商不会纠错，只会重翻一遍。') : null)) : null,
-    setRow('翻译的网络', '',
-      // “已保存”跟在后面；出错的话比较长，放到下面一行
-      h('span', { class: 'col', style: { flex: '0 1 auto', gap: '4px', maxWidth: '420px' } },
-        h('span', { class: 'hstack', style: { gap: '6px' } }, netSel, netMode === 'proxy' ? proxyIn : null, trNetErr ? null : netSay),
-        trNetErr ? netSay : null)),
     trPlaceRow(c, apply),
     s.accounts.length ? setRow('自动翻译收到的消息', '',
       h('span', { class: 'col tr-auto' }, s.accounts.map((a) => h('span', { class: 'hstack tr-auto-row' },
@@ -1316,12 +1109,10 @@ function translatePage(page) {
     setRow('每个号每天最多自动翻译', '',
       (() => { const sel = h('select', { 'aria-label': '每天上限', onchange: async (e) => apply(await window.wa.trDailyCap(Number(e.target.value))) }, (c.dailyCaps || [500]).map((n) => h('option', { value: String(n) }, `${n} 条`))); sel.value = String(c.dailyCap || 500); return sel; })()),
     h('h2', { class: 'ov-h2' }, '角色设定'),
-    h('div', { class: 'box tr-form' },
-      trRoleBox(c, apply),
-      h('span', { class: 'hint' }, '混元翻译模型只认“中文 = 外语”这样的固定译法。')),
+    h('div', { class: 'box tr-form' }, trRoleBox(c, apply)),
     trWigBox(c, apply),
     h('h2', { class: 'ov-h2' }, '翻译模式'),
-    h('p', { class: 'hint' }, '工作台的回复用排第一个的“发出”模式。'),
+    h('p', { class: 'hint' }, '工作台的回复用排第一个的「发出」模式。'),
     trModeEdit ? trModeForm() : null,
     h('div', { class: 'box' }, tr.modes.map((m) => h('div', { class: 'tr-prow' },
       h('b', { title: m.name }, m.name), h('span', { class: 'hint' }, { out: '发出', in: '收到', both: '都可以' }[m.direction]),
@@ -1356,7 +1147,7 @@ function renderPanel(force = false) {
     const host = h('div', { class: 'dk-host' });
     $panel.replaceChildren(panelHead(), host);
     dockRender(true);
-    // 从设置页回来（可能刚填了密钥、换了默认服务商）：主进程那时不推状态，这里重新拿一次
+    // 从设置页回来（可能刚改了翻译设置）：主进程那时不推状态，这里重新拿一次
     if (dk.st) dockFetch();
     if (tabChanged) fxPlay(host, 'fx-fade');
     return;
@@ -1393,6 +1184,126 @@ function renderPanel(force = false) {
   if (tabChanged || editChanged) [...$panel.children].slice(1).forEach((el) => fxPlay(el, 'fx-fade'));
 }
 
+// ---------- 登录页 ----------
+// 后台要求必须登录时整个软件只有这一页；“提示登录”时多一个“稍后”。
+// 用来财的公司邮箱收验证码登录：邮箱 + 「获取验证码」，下面验证码 + 登录。
+// 来财不说这个邮箱是不是成员（发码一律成功），所以发完只提醒看看邮箱填对没有
+const loginForm = { busy: false, sending: false, error: '', offline: false, retry: '', sentTo: '', until: 0 };
+let loginEl = null;
+let loginTick = null;
+function loginPage() {
+  if (!loginEl) {
+    const email = h('input', { type: 'email', autocomplete: 'email', spellcheck: 'false', maxlength: '254', 'aria-label': '公司邮箱' });
+    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', 'aria-label': '验证码' });
+    const err = h('div', { class: 'note bad login-err', role: 'alert', hidden: true });
+    const sent = h('span', { class: 'hint login-sent', hidden: true });
+    const getCode = h('button', { type: 'button', class: 'btn login-code' });
+    const go = h('button', { type: 'button', class: 'btn primary' }, '登录');
+    const later = h('button', { type: 'button', class: 'btn', onclick: () => window.wa.teamLater() }, '稍后');
+    const fail = (r, again) => {
+      loginForm.error = (r && r.error) || '连不上团队后台';
+      loginForm.offline = !r || !!r.offline; // 主进程那边出错（r 为空）也当连不上，给「重试」
+      loginForm.retry = loginForm.offline ? again : '';
+    };
+    const requestCode = async () => {
+      if (loginForm.sending || loginForm.busy || Date.now() < loginForm.until) return;
+      if (!email.value.trim()) { email.focus(); return; }
+      loginForm.sending = true; loginForm.error = ''; paint();
+      let r;
+      try { r = await window.wa.teamCode({ email: email.value }); } catch { r = null; }
+      loginForm.sending = false;
+      if (r && r.ok) {
+        loginForm.sentTo = email.value.trim();
+        loginForm.until = Date.now() + r.resendAfterS * 1000;
+        code.value = '';
+        code.focus();
+      } else {
+        fail(r, 'code');
+        if (r && r.retryAfterS) loginForm.until = Date.now() + r.retryAfterS * 1000;
+      }
+      paint();
+    };
+    const submit = async () => {
+      if (loginForm.busy) return;
+      if (!email.value.trim()) { email.focus(); return; }
+      if (!/^\d{6}$/.test(code.value)) { code.focus(); return; }
+      loginForm.busy = true; loginForm.error = ''; paint();
+      let r;
+      try { r = await window.wa.teamLogin({ email: email.value, code: code.value }); } catch { r = null; }
+      loginForm.busy = false;
+      if (r && r.ok) { code.value = ''; loginForm.error = ''; loginForm.sentTo = ''; loginForm.until = 0; } else {
+        fail(r, 'login');
+        // 码不对：清空，焦点留在验证码框
+        if (r && r.badCode) { code.value = ''; code.focus(); }
+      }
+      paint();
+    };
+    // 只收数字；填满 6 位自动登录
+    code.addEventListener('input', () => {
+      const digits = code.value.replace(/\D/g, '').slice(0, 6);
+      if (digits !== code.value) code.value = digits;
+      if (digits.length === 6) submit();
+    });
+    email.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      requestCode();
+    });
+    code.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      submit();
+    });
+    getCode.addEventListener('click', requestCode);
+    go.addEventListener('click', submit);
+    // 「重试」：7 天连不上而锁住的先同步一次（令牌还有效就直接解锁）；其它就是把刚才没成功的那一步再做一次
+    const retry = h('button', { type: 'button', class: 'link-btn', onclick: async () => {
+      if (!loginForm.error && (s.team || {}).login === 'ok') {
+        loginForm.busy = true; paint();
+        try { await window.wa.teamRetry(); } finally { loginForm.busy = false; paint(); }
+      } else if (loginForm.retry === 'code') requestCode();
+      else submit();
+    } }, '重试');
+    loginEl = h('div', { class: 'center login-page' }, h('div', { class: 'login-card' },
+      h('h1', null, '邮箱登录'),
+      h('label', { class: 'field' }, '公司邮箱', h('div', { class: 'login-row' }, email, getCode)),
+      sent,
+      h('label', { class: 'field' }, '验证码', code),
+      err,
+      h('div', { class: 'btns' }, go, later)));
+    const paint = () => {
+      const st = s.team || {};
+      if (!email.value && st.email && document.activeElement !== email) email.value = st.email;
+      // 不是自己点出的错：被停用、7 天连不上，进来就说明为什么
+      const why = loginForm.error || (st.login === 'disabled' ? '这台电脑已被管理员停用' : st.locked && st.login === 'ok' ? '连不上团队后台' : '');
+      const offline = loginForm.error ? loginForm.offline : !!why && st.login === 'ok';
+      err.hidden = !why;
+      err.replaceChildren(h('span', null, why), offline ? retry : '');
+      const left = Math.ceil((loginForm.until - Date.now()) / 1000);
+      getCode.textContent = loginForm.sending ? '发送中' : left > 0 ? `${left} 秒后重新获取` : '获取验证码';
+      getCode.disabled = loginForm.sending || loginForm.busy || left > 0;
+      sent.hidden = !loginForm.sentTo;
+      sent.textContent = loginForm.sentTo ? '验证码已发到这个邮箱。没收到的话，看看邮箱有没有填对。' : '';
+      go.disabled = loginForm.busy;
+      go.textContent = loginForm.busy ? '登录中' : '登录';
+      retry.disabled = loginForm.busy || loginForm.sending;
+      later.hidden = !!s.loginLocked || st.policy !== 'optional';
+      // 倒计时：每秒刷新按钮，到时停下
+      if (left > 0 && !loginTick) loginTick = setInterval(paint, 1000);
+      if (left <= 0 && loginTick) { clearInterval(loginTick); loginTick = null; }
+    };
+    loginEl.paint = paint;
+    loginEl.focusFirst = () => requestAnimationFrame(() => {
+      if (loginEl.contains(document.activeElement)) return;
+      // 邮箱已经填好：焦点放到「获取验证码」，按空格或回车就能要码
+      if (email.value && !getCode.disabled) getCode.focus(); else if (email.value) code.focus(); else email.focus();
+    });
+  }
+  loginEl.paint();
+  if (shown !== 'login') loginEl.focusFirst();
+  return loginEl;
+}
+
 function welcomePage() {
   const step = (n, title, text) => h('li', null, h('span', { class: 'n' }, n), h('span', { class: 'meta' }, h('b', null, title), text ? h('small', null, text) : null));
   return h('div', { class: 'center', style: { background: 'var(--white)' } }, h('div', { class: 'col', style: { maxWidth: '640px', gap: '26px' } },
@@ -1401,7 +1312,7 @@ function welcomePage() {
     h('h1', null, '一个窗口，同时登录多个 WhatsApp'),
     h('ol', { class: 'steps' },
       step(1, '起个名字，选个颜色'),
-      step(2, '选网络线路', ['可以直连（几个号都直连也行，只是出口 IP 相同）；想分开 IP，就在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点“测试”。详见', clashLink(), '。']),
+      step(2, '选网络线路', ['可以直连（几个号都直连也行，只是出口 IP 相同）；想分开 IP，就在 Clash 里给每个号开一个本地端口（填 socks5://127.0.0.1:端口），点「测试」。详见', clashLink(), '。']),
       step(3, '手机扫码登录', 'WhatsApp › 设置 › 已关联的设备 › 关联新设备。')),
     h('div', null, h('button', { class: 'btn primary', style: { height: '46px', padding: '0 26px' }, onclick: () => window.wa.add() }, '添加第一个账号'))));
 }
@@ -1442,8 +1353,8 @@ function editorPage(id) {
         !d.liteAvailable ? h('span', { class: 'hint' }, '这台电脑不支持加密保存，不能使用轻量模式。') : null)
       : h('div', { class: 'field' }, '账号类型', h('div', { class: 'tags' }, h('span', { class: 'tag' }, mode === 'lite' ? '轻量模式（添加后不能改）' : '网页版（添加后不能改）')));
     const name = h('input', { type: 'text', value: d.name, 'aria-label': '名称', maxlength: '40' });
-    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '可不填，例如：德国客户，小王负责' });
-    const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24', placeholder: '登录后自动填写，也可以自己填' });
+    const note = h('input', { type: 'text', value: d.note || '', 'aria-label': '备注', maxlength: '200', placeholder: '例如：德国客户' });
+    const phone = h('input', { type: 'text', class: 'mono', value: d.phone || '', 'aria-label': '手机号', maxlength: '24' });
     const proxyInput = h('input', { type: 'text', class: 'mono', value: d.proxy, placeholder: '留空表示直连，例如 socks5://127.0.0.1:7891', 'aria-label': '代理地址' });
     const password = h('input', { type: 'password', autocomplete: 'off', 'aria-label': '代理密码', placeholder: d.hasPassword ? '已保存，留空表示不修改' : '' });
     const passwordRow = h('label', { class: 'field' }, '代理密码', password);
@@ -1451,7 +1362,7 @@ function editorPage(id) {
     const allowCalls = h('input', { type: 'checkbox', checked: d.allowCalls });
     const callsRow = h('div', { class: 'field' }, '通话',
       h('label', { class: 'check-row' }, allowCalls, h('span', null, '允许通话（直连号）')),
-      h('span', { class: 'hint' }, '通话走这台电脑的真实 IP。Clash 开着“系统代理”时别打开，或者把 Clash 改成 TUN 模式。'));
+      h('span', { class: 'hint' }, '通话走这台电脑的真实 IP。Clash 开着「系统代理」时别打开，或者把 Clash 改成 TUN 模式。'));
     const result = h('div', { role: 'status' });
     const region = h('select', { 'aria-label': '地区' }, d.regions.map((r) => h('option', { value: r.key }, r.label)));
     // 预设里没有的出口时区（tz:...）：加一个选项放在最前面
@@ -1532,7 +1443,7 @@ function editorPage(id) {
       const st = cur && portState ? portState[cur.port] : null;
       const lines = [];
       if (st && !st.open) {
-        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点“重新检测”或“测试”。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
+        lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口现在没开：要么 Clash 没开，要么还没在 Clash 里开这个端口。按 `, clashLink(), ` 加上这个端口，重新加载配置后点「重新检测」或「测试」。这样保存也可以，端口开好之前这个号会暂停联网，不会改用直连。`));
       } else if (st && cur.socks && !st.socks) {
         lines.push(h('div', { class: 'note bad' }, `${cur.port} 端口被别的程序占着，或者要密码，不能当 socks5 代理用。请换一个端口，详见 `, clashLink(), '。'));
       }
@@ -1551,7 +1462,7 @@ function editorPage(id) {
       const direct = mode !== 'lite' && !proxyInput.value.trim();
       region.hidden = direct;
       tags.replaceChildren(
-        h('span', { class: 'tag' }, direct ? '时区：跟随系统代理出口' : auto ? '时区：还没识别，点“测试”自动选好' : `时区：${opt ? opt.label : ''}`),
+        h('span', { class: 'tag' }, direct ? '时区：跟随系统代理出口' : auto ? '时区：还没识别，点「测试」自动选好' : `时区：${opt ? opt.label : ''}`),
         h('span', { class: 'tag' }, `界面语言：${d.uiLanguage || '中文'}`),
         h('span', { class: 'tag' }, '浏览器：Chrome，操作系统跟随本机'),
         h('span', { class: 'tag' }, proxyInput.value.trim() ? 'WebRTC 只走代理' : '直连：跟随系统代理'));
@@ -1607,7 +1518,7 @@ function editorPage(id) {
         b.title = b.dataset.mode === 'lite' && primary.checked ? '主号只能用网页版' : '';
       }
       liteReason.textContent = !d.liteAvailable || !primary.checked ? ''
-        : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的“这是主号”后可以选轻量模式。';
+        : !d.primaryName ? '第一个号必须是网页版主号，之后添加的号才能选轻量模式。' : '主号只能用网页版；取消勾选下面的「这是主号」后可以选轻量模式。';
       proxyInput.placeholder = '留空表示直连，例如 socks5://127.0.0.1:7891';
       primaryRow.hidden = lite;
       regionRow.hidden = lite;
@@ -1615,7 +1526,7 @@ function editorPage(id) {
       callsRow.hidden = lite || !!proxyInput.value.trim();
       liteBox.hidden = !lite;
       proxyHint.replaceChildren(...(lite
-        ? ['填了代理要先“测试”通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
+        ? ['填了代理要先「测试」通过，出口 IP 不能和主号相同。带密码的代理请用 http://。']
         : ['代理连不上时这个号会暂停联网，不会改用直连。带密码的代理请用 http://。']));
       drawLiteDirect();
       sidePanel.replaceChildren(...sideText());
@@ -1623,7 +1534,7 @@ function editorPage(id) {
     primary.addEventListener('change', () => { if (primary.checked && mode === 'lite') mode = 'web'; onModeChange(); });
     const sideText = () => (d.isNew
       ? [h('ol', null, h('li', null, '手机打开 WhatsApp'), h('li', null, '设置 › 已关联的设备'), h('li', null, '关联新设备，扫码'))]
-      : [h('span', null, mode === 'lite' ? '修改代理后会重新连接，不需要重新扫码。' : '修改代理或时区后，这个账号的页面会重新加载，不需要重新扫码。')]);
+      : [h('span', null, mode === 'lite' ? '改了代理会重新连接，不用重新扫码。' : '改了代理或时区会重新加载，不用重新扫码。')]);
     const sidePanel = h('div', { class: 'side-panel' });
     proxyInput.addEventListener('input', onProxyChange);
     password.addEventListener('input', invalidateTest);
@@ -1661,7 +1572,7 @@ function editorPage(id) {
       saveBtn.disabled = true;
       if (mode === 'lite' && d.isNew && !liteConfirm.checked) { error.textContent = '请先勾选风险确认'; saveBtn.disabled = false; return; }
       // 直连不用测试；填了代理的轻量号仍要先测试通过
-      if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点“测试”，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
+      if (mode === 'lite' && proxyInput.value.trim() && !tested && (d.isNew || proxyInput.value.trim() !== d.proxy || password.value)) { error.textContent = '请先点「测试」，代理测试通过后才能保存'; saveBtn.disabled = false; return; }
       const res = await window.wa.editorSave({ id: d.id, name: name.value.trim(), note: note.value, phone: phone.value, color, emoji, proxy: proxyInput.value, password: password.value, region: region.value, mode, primary: mode === 'web' && primary.checked, liteConfirm: liteConfirm.checked, allowCalls: allowCalls.checked, groupId: groupRow ? groupSel.value : undefined });
       saveBtn.disabled = false;
       if (res && res.error) error.textContent = res.error;
@@ -1799,15 +1710,16 @@ function quickTiles() {
   const memTile = qkTile('内存', mb(s.totalMB || 0), autoOn && st.capMB > 0 && (s.totalMB || 0) > st.capMB ? 'bad' : '',
     autoOn && st.capMB > 0 ? `上限 ${mb(st.capMB)}` : '不设上限',
     memCleanBtn('link-btn qk-act'));
-  // 翻译：默认服务商有没有填密钥
+  // 翻译：来财那边能不能用（见 trCloudLoad）
   let trTile;
-  if (!tr.cfg) trTile = qkTile('翻译', '读取中…', '', '', null);
-  else {
-    const p = tr.cfg.providers.find((x) => x.id === tr.cfg.primaryId);
-    if (!p) trTile = qkTile('翻译', '没设服务商', 'bad', '', { label: '去设置', on: () => goTab('translate') });
-    else if (!p.hasKey) trTile = qkTile('翻译', '还没填密钥', 'bad', p.name, { label: '在下面填', on: () => { const el = document.querySelector('.qk-keys input'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); } } });
-    else trTile = qkTile('翻译', '可以用', 'ok', p.preset === 'deepl' ? p.name : `${p.name} ${p.model}`, { label: '查看', on: () => goTab('translate') });
-  }
+  const cw = trCloud.st;
+  const trMore = { label: '查看', on: () => goTab('translate') };
+  if (!cw) trTile = qkTile('翻译', '读取中…', '', '', null);
+  else if (cw.error && cw.kind === 'auth') trTile = qkTile('翻译', trCloud.login === 'ok' ? '要重新登录' : '没登录团队', 'bad', '', { label: '登录', on: () => window.wa.showLogin() });
+  else if (cw.error) trTile = qkTile('翻译', '连不上来财', 'warn', '', trMore);
+  else if (!cw.ready) trTile = qkTile('翻译', '还没开通', 'bad', '请找管理员', trMore);
+  else if (cw.overBudget) trTile = qkTile('翻译', '额度用完了', 'bad', '请找管理员', trMore);
+  else trTile = qkTile('翻译', '可以用', 'ok', '来财 DeepSeek', trMore);
   // 隔离自检：显示这次打开软件后最近一次的结果（和自检页同一份）
   let ckTile;
   if (checkRunning) ckTile = qkTile('隔离自检', '检查中…', '', '', null);
@@ -1824,7 +1736,7 @@ function quickTiles() {
   const ust = u ? u.status : 'dev';
   const usub = {
     dev: '开发版不检查更新', off: '这种安装方式不能自动更新', checking: '正在检查…',
-    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: '已是最新', error: '上次没检查成功', idle: '每小时自动检查',
+    downloading: `正在下载 ${u && u.version}`, downloaded: `${u && u.version} 已就绪`, none: u && u.needLogin ? '还没登录团队' : u && u.pending ? '新版本正在上传' : '已是最新', error: '上次检查失败', idle: '每小时自动检查',
   }[ust] || '';
   const upTile = qkTile('版本', (s.about && s.about.version) || '', ust === 'downloaded' ? 'ok' : '', usub,
     ust === 'downloaded' ? { label: '去更新', on: () => goTab('about') }
@@ -1833,8 +1745,7 @@ function quickTiles() {
 }
 function quickPage(page) {
   const st = s.settings;
-  if (!tr.cfg) trLoad();
-  const apply = (r) => { tr.cfg = r.config; tr.modes = r.modes; if (r.error) trSay = r.error; render(true); };
+  trCloudLoad();
   page.append(...kids(
     h('h1', null, '快捷设置'),
     quickTiles(),
@@ -1855,11 +1766,6 @@ function quickPage(page) {
           h('button', { class: 'btn', disabled: !s.accounts.length, title: s.accounts.length ? '' : '还没有账号', onclick: () => window.wa.lock(true) }, '立即锁定'))),
       s.canLoginItem ? setRow('开机自动启动', '',
         sw(st.openAtLogin, '开机自动启动', (v) => window.wa.setSetting('openAtLogin', v))) : null),
-    h('div', { class: 'qk-keys' },
-      qkHead('翻译密钥', 'translate'),
-      trSay ? h('div', { class: 'hint', role: 'status', style: { marginBottom: '8px' } }, trSay) : null,
-      tr.cfg && !tr.cfg.canEncrypt ? h('div', { class: 'tr-warn' }, '这台电脑不支持加密保存，暂时不能保存密钥。') : null,
-      tr.cfg ? trKeysBox(tr.cfg, apply) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '加载中…'))),
     h('div', null,
       qkHead('内存', 'memory'),
       setRow('自动回收后台账号', '不退出登录，不漏消息。',
@@ -1932,6 +1838,8 @@ function settingsPage() {
             (s.popupChoices || [4, 6, 10, 0]).map((n) => h('option', { value: String(n), selected: st.popupSeconds === n }, n ? `${n} 秒` : '不自动消失')))),
         setRow('提示音', '',
           sw(st.popupSound !== false, '弹窗提示音', (v) => window.wa.setSetting('popupSound', v))),
+        setRow('稍后提醒', '',
+          sw(st.popupLater !== false, '稍后提醒', (v) => window.wa.setSetting('popupLater', v))),
         setRow('勿扰', '掉线、退出登录、有新版本照样提醒，不响。',
           sw(!!st.popupDnd, '勿扰', (v) => window.wa.setSetting('popupDnd', v))),
         setRow('测试通知', '',
@@ -1992,7 +1900,7 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
-        ...(s.team && !s.team.joined ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => { settingsTab = 'team'; render(true); } }, '加入团队…'))] : [])),
+        ...(s.team && s.team.login === 'none' ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => window.wa.showLogin() }, '登录…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' },
         h('button', { class: 'btn', onclick: () => window.wa.openLogs() }, '打开日志文件夹'),
@@ -2054,13 +1962,13 @@ function crmBox(accounts, upload) {
     ? `上次上传：${new Date(upload.at).toLocaleString('zh-CN', { hour12: false })}${upload.error ? `（${upload.error}）` : '（成功）'}`
     : '还没有上传过';
   return h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '同步到 CRM'),
-    h('p', { class: 'hint', style: { margin: '0' } }, '这些号的单聊文字消息每 10 分钟同步到公司 CRM。群聊不同步；网页版的号只同步你打开过的对话。'),
+    h('p', { class: 'hint', style: { margin: '0' } }, '所有客户的聊天会 AI 分析并上传至 CRM'),
     h('p', { class: 'hint', style: { margin: '0', fontSize: 'var(--fs-s)' } }, last),
     list.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '6px 0' } },
-      avatarOf(a, a.crm ? ' crm' : ''),
+      avatarOf(a),
       h('span', { class: 'meta crm-name', title: a.name }, a.name),
-      h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crm
-        ? `本机排队 ${a.crm.queued} 条${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
+      h('span', { class: 'hint crm-note', style: { fontSize: 'var(--fs-s)' } }, a.crmWaitPhone ? '等读到本号的号码' : a.crm
+        ? `本机排队 ${a.crm.queued} 条${a.crm.held ? `，${a.crm.held} 条等客户在来财建档后再传` : ''}${a.crm.skipped ? `，${a.crm.skipped} 条认不出对方号码（没有同步）` : ''}${a.crm.notime ? `，${a.crm.notime} 条打开对话前就有、读不出时间（没有同步）` : ''}`
         : '这台电脑不能加密保存，没有采集'))));
 }
 
@@ -2070,73 +1978,40 @@ function teamPage(t, accounts = []) {
   const when = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '还没有');
   const fieldList = (title, items) => h('div', { class: 'col', style: { gap: '4px' } }, h('b', null, title), h('ul', { style: { margin: '0', paddingLeft: '20px' } }, items.map((x) => h('li', { class: 'hint', style: { fontSize: 'var(--fs-s)' } }, x))));
   const result = teamForm.result ? h('div', { class: `note ${teamForm.result.startsWith('✓') ? 'ok' : 'bad'}`, role: 'status' }, teamForm.result, teamForm.result.startsWith('✓') ? null : rawDetail(teamForm.detail)) : null;
-  wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('h1', null, '团队'),
-    h('p', { class: 'lead' }, '登记后，管理员可以给你分配账号、查看每个号的状态。')));
+  wrap.append(h('h1', null, '团队'));
+  // 退出登录能撤回（再登录一次就回来），直接退，不弹确认
+  const logout = h('button', { class: 'btn', onclick: async () => { teamForm.result = ''; await window.wa.teamLogout(); render(true); } }, '退出登录');
 
-  if (t.joined && !t.revoked) {
-    const ok = !t.offline && !t.lastError;
+  if (t.login !== 'ok') {
     wrap.append(...kids(
-      h('div', { class: 'kv' },
-        h('span', null, '后台地址'), h('span', { class: 'mono', style: { fontSize: 'var(--fs-s)', wordBreak: 'break-all' } }, t.server),
-        h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
-        h('span', null, '上次同步'), h('span', null, when(t.lastOkAt)),
-        h('span', null, '私人号'), h('span', null, t.allowPrivate ? '允许保留' : '管理员不允许，私人号已暂停并隐藏（数据没删）')),
-      ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
-      t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
-      h('div', { class: 'btns' },
-        morphBtn('teamSync', { idle: '立即同步', busy: '同步中', ok: '已同步', err: '失败' }, async () => {
-          teamForm.result = ''; render(true);
-          const r = await window.wa.teamSync();
-          teamForm.result = r && r.ok ? '' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
-          render(true);
-          return { ok: !!(r && r.ok) };
-        }),
-        h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容')),
-      result,
-      teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
-    if (t.privateAccounts.length && t.allowPrivate) {
-      wrap.append(h('div', { class: 'col', style: { gap: '6px' } }, h('b', null, '没加入团队的号'),
-        t.privateAccounts.map((a) => h('div', { class: 'setrow', style: { alignItems: 'center', padding: '8px 0' } },
-          avatarOf(a),
-          h('span', { class: 'meta' }, a.name),
-          h('button', { class: 'btn', onclick: async () => {
-            const r = await window.wa.teamJoin([a.id]);
-            teamForm.result = r && r.ok ? `✓ 「${a.name}」已加入团队` : (r && r.error) || '加入没成功'; teamForm.detail = (r && r.detail) || '';
-            render(true);
-          } }, '加入团队')))));
-    }
-    wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
+      t.login === 'disabled' ? h('div', { class: 'note bad' }, '这台电脑已被管理员停用，团队号已暂停并隐藏（数据还在）。') : null,
+      !t.canEncrypt ? h('div', { class: 'note bad' }, '这台电脑不能加密保存登录信息，没法登录。') : null,
+      t.canEncrypt ? h('div', { class: 'btns' }, h('button', { class: 'btn primary', onclick: () => window.wa.showLogin() }, '登录'), t.login === 'disabled' ? logout : null) : null));
     return wrap;
   }
 
-  if (t.revoked) wrap.append(h('div', { class: 'note bad' }, '这台电脑已被管理员停用，团队号已暂停并隐藏（数据还在）。私人号不受影响。要恢复请找管理员。'));
-  if (!t.canEncrypt) {
-    wrap.append(h('div', { class: 'note bad' }, '这台电脑不支持加密保存，不能登记到团队。'));
-    return wrap;
-  }
-  if (teamForm.picked === null) teamForm.picked = new Set(t.privateAccounts.map((a) => a.id));
-  const input = (key, attrs) => h('input', { type: 'text', value: teamForm[key], oninput: (e) => { teamForm[key] = e.target.value; }, ...attrs });
-  const consent = h('input', { type: 'checkbox', checked: teamForm.consent, onchange: (e) => { teamForm.consent = e.target.checked; render(true); } });
+  const ok = !t.offline && !t.lastError;
   wrap.append(...kids(
-    h('label', { class: 'field' }, '后台地址', input('server', { class: 'mono', placeholder: 'https://team.example.com', 'aria-label': '后台地址' })),
-    h('label', { class: 'field' }, '登记码', input('code', { class: 'mono', placeholder: 'XXXXX-XXXXX', 'aria-label': '登记码', maxlength: '11' })),
-    h('label', { class: 'field' }, '电脑名字', input('deviceName', { placeholder: '例如：前台 1 号机', maxlength: '40', 'aria-label': '电脑名字' })),
-    t.privateAccounts.length ? h('div', { class: 'field' }, '加入团队的账号',
-      t.privateAccounts.map((a) => h('label', { class: 'check-row' },
-        h('input', { type: 'checkbox', checked: teamForm.picked.has(a.id), onchange: (e) => { if (e.target.checked) teamForm.picked.add(a.id); else teamForm.picked.delete(a.id); } }),
-        a.name))) : null,
-    h('div', { class: 'box' }, fieldList('登记后会上传', t.uploadFields), fieldList('不会上传', t.neverUpload),
-      h('label', { class: 'check-row' }, consent, '我看过上面的清单，同意上传这些内容')),
-    h('div', { class: 'btns' }, morphBtn('teamEnroll', { idle: '登记', busy: '登记中', err: '失败' }, async () => {
-      teamForm.busy = true; teamForm.result = ''; render(true);
-      const r = await window.wa.teamEnroll({ server: teamForm.server, code: teamForm.code, deviceName: teamForm.deviceName, localIds: [...teamForm.picked], consent: teamForm.consent });
-      teamForm.busy = false;
-      teamForm.result = r && r.ok ? '✓ 已登记到团队' : (r && r.error) || '登记没成功'; teamForm.detail = (r && r.detail) || '';
-      if (r && r.ok) { teamForm.code = ''; teamForm.picked = null; }
-      render(true);
-      return { ok: !!(r && r.ok) };
-    }, { class: 'btn primary', disabled: !teamForm.consent })),
-    result));
+    h('div', { class: 'kv' },
+      h('span', null, '登录'), h('span', null, t.userName || '已登录'),
+      ...(t.email ? [h('span', null, '邮箱'), h('span', null, t.email)] : []),
+      h('span', null, '团队账号'), h('span', null, `${t.teamCount} 个`),
+      h('span', null, '上次同步'), h('span', null, when(t.lastOkAt))),
+    ok ? null : h('div', { class: 'note warn' }, `${t.lastError || '后台暂时连不上'}。账号照常收发，连上后自动补上。`, rawDetail(t.lastErrorDetail)),
+    t.held ? h('div', { class: 'note warn' }, `后台要一次收回 ${t.held} 个号，数量太多，先暂停，等管理员确认。`) : null,
+    h('div', { class: 'btns' },
+      morphBtn('teamSync', { idle: '立即同步', busy: '同步中', ok: '已同步', err: '失败' }, async () => {
+        teamForm.result = ''; render(true);
+        const r = await window.wa.teamSync();
+        teamForm.result = r && r.ok ? '' : (r && r.error) || '同步没成功'; teamForm.detail = (r && r.detail) || '';
+        render(true);
+        return { ok: !!(r && r.ok) };
+      }),
+      h('button', { class: 'btn', onclick: () => { teamForm.showUpload = !teamForm.showUpload; render(true); } }, teamForm.showUpload ? '收起上传内容' : '查看上传内容'),
+      logout),
+    result,
+    teamForm.showUpload ? h('pre', { class: 'mono note plain', style: { whiteSpace: 'pre-wrap', fontSize: 'var(--fs-s)', maxHeight: '320px', overflow: 'auto' } }, t.lastUpload || '还没有上传过。') : null));
+  wrap.append(...[crmBox(accounts, t.crmUpload)].filter(Boolean), fieldList('会上传的内容', t.uploadFields), fieldList('不会上传的内容', t.neverUpload));
   return wrap;
 }
 
@@ -2146,15 +2021,19 @@ function updateBox(u) {
   const when = u.lastCheckAt ? new Date(u.lastCheckAt).toLocaleString('zh-CN', { hour12: false }) : '还没检查过';
   const [title, line, tone] = {
     dev: ['开发版不检查更新', '', 'idle'],
-    off: ['不支持自动更新', '请到下载页下载新版。', 'idle'],
+    off: ['不支持自动更新', '请手动安装新版。', 'idle'],
     idle: ['自动更新已开启', '', 'idle'],
     checking: ['正在检查更新…', '', 'busy'],
-    none: ['已是最新版本', '', 'ok'],
+    // 没登录团队时不检查（更新从来财下，要设备令牌）
+    none: u.needLogin ? ['还没登录团队', '', 'idle']
+      : u.pending ? [`新版本${u.version ? ` ${u.version} ` : ''}正在上传`, '稍后自动再查', 'idle']
+      : ['已是最新版本', u.current ? `当前版本 ${u.current}` : '', 'ok'],
     downloading: [`正在下载 ${u.version}`, u.userAsked ? (u.manual ? '下载完会自动打开安装包。' : '下载完自动更新') : '', 'busy'],
     downloaded: u.manual
-      ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进“应用程序”替换旧版。`, 'new']
+      ? [`新版本 ${u.version} 已就绪`, `已下载并校验通过。${u.mac ? 'WAswitch 不在「应用程序」里或没有写入权限，没法自动替换：' : ''}打开安装包，把新的 WAswitch 拖进「应用程序」替换旧版。`, 'new']
       : [`新版本 ${u.version} 已就绪`, updateWaitLine(u), 'new'],
-    error: ['这次检查没成功', '最多 1 小时后自动再试。', 'idle'],
+    // 失败不等于没有新版本：标题直说失败，下面写原因
+    error: ['检查更新失败', u.errorText || '', 'idle'],
   }[u.status] || ['软件更新', '', 'idle'];
   const t = u.warn ? 'warn' : tone;
   const busy = ['checking', 'downloading'].includes(u.status);
@@ -2172,8 +2051,8 @@ function updateBox(u) {
     u.status === 'downloading' ? h('div', { class: 'upd-progress' },
       h('div', { class: 'progress' }, h('span', { style: { width: `${u.percent}%` } })),
       h('span', { class: 'pct' }, `${u.percent}%`)) : null,
-    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次没检查成功，可能是网络问题。可以去下载页手动下载。`) : null,
-    u.status === 'dev' ? null : h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult ? `，${u.lastResult}` : ''}`),
+    u.warn ? h('div', { class: 'note warn' }, `连续 ${u.failures} 次检查失败，可能是网络问题。`) : null,
+    u.status === 'dev' ? null : h('span', { class: 'hint upd-foot' }, `上次检查：${when}${u.lastResult && !line && u.status !== 'error' ? `，${u.lastResult}` : ''}`),
     u.status === 'error' ? rawDetail(u.lastDetail) : null);
 }
 
@@ -2233,8 +2112,9 @@ function renderLock() {
 }
 
 function render(forceContent = false) {
-  document.body.style.setProperty('--side', s.collapsed && s.page !== 'settings' ? '64px' : '200px');
-  document.body.classList.toggle('collapsed', s.collapsed && s.page !== 'settings');
+  const narrowSide = s.collapsed && s.page !== 'settings' && !s.loginLocked;
+  document.body.style.setProperty('--side', narrowSide ? '64px' : '200px');
+  document.body.classList.toggle('collapsed', narrowSide);
   const acc = active();
   if (s.page !== 'editor') liveColor = null;
   document.body.style.background = s.page === 'account' && acc ? tint(acc.color) : s.page === 'editor' ? tint(liveColor || s.editorColor) : 'var(--slate-3)';
@@ -2270,6 +2150,10 @@ function render(forceContent = false) {
     if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (s.page === 'welcome') {
     if (key !== shown) $content.replaceChildren(welcomePage());
+  } else if (s.page === 'login') {
+    // 同一个元素原地更新：重画时填了一半的账号密码不丢
+    const el = loginPage();
+    if ($content.firstChild !== el || $content.childNodes.length !== 1) $content.replaceChildren(el);
   } else if (acc && !acc.problem && acc.mode === 'lite') {
     // 轻量模式聊天页：同一个元素反复更新，不重建
     const el = litePage(acc, s.lite);

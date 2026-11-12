@@ -14,7 +14,7 @@ const decodePart = (s) => JSON.parse(new TextDecoder().decode(b64urlDecode(s)));
 
 async function loadKeys(domain, fetchImpl, force = false) {
   if (!force && certCache.domain === domain && Date.now() - certCache.at < CERT_TTL_MS) return certCache.keys;
-  const res = await fetchImpl(`https://${domain}/cdn-cgi/access/certs`, { redirect: 'error' });
+  const res = await fetchImpl(`https://${domain}/cdn-cgi/access/certs`, { redirect: 'manual' } /* Workers 不支持 'error'；3xx 在下面按失败处理 */);
   if (!res.ok) throw new Error(`certs ${res.status}`);
   const body = await res.json();
   const keys = new Map();

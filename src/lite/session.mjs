@@ -14,7 +14,7 @@ import { makeTransport, makeDirectTransport } from './transport.mjs';
 import { makeAuthState } from './vault.mjs';
 import { ChatStore, phoneOf } from './store.mjs';
 import { waVersion, resetVersionCache } from './version.mjs';
-import { crmItem } from './crm.mjs';
+import { crmItem, backfillItems } from './crm.mjs';
 
 export const SEND_LIMIT = 10;
 export const VOICE_MAX_BYTES = 16 * 1024 * 1024; // 一条语音最多下载这么多（5 分钟的语音一般不到 1 MB）
@@ -101,11 +101,23 @@ export class Session {
       try {
         const r = await crmItem(m, since, pnForLid);
         if (!r) continue;
-        if (r.skip) skipped += 1; else items.push(r.item);
+        if (r.skip) { skipped += 1; continue; }
+        // 对方的 WhatsApp 名字：通讯录名字、对方自己设的名字（store 在 addMessage 时已经记下 pushName）
+        const jid = String(m.key.remoteJid || '');
+        const name = this.store ? this.store.nameOf(jid) || this.store.nameOf(`${r.item.peer}@s.whatsapp.net`) : '';
+        items.push(name ? { ...r.item, name } : r.item);
       } catch { /* 这一条取不出来就跳过 */ }
     }
     if (sock !== this.sock || this.crmSince !== since || (!items.length && !skipped)) return;
     this.post({ type: 'crm', id: this.id, items, skipped });
+  }
+
+  // 补传本机缓存里 since 之后的单聊（主进程在这个号第一次开始采集时调用一次）
+  async crmBackfill(since) {
+    if (!this.store || this.status !== 'open' || !this.sock) return null; // 没连上：主进程下一轮再试，不算补过
+    const sock = this.sock;
+    const pnForLid = (lid) => sock?.signalRepository?.lidMapping?.getPNForLID?.(lid);
+    return backfillItems(this.store, Number(since) || 0, pnForLid);
   }
 
   log(msg) { this.post({ type: 'log', id: this.id, msg: scrub(msg) }); }
@@ -209,13 +221,15 @@ export class Session {
       this.changed();
     });
     // 在线时的对话变化：unreadCount 正数是 Baileys 这一批新增的条数，新消息的未读由下面 messages.upsert 一条条加（见 store.liveChat）
-    ev.on('chats.upsert', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
-    ev.on('chats.update', (list) => { for (const c of list) this.store.liveChat(c); this.changed(); });
-    ev.on('chats.delete', (ids) => { for (const id of ids) this.store.remove(id); this.changed(); });
-    const names = (list) => { for (const c of list) this.store.setName(c.id, c.name || c.notify || c.verifiedName); this.changed(); };
+    // 都只认当前连接：退出登录后 store 是 null，旧连接晚到的事件不能让后台进程抛错重启
+    const live = (fn) => (arg) => { if (sock === this.sock && this.store) fn(arg); };
+    ev.on('chats.upsert', live((list) => { for (const c of list) this.store.liveChat(c); this.changed(); }));
+    ev.on('chats.update', live((list) => { for (const c of list) this.store.liveChat(c); this.changed(); }));
+    ev.on('chats.delete', live((ids) => { for (const id of ids) this.store.remove(id); this.changed(); }));
+    const names = live((list) => { for (const c of list) this.store.setName(c.id, c.name || c.notify || c.verifiedName); this.changed(); });
     ev.on('contacts.upsert', names);
     ev.on('contacts.update', names);
-    ev.on('groups.update', (list) => { for (const g of list) if (g.subject) this.store.updateChat({ id: g.id, subject: g.subject }); this.changed(); });
+    ev.on('groups.update', live((list) => { for (const g of list) if (g.subject) this.store.updateChat({ id: g.id, subject: g.subject }); this.changed(); }));
     ev.on('messages.upsert', ({ messages, type }) => {
       if (sock !== this.sock) return;
       for (const m of messages) {
@@ -248,6 +262,7 @@ export class Session {
       this.changed();
       // 群名称
       sock.groupFetchAllParticipating().then((groups) => {
+        if (sock !== this.sock || !this.store) return;
         for (const g of Object.values(groups || {})) this.store.updateChat({ id: g.id, subject: g.subject });
         this.changed();
       }, () => {});

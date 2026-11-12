@@ -2,7 +2,7 @@
 //
 // 默认关，要在 MCP 接口设置里单独打开；关着时 AI 看不到这三个工具。都不弹窗确认：
 //   - 话术是你自己写的常用回复，不是聊天内容
-//   - 翻译只翻 AI 给的文字，不读聊天、不带对话上下文；用的是你在 设置 › 翻译 里配的服务商（花你的额度），所以限了速
+//   - 翻译只翻 AI 给的文字，不读聊天、不带对话上下文；走来财（花公司的翻译额度），所以限了速
 //   - 客户时间只按号码算，不读页面，号码不记录
 // 都不往 WhatsApp 页面注入脚本，也不发送任何消息。
 const { z } = require('zod');
@@ -119,8 +119,8 @@ class TranslateLimit {
 // hooks（main.js 提供）：
 //   listQuickReplies() -> [{ id, title, text, updatedAt }]
 //   translateModes() -> [{ id, name, direction, prompt, temperature }]   设置 › 翻译 里的翻译模式
-//   translate({ text, mode, target, source }) -> { text, provider, fallback, ms, warn[] } | { error, kind }
-//       和面板里点“翻译”走同一条队列，用同样的服务商、备用服务商、角色设定和网络设置
+//   translate({ text, mode, target, source }) -> { text, provider, ms, warn[] } | { error, kind }
+//       和面板里点“翻译”走同一条队列，一样走来财，用同样的角色设定
 // options: { limit: TranslateLimit, sessionOf(extra) -> string, now() }
 // 返回三个工具，开关由 server.js 控制
 function registerHelperTools(server, hooks, { limit, sessionOf = (extra) => extra.sessionId || 'unknown', now = () => new Date() }) {
@@ -144,7 +144,7 @@ function registerHelperTools(server, hooks, { limit, sessionOf = (extra) => extr
   const translate = server.registerTool('translate_text', {
     title: '翻译文字',
     description: [
-      '用 WAswitch 里设置好的翻译服务（设置 › 翻译 的默认服务商、备用服务商和角色设定）翻译一段文字，返回译文。',
+      '用 WAswitch 的翻译（走来财，带上 设置 › 翻译 里的角色设定）翻译一段文字，返回译文。',
       '只翻你给的文字，不读聊天、不带对话上下文，不会发送。',
       `target 是目标语言，可以写 ${LANG_NAMES.join('、')}，也可以写 en、de、fr、es 这类代码或英文名。`,
       'mode 可选，是用户在设置里建的翻译模式名称（例如“商务正式”），不填就忠实直译。',
@@ -162,7 +162,7 @@ function registerHelperTools(server, hooks, { limit, sessionOf = (extra) => extr
     const to = normLang(target);
     if (!to) return fail(`不认识目标语言「${target}」。可以用：${LANG_NAMES.join('、')}`);
     const from = source ? normLang(source) : '';
-    if (from === null) return fail(`不认识原文语言「${source}」。可以不填，让服务商自己认。`);
+    if (from === null) return fail(`不认识原文语言「${source}」。可以不填，让翻译自己认。`);
     let m = PLAIN_MODE;
     if (mode) {
       const modes = hooks.translateModes() || [];
@@ -180,8 +180,9 @@ function registerHelperTools(server, hooks, { limit, sessionOf = (extra) => extr
     }
     if (!r || r.error) {
       const why = (r && r.error) || '翻译失败';
-      const hint = r && (r.kind === 'config' || r.kind === 'auth')
-        ? '请用户在 WAswitch 的 设置 › 翻译 里设置服务商和密钥。'
+      // 翻译走来财：没登录团队要用户自己登录；没开通、额度用完的报错里已经写了找管理员
+      const hint = r && r.kind === 'auth'
+        ? '请用户在 WAswitch 里登录团队。'
         : r && r.kind === 'busy' ? '软件正在翻译别的内容，请稍后再试。' : '';
       return fail(`翻译失败：${why}${hint ? `。${hint}` : ''}`);
     }
@@ -190,7 +191,6 @@ function registerHelperTools(server, hooks, { limit, sessionOf = (extra) => extr
       target: to,
       mode: m.name,
       provider: r.provider,
-      ...(r.fallback ? { fallback: true } : {}),
       ...(r.warn && r.warn.length ? { warning: `译文里出现了原文没有的联系方式或链接：${r.warn.join('、')}，请核对。` } : {}),
     });
   });

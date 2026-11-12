@@ -3,11 +3,13 @@
 // 做法：本地起一个假的 web.whatsapp.com（HTTPS 自签证书 + host-resolver-rules），页面只有对话列表、没有对话区；
 // 等翻译页提示「先在左边点开一个聊天」（已经读过一次页面了），隔 0.7 秒（比 0.3 秒的间隔长）后在页面里放进一个对话，
 // 量翻译页多久出现这个对话的消息；放进去、拿掉各做 3 轮，每轮的等待错开。
+// 还查一次：先拿的旧状态（「正在读」）晚到界面，不能盖掉刚推来的「没打开对话」（invoke 的回复会排到之后的推送后面，CI 上偶尔一直停在「正在读」）。
 // 窗口要够宽（不到 1000 宽工作台默认收起）：Linux 无界面环境用 xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { teamOff } = require('./fixtures/team-off');
 const net = require('net');
 const https = require('https');
 const electron = require('electron');
@@ -59,10 +61,10 @@ window.__close = () => { document.getElementById('wrap').innerHTML = ''; return 
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'SG', seed: 1 },
   }]));
   // 这个检查看的是工作台翻译页列出消息：设置成「译文显示在右侧工作台」（默认是消息下面，见 check-tr-inline.js）
-  fs.writeFileSync(path.join(home, 'waswitch', 'translate.json'), JSON.stringify({ trPlace: 'panel' }));
+  fs.writeFileSync(path.join(home, 'waswitch', 'translate.json'), JSON.stringify({ trPlace: 'panel', trPlaceInlineDefault: true }));
   const port = await freePort();
   // 直连号跟随系统代理：去掉环境里的代理变量，让请求直接到本地假服务
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
     `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, root], { env, stdio: 'ignore' });
@@ -85,8 +87,14 @@ window.__close = () => { document.getElementById('wrap').innerHTML = ''; return 
     const waitFor = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return Date.now() - t0; await sleep(20); } return -1; };
     const hint = () => shellC.evaluate("document.body.innerText.includes('先在左边点开一个聊天')");
     const items = () => shellC.evaluate("document.querySelectorAll('.dk-item').length");
+    const dockText = () => shellC.evaluate("(document.querySelector('.dk-host .dk-list') || document.querySelector('.dk-host') || document.body).innerText.trim().split('\\n')[0]");
 
-    check(await waitFor(hint, 20000) >= 0, '没打开对话时翻译页提示先点开一个聊天');
+    const first = await waitFor(hint, 20000) >= 0;
+    check(first, `没打开对话时翻译页提示先点开一个聊天${first ? '' : `（翻译页显示的是：${await dockText()}）`}`);
+    // 旧状态晚到：编号比手上的小，翻译页不跟着变回「正在读当前对话…」
+    await shellC.evaluate("dockOnState({ ...dk.st, seq: dk.st.seq - 1, readable: 'loading' })");
+    await sleep(100);
+    check(await hint(), `比手上旧的状态晚到时不盖掉新的，还提示先点开一个聊天（${await dockText()}）`);
     const times = [];
     for (let k = 0; k < 3; k++) {
       await sleep(700 + k * 450); // 错开读页面的节拍

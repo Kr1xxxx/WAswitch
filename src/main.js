@@ -32,6 +32,7 @@ const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./trans
 const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
+const { pasteToCompose } = require('./compose-insert');
 const { createChatOpener } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
@@ -39,9 +40,9 @@ const { LiteHost } = require('./lite/host');
 const { fillLite } = require('./trfill');
 const { isSafeLink } = require('./links');
 const { clearSessionCache } = require('./cache');
-const { Updater, request: directRequest, OWNER: GH_OWNER, REPO: GH_REPO } = require('./updater');
+const { Updater, request: updateRequest, FEED: UPDATE_FEED } = require('./updater');
 const { TeamSync } = require('./team');
-const { CrmQueue } = require('./crm/queue');
+const { CrmQueue, keepQueue } = require('./crm/queue');
 const crmWeb = require('./crm/web');
 const { CrmUploader } = require('./crm/upload');
 const { canEncrypt } = require('./secure-storage');
@@ -53,7 +54,7 @@ const { setupCheckIpc } = require('./check-ipc');
 const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
-const { setupPeerClock } = require('./peer-clock');
+const { setupPeerClock, webPeerNumber } = require('./peer-clock');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
@@ -582,7 +583,7 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | overview | translate | welcome
+let page = 'account'; // account | editor | settings | overview | translate | welcome | login
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
@@ -604,6 +605,11 @@ const isLite = (acc) => acc && acc.mode === 'lite';
 // 团队模式（在 app ready 之后创建）。被后台收回、电脑被停用、或后台不允许的私人号都“停着”：不运行、不显示，数据保留
 let team = null;
 const isParked = (acc) => !!(team && acc && team.isParked(acc));
+// 后台要求必须登录、而这台电脑没登录（或被停用、7 天连不上）：所有号停着，只显示登录页。自动更新不看这个
+const loginLocked = () => !!(team && team.locked());
+let loginWasLocked = false;
+let loginPrompted = false; // 后台是“提示登录”时，这次打开软件已经提示过（或点了“稍后”）
+let loginAsked = false; // 用户自己从设置里点了“登录”
 const visibleAccounts = () => accounts.filter((a) => !isParked(a));
 const isParkedId = (id) => accounts.some((a) => a.id === String(id) && isParked(a));
 
@@ -649,6 +655,7 @@ const popup = new PopupWindow({
 });
 ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
 ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
+ipcMain.on('popup:layout', (e, rects) => popup.onLayout(e.sender, rects));
 ipcMain.on('popup:act', (e, { uid, action } = {}) => {
   if (!['open', 'later', 'close'].includes(action)) return;
   popup.onAction(e.sender, Number(uid), action);
@@ -656,6 +663,7 @@ ipcMain.on('popup:act', (e, { uid, action } = {}) => {
 
 const notifier = new Notifier({
   getAccounts: () => displayOrder(),
+  minimalMenu: () => loginLocked(), // 锁成登录页时托盘菜单只留“显示窗口”和“退出”
   readChats: (acc) => readUnreadChats(acc),
   popup,
   openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
@@ -725,7 +733,12 @@ function accountStatus(id) {
   return pendingLoad.has(id) || view.webContents.isLoading() ? 'loading' : 'ready';
 }
 
-const mcpHooks = {
+// 锁成登录页时 MCP 的每个操作都拒绝（号都停着，也不该让 AI 读本机的客户资料和话术）
+const guardMcp = (hooks) => Object.fromEntries(Object.entries(hooks).map(([k, fn]) => [k, typeof fn !== 'function' ? fn : (...args) => {
+  if (loginLocked()) throw new Error('WAswitch 还没登录');
+  return fn(...args);
+}]));
+const mcpHooks = guardMcp({
   listAccounts: () => visibleAccounts().map((a) => ({
     id: a.id,
     name: a.name,
@@ -827,7 +840,7 @@ const mcpHooks = {
             `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
             '会读到消息内容：每条消息的文字、时间、是不是你发的。',
             '只读，不会点开别的对话，不会标为已读，不保存到电脑。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-            '“10 分钟内允许”只对这个连接、这个账号有效（期间读这个账号的其他对话也不再问），可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+            '「10 分钟内允许」只对这个连接、这个账号有效（期间读这个账号的其他对话也不再问），可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
           ].join('\n'),
         } : {
           title: kind === 'search' ? 'AI 想找对话' : 'AI 想读取对话列表',
@@ -841,13 +854,13 @@ const mcpHooks = {
                 ? '会发给 AI：找到的对话的名称、号码、未读数、时间，以及最后一条消息预览（你在设置里打开了预览）。'
                 : '会发给 AI：找到的对话的名称、号码、未读数、时间。不含消息内容。',
               '网页版账号只看对话列表顶部已经显示的对话，轻量模式账号看本机保存的全部对话。只读，不会点开对话，不会标为已读。',
-              '“10 分钟内允许”只对这个连接、这些账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+              '「10 分钟内允许」只对这个连接、这些账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
             ] : [
               includePreview
                 ? '会读取：对话名称、未读数、时间，以及每个对话的最后一条消息预览（你在设置里打开了预览）。'
                 : '会读取：对话名称、未读数、时间。不含消息内容。',
               '只读，不会点开对话，不会标为已读。读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-              '“10 分钟内允许”只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+              '「10 分钟内允许」只对这个连接、这个账号有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
             ]),
           ].join('\n'),
         }),
@@ -889,7 +902,7 @@ const mcpHooks = {
           `客户端自称：${client}（这个名字是客户端自己报的，不一定真实）`,
           '会读到：搜到的客户的名字、电话、标签、备注和跟进时间。只读，不会改资料。',
           '读到的内容会发给这个 AI 客户端所用的 AI 服务商。',
-          '“10 分钟内允许”对这个连接的所有搜索有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
+          '「10 分钟内允许」对这个连接的所有搜索有效，可以在 MCP 接口设置里随时撤销。2 分钟内不选视为拒绝。',
         ].join('\n'),
       });
       if (abort.signal.aborted) return 'deny';
@@ -904,7 +917,7 @@ const mcpHooks = {
   translateModes: () => (modeStore ? modeStore.list() : []),
   // 和面板里点“翻译”走同一条队列（自动翻译正在跑时等它这一条），不带对话上下文
   translate: ({ text, mode, target, source }) => trIpc.userTranslate({ text, mode, target, source }),
-};
+});
 
 // 轻量模式的输入框在软件界面里：请界面填进去，界面回 'ok' | 'not_empty' | 'chat' | 'none'
 const liteFillWaits = new Map();
@@ -1255,6 +1268,10 @@ function checkOffline() {
 }
 
 function pushState() {
+  // 锁没锁变了（比如 7 天宽限刚到）：马上停号或启动，不等定时器
+  if (team && loginLocked() !== loginWasLocked) setImmediate(checkLoginLock);
+  if (loginLocked()) page = 'login';
+  else if (page === 'login' && !loginPageWanted()) page = visibleAccounts().length ? 'account' : 'welcome';
   team?.noteChange();
   crmReconcile();
   trackNet();
@@ -1272,7 +1289,8 @@ function pushState() {
     update: updater ? updater.snapshot() : null,
     mcp: mcpModule ? mcpModule.view() : null,
     collapsed: sideCollapsed(),
-    team: team ? { ...team.snapshot(), crmUpload: crmUploader ? crmUploader.last : null } : null,
+    team: team ? { ...team.snapshot(), crmUpload: crmUploadStatus() } : null,
+    loginLocked: loginLocked(),
     locked,
     panelOpen: panelShown(),
     panelTab,
@@ -1330,9 +1348,11 @@ function pushState() {
         liteStatus: isLite(acc) ? (liteStates.get(acc.id)?.status || 'connecting') : '',
         team: !!acc.teamId,
         teamNote: acc.teamNote || '',
-        // 开了“同步到 CRM”：侧栏一直显示标记；团队页显示条数（不显示内容）
+        // 团队号都同步到 CRM：只在设置 › 团队显示条数（不显示内容），侧栏没有标记
         crm: crmOn(acc) ? crmQueue.stats(acc.id) : null,
         crmWanted: !!(acc.teamCrm && !isParked(acc)),
+        // 重新加入的号：来财知道它的号码以前不同步（团队页显示“等读到本号的号码”）
+        crmWaitPhone: !!(acc.teamId && acc.teamCrm && acc.teamRejoin && !isParked(acc)),
       };
     }),
     lite: liteStateForShell(),
@@ -1532,7 +1552,7 @@ async function onNetworkChange() {
     // 断开旧连接，WhatsApp 网页会立刻用新线路重连，登录和聊天都不受影响
     await ses.closeAllConnections().catch(() => {});
   }
-  const tr = trIpc.translateSession(false); // 翻译可能跟随系统代理
+  const tr = trIpc.translateSession(); // 翻译（发给来财）跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
   // 等着自动重翻的、停着的后台补翻：换了线路马上再试（刚掉线那一下不试，试了也是白白用掉一次）
@@ -1816,6 +1836,8 @@ async function createView(acc, loadDelay = 0) {
   ses.setSpellCheckerEnabled(false);
   downloads.setup(acc, ses);
   const applied = await proxy.apply(ses, acc.proxy);
+  // 等代理的这一会儿号被停了（锁成登录页、被收回）：不再建页面
+  if (isParked(acc)) return;
   // 拼写检查每个号单独开关，默认关。代理设好了才打开（打开时 Windows 可能会下载词典）
   proxyReady.set(acc.id, !applied.error);
   if (!applied.error) applySpellcheck(acc, ses);
@@ -2009,11 +2031,15 @@ function startLite(acc) {
   liteHost.start(acc.id, { proxy: url, key, os: process.platform, crm: crmOn(acc) ? crmQueue.enable(acc.id) : 0 });
 }
 
+// 正在建页面的号：登录解锁和团队“恢复”可能同时要启动同一个号，第二次直接跳过
+const viewStarting = new Set();
 function startAccount(acc, loadDelay = 0) {
   if (isParked(acc)) return Promise.resolve();
   if (acc.teamNeedsProxy) { problems.set(acc.id, { ...TEAM_PROXY_PROBLEM }); return Promise.resolve(); }
   if (isLite(acc)) { startLite(acc); return Promise.resolve(); }
-  return createView(acc, loadDelay);
+  if (viewStarting.has(acc.id)) return Promise.resolve();
+  viewStarting.add(acc.id);
+  return createView(acc, loadDelay).finally(() => viewStarting.delete(acc.id));
 }
 
 // 主进程看到的轻量模式状态 → 侧栏和卡片里的提示
@@ -2044,8 +2070,8 @@ const LITE_PROBLEMS = {
       title: local ? `${acc.name}：Clash 当前节点不通` : `${acc.name}：代理连不上 WhatsApp`,
       short: '节点不通',
       text: local
-        ? `Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点“修改代理”换个端口。`
-        : `代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点“修改代理”换一条线路。`,
+        ? `Clash 开着，${p.port} 端口也能连上，但当前节点连不上 WhatsApp：在 Clash 里给这个端口换个节点，或者点「修改代理」换个端口。`
+        : `代理${ok ? ` ${p.host}:${p.port}` : ''}能连上，但通过它连不上 WhatsApp，代理那边的网络可能有问题。可以点「修改代理」换一条线路。`,
       detail: raw,
       retrying: true,
     };
@@ -2053,7 +2079,7 @@ const LITE_PROBLEMS = {
   loggedOut: () => ({
     title: '这个号已退出登录',
     short: '已退出登录',
-    text: '手机上移除了这台设备，或者登录已经失效。点“重新连接”会显示新的二维码，用手机重新扫码即可。',
+    text: '手机上移除了这台设备，或者登录已经失效。点「重新连接」会显示新的二维码，用手机重新扫码即可。',
   }),
   banned: () => ({
     title: 'WhatsApp 拒绝了这个号的连接',
@@ -2063,12 +2089,12 @@ const LITE_PROBLEMS = {
   replaced: () => ({
     title: '这个号的轻量模式在别处连上了',
     short: '在别处连上',
-    text: '同一份登录数据在别的地方连接了 WhatsApp，这里已断开，不再自动重连。确认没有别处在用后，点“重新连接”。',
+    text: '同一份登录数据在别的地方连接了 WhatsApp，这里已断开，不再自动重连。确认没有别处在用后，点「重新连接」。',
   }),
   outdated: () => ({
     title: 'WhatsApp 拒绝了旧版本',
     short: '需要更新',
-    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。请更新 WAswitch：到 设置 › 关于 检查更新，或到 Releases 页面下载新版。',
+    text: 'WhatsApp 拒绝了当前的协议版本，已停止自动重连。请更新 WAswitch：到 设置 › 关于 检查更新。',
   }),
   authError: () => ({
     title: '这个号的本机数据读不出来',
@@ -2078,17 +2104,17 @@ const LITE_PROBLEMS = {
   stuck: () => ({
     title: '连接反复失败，已停止重连',
     short: '连接失败',
-    text: 'WhatsApp 连续几次用同样的原因断开（可能是登录数据失效）。点“重新连接”再试一次；如果还是不行，删除这个号后重新添加、重新扫码。',
+    text: 'WhatsApp 连续几次用同样的原因断开（可能是登录数据失效）。点「重新连接」再试一次；如果还是不行，删除这个号后重新添加、重新扫码。',
   }),
   crashLoop: () => ({
     title: '轻量模式后台进程反复出错，已停止自动恢复',
     short: '后台出错',
-    text: '10 分钟内出错超过 3 次。点“重新连接”再试一次；如果还是不行，点“打开日志文件夹”，最新的日志里记着出错原因。',
+    text: '10 分钟内出错超过 3 次。点「重新连接」再试一次；如果还是不行，点「打开日志文件夹」，最新的日志里记着出错原因。',
   }),
   crashed: () => ({
     title: '轻量模式后台进程意外退出',
     short: '后台出错',
-    text: '正在自动恢复。如果反复出现，点“打开日志文件夹”，最新的日志里记着出错原因。',
+    text: '正在自动恢复。如果反复出现，点「打开日志文件夹」，最新的日志里记着出错原因。',
     retrying: true,
   }),
 };
@@ -2128,6 +2154,8 @@ function bindLiteEvents() {
     // 断开、重连中：连上后推来的未读回到断开前的数不算新消息
     if (['connecting', 'reconnecting', 'proxyDown', 'unreachable', 'crashed'].includes(status)) notifier.hold(id);
     if (status === 'open') fillOriginalsSoon(id);
+    if (status === 'open' && prev !== 'open') liteOpenAt.set(id, Date.now());
+    if (status !== 'open') liteOpenAt.delete(id);
     if (status === 'open') { loginStates.set(id, 'logged_in'); noteLoggedIn(id, 'logged_in'); if (me) liteMe.set(id, me); setDetectedPhone(acc, waPage.parseWid(me)); }
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) loginStates.set(id, 'needs_qr');
     if (['qr', 'qrExpired', 'loggedOut'].includes(status)) mcp?.controller.gate.clearAccount(id);
@@ -2285,6 +2313,9 @@ function aiRequestForShell() {
 }
 
 function showPage(next) {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
   page = next === 'account' && !visibleAccounts().length ? 'welcome' : next;
   refresh();
 }
@@ -2292,6 +2323,9 @@ function showPage(next) {
 // prefill：新建账号时预填的名称和地区（MCP 的 add_account 用）
 let editorPrefill = null;
 function openEditor(id, prefill = null) {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
   const acc = accounts.find((a) => a.id === id);
   editorPrefill = acc ? null : prefill;
   editorId = acc ? acc.id : null;
@@ -2327,7 +2361,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
       title: '删除账号',
       message: `删除「${acc.name}」？`,
       detail: `${isLite(acc)
-        ? '会让手机“已关联的设备”里的这台设备退出（已连上时），并清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置）。手机上的聊天记录不受影响。'
+        ? '会让手机「已关联的设备」里的这台设备退出（已连上时），并清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置）。手机上的聊天记录不受影响。'
         : '注意：这不会让手机退出。删除后请在手机 WhatsApp › 设置 › 已关联的设备 里手动退出这台电脑。\n\n会清除这个号在本机的全部数据（登录状态、聊天缓存、代理设置），之后要重新扫码才能登录。手机上的聊天记录不受影响。'}${timeoutMs ? '\n\n这个请求来自 MCP 客户端（AI 助手）。' : ''}`,
     }));
   } finally {
@@ -2351,6 +2385,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   if (trIpc.floatCore) trIpc.floatCore.forget(id);
   memoryManager.forget(id);
   if (!lite) await session.fromPartition(`persist:wa-${id}`).clearStorageData();
+  if (team) team.forget(acc); // 来财那边坐席还在：记下来，同步时不再建回来
   const wasPrimary = acc.primary;
   accounts = accounts.filter((a) => a.id !== id);
   trIpc.forgetDrafts(id); // 号已经不在了：之后晚到的草稿不再收
@@ -2394,7 +2429,7 @@ function setSetting(key, value) {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
   } else if (key === 'capMB') {
     if (!memory.CAP_CHOICES.includes(value)) return;
-  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton', 'popupSound', 'popupDnd'].includes(key)) {
+  } else if (['autoRecycle', 'lowMemoryMode', 'closeToTray', 'openAtLogin', 'sidebarCollapsed', 'showUpdateButton', 'popupSound', 'popupDnd', 'popupLater'].includes(key)) {
     if (typeof value !== 'boolean') return;
   } else if (key === 'lockMinutes') {
     if (!memory.LOCK_CHOICES.includes(value)) return;
@@ -2407,6 +2442,7 @@ function setSetting(key, value) {
   if (key === 'recycleMB' && value > 0) settings.recycleLastMB = value; // 关掉再打开时沿用
   memory.saveSettings(settings);
   if (key === 'openAtLogin') applyLoginItem();
+  if (key === 'popupLater' && !value) notifier.cancelLater(); // 关掉：已经点过“稍后”的也不再弹
   if (key.startsWith('popup')) popup.refresh();
   notifier.refresh();
   refresh();
@@ -2574,6 +2610,8 @@ function setupUpdater() {
       refresh();
     },
     notify: (title, body, onClick) => notifier.notifyApp(title, body, onClick),
+    // 更新从来财下，带团队登录的设备令牌；没登录团队时是空的，不检查
+    deviceToken: () => (team ? team.tokenPlain() : ''),
   });
   updater.start();
   setInterval(maybeMoveData, 10 * 60 * 1000).unref?.();
@@ -2601,28 +2639,40 @@ function maybeMoveData() {
 app.on('second-instance', () => notifier.showWindow());
 
 // ---------- 团队模式 ----------
-// ---------- 同步到 CRM：采集到本机加密队列（第 1 步），定时传到团队后台（第 2 步） ----------
-// 只有团队号、管理员在后台开了同步、号没停着、系统能真加密时才采集；私人号永远不采集
+// ---------- 同步到 CRM：采集到本机加密队列，每 2 分钟传到来财 ----------
+// 只有团队号（登录后本机的号都自动加入团队）、号没停着、系统能真加密时才采集
 let crmQueue = null;
 let crmTimer = null;
 let crmUploader = null;
-const CRM_UPLOAD_MS = 10 * 60 * 1000;
+const CRM_UPLOAD_MS = 2 * 60 * 1000;
 const CRM_READ_MS = 15 * 1000;
-const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !isParked(acc) && crmQueue.canEncrypt());
-// 开关、收回、停用、换私人号、删号之后：停止采集，删掉队列和去重表
+const CRM_BACKFILL_DAYS_MS = 30 * 24 * 3600 * 1000;
+const CRM_BACKFILL_WAIT_MS = 2 * 60 * 1000; // 轻量号连上后等 2 分钟（手机把最近的聊天同步过来）再补传
+const liteOpenAt = new Map(); // 轻量号这次连上的时间
+const crmBackfilling = new Set();
+// 重新加入的号（换了设备、换了后台，teamRejoin）：来财知道它自己的号码以后才采集和上传（来财靠号码在电脑之间去重）
+const crmOn = (acc) => !!(acc && crmQueue && team && team.enrolled() && acc.teamId && acc.teamCrm && !acc.teamRejoin && !isParked(acc) && crmQueue.canEncrypt());
+// 不该采集的号：停止采集。号被收回、不再同步、删号、换人登录：连队列和去重表一起删（keepQueue）；
+// 电脑被停用、登录失效、退出登录、号暂时停着、同一个人重新加入：队列留着，重新登录后接着传
 function crmReconcile() {
   if (!crmQueue) return;
   for (const id of crmQueue.enabledIds()) {
-    if (crmOn(accounts.find((a) => a.id === id))) continue;
+    const acc = accounts.find((a) => a.id === id);
+    if (crmOn(acc)) continue;
+    if (liteHost) liteHost.setCrm(id, 0);
+    if (keepQueue(acc)) continue;
     crmQueue.purge(id);
     crmWebReader.forget(id);
-    if (liteHost) liteHost.setCrm(id, 0);
   }
+  let rebackfilled = false;
   for (const acc of accounts) {
     if (!crmOn(acc)) continue;
+    // 重新加入、队列留着的号：再补传一次（重新加入前这段时间的消息），来财去重；记下已经补过，重启后不再补
+    if (acc.teamRebackfill) { crmQueue.rebackfill(acc.id); delete acc.teamRebackfill; rebackfilled = true; }
     const since = crmQueue.enable(acc.id);
     if (isLite(acc) && liteHost) liteHost.setCrm(acc.id, since);
   }
+  if (rebackfilled) saveAccounts();
 }
 // 网页版号：只读员工正在看的对话，条件和悬浮窗一样（账号页、窗口看得见、没锁、号正常、页面没在加载）
 // switching = 切走前最后读一次（这时它还是当前号）
@@ -2633,11 +2683,19 @@ async function crmReadWeb(id, switching) {
   if (!switching && id !== activeId) return;
   const view = views.get(acc.id);
   if (!view || view.webContents.isDestroyed() || view.webContents.isLoading()) return;
-  const r = await waPage.readOpenChat(view.webContents);
+  const r = await waPage.readOpenChat(view.webContents, { max: waPage.MAX_MSGS_LIMIT }); // 最后 50 条
   if (!r.ok || !crmOn(acc)) return;
+  // 对方是隐私编号（@lid）或新版页面的编号里没有对方：按这次读到的对话编号和标题查号码（查到的记一会儿）。
+  // 查不到时这些消息跳过计数，不会没有号码或者用错号码
+  // 编号认不出时，只有断定是和标题那个人的单聊（oneToOne）才按标题找联系人的号码
+  const peer = { chat: r.chat, title: r.title, group: r.group, digits: '' };
+  if (r.msgs.length && !r.group && !crmWeb.phoneOfChat(r.chat)) {
+    peer.digits = await webPeerNumber(view.webContents, acc.id, { ...peer, oneToOne: r.oneToOne });
+    if (!crmOn(acc)) return;
+  }
   const since = crmQueue.since(acc.id);
   const now = Date.now();
-  const got = crmWebReader.collect(acc.id, r.msgs, since, now);
+  const got = crmWebReader.collect(acc.id, r.msgs, since, now, r.title, peer); // 对话标题 = 对方的 WhatsApp 名字
   for (const item of got.items) crmQueue.add(acc.id, item);
   if (got.nonumber) crmQueue.skip(acc.id, got.nonumber);
   if (got.notime) crmQueue.skipNoTime(acc.id, got.notime);
@@ -2645,9 +2703,88 @@ async function crmReadWeb(id, switching) {
 // 每个对话读到过哪些消息（只在内存里）：读不出时间的旧消息不收、跳过的只算一次
 const crmWebReader = new crmWeb.WebReader();
 
+// 轻量号第一次开始采集（或这个版本第一次运行时已经在采集）：把本机缓存里最近 30 天的单聊补传一次。
+// 号要连着、连上满 2 分钟；拿不到（没在运行、超时）就下一轮再试。网页版的号只看得到打开的对话，不补传
+function crmBackfill() {
+  if (!crmQueue || !liteHost) return;
+  for (const acc of accounts) {
+    if (!isLite(acc) || !crmOn(acc) || !crmQueue.needsBackfill(acc.id) || crmBackfilling.has(acc.id)) continue;
+    const openAt = liteOpenAt.get(acc.id);
+    if (!openAt || Date.now() - openAt < CRM_BACKFILL_WAIT_MS) continue;
+    crmBackfilling.add(acc.id);
+    liteHost.crmBackfill(acc.id, Date.now() - CRM_BACKFILL_DAYS_MS).then((r) => {
+      if (!r || !Array.isArray(r.items) || !crmOn(acc) || !crmQueue.needsBackfill(acc.id)) return;
+      let n = 0;
+      for (const item of r.items) if (crmQueue.add(acc.id, item, { backfill: true })) n += 1;
+      if (Number.isInteger(r.skipped) && r.skipped > 0) crmQueue.skip(acc.id, r.skipped);
+      crmQueue.markBackfilled(acc.id);
+      console.log(`轻量号 ${acc.id} 补传最近 30 天的聊天：${n} 条进队列`);
+    }, (e) => console.warn(`轻量号 ${acc.id} 补传没成功：${e.message}`)).finally(() => crmBackfilling.delete(acc.id));
+  }
+}
+
+// 后台是“提示登录”、还没登录：这次打开软件提示一次登录页（可以点“稍后”）
+const loginPromptWanted = () => !!team && !loginPrompted && team.policy() === 'optional' && team.loginState() === 'none';
+const loginPageWanted = () => !!team && team.loginState() !== 'ok' && loginAsked;
+// 该提示就提示（每次打开软件最多一次）：之后点“稍后”或去别的页面都算看过了
+function promptLogin() {
+  if (!loginPromptWanted()) return false;
+  loginPrompted = true;
+  loginAsked = true;
+  return true;
+}
+
+// 锁没锁变了：锁上就把所有号停掉（轻量号先写盘，数据都不删），显示登录页；解开就照常启动全部账号
+let loginStarting = false;
+async function checkLoginLock() {
+  if (!team) return;
+  const now = loginLocked();
+  if (now === loginWasLocked) return;
+  loginWasLocked = now;
+  if (now) {
+    console.warn('团队后台要求登录：所有账号停下，显示登录页');
+    for (const acc of accounts) parkAccount(acc);
+    setAiRequest(null);
+    page = 'login';
+    refresh();
+    notifier.refresh();
+    return;
+  }
+  console.log('已登录：启动账号');
+  page = visibleAccounts().length ? 'account' : 'welcome';
+  activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
+  refresh();
+  notifier.refresh();
+  if (loginStarting) return;
+  loginStarting = true;
+  try {
+    const order = visibleAccounts().sort((a, b) => (b.id === activeId) - (a.id === activeId));
+    for (const [i, acc] of order.entries()) {
+      if (loginLocked()) break;
+      if (isLite(acc) ? liteStates.has(acc.id) : views.has(acc.id)) continue;
+      await startAccount(acc, i * 2500);
+      refresh();
+    }
+  } finally {
+    loginStarting = false;
+  }
+}
+
+// 设置 › 团队的“上次上传”一行：本机队列太大丢过等建档的聊天时，接在后面说一句
+function crmUploadStatus() {
+  if (!crmUploader) return null;
+  const last = crmUploader.last;
+  const d = crmQueue ? crmQueue.dropped : null;
+  if (!d || !d.n) return last;
+  const note = `本机存不下，删了最早的 ${d.n} 条聊天`;
+  return { at: last.at || d.at, error: last.error ? `${last.error}；${note}` : note };
+}
+
 function setupTeam() {
   team = new TeamSync({
     dir: app.getPath('userData'),
+    // 后台地址写死在 src/team（TEAM_SERVER）。只有从源码运行时，自检可以换成本机的假后台
+    ...(!app.isPackaged && process.env.WASWITCH_TEST_TEAM_SERVER ? { server: process.env.WASWITCH_TEST_TEAM_SERVER } : {}),
     safeStorage,
     appVersion: app.getVersion(),
     platform: process.platform,
@@ -2657,22 +2794,37 @@ function setupTeam() {
       statusOf: (acc) => teamStatusOf(acc),
       deviceInfo: () => ({ mem_mb: Math.round(memoryManager.totalMB() || 0), low_mem: settings.lowMemoryMode === true }),
       park: (acc) => parkAccount(acc),
-      unpark: (acc) => { unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
+      // 刚解锁（登录成功、恢复）：交给 checkLoginLock 按 2.5 秒错开启动，不在这里一起启动
+      unpark: (acc) => { if (loginWasLocked) return; unparkAccount(acc).then(refresh, (e) => console.warn(`恢复账号 ${acc.id} 失败：${e.message}`)); },
       createSeat: (seat) => createTeamSeat(seat),
-      refresh: () => refresh(),
+      // 换了人登录：上一个人解不开的旧队列文件也删（还在的队列由 crmReconcile 按 keepQueue 删）
+      personChanged: () => crmQueue?.dropBad(),
+      refresh: () => {
+        // 第一次问到后台是“提示登录”：用户在账号页或欢迎页时换成登录页
+        if (!loginLocked() && ['account', 'welcome'].includes(page) && promptLogin()) page = 'login';
+        refresh();
+        checkLoginLock();
+      },
     },
   });
-  crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列写盘失败：${e.message}`) });
+  loginWasLocked = loginLocked();
+  // 必须登录时 7 天宽限是按时间算的：没有任何事件也要定时看一下
+  setInterval(checkLoginLock, 60 * 1000).unref?.();
+  crmQueue = new CrmQueue({ dir: app.getPath('userData'), safeStorage, onError: (e) => console.warn(`CRM 队列：${e.message}`) });
   crmTimer = setInterval(() => {
     crmQueue.sweep();
     if (activeId) crmReadWeb(activeId, false);
   }, CRM_READ_MS);
-  // 第 2 步：每 10 分钟把本机队列传到团队后台；后台确认收到才从本机删
+  // 每 2 分钟（队列里有要传的时候）把本机队列传到来财；第一次在启动 60 秒后。来财回答了才从本机删
   crmUploader = new CrmUploader({ queue: crmQueue, team, accounts: () => accounts, crmOn });
-  const upload = () => crmUploader.run().then(() => refresh(), (e) => console.warn(`CRM 上传失败：${e.message}`));
+  const upload = () => {
+    crmBackfill();
+    if (!crmUploader.due()) return;
+    crmUploader.run().then(() => refresh(), (e) => console.warn(`CRM 上传失败：${e.message}`));
+  };
   setTimeout(upload, 60 * 1000).unref?.();
   setInterval(upload, CRM_UPLOAD_MS).unref?.();
-  // 停着的号启动时就不运行；后台不允许私人号时也一样（以最后一次同步的结果为准）
+  // 停着的号启动时就不运行（以最后一次同步的结果为准）
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }
 
@@ -2750,7 +2902,9 @@ app.whenReady().then(async () => {
     fs.writeFileSync(flag, '1');
   } catch (e) { console.warn(`旧翻译模式清理失败：${e.message}`); }
   try { updateModes(modeStore); } catch (e) { console.warn(`翻译模式更新失败：${e.message}`); }
-  translator = new Translator({ dir: app.getPath('userData'), safeStorage, sessionFor: trIpc.translateSession });
+  // 翻译、纠错、语音转文字都走来财，用团队登录的设备令牌（team 在后面 setupTeam 里才建，这里用到时再读）
+  translator = new Translator({ dir: app.getPath('userData'), sessionFor: trIpc.translateSession,
+    cloud: () => (team && team.enrolled() ? { server: team.server, token: team.tokenPlain() } : null) });
   trIpc.applyTranslateNet().catch(() => {});
   trIpc.setupFloatCore();
   setInterval(checkFollowUps, 60 * 1000);
@@ -2765,7 +2919,8 @@ app.whenReady().then(async () => {
   applyLoginItem();
   setupTeam();
   activeId = (findAcc(settings.lastAccountId) || visibleAccounts()[0])?.id ?? null;
-  page = visibleAccounts().length ? 'account' : 'welcome';
+  // 锁着（必须登录而没登录）：visibleAccounts() 是空的，下面一个号都不启动，只显示登录页
+  page = loginLocked() || promptLogin() ? 'login' : visibleAccounts().length ? 'account' : 'welcome';
   refresh();
   if (!shouldStartHidden()) win.show();
   if (dataStart.fallback) setTimeout(() => notifier.notifyApp('D 盘打不开', datadir.fallbackText(dataStart)), 5000);
@@ -2807,9 +2962,10 @@ app.whenReady().then(async () => {
     // 从源码运行时总是用仓库里的 src/mcp（即使本地打过 mcp-module.json）
     expected: app.isPackaged ? loadExpected(path.join(__dirname, 'mcp-module.json')) : null,
     dev: !app.isPackaged,
-    owner: GH_OWNER,
-    repo: GH_REPO,
-    fetch: directRequest,
+    // 和自动更新同一个来财地址、同一个设备令牌
+    feed: UPDATE_FEED,
+    deviceToken: () => (team ? team.tokenPlain() : ''),
+    fetch: updateRequest,
     loadDev: () => require('./mcp'),
     start: async (setupMcp, extra) => {
       const m = setupMcp({ hooks: mcpHooks, lockLocalPage, onStatus: () => mcpModule.tick(), dataDir: dataStart.home, ...extra });
@@ -2943,9 +3099,8 @@ handleShell('cust:delete', (id) => {
 });
 // 返回有没有真的写进剪贴板：界面只在成功时打对勾
 handleShell('panel:copy', (text) => copyText(text));
-// 插入到聊天框：等于用户自己按 Ctrl+V（会覆盖剪贴板），不发回车、不模拟按键，发送永远由人来按。
-// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里。
-// 焦点不在对话下方的输入框（比如在搜索框）就不贴，返回 'focus' 让用户先点一下输入框
+// 插入到聊天框（翻译页的「放进输入框」、话术的「插入」）：做法见 compose-insert.js。
+// 面板画出来时记下的账号必须还是当前账号，并且没锁、页面正常，否则拒绝，免得贴到别的号里
 const insertBlocked = (accountId) => {
   const acc = findAcc(accountId);
   if (!acc || accountId !== activeId || page !== 'account' || locked || problems.has(accountId)) return 'changed';
@@ -2955,18 +3110,12 @@ const insertBlocked = (accountId) => {
 };
 async function insertText(accountId, text) {
   if (typeof accountId !== 'string' || typeof text !== 'string' || !text) return 'bad';
-  const blocked = insertBlocked(accountId);
-  if (blocked) return blocked;
-  const focus = await waPage.composeFocus(views.get(accountId).webContents);
-  const after = insertBlocked(accountId); // 读焦点期间可能换号、锁定
-  if (after) return after;
-  if (focus !== 'compose') return 'focus';
-  const view = views.get(accountId);
-  await clipboard.writeText(text.slice(0, 4000)); // 剪贴板接口是异步的：写完再贴
-  if (insertBlocked(accountId)) return 'changed';
-  view.webContents.focus();
-  view.webContents.paste();
-  return 'ok';
+  return pasteToCompose(text, {
+    blocked: () => insertBlocked(accountId),
+    wc: () => views.get(accountId).webContents,
+    copyText,
+    focusCompose: waPage.focusCompose,
+  });
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 // 导出导入：[文件名前缀, 保存框标题, 打开框标题]
@@ -3064,7 +3213,10 @@ const selTr = createSelTranslate({
   translate: (text) => trIpc.selTranslate(text),
   copy: (text) => copyText(text),
   focus: () => focusActive(),
+  mouseUp: (id) => { if (id === activeId) trIpc.inlineNudge(); },
+  trEdit: trIpc.trEdit,
 });
+trIpc.useSelTr(selTr);
 // ---- 顶栏“客户当地时间”（在 peer-clock.js） ----
 setupPeerClock(ctx);
 onShell('collapse', () => toggleSide());
@@ -3077,8 +3229,34 @@ onShell('reload', (id) => {
 });
 onShell('retry', (id) => { if (findAcc(id)) retryNow(id); });
 // 团队模式（设置 › 团队）
-handleShell('team:enroll', async ({ server, code, deviceName, localIds, consent } = {}) => team.enroll({ server, code, deviceName, localIds, consent }));
-handleShell('team:join', async ({ localIds } = {}) => team.join(localIds));
+// 登录页和设置 › 团队：要验证码、登录、退出登录、“稍后”（提示登录时这次不再提示）
+handleShell('team:code', async ({ email } = {}) => team.requestCode({ email: typeof email === 'string' ? email : '' }));
+handleShell('team:login', async ({ email, code } = {}) => {
+  const r = await team.login({ email: typeof email === 'string' ? email : '', code: typeof code === 'string' ? code : '' });
+  if (r && r.ok) { loginPrompted = true; loginAsked = false; await checkLoginLock(); refresh(); trIpc.retryCloudErrors(); }
+  return r;
+});
+// 主动退出登录：停止采集，本机还没传的聊天留着（同一个人再登录接着传；换了人登录时 login() 清掉团队号，crmReconcile 再删）
+handleShell('team:logout', async () => {
+  const r = await team.logout();
+  if (crmQueue && liteHost) for (const id of crmQueue.enabledIds()) liteHost.setCrm(id, 0);
+  checkLoginLock();
+  return r;
+});
+onShell('team:later', () => {
+  if (loginLocked()) return;
+  loginPrompted = true;
+  loginAsked = false;
+  refresh();
+});
+onShell('team:show-login', () => {
+  if (loginLocked() || team.loginState() === 'ok') return;
+  loginAsked = true;
+  page = 'login';
+  refresh();
+});
+// 登录页上“连不上团队后台”的“重试”：重新问一下后台（已登录的同步一次，没登录的问策略）
+handleShell('team:retry', async () => { const r = await team.syncNow(); checkLoginLock(); return r; });
 handleShell('team:sync', async () => team.syncNow());
 onShell('mute', ({ id, muted } = {}) => {
   const acc = findAcc(id);

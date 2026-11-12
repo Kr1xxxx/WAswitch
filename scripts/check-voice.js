@@ -42,17 +42,17 @@ async function decodeCheck() {
 
 // 在页面里跑：翻译页显示几条语音，返回各行的文字、按钮、尺寸
 const scenario = async () => {
-  const base = { accountId: 'a1', readable: 'ok', title: 'Sophie Martin', paused: '', auto: false, dailyCap: 500, hasProvider: true, needKey: null, lite: true,
-    primaryId: 'z', fallbackId: '', providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
+  const base = { accountId: 'a1', readable: 'ok', title: 'Sophie Martin', paused: '', auto: false, dailyCap: 500, hasProvider: true, lite: true,
+    primaryId: 'cloud', fallbackId: '', providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
     langs: ['英语', '法语'], target: '法语', targetSrc: 'detected', autoTarget: '法语', canRemember: true };
-  const it = (h, x) => ({ h, text: '', t: '09:41', state: 'manual', tr: '', err: '', errPid: '', warn: [], note: '', edited: false, fixed: false, suggest: '', voice: 23, ...x });
+  const it = (h, x) => ({ h, text: '', t: '09:41', state: 'manual', tr: '', err: '', warn: [], note: '', edited: false, fixed: false, suggest: '', voice: 23, ...x });
   const items = [
     it('v1', {}),
     it('v2', { state: 'running' }),
     it('v3', { state: 'done', text: 'Bonjour, est-ce que la perruque est encore disponible ?', tr: '你好，这顶假发还有货吗？' }),
     it('v4', { state: 'error', err: '智谱余额不足，语音转文字要先充值' }),
     it('v5', { voice: 412, note: 'long' }),
-    it('v6', { state: 'error', err: '智谱还没填密钥', errPid: 'z' }),
+    it('v6', { state: 'error', err: '先登录团队才能翻译' }),
     // 网页号：时长还不知道；读不到、过期
     it('w1', { voice: 0 }),
     it('w2', { voice: 0, state: 'error', err: '读不到这条语音，请在 WhatsApp 里听', code: 'W2 no_media_fields' }),
@@ -112,7 +112,7 @@ async function rowsCheck() {
   assert(r.v4.text.includes('余额不足') && r.v4.btns.includes('重试'), JSON.stringify(r.v4));
   assert.strictEqual(r.v5.tag, '语音 6:52');
   assert.deepStrictEqual(r.v5.btns, ['转文字（太长，只转前 5 分钟）']);
-  assert(r.v6.btns.includes('去填密钥') && r.v6.btns.includes('重试'), JSON.stringify(r.v6));
+  assert(r.v6.text.includes('先登录团队才能翻译') && !r.v6.btns.includes('去填密钥') && r.v6.btns.includes('重试'), JSON.stringify(r.v6));
   assert.strictEqual(r.w1.tag, '语音');
   assert.deepStrictEqual(r.w1.btns, ['转文字']);
   assert(r.w2.text.includes('读不到这条语音') && r.w2.btns.includes('重试') && r.w2.code === 'W2 no_media_fields', JSON.stringify(r.w2));

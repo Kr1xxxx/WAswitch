@@ -3,12 +3,11 @@
 const { app, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const proxy = require('./proxy');
 const waPage = require('./wa-page');
 const { matchChatCustomer } = require('./chatlang');
-const { needsKey, extraContacts } = require('./translate');
+const { extraContacts } = require('./translate');
 const { TrStore, pickDir: pickTrDir, migrate: migrateTr } = require('./trstore');
-const { FloatCore, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
+const { FloatCore, inlineEntry, inlineClicks, fromLite, msgHash, VOICE_MAX_S } = require('./floatcore');
 const RADIX = require('./colors/radix');
 const webVoice = require('./web-voice');
 const { detectLang } = require('./langdetect');
@@ -23,75 +22,31 @@ function setupTranslateIpc(ctx) {
     handleShell, onShell, findAcc, isLite, views, problems, parkedCustomer, panelShown, liteChat,
   } = ctx;
 
-  // 翻译请求用单独的内存会话，和任何 WhatsApp 账号都不共用 cookie 和代理
-  function translateSession(local) {
-    return session.fromPartition(local ? 'wa-translate-local' : 'wa-translate');
+  // 翻译请求（发给来财）用单独的内存会话，和任何 WhatsApp 账号都不共用 cookie 和代理；跟随系统代理，和团队同步一样
+  function translateSession() {
+    return session.fromPartition('wa-translate');
   }
   async function applyTranslateNet() {
-    const net = ctx.translator.load().network;
-    const remote = translateSession(false);
-    if (net.mode === 'proxy' && net.proxyUrl) await remote.setProxy({ proxyRules: net.proxyUrl, proxyBypassRules: '<local>' });
-    else await remote.setProxy({ mode: net.mode === 'direct' ? 'direct' : 'system' });
-    await translateSession(true).setProxy({ mode: 'direct' }); // 本机模型不走代理
+    await translateSession().setProxy({ mode: 'system' });
   }
   const trState = () => ({ config: ctx.translator.publicConfig(), modes: ctx.modeStore.list() });
   handleShell('tr:config', () => trState());
-  // 密钥填好、测通，或换了默认服务后：之前因为“没填密钥 / 密钥不对”失败的收到消息自动重翻（别的原因失败的不动）
-  // changedId：刚改的服务商。报错的服务商是它、或已经不是默认服务了，才重翻；默认服务还没密钥就不翻
-  function retryKeyErrors(changedId = '') {
-    if (!floatCore) return;
+  // 设置页的提醒：来财那边开通了没有、这个月额度用完没有（{ ready, overBudget } 或 { error, kind }）
+  handleShell('tr:cloud-status', () => ctx.translator.cloudStatus());
+  // 刚登录团队后：之前因为“先登录团队”或来财没开通失败的收到消息自动重翻（别的原因失败的不动）
+  function retryCloudErrors() {
+    if (!floatCore || !ctx.translator.cloud()) return;
     const cfg = ctx.translator.load();
-    const primary = ctx.translator.provider(cfg.primaryId);
-    if (!primary || needsKey(primary)) return;
-    const touched = floatCore.retryKeyErrors({ dailyCap: cfg.dailyCap, match: (pid) => !pid || pid === changedId || pid !== primary.id });
+    const touched = floatCore.retryKeyErrors({ dailyCap: cfg.dailyCap, kinds: ['auth', 'config'], match: () => true });
     if (touched.length) pushFloat();
   }
-  handleShell('tr:provider:save', (data) => {
-    const r = ctx.translator.saveProvider(data);
-    if (r.ok && data && typeof data.key === 'string' && data.key.trim()) retryKeyErrors(r.id);
-    pushFloat();
-    return { ...r, ...trState() };
-  });
-  handleShell('tr:provider:delete', (id) => {
-    const snap = typeof id === 'string' ? ctx.translator.deleteProvider(id) : null;
-    if (snap) {
-      ctx.offerUndo({ kind: 'tr', where: 'body', text: `已删除「${shortName(snap.provider.name)}」` }, () => {
-        if (ctx.translator.restoreProvider(snap)) { retryKeyErrors(snap.provider.id); pushFloat(); }
-      });
-    }
-    pushFloat();
-    return trState();
-  });
-  handleShell('tr:fix:zhipu', () => ({ ...ctx.translator.addZhipuForFix(), ...trState() }));
-  handleShell('tr:roles', (roles) => { ctx.translator.setRoles(roles && typeof roles === 'object' ? roles : {}); retryKeyErrors(); pushFloat(); return trState(); });
   handleShell('tr:role', (text) => ({ ...ctx.translator.setRolePrompt(text), ...trState() }));
-  handleShell('tr:deepl-cap', (n) => ({ ...ctx.translator.setDeeplCap(n), ...trState() }));
   handleShell('tr:wig', (on) => ({ ...ctx.translator.setWigTerms(on === true), ...trState() }));
   handleShell('tr:lash', (on) => ({ ...ctx.translator.setLashTerms(on === true), ...trState() }));
-  handleShell('tr:network', async (net) => {
-    // 翻译代理不能和任何账号的代理是同一个地址端口：否则会共用出口，带密码的代理还会被自动填上那个号的账号密码
-    if (net && net.mode === 'proxy') {
-      let u = null;
-      try { u = new URL(String(net.proxyUrl || '').trim()); } catch {}
-      const norm = (h) => { const x = String(h || '').replace(/^\[|\]$/g, '').toLowerCase(); return ['localhost', '127.0.0.1', '::1'].includes(x) ? 'loopback' : x; };
-      const same = u && ctx.accounts.some((a) => { const p = proxy.parse(a.proxy); return p && !p.error && norm(p.host) === norm(u.hostname) && String(p.port) === String(u.port); });
-      if (same) return { error: '这个代理端口已经给某个账号用了，翻译请用别的端口（或选“跟随系统代理”）', ...trState() };
-    }
-    const r = ctx.translator.setNetwork(net && typeof net === 'object' ? net : {});
-    if (r.ok) { try { await applyTranslateNet(); } catch { return { error: '代理设置没生效', ...trState() }; } }
-    return { ...r, ...trState() };
-  });
-  handleShell('tr:test', async (id) => {
-    if (typeof id !== 'string') return { error: '找不到这个服务商' };
-    // 和用户点的翻译一样排在自动翻译前面（刚保存密钥时自动重翻可能正在跑）
-    const r = await userTranslate(null, () => ctx.translator.test(id));
-    if (r && r.ok) retryKeyErrors(id);
-    return r;
-  });
   // 用户点的翻译（面板、悬浮窗写中文）优先：自动翻译正在跑时等它这一条翻完（最多 35 秒），
   // 等的这段时间自动翻译不再取下一条。等的时候点“取消”只取消自己，不打断自动翻译那条。
   const userTr = { waiting: 0, running: false, gen: 0 };
-  // run：真正要做的事（默认翻译；测试服务商也走这里排队）
+  // run：真正要做的事（默认翻译）
   async function userTranslate(args, run = (a) => ctx.translator.translate(a)) {
     const gen = userTr.gen;
     const until = Date.now() + 35000;
@@ -121,7 +76,7 @@ function setupTranslateIpc(ctx) {
   // 发出的翻译：同一句中文、同一种语言、同一个模式翻过就直接用记下的译文（见 outcache.js）；fresh = 用户点了“重新翻译”
   // 角色设定（固定译法，含打开的假发词汇）也算进记录的键：改了固定译法或开关假发词汇，老译文不再用
   const outTranslate = makeOutTranslate({ store: () => trStore, translate: (a) => userTranslate(a), warnOf: extraContacts, extra: () => ctx.translator.roleText() });
-  // 服务商太忙要等着重试时，告诉界面还要等几毫秒（按钮上倒计时）；lane：dock = 工作台，page = 翻译页
+  // 来财太忙要等着重试时，告诉界面还要等几毫秒（按钮上倒计时）；lane：dock = 工作台，page = 翻译页
   const waitTo = (lane) => (ms) => {
     const wc = ctx.shellView && ctx.shellView.webContents;
     if (wc && !wc.isDestroyed()) wc.send('tr:wait', { lane, ms });
@@ -131,7 +86,7 @@ function setupTranslateIpc(ctx) {
     // 工作台写回复：带上当前对话最近几条当上下文（只在请求的号还是当前号时）
     const context = typeof ctxAccount === 'string' && ctxAccount === ctx.activeId && floatCore ? floatCore.contextOf(ctx.activeId) : undefined;
     // __back：回译成中文核对，用固定的忠实翻译提示词
-    // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改；设了纠错服务商就用它
+    // 纠错要发的译文：内置校对提示词，对照中文原文和上下文改
     if (fix === true && typeof draft === 'string' && draft.trim()) return userTranslate({ text, mode: FIX_OUT, target, source, context, draft, fix: true, onWait });
     let mode = modeId === '__back' ? { prompt: '把用户的文字忠实地翻译成中文，不增不减，不润色。', temperature: 0 }
       : typeof modeId === 'string' ? ctx.modeStore.get(modeId) : null;
@@ -140,7 +95,7 @@ function setupTranslateIpc(ctx) {
   });
   handleShell('tr:cancel', () => userCancel());
   // 左侧栏「翻译」页：不跟任何对话绑定，忠实翻译，不带上下文、不用发出译文的缓存。
-  // providerId = 这一栏选的模型（只用它，不换备用，纠错也用它）。没指定原文语言时顺便返回本机认出来的语言（只用来显示）
+  // 没指定原文语言时顺便返回本机认出来的语言（只用来显示）
   // 用单独的翻译通道（translator.lane()）：不让工作台的自动翻译排队等，也不等它
   let pageLane = null;
   const pageTr = () => {
@@ -148,14 +103,12 @@ function setupTranslateIpc(ctx) {
     return pageLane;
   };
   const PAGE_MODE = { prompt: '把用户的文字忠实地翻译成{目标语言}。保留数字、链接、表情和换行，不增不减内容。', temperature: 0.2 };
-  handleShell('tr:page', async ({ text, source, target, providerId, fix, draft } = {}) => {
+  handleShell('tr:page', async ({ text, source, target, fix, draft } = {}) => {
     if (typeof text !== 'string') return { error: '先放一段要翻译的文字', kind: 'input' };
     const detected = source ? '' : detectLang(text.slice(0, 2000));
-    const pid = typeof providerId === 'string' ? providerId : '';
-    // 纠错也用这一栏选的模型（按钮就在模型旁边）
     const r = fix === true && typeof draft === 'string' && draft.trim()
-      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, providerId: pid, onWait: waitTo('page') })
-      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, providerId: pid, onWait: waitTo('page') });
+      ? await pageTr().translate({ text, mode: FIX_OUT, target, source, draft, fix: true, onWait: waitTo('page') })
+      : await pageTr().translate({ text, mode: PAGE_MODE, target, source, onWait: waitTo('page') });
     return { ...r, detected };
   });
   handleShell('tr:page:cancel', () => pageTr().cancel());
@@ -234,7 +187,7 @@ function setupTranslateIpc(ctx) {
   };
   // ---- 语音转文字（客户发来的语音） ----
   // 轻量号：后台进程下载语音；网页号：读 WhatsApp 本机存储里的下载信息，用这个号自己的会话下载解密（见 web-voice.js）。
-  // 都只走这个号自己的代理 → 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 智谱转文字。
+  // 都只走这个号自己的代理 → 界面进程解码成 16 kHz 单声道（主进程没有 Opus 解码器，Chromium 自带）→ 来财转文字。
   // 音频只在内存里，不写盘
   let decodeN = 0;
   const decodes = new Map(); // n -> { resolve, reject, timer }
@@ -296,30 +249,10 @@ function setupTranslateIpc(ctx) {
     return seconds ? { ...r, seconds } : r;
   }
 
-  // 付费的备用一次只翻一条：等主通道空下来、用户自己的翻译先翻（最多等 60 秒）
-  async function onMainLane(args) {
-    const until = Date.now() + 60000;
-    for (;;) {
-      if (!ctx.translator.busy && !userTr.waiting && !userTr.running) {
-        const r = await ctx.translator.translate(args);
-        if (!(r && r.kind === 'busy')) return r;
-      }
-      if (Date.now() > until) return { error: '上一段还在翻译', kind: 'busy' };
-      await new Promise((res) => setTimeout(res, 250));
-    }
-  }
-  // 后台补翻更早的消息：只用免费的智谱、混元，走自己的通道（不占用户翻译那条，也不占 DeepL），失败不换付费的备用。
-  // 默认服务商是免费的：和新消息一样同时发给有密钥的智谱、混元，用先回来的；默认是付费的：用 freeProvider() 那一家。
-  // 都没填密钥就不翻（留着「翻译」按钮）。signal：给新消息、用户点的让位置时取消
-  async function slowTranslate(args, signal) {
-    if (signal && signal.aborted) return { error: '已取消', kind: 'cancel' };
-    if (ctx.translator.raceSet().length) return ctx.translator.raceFree(args, { signal });
-    const free = ctx.translator.freeProvider();
-    if (!free) return { error: '没有免费的翻译服务', kind: 'nofree' };
-    const lane = ctx.translator.lane();
-    const stop = () => lane.cancel();
-    if (signal) signal.addEventListener('abort', stop, { once: true });
-    try { return await lane.translate({ ...args, providerId: free.id }); } finally { if (signal) signal.removeEventListener('abort', stop); }
+  // 后台补翻更早的消息：以前只用免费的翻译服务；来财按用量花钱，不在后台补（#209）。
+  // 返回 nofree：floatcore 把排着的退回「翻译」按钮，用户点了再翻
+  async function slowTranslate() {
+    return { error: '没有免费的翻译服务', kind: 'nofree' };
   }
   function setupFloatCore() {
     // 启动时同步定位置（D 盘能用就是 D 盘，否则 C），D 盘能用而 C 盘还有译文就搬过去一次；只往 D 搬，选了 C 不动 D 盘的
@@ -338,30 +271,29 @@ function setupTranslateIpc(ctx) {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
-        if (!mode) return Promise.resolve({ error: '没有“收到”方向的翻译模式', kind: 'input' });
-        if (slow) return slowTranslate({ text, mode, target: '中文', context }, signal);
-        // 默认服务商是免费的（智谱、混元）：同时发给有密钥的免费服务商，用先翻出来的；各走各的通道，
-        // 不占用户翻译用的那条，可以同时翻好几条（见 parallel）。都失败了才用付费的备用，一次一条
+        if (!mode) return Promise.resolve({ error: '没有「收到」方向的翻译模式', kind: 'input' });
+        if (slow) return slowTranslate();
+        // 登录着团队：收到的消息各走各的通道发给来财，不占用户翻译用的那条，可以同时翻好几条（见 parallel）
         if (!fix && ctx.translator.raceSet().length) {
-          return ctx.translator.raceFree({ text, mode, target: '中文', context }, { paid: onMainLane });
+          return ctx.translator.raceFree({ text, mode, target: '中文', context });
         }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
         return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
       },
     });
-    // 同时翻几条：用免费服务商时 3 条，付费的（DeepL 等）一次一条
+    // 同时翻几条：登录着团队 3 条，没登录 1 条（反正都是「先登录团队」）
     floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
-    // 有没有免费的智谱、混元（自动重翻只用它们，见 slowTranslate）
-    floatCore.deps.hasFree = () => !!(ctx.translator.raceSet().length || ctx.translator.freeProvider());
-    floatCore.onChange = (accId) => { if (accId === ctx.activeId) { pushFloat(); inlineSoon(); } };
+    // 后台补翻和自动重翻都走免费的那条路（slowTranslate）：现在没有，失败了直接显示报错和「重试」
+    floatCore.deps.hasFree = () => false;
+    floatCore.onChange = (accId) => { if (accId === ctx.activeId) { pushFloat(); inlineSoon(); trEditSync(); } };
   }
 
   // ---- 译文显示在消息下面（shen 2026-10-30）----
   // 网页号：在 WhatsApp 页面里客户消息的气泡下面放译文（wa-page.js 的 paintTranslations，唯一改页面的地方）；
   // 轻量号：聊天页是软件自己画的，把每条消息的译文发给界面（lite:tr），lite.js 画在原文下面。
   // 用最近一次读到的消息（data-id 只在主进程）对上翻译栏里的状态；按钮（翻译、重试）点了和工作台里点一样（readerItem）
-  let inlineRead = null; // { accId, wc, lite, msgs }
+  let inlineRead = null; // { accId, wc, lite, msgs, vis }
   let inlineTimer = null;
   let inlineBusy = false;
   let inlineAgain = false;
@@ -372,26 +304,29 @@ function setupTranslateIpc(ctx) {
       return m ? m[1].trim() : '';
     } catch { return ''; }
   };
+  // 颜色有浅、深两套：WhatsApp 是浅色主题用 light（Radix 浅色色阶），深色主题用 dark（Radix 深色色阶，只给这一块用；译文字用 12 号，和 WhatsApp 深色下的正文一样白）。字号、圆角两套一样
   let inlineLookCache = null;
-  const inlineLook = () => inlineLookCache || (inlineLookCache = {
-    fsS: cssVar('fonts/fonts.css', 'fs-s') || 'inherit', rS: cssVar('tokens.css', 'r-s') || '0',
-    text: RADIX.hex('slate', 11), strong: RADIX.hex('slate', 12), line: RADIX.hex('slate', 6), bad: RADIX.hex('red', 11),
-    btn: RADIX.hex('slate', 4), btnHover: RADIX.hex('slate', 5), focus: RADIX.hex('blue', 8),
-  });
-  // 一条消息下面显示什么：k = done（译文）| busy（翻译中）| error（原因 + 重试）| manual（「翻译」按钮）；不用翻的（skip）不显示
-  function inlineEntry(it) {
-    const voice = typeof it.voice === 'number' && !it.text;
-    if (it.state === 'done') return it.tr ? { k: 'done', t: it.tr } : null;
-    if (it.state === 'skip') return null;
-    if (it.state === 'queued' || it.state === 'running') return { k: 'busy', t: voice ? '转文字中…' : '翻译中…' };
-    if (it.state === 'error') return { k: 'error', t: it.err || '翻译失败', b: '重试' };
-    const label = voice ? (it.note === 'long' ? '转文字（太长，只转前 5 分钟）' : '转文字') : (it.note === 'long' ? '翻译（太长，不自动翻）' : '翻译');
-    return { k: 'manual', b: label };
-  }
+  const inlineLook = () => {
+    if (inlineLookCache) return inlineLookCache;
+    const base = { fsS: cssVar('fonts/fonts.css', 'fs-s') || 'inherit', rS: cssVar('tokens.css', 'r-s') || '0' };
+    return (inlineLookCache = {
+      light: {
+        ...base,
+        text: RADIX.hex('slate', 11), strong: RADIX.hex('slate', 12), line: RADIX.hex('slate', 6), bad: RADIX.hex('red', 11),
+        btn: RADIX.hex('slate', 4), btnHover: RADIX.hex('slate', 5), focus: RADIX.hex('blue', 8),
+      },
+      dark: {
+        ...base,
+        text: RADIX.hexDark('slate', 12), strong: RADIX.hexDark('slate', 12), line: RADIX.hexDark('slate-a', 6), bad: RADIX.hexDark('red', 11),
+        btn: RADIX.hexDark('slate-a', 4), btnHover: RADIX.hexDark('slate-a', 5), focus: RADIX.hexDark('blue', 8),
+      },
+    });
+  };
   function inlineList(r) {
     if (!inlineOn()) return [];
     const items = new Map(floatCore.viewOf(r.accId).items.map((it) => [it.h, it]));
     const out = [];
+    const done = new Set();
     for (const m of r.msgs) {
       if (m.out) continue;
       // 页面上的编号：新格式按 raw；按内容算出来的编号（读不到 data-id 时）在页面上找不到，不显示
@@ -399,11 +334,102 @@ function setupTranslateIpc(ctx) {
       if (!dom) continue;
       const h = msgHash(r.accId, m.id);
       const it = items.get(h);
+      if (it) done.add(h);
       const e = it ? inlineEntry(it) : null;
-      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '' });
+      // c：这条消息的按钮被点过几次。点了马上又失败（没登录、额度用完）时文字不变，靠它让页面把按钮重画成能点的
+      if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClickCount.get(h) || 0, o: trOpenOf(r.accId, h, e) });
+    }
+    // 往上翻聊天记录时屏幕上看得到的更早的客户消息（不在翻译栏里）：存过的显示译文，没翻过的给「翻译」按钮（见 FloatCore.history）
+    if (Array.isArray(r.vis) && r.vis.length) {
+      const hist = floatCore.history(r.accId, r.vis);
+      for (const m of r.vis) {
+        if (m.out) continue;
+        const dom = m.raw || (/^(true|false)_chat:/.test(m.id) ? '' : m.id);
+        const h = msgHash(r.accId, m.id);
+        if (!dom || done.has(h)) continue;
+        done.add(h);
+        const it = hist.get(h);
+        // 排着后台补翻、等着自动重翻的（翻译栏里显示「翻译」）一样显示按钮
+        const e = it ? inlineEntry((it.state === 'queued' && it.bg) || it.state === 'wait' ? { ...it, state: 'manual' } : it) : null;
+        if (e) out.push({ id: dom, h, k: e.k, t: e.t || '', b: e.b || '', c: inlineClickCount.get(h) || 0, o: trOpenOf(r.accId, h, e) });
+      }
     }
     return out;
   }
+  const inlineClickCount = new Map();
+
+  // ---- 气泡译文的编辑小窗（点译文末尾的小铅笔，shen 2026-11-02）----
+  // 网页号：小窗放在选中文字翻译的那个小视图里（sel-translate.js 的 openTr，不放进 WhatsApp 页面，页面会抢键盘）；
+  // 轻量号：shell 自己画（lite.js），数据走 tr:item 和工作台同样的 dock:edit / dock:item / dock:suggest。
+  // 改了没保存就收起：不弹确认，改的字记着（每条一份，最多 50 条，软件开着期间），下次打开同一条还在；这条译文被换掉了就不再用
+  let selTr = null; // main.js 建好后给（useSelTr）
+  const trDrafts = new Map(); // `${accId}:${h}` -> { base: 当时的译文, text }
+  const trDraftKey = (accId, h) => `${accId}:${h}`;
+  function trDraftOf(accId, h, tr) {
+    const d = trDrafts.get(trDraftKey(accId, h));
+    if (!d) return '';
+    if (d.base !== tr) { trDrafts.delete(trDraftKey(accId, h)); return ''; }
+    return d.text;
+  }
+  function trDraftSet(accId, h, text) {
+    const e = floatCore && floatCore.entry(accId, h);
+    const k = trDraftKey(accId, h);
+    trDrafts.delete(k);
+    if (!e || typeof text !== 'string' || text === e.tr) return;
+    trDrafts.set(k, { base: e.tr, text: text.slice(0, 4000) });
+    while (trDrafts.size > 50) trDrafts.delete(trDrafts.keys().next().value);
+  }
+  // 小窗开着的那条（网页号）：消息下面的铅笔保持显示
+  function trOpenOf(accId, h, e) {
+    const s = selTr && selTr.shown;
+    return s && s.mode === 'tr' && s.id === accId && s.h === h && e.k === 'done' ? 1 : 0;
+  }
+  // 小窗要的：这条现在的状态（只认当前号）
+  const trEntry = (accId, h) => (floatCore && accId === ctx.activeId && typeof h === 'string' ? floatCore.entry(accId, h) : null);
+  // 保存：文字和译文一样就不用存
+  function trSave(accId, h, text) {
+    const e = trEntry(accId, h);
+    if (!e || typeof text !== 'string' || !text.trim()) return false;
+    if (text === e.tr) return true;
+    const ok = floatCore.edit(accId, h, text);
+    if (ok) trDrafts.delete(trDraftKey(accId, h));
+    return ok;
+  }
+  // 纠错：框里改了先保存（这时结果按「改过的」处理，只给建议）
+  function trFix(accId, h, text) {
+    const e = trEntry(accId, h);
+    if (!e || !e.orig) return false;
+    if (typeof text === 'string' && text.trim() && text !== e.tr && !trSave(accId, h, text)) return false;
+    const ok = floatCore.manual(accId, h, true);
+    pushFloat();
+    return ok;
+  }
+  // 网页号的小窗开着时：状态变了就推过去；这条不在了（换了对话、被挤出去）就收起
+  function trEditSync() {
+    const s = selTr && selTr.shown;
+    if (!s || s.mode !== 'tr') return;
+    if (s.id !== ctx.activeId) { selTr.hideTr(); return; }
+    selTr.updateTr(trEntry(s.id, s.h));
+  }
+  // 点了网页号气泡里的铅笔：hit = { h, rect, top }
+  function trOpenWeb(r, hit, list) {
+    if (!selTr || r.accId !== ctx.activeId || !hit || !list.some((x) => x.h === hit.h && x.k === 'done')) return;
+    const entry = trEntry(r.accId, hit.h);
+    if (!entry || !entry.tr) return;
+    selTr.openTr({ id: r.accId, wc: r.wc, h: hit.h, rect: hit.rect, top: hit.top, entry, draft: trDraftOf(r.accId, hit.h, entry.tr) })
+      .then((opened) => { if (opened) inlineSoon(); });
+  }
+  // sel-translate.js 用（只认当前号）
+  const trEdit = {
+    save: (id, h, text) => trSave(id, h, text),
+    fix: (id, h, text) => trFix(id, h, text),
+    take: (id, h, yes) => (trEntry(id, h) ? floatCore.suggestion(id, h, yes === true) : false),
+    draft: (id, h, text) => { if (findAcc(id)) trDraftSet(id, h, text); },
+    closed: () => inlineSoon(), // 铅笔不用再常亮
+  };
+  // 轻量号：小窗要的这条现在的状态 + 上次没保存的字（草稿表在 shell 里，这里不给）
+  handleShell('tr:item', ({ accountId, h } = {}) => trEntry(accountId, h));
+
   function inlineSoon() {
     if (inlineTimer) return;
     inlineTimer = setTimeout(() => { inlineTimer = null; inlinePaint(); }, 30);
@@ -425,10 +451,13 @@ function setupTranslateIpc(ctx) {
     if (!r.wc || r.wc.isDestroyed()) return;
     inlineBusy = true;
     let clicks = [];
-    try { clicks = await waPage.paintTranslations(r.wc, list, inlineLook()); } finally { inlineBusy = false; }
-    // 点了气泡里的「翻译」「重试」：只认当前号、这次放出去的消息
-    const sent = new Set(list.map((e) => e.h));
-    for (const h of new Set(clicks)) if (sent.has(h) && r.accId === ctx.activeId) readerItem(h);
+    let edit = null;
+    try { ({ clicks, edit } = await waPage.paintTranslations(r.wc, list, inlineLook())); } finally { inlineBusy = false; }
+    if (edit) trOpenWeb(r, edit, list);
+    // 点了气泡里的「翻译」「重试」：只翻当前号、这次放出去的消息（换了号的不翻，但按钮要恢复能点）
+    const { run, repaint } = inlineClicks(clicks, list, r.accId, ctx.activeId, inlineClickCount);
+    for (const h of run) readerItem(h);
+    if (repaint) inlineAgain = true;
     if (inlineAgain) { inlineAgain = false; inlineSoon(); }
   }
   // 换成「右侧工作台」：所有网页号页面里放的译文都拿掉，轻量聊天页也清掉
@@ -437,6 +466,7 @@ function setupTranslateIpc(ctx) {
       const wc = view && view.webContents;
       if (wc && !wc.isDestroyed()) waPage.paintTranslations(wc, [], inlineLook());
     }
+    if (selTr) selTr.hideTr();
     const wc = ctx.shellView && ctx.shellView.webContents;
     if (wc && !wc.isDestroyed()) wc.send('lite:tr', { accountId: '', list: [] });
   }
@@ -462,14 +492,14 @@ function setupTranslateIpc(ctx) {
       readAt = Date.now();
       let r;
       try {
-        if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc);
+        if (target.lite) { const lc = liteChat(target.acc.id); r = fromLite(lc.view, lc.jid); } else r = await waPage.readOpenChat(target.wc, { vis: inlineOn() });
       } finally { floatBusy = false; }
       if (!readerOn() || target.acc.id !== ctx.activeId) { scheduleFloat(500); return; }
       if (r.why === 'wait') { scheduleFloat(300); return; } // 轻量号刚点开对话，消息还没推过来
       if (r.ok) {
         // 打开的对话里还没有消息也算读到了（悬浮窗会提示没有文字消息）
         floatFails = 0;
-        inlineRead = { accId: target.acc.id, wc: target.lite ? null : target.wc, lite: !!target.lite, msgs: r.msgs || [] };
+        inlineRead = { accId: target.acc.id, wc: target.lite ? null : target.wc, lite: !!target.lite, msgs: r.msgs || [], vis: r.vis || [] };
         const was = floatReadable;
         floatReadable = 'ok';
         const cfg = ctx.translator.load();
@@ -524,7 +554,7 @@ function setupTranslateIpc(ctx) {
     const v = floatCore.viewOf(accId);
     if (!v.chatKey || !v.items.length) return false;
     const lang = detectLang(v.items.slice(-5).map((it) => it.text).join('\n'));
-    if (!lang || lang === '中文') return false;
+    if (!lang) return false;
     return ctx.translator.setChatLang(`${accId}:${v.chatKey}`, lang, 'detected');
   }
   // 发出的目标语言和它的来源：手动选的 > 客户名单里填的 > 认出来的 > 这个号的默认语言
@@ -542,15 +572,19 @@ function setupTranslateIpc(ctx) {
     if (kept && kept.src === 'detected') return { lang: kept.lang, from: 'detected', name: '' };
     return { lang: (acc && cfg.accountLang[acc.id]) || '英语', from: 'default', name: '' };
   }
+  // 每算一次状态编一个号：界面里 invoke 拿回来的状态可能比之后推来的晚到（dock:get 的回复排在 dock:state 后面），
+  // 界面按号认先后，旧的不盖新的。不然先拿到的「正在读」盖掉了刚推来的「没打开对话」，主进程看状态没变不再推，翻译页就一直停在「正在读」
+  let floatSeq = 0;
   function floatState() {
     const cfg = ctx.translator.load();
     const acc = findAcc(ctx.activeId);
     const modes = ctx.modeStore.list();
     const v = acc ? floatCore.viewOf(acc.id) : { title: '', items: [], paused: '' };
-    const primary = ctx.translator.provider(cfg.primaryId);
+    const pub = ctx.translator.publicConfig();
     const inMode = floatInMode();
     const out = outTarget(acc, v);
     return {
+      seq: ++floatSeq,
       accountId: acc ? acc.id : '',
       accountName: acc ? acc.name : '',
       lite: !!(acc && isLite(acc)),
@@ -563,20 +597,18 @@ function setupTranslateIpc(ctx) {
       today: v.today || 0,
       auto: !!(acc && floatAuto(acc.id)),
       dailyCap: cfg.dailyCap,
-      hasProvider: !!primary,
-      // 默认翻译服务还没填密钥：翻译页顶上显示黄条和“去填密钥”
-      needKey: primary && needsKey(primary) ? { id: primary.id, name: primary.name || '翻译服务', others: (cfg.providers || []).some((p) => p.id !== primary.id && !needsKey(p)) } : null,
-      providerName: primary ? primary.name : '',
-      primaryId: primary ? primary.id : '',
-      fallbackId: cfg.fallbackId || '',
-      providers: (cfg.providers || []).map((p) => ({ id: p.id, name: p.name, model: p.model || '' })), // 翻译页的“换模型”下拉，不带密钥
-      engine: primary ? (primary.model || primary.name) : '',
+      hasProvider: true,
+      providerName: pub.providers[0].name,
+      primaryId: pub.primaryId,
+      fallbackId: '',
+      providers: pub.providers.map((p) => ({ id: p.id, name: p.name, model: p.model })),
+      engine: pub.providers[0].model,
       modes: {
         out: modes.filter((m) => m.direction !== 'in').map(({ id, name }) => ({ id, name })),
         in: modes.filter((m) => m.direction !== 'out').map(({ id, name }) => ({ id, name })),
       },
       inModeId: inMode ? inMode.id : '',
-      langs: ctx.translator.publicConfig().langs,
+      langs: pub.langs,
       target: out.lang,
       targetSrc: out.from, // manual | customer | detected | default
       autoTarget: (out.auto || out).lang, // “自动选择”时中文翻成的语言（客户的语言）
@@ -677,6 +709,7 @@ function setupTranslateIpc(ctx) {
   return {
     translateSession,
     applyTranslateNet,
+    retryCloudErrors,
     setupFloatCore,
     pushFloat,
     layoutFloat,
@@ -686,6 +719,11 @@ function setupTranslateIpc(ctx) {
     // 轻量号的对话有变化（新消息、换对话）：马上读一次，不等 2 秒
     liteChanged(id) { if (id === ctx.activeId && readerOn() && !floatBusy) scheduleFloat(50); },
     get floatCore() { return floatCore; },
+    // 选中文字翻译的小视图（sel-translate.js）：编辑小窗也放在它里面
+    useSelTr(s) { selTr = s; },
+    trEdit,
+    // 当前网页号松开鼠标（可能刚点了铅笔）：马上放一次译文，不等读页面那一轮
+    inlineNudge() { if (inlineOn() && inlineRead && !inlineRead.lite && inlineRead.accId === ctx.activeId) inlineSoon(); },
     get trStore() { return trStore; },
     get drafts() { return drafts; },
     // 删号：这个号的草稿一起删

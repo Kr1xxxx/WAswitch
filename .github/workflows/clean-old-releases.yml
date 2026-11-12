@@ -1,0 +1,53 @@
+# 手动运行：删掉 1.0.5 以前的 Release（v0.2.0 到 v1.0.4）和里面的安装包，tag 留着。
+# 为什么：1.0.4 及更早的版本不用登录来财就能用。仓库公开后 Release 里的安装包谁都能下，
+# 等于把一个能用的多开工具发出去。1.0.5 起必须登录，留着没关系。
+# 删了收不回（安装包只能从 tag 重新打，文件不会一模一样）。所以默认只列出会删哪些；勾上「真的删」才删。
+# 和发版共用 concurrency，不会在发版中途动 Release。只有能写仓库的人才能手动运行。
+name: clean-old-releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: 真的删（不勾只列出会删哪些）
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DELETE: ${{ inputs.delete }}
+      # 比这个版本小的才删
+      KEEP_FROM: 1.0.5
+    steps:
+      - name: 删掉 1.0.5 以前的 Release
+        run: |
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          n=0
+          for tag in $tags; do
+            v=${tag#v}
+            # 只认 v 加三段数字的 tag，别的不碰
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "跳过 $tag"; continue; fi
+            # 两个里小的那个是它自己、又不等于 KEEP_FROM，才算比 KEEP_FROM 小
+            if [ "$v" = "$KEEP_FROM" ] || [ "$(printf '%s\n%s\n' "$v" "$KEEP_FROM" | sort -V | head -n 1)" != "$v" ]; then
+              echo "留着 $tag"
+              continue
+            fi
+            if [ "$DELETE" = true ]; then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+              echo "删掉 $tag"
+            else
+              echo "会删 $tag"
+            fi
+            n=$((n+1))
+          done
+          if [ "$DELETE" = true ]; then echo "删掉 $n 个 Release"; else echo "会删 $n 个 Release（这次没删）"; fi

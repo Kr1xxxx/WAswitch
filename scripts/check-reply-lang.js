@@ -17,9 +17,22 @@ assert.strictEqual(R.isChinese('@emma_schneider 明天发货'), true);
 assert.strictEqual(R.isChinese('Please check https://example.com/wig'), false);
 // 中文翻成客户的语言（客户资料 / 认出来的）
 assert.deepStrictEqual(R.pick({ text: '谢谢', src: '', manual: '', autoTarget: '德语' }), { source: '中文', target: '德语' });
-// 客户语言是中文或没有：中文翻成英语
-assert.strictEqual(R.pick({ text: '谢谢', autoTarget: '中文' }).target, '英语');
+// 客户语言没有：中文翻成英语
 assert.strictEqual(R.pick({ text: '谢谢' }).target, '英语');
+assert.strictEqual(R.pick({ text: '谢谢', autoTarget: '' }).target, '英语');
+// 客户写中文（自动选择）：写中文不翻，写别的翻成中文（shen 2026-11-06）
+assert.deepStrictEqual(R.pick({ text: '谢谢', autoTarget: '中文' }), { source: '中文', target: '中文' });
+assert.strictEqual(R.noTr({ text: '谢谢', autoTarget: '中文' }), true);
+assert.strictEqual(R.noTr({ text: '这个 lace front 头套明天发', autoTarget: '中文' }), true);
+assert.deepStrictEqual(R.pick({ text: 'Thanks, see you', autoTarget: '中文' }), { source: '', target: '中文' });
+assert.strictEqual(R.noTr({ text: 'Thanks, see you', autoTarget: '中文' }), false);
+assert.strictEqual(R.noTr({ text: '谢谢', src: '英语', autoTarget: '中文' }), false);
+assert.strictEqual(R.noTr({ text: '谢谢', autoTarget: '德语' }), false);
+assert.strictEqual(R.noTr({ text: '谢谢' }), false);
+// 手动选了目标语言（或 ⇄ 对调）：照常翻，中文聊天也能翻成别的语言
+assert.deepStrictEqual(R.pick({ text: '谢谢', manual: '德语', autoTarget: '中文' }), { source: '中文', target: '德语' });
+assert.strictEqual(R.noTr({ text: '谢谢', manual: '德语', autoTarget: '中文' }), false);
+assert.strictEqual(R.noTr({ text: '谢谢', manual: '中文', autoTarget: '中文' }), false);
 // 没写字按中文显示
 assert.strictEqual(R.pick({ text: '', autoTarget: '英语' }).target, '英语');
 assert.strictEqual(R.pick({ text: '123 ?', autoTarget: '英语' }).target, '英语');
@@ -34,4 +47,7 @@ assert.deepStrictEqual(R.swap({ text: '你好', src: '', manual: '', autoTarget:
 assert.deepStrictEqual(R.swap({ text: 'hello there', src: '英语', manual: '', autoTarget: '英语' }), { src: '中文', manual: '英语' });
 assert.deepStrictEqual(R.swap({ text: 'hello there', src: '', manual: '', autoTarget: '英语' }), { src: '中文', manual: '英语' }); // 认不出原文语言：目标按英语
 assert.deepStrictEqual(R.swap({ text: '你好', src: '', manual: '德语', autoTarget: '英语' }), { src: '德语', manual: '中文' });
+// 中文聊天里写中文（不用翻）：对调后是中文翻英语；写外文照旧
+assert.deepStrictEqual(R.swap({ text: '你好', src: '', manual: '', autoTarget: '中文' }), { src: '中文', manual: '英语' });
+assert.deepStrictEqual(R.swap({ text: 'hello there', src: '', manual: '', autoTarget: '中文' }), { src: '中文', manual: '英语' });
 console.log('check-reply-lang OK');

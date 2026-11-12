@@ -348,6 +348,12 @@ class Notifier {
     this.laterTimers.set(card.key, t);
   }
 
+  // 设置里关掉了“稍后提醒”：等着的都不弹了
+  cancelLater() {
+    for (const t of this.laterTimers.values()) clearTimeout(t);
+    this.laterTimers.clear();
+  }
+
   dropCards(id) {
     for (const [key, t] of this.laterTimers) if (key.startsWith(`m:${id}:`)) { clearTimeout(t); this.laterTimers.delete(key); }
     if (this.popup) this.popup.dropAccount(id, (c) => c.kind !== 'msg');
@@ -419,6 +425,15 @@ class Notifier {
         click: () => { this.showWindow(); this.hooks.activate(acc.id); },
       };
     });
+    if (this.hooks.minimalMenu && this.hooks.minimalMenu()) {
+      this.tray.setContextMenu(Menu.buildFromTemplate([
+        { label: '显示窗口', click: () => this.showWindow() },
+        ...(this.hooks.updateMenu ? this.hooks.updateMenu() : []), // 自动更新不看登录
+        { type: 'separator' },
+        { label: '退出 WAswitch', click: () => this.hooks.quit() },
+      ]));
+      return;
+    }
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示窗口', click: () => this.showWindow() },
       ...(this.hooks.updateMenu ? this.hooks.updateMenu() : []),

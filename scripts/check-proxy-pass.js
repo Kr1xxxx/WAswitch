@@ -1,6 +1,6 @@
 // 编辑账号时代理密码保留/换新/清空的判断（src/proxy-parse.js 的 passwordPlan），保存和测试共用
 const assert = require('assert');
-const { passwordPlan, keepOldPassword } = require('../src/proxy-parse');
+const { parse, passwordPlan, keepOldPassword } = require('../src/proxy-parse');
 
 const OLD = 'http://alice@1.2.3.4:8080';
 // 什么都没改、没填新密码：沿用旧密码
@@ -34,5 +34,35 @@ assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://alice@1.2.3.4:8080'
 // 清掉密码的情况（审计第 1 条）不受影响：不会把旧密码留给新代理
 assert.strictEqual(keepOldPassword(passwordPlan(OLD, 'http://bob@5.6.7.8:8080', ''), 'pw'), false);
 assert.strictEqual(keepOldPassword(passwordPlan(OLD, '', ''), 'pw'), false);
+
+// 写了和协议默认值相同的端口（http 80、https 443）也要认：new URL() 会把它丢掉
+const NO_PORT = '代理地址需要包含 IP 和端口，例如 socks5://127.0.0.1:7891';
+const p80 = parse('http://1.2.3.4:80');
+assert.strictEqual(p80.error, undefined);
+assert.strictEqual(p80.port, 80);
+assert.strictEqual(p80.rules, 'http://1.2.3.4:80');
+assert.strictEqual(p80.display, 'http://1.2.3.4:80');
+const p443 = parse('https://p.example:443');
+assert.deepStrictEqual([p443.port, p443.rules, p443.display], [443, 'https://p.example:443', 'https://p.example:443']);
+assert.strictEqual(parse('http://alice:pw@1.2.3.4:80/').display, 'http://alice@1.2.3.4:80');
+assert.strictEqual(parse('http://alice:pw@1.2.3.4:80/').port, 80);
+assert.strictEqual(parse('http://1.2.3.4:8080').port, 8080);
+assert.strictEqual(parse('http://1.2.3.4:8080').rules, 'http://1.2.3.4:8080');
+assert.strictEqual(parse('socks5://1.2.3.4:1080').rules, 'socks5://1.2.3.4:1080');
+// IPv6：有端口能用，没写端口仍然报错
+assert.strictEqual(parse('socks5://[::1]:1080').port, 1080);
+assert.strictEqual(parse('socks5://[::1]:1080').rules, 'socks5://[::1]:1080');
+assert.strictEqual(parse('http://[::1]:80').port, 80);
+assert.strictEqual(parse('http://[::1]:80').rules, 'http://[::1]:80');
+assert.strictEqual(parse('http://[::1]').error, NO_PORT);
+assert.strictEqual(parse('socks5://[::1]').error, NO_PORT);
+// 真的没写端口：报错不变
+assert.strictEqual(parse('http://1.2.3.4').error, NO_PORT);
+assert.strictEqual(parse('https://1.2.3.4/').error, NO_PORT);
+assert.strictEqual(parse('socks5://1.2.3.4').error, NO_PORT);
+assert.strictEqual(parse('http://alice@1.2.3.4').error, NO_PORT);
+assert.strictEqual(parse('http://1.2.3.4/path:80').error, NO_PORT);
+// 80 端口的地址能沿用旧密码
+assert.deepStrictEqual(passwordPlan('http://alice@1.2.3.4:80', 'http://alice@1.2.3.4:80', ''), { kind: 'old' });
 
 console.log('check-proxy-pass: ok');

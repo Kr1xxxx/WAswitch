@@ -9,4 +9,9 @@ contextBridge.exposeInMainWorld('seltr', {
   copy: (text) => ipcRenderer.invoke('seltr:copy', typeof text === 'string' ? text : ''),
   size: (h) => ipcRenderer.send('seltr:size', Number(h) || 0),
   hide: () => ipcRenderer.send('seltr:hide'),
+  // 气泡译文的编辑小窗（mode tr）：改哪一条由主进程记着，这里只传文字
+  trSave: (text) => ipcRenderer.send('seltr:tr-save', typeof text === 'string' ? text : ''),
+  trFix: (text) => ipcRenderer.send('seltr:tr-fix', typeof text === 'string' ? text : ''),
+  trTake: (yes) => ipcRenderer.send('seltr:tr-take', yes === true),
+  trDraft: (text) => ipcRenderer.send('seltr:tr-draft', typeof text === 'string' ? text : ''),
 });

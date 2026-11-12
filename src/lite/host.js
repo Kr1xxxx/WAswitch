@@ -263,6 +263,12 @@ class LiteHost extends EventEmitter {
 
   read(id, jid) { for (const p of this.procs()) p.read(id, jid); }
 
+  // CRM 补传：这个号本机缓存里 since 之后的单聊。号没在运行时返回 null
+  crmBackfill(id, since) {
+    const p = this.procOf(id);
+    return p && p.running() ? p.request({ type: 'backfill', id, since }, 30000) : Promise.resolve(null);
+  }
+
   sendText(id, jid, text) {
     const p = this.procOf(id);
     return p ? p.sendText(id, jid, text) : Promise.reject(new Error('这个号没有在运行'));

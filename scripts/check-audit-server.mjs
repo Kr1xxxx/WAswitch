@@ -13,7 +13,7 @@ for (const [uid, role, email] of [[owner, 'owner', 'owner@example.test'], [super
 }
 const admin = (email, user, body) => handleAdmin(new Request('https://test.invalid/api/admin/users/' + user, {
   method: 'PATCH', headers: { 'content-type': 'application/json', 'x-waswitch-admin': '1' }, body: JSON.stringify(body),
-}), { DB: db }, '/api/admin/users/' + user, { email });
+}), { DB: db }, '/api/admin/users/' + user, { ...db.raw.prepare('SELECT id, name, role, group_id FROM users WHERE email = ?').get(email) });
 try {
   assert.equal((await admin('sup@example.test', target, { name: 'Allowed' })).status, 200);
   const prepare = db.prepare;

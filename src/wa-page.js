@@ -28,10 +28,13 @@ const SELECTORS = {
   filterTab: '#side [role="tab"], #side [role="tablist"] button',
   // 悬浮翻译：当前打开的对话（右侧 #main）
   chatMain: '#main',
-  // 对话下方写消息的输入框。“放进输入框”只在焦点在这里时才粘贴
-  composeBox: ['#main footer [contenteditable="true"]'],
-  chatTitle: ['#main header span[title]', '#main header [title]', '#main header span[dir="auto"]'],
-  // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的）
+  // 对话下方写消息的输入框。新版（2026-10 起）的输入框带 data-testid，以防哪天不在 footer 里
+  composeBox: ['#main footer [contenteditable="true"]', '#main [data-testid="conversation-compose-box-input"]'],
+  // 顶栏的对话名字：名字那个 span 在前，下面一行（「在线」「正在输入…」「最后上线时间」「点击这里查看联系人信息」）在后。
+  // 新版的名字 span 可能没有 title、下面那行却有，只找 span[title] 会读到下面那行，一会儿一变（shen 2026-11-02「一会会自动重新翻译一遍」），
+  // 所以第一条按页面顺序取第一个带 title 或 dir="auto" 的 span（querySelector 一组选择器时按页面顺序返回）
+  chatTitle: ['#main header span[title], #main header span[dir="auto"]', '#main header [title]'],
+  // 每条消息的外层带 data-id（true_ 开头是自己发的，false_ 开头是收到的；新版（2026-10 起）只有 32 位十六进制的消息编号，没有前缀和号码）
   message: '[data-id]',
   // 消息正文：带 data-pre-plain-text 的 copyable-text 里的 selectable-text。
   // data-pre-plain-text 本身含时间和群发送人，不读它
@@ -40,6 +43,8 @@ const SELECTORS = {
   // 没有 true_/false_ 前缀时，用气泡的 class 认方向
   messageIn: '.message-in',
   messageOut: '.message-out',
+  // 新版（2026-10 起）没有 .message-in/.message-out，气泡是 msg-container：没有正文的消息（语音）按它量位置、放译文
+  bubble: '[data-testid="msg-container"]',
   // 认不出方向时再看：只有自己发的消息才带发送状态的勾（单勾、双勾、发送中的钟）
   messageTick: '[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-time"], [data-icon="msg-check-light"], [data-icon="msg-dblcheck-light"], [data-icon="tail-out"]',
   // 引用的消息、链接预览是可点的块，跳过里面的文字
@@ -173,9 +178,12 @@ function parsePre(raw) {
 // 悬浮翻译和 CRM 同步：只读当前打开的对话的最后 20 条消息。
 // 只用 querySelector / getAttribute / textContent（不用 innerText，不触发排版），不滚动、不聚焦、不改页面。
 // 不读群里的发送人、引用的消息和链接预览；时间只在隔离环境里解析成数字（t），发送人名字不带出来。每条最多 4000 字，总共最多 20000 字。
-// MCP 的 read_messages 可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
+// MCP 的 read_messages 和 CRM 采集可以多读一些（最多 50 条，总共最多 40000 字），见 readOpenChat 的 max
 const MAX_MSGS = 20;
 const MAX_MSGS_LIMIT = 50;
+// 译文显示在消息下面时另外带回「屏幕上看得到的消息」（vis，上下各多算一屏）：往上翻到更早的记录时，
+// 存过的译文、「翻译」按钮也放得上（最后 20 条那份照旧给翻译栏用）。最多 50 条，总共最多 40000 字
+const MAX_VIS = 50;
 // Shared read-only identity snapshot. Mixed/transitional DOMs fail closed.
 function chatIdentity(main) {
   if (!main) return '';
@@ -187,9 +195,9 @@ function chatIdentity(main) {
   }
   return ids.size === 1 ? [...ids][0] : '';
 }
-const readChatCode = (max = MAX_MSGS) => `(() => {
+const readChatCode = (max = MAX_MSGS, vis = false) => `(() => {
   const parsePre = ${parsePre.toString()};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, title: SELECTORS.chatTitle, msg: SELECTORS.message, body: SELECTORS.messageBody, text: SELECTORS.messageText, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, mOut: SELECTORS.messageOut, bubble: SELECTORS.bubble, tick: SELECTORS.messageTick, voice: SELECTORS.voiceMark, loggedIn: SELECTORS.loggedIn, qr: SELECTORS.needsQr })};
   const first = (root, list) => { for (const s of list) { const el = root.querySelector(s); if (el) return el; } return null; };
   const main = document.querySelector(S.main);
   const chat = (${chatIdentity.toString()})(main);
@@ -241,7 +249,7 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
   const mr = main.getBoundingClientRect();
   const sideOf = (n) => {
     if (mr.width < 200) return null;
-    const r = (first(n, S.body) || n).getBoundingClientRect();
+    const r = (first(n, S.body) || n.querySelector(S.bubble) || n).getBoundingClientRect();
     if (!r.width || r.width > mr.width - 48) return null;
     const left = r.left - mr.left;
     const right = mr.right - r.right;
@@ -276,12 +284,13 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     if (!id) continue;
     if (n.parentElement && n.parentElement.closest(S.msg)) continue; // 嵌在别的消息里（引用）
     const out = dirOf(n, id);
-    if (out === null && !n.querySelector('[data-pre-plain-text]')) continue; // 既认不出方向也没有正文，多半不是消息
+    // 既认不出方向也没有正文、也没有气泡，多半不是消息。新版没有 .message-in/.message-out，语音这类没有正文的只能靠气泡（msg-container）认，方向后面按位置定
+    if (out === null && !n.querySelector('[data-pre-plain-text]') && !n.querySelector(S.bubble)) continue;
     top.push({ n, rawId: id, out });
   }
   resolve(top);
   for (const e of top) {
-    if (e.out === null) e.out = false; // 实在认不出：当成收到的，客户的消息不能漏
+    if (e.out === null) { e.out = false; e.guess = true; } // 实在认不出：当成收到的，客户的消息不能漏
     // 新格式编号没有 true_/false_ 前缀：补成同样的形状，悬浮窗靠中间那段认出换了对话
     e.id = /^(true|false)_/.test(e.rawId) ? e.rawId : (e.out ? 'true_' : 'false_') + chatPart + '_' + e.rawId;
   }
@@ -295,6 +304,7 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const seen = new Map();
     for (const e of top) {
       const out = e.out === true;
+      if (e.out === null) e.guess = true;
       const { text, pre } = textOf(e.n);
       const key = (out ? 'o' : 'i') + pre + '|' + text;
       const k = (seen.get(key) || 0) + 1;
@@ -303,6 +313,13 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
       e.id = (out ? 'true_' : 'false_') + chatPart + '_h' + hash(key) + '.' + k;
     }
   }
+  // 像不像群：编号是群的，或者认得出是收到的消息里有两个以上不同的发送人名字（新版编号里没有对话编号时用）
+  const senders = new Set(top.filter((e) => e.out === false && !e.guess && e.name).map((e) => e.name));
+  const group = /@g\.us$/.test(chat) || senders.size > 1;
+  // 能不能断定是和标题那个人的单聊：收到的消息只有标题这个人发的（或者还没有收到的）。
+  // 有一个发送人不是标题，就可能是群（群里只有一个人说过话），不能按标题去找联系人的号码；
+  // 有认不准收发的消息（guess）也不算，那些消息里可能就有群里别人发的
+  const oneToOne = !group && !top.some((e) => e.out === false && e.guess) && (senders.size === 0 || (senders.size === 1 && senders.has(norm(title))));
   // 一条都没有：没有标题也没有消息行，多半是没点开对话（右边是空白页）；有标题就是空对话
   if (!top.length) {
     const rows = main.querySelectorAll('[role="row"]').length;
@@ -310,27 +327,35 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     if (!rows) return { ok: true, title, chat, msgs: [] };
     return { ok: false, why: 'nomatch' };
   }
-  const msgs = [];
-  let size = 0;
-  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
-  for (const { n, id: rawId, rawId: domId, out } of top.slice(-${max}).reverse()) {
+  // 一条消息带出去的样子；超出字数限制返回 null
+  const pack = (e, room) => {
+    const { n, id: rawId, rawId: domId, out } = e;
     const id = rawId.slice(0, 300);
     // 页面上真正的 data-id（新格式没有 true_/false_ 前缀时和 id 不一样）：在消息下面显示译文时按它找气泡
     const raw = domId && domId !== rawId ? { raw: domId.slice(0, 300) } : {};
     const r = textOf(n);
     const text = r.text.slice(0, 4000);
-    if (size + text.length > ${max > MAX_MSGS ? 40000 : 20000}) break;
-    size += text.length;
-    // 客户发来的语音（编号带 true_/false_ 才算，下载要用它）：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），
-    // 带 voice（时长认不准，给 0，以 WhatsApp 存的为准）
+    if (text.length > room) return null;
+    // 客户发来的语音：有语音标记、没有正文（群里气泡顶上的发送人名字不算正文），带 voice（时长认不准，给 0，以 WhatsApp 存的为准）。
+    // 下载要用页面上的编号：带 true_/false_ 的整条，或者新版只有消息自己的编号（一串十六进制，web-voice.js 按它在存储里找）；按内容算的编号不算
     const outside = (sel) => [...n.querySelectorAll(sel)].some((x) => !x.closest(S.skip));
-    const voice = !out && /^(true|false)_/.test(rawId) && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
-    msgs.push(voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw });
+    const voice = !out && /^((true|false)_|[0-9A-Fa-f]{16,}$)/.test(domId || '') && outside(S.voice) && !outside('span.selectable-text, .copyable-text');
+    return voice ? { id, out, text: '', t: r.t, voice: 0, ...raw } : { id, out, text, t: r.t, ...raw };
+  };
+  const msgs = [];
+  let size = 0;
+  // 从最新的往前取，字数超了就丢掉更早的（要翻的是新消息）
+  for (const e of top.slice(-${max}).reverse()) {
+    const m = pack(e, ${max > MAX_MSGS ? 40000 : 20000} - size);
+    if (!m) break;
+    size += m.text.length;
+    msgs.push(m);
   }
   msgs.reverse();
   // 是不是停在最下面：往上翻聊天记录时 WhatsApp 会把最下面的新消息从页面上拿掉，这时读到的最后几条不是最新的。
   // 找最后一条消息外面能滚动的那层，离底部还远就是 false；找不到（没排版、页面改版）是 null。只读位置，不滚动
   let bottom = null;
+  let scroller = null;
   const last = top[top.length - 1].n;
   for (let sc = last.parentElement; sc && sc !== main; sc = sc.parentElement) {
     if (sc.scrollHeight <= sc.clientHeight + 4) continue;
@@ -339,11 +364,38 @@ const readChatCode = (max = MAX_MSGS) => `(() => {
     const dist = cs.flexDirection === 'column-reverse' ? Math.abs(sc.scrollTop) : sc.scrollHeight - sc.clientHeight - sc.scrollTop;
     const gap = last.getBoundingClientRect().bottom - sc.getBoundingClientRect().bottom;
     bottom = dist <= 120 && gap <= 120;
+    scroller = sc;
     break;
+  }${vis ? `
+  // 屏幕上看得到的消息（上下各多算一屏，滚一下也已经放好；自己发的也带上，翻旧消息时当上下文）：只读位置，不滚动
+  const vis = [];
+  const box = (scroller || main).getBoundingClientRect();
+  const lo = box.top - box.height;
+  const hi = box.bottom + box.height;
+  const mid = (box.top + box.bottom) / 2;
+  const near = [];
+  for (const e of top) {
+    if (!/^(true|false)_/.test(e.id)) continue;
+    const r = e.n.getBoundingClientRect();
+    if (!r.height || r.bottom < lo || r.top > hi) continue;
+    near.push({ e, d: Math.abs((r.top + r.bottom) / 2 - mid) });
   }
-  return { ok: true, title, chat, msgs, bottom };
+  // 太多时留离屏幕中间近的，再按页面上的顺序排回去
+  const keep = new Set(near.sort((a, b) => a.d - b.d).slice(0, ${MAX_VIS}).map((x) => x.e));
+  let vsize = 0;
+  for (const e of top) {
+    if (!keep.has(e)) continue;
+    const m = pack(e, 40000 - vsize);
+    if (!m) continue;
+    vsize += m.text.length;
+    vis.push(m);
+  }
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom, vis };` : `
+  return { ok: true, title, chat, group, oneToOne, msgs, bottom };`}
 })()`;
 const READ_CHAT_CODE = readChatCode(MAX_MSGS);
+const READ_CHAT_VIS_CODE = readChatCode(MAX_MSGS, true);
+const READ_CHAT_MAX_CODE = readChatCode(MAX_MSGS_LIMIT);
 
 const cleanTime = (t) => {
   if (!t || typeof t !== 'object') return null;
@@ -357,17 +409,22 @@ const cleanTime = (t) => {
   return { ...v, ambig: t.ambig === true, at, altAt };
 };
 
-// max：最多读几条（默认 20，最多 50）。只读页面上已经显示出来的消息，不滚动
-async function readOpenChat(wc, { max = MAX_MSGS } = {}) {
+const cleanMsgs = (list, n) => (Array.isArray(list) ? list : []).filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
+  .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
+    ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
+
+// max：最多读几条（默认 20，最多 50；CRM 采集读 50 条）。只读页面上已经显示出来的消息，不滚动。
+// vis：另外带回屏幕上看得到的消息（只在默认的 20 条时有，译文显示在消息下面用）
+async function readOpenChat(wc, { max = MAX_MSGS, vis = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, why: 'loading' };
   const n = Number.isInteger(max) ? Math.min(Math.max(max, 1), MAX_MSGS_LIMIT) : MAX_MSGS;
+  const withVis = vis === true && n === MAX_MSGS;
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: n === MAX_MSGS ? READ_CHAT_CODE : readChatCode(n) }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: withVis ? READ_CHAT_VIS_CODE : n === MAX_MSGS ? READ_CHAT_CODE : n === MAX_MSGS_LIMIT ? READ_CHAT_MAX_CODE : readChatCode(n) }]);
     if (!r || typeof r !== 'object' || !r.ok || !Array.isArray(r.msgs)) return { ok: false, why: (r && r.why) || 'bad' };
-    const msgs = r.msgs.filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string').slice(-n)
-      .map((m) => ({ id: m.id.slice(0, 300), out: m.out === true, text: m.text.slice(0, 4000), t: cleanTime(m.t), ...(m.voice === 0 && m.out !== true ? { voice: 0 } : {}),
-        ...(typeof m.raw === 'string' && m.raw ? { raw: m.raw.slice(0, 300) } : {}) }));
-    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null };
+    const msgs = cleanMsgs(r.msgs, n);
+    return { ok: true, title: typeof r.title === 'string' ? r.title.slice(0, 100) : '', chat: typeof r.chat === 'string' ? r.chat.slice(0, 100) : '', group: r.group === true, oneToOne: r.oneToOne === true, msgs, bottom: typeof r.bottom === 'boolean' ? r.bottom : null,
+      ...(withVis ? { vis: cleanMsgs(r.vis, MAX_VIS) } : {}) };
   } catch {
     return { ok: false, why: 'error' };
   }
@@ -400,11 +457,15 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
     w.inner = new MutationObserver((recs) => { if (recs.some((r) => outside(r.target) && !ours(r))) w.hit(); });
     // #main 换了（切对话、关掉对话）：看它的父元素有没有增删子元素
     w.outer = new MutationObserver(() => { if (document.querySelector(SEL) !== w.main) { w.bind(); w.hit(); } });
+    // 滚动聊天记录（往上翻时译文要跟着放到看得到的消息上）：停下 200 毫秒后算一次变化
+    w.onScroll = () => { clearTimeout(w.st); w.st = setTimeout(w.hit, 200); };
     w.bind = () => {
       w.inner.disconnect();
       w.outer.disconnect();
+      if (w.main) w.main.removeEventListener('scroll', w.onScroll, true);
       w.main = document.querySelector(SEL);
       if (!w.main) return;
+      w.main.addEventListener('scroll', w.onScroll, { capture: true, passive: true });
       w.inner.observe(w.main, { childList: true, subtree: true, characterData: true });
       if (w.main.parentElement) w.outer.observe(w.main.parentElement, { childList: true });
     };
@@ -419,7 +480,7 @@ const WAIT_CHAT_CODE = (ms) => `(() => {
 })()`;
 
 // 不用再等了（面板关了）：停止看着，下次等时再接上
-const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); w.main = null; } return 1; })()`;
+const STOP_WATCH_CODE = `(() => { const w = window.__wsChatWatch; if (w) { w.inner.disconnect(); w.outer.disconnect(); if (w.main) w.main.removeEventListener('scroll', w.onScroll, true); clearTimeout(w.st); w.main = null; } return 1; })()`;
 async function stopChatWatch(wc) {
   if (!wc || wc.isDestroyed()) return;
   try { await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: STOP_WATCH_CODE }]); } catch {}
@@ -443,11 +504,14 @@ async function waitChatChange(wc, ms = 2000) {
 
 // 设置里选了「译文显示在消息下面」：在当前打开的对话里，客户消息的气泡里、原文下面放一块译文（shen 2026-10-30）。
 // 这是唯一改页面的地方：只加带 data-wasw-tr 的块，文字一律 textContent；同一块内容没变就不动，不在的、不要的拿掉。
-// list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字 }]，空数组 = 全部拿掉。
-// look：颜色（主进程按 Radix 色阶给）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
+// list：[{ id: 页面上的 data-id, h: 消息 hash, k: done | busy | error | manual, t: 文字, b: 按钮上的字, o: 1 = 这条的编辑小窗开着 }]，空数组 = 全部拿掉。
+// look：{ light, dark } 两套颜色（主进程按 Radix 色阶给）：WhatsApp 是浅色主题用 light，深色主题用 dark，跟着原文的字色选（见 PAINT_CODE 里的 tone）。块里的按钮（翻译、重试）点了先记在隔离环境里，叫醒读页面那边，下一次放译文时带回去（返回点过的 hash）。
+// 译文（done）末尾有一个小铅笔：点了同样先记下 { h, rect: 译文块的位置, top: 气泡上沿 }，下一次放译文时带回去，主进程弹编辑小窗。
+// 返回 { clicks: [hash], edit: { h, rect, top } | null }
 // 原来停在最下面的，放完还停在最下面（气泡变高了不让最新的消息被挤到下面看不见）
 const TR_SPACER = 64; // 译文末尾留出 WhatsApp 右下角时间的位置（px）
-// 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给
+// 样式放在页面 head 里的一个 <style data-wasw-style>（全部拿掉时一起拿掉）。字号、圆角用软件的变量名，值由主进程从 fonts.css、tokens.css 读出来给。
+// 颜色有浅、深两套（PAINT_CODE 里按 WhatsApp 原文的字色选一套，只换这一段样式文字）：深色那套是 Radix 的深色色阶，只给这一块用，软件自己的界面不做深色
 const TR_CSS = (K) => [
   `[data-wasw-tr] { --hair: 1px; --fs-s: ${K.fsS}; --r-s: ${K.rS}; display: block; margin-top: 6px; padding-top: 6px; border-top: var(--hair) solid ${K.line}; color: ${K.text}; font-size: inherit; line-height: inherit; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }`,
   '@media (min-resolution: 2dppx) { [data-wasw-tr] { --hair: .5px; } }',
@@ -456,18 +520,55 @@ const TR_CSS = (K) => [
   `[data-wasw-tr] button:hover { background: ${K.btnHover}; }`,
   `[data-wasw-tr] button:focus-visible { outline: 2px solid ${K.focus}; }`,
   '[data-wasw-tr] button:disabled { cursor: default; }',
+  // 译文末尾的小铅笔（点了弹编辑小窗）：平时藏着但占着位置（译文不跳），鼠标移到这条消息上、键盘移到它上面、它的小窗开着时显示。颜色只用 look 里的
+  `[data-wasw-tr] button[data-wasw-edit] { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: 0 0 0 4px; padding: 0; vertical-align: -5px; background: transparent; color: ${K.text}; visibility: hidden; }`,
+  `[data-wasw-tr] button[data-wasw-edit]:hover { background: ${K.btnHover}; color: ${K.strong}; }`,
+  '[data-id]:hover [data-wasw-tr] button[data-wasw-edit], [data-wasw-tr] button[data-wasw-edit]:focus-visible, [data-wasw-tr] button[data-wasw-edit][aria-expanded="true"] { visibility: visible; }',
+  '[data-wasw-tr] button[data-wasw-edit] svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }',
   `[data-wasw-tr] [data-wasw-pad] { display: inline-block; width: ${TR_SPACER}px; height: 1px; }`,
 ].join('\n');
 const PAINT_CODE = (list, look) => `(() => {
   const L = ${JSON.stringify(list)};
-  const CSS_TEXT = ${JSON.stringify(TR_CSS(look))};
-  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn })};
+  const CSS_BY_TONE = ${JSON.stringify({ light: TR_CSS((look && look.light) || {}), dark: TR_CSS((look && look.dark) || {}) })};
+  const S = ${JSON.stringify({ main: SELECTORS.chatMain, body: SELECTORS.messageBody, skip: SELECTORS.messageSkip, mIn: SELECTORS.messageIn, bubble: SELECTORS.bubble, voice: SELECTORS.voiceMark })};
+  // 收到的消息的气泡：旧版是 .message-in，新版是 msg-container；都没有就是整条消息
+  const bubOf = (msg) => (msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg.querySelector(S.bubble) || msg);
   const w = window.__wsTr || (window.__wsTr = { clicks: [] });
   const clicks = w.clicks.splice(0, 50);
+  const edit = w.edit || null;
+  w.edit = null;
   const main = document.querySelector(S.main);
   const mine = [...document.querySelectorAll('[data-wasw-tr]')];
   const want = new Map();
   if (main) for (const e of L) if (e && typeof e.id === 'string' && e.id) want.set(e.id, e);
+  // WhatsApp 现在是不是深色主题：看前几条（最多 5 条）要放译文的消息，正文的字色亮就是深色（WhatsApp 让字和气泡底色反差够大：深色主题浅字，浅色主题深字），按多数定；
+  // 只认有正文块的（撤回、系统提示这类的灰字不算）。一条正文都没有时看第一条的气泡；一样多或都读不到时沿用上一次的。换主题后下一次放译文（约 2 秒）就换过来
+  const luma = (c) => {
+    if (!/^rgb/.test(c)) return null;
+    const n = (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+    if (n.length < 3 || n.some((v) => !(v >= 0))) return null;
+    const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(n[0]) + 0.7152 * f(n[1]) + 0.0722 * f(n[2]);
+  };
+  let tone = w.tone || 'light';
+  let darkN = 0;
+  let lightN = 0;
+  let firstBubble = null;
+  if (main) for (const e of want.values()) {
+    if (darkN + lightN >= 5) break;
+    const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
+    if (!msg) continue;
+    let el = null;
+    for (const sel of S.body) { for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip) && !b.closest('[data-wasw-tr]')) { el = b; break; } if (el) break; }
+    if (!el) { if (!firstBubble) firstBubble = bubOf(msg); continue; }
+    const l = luma(getComputedStyle(el).color);
+    if (l === null) continue;
+    if (l > 0.4) darkN += 1; else lightN += 1;
+  }
+  if (!darkN && !lightN && firstBubble) { const l = luma(getComputedStyle(firstBubble).color); if (l !== null) (l > 0.4 ? darkN += 1 : lightN += 1); }
+  if (darkN !== lightN) tone = darkN > lightN ? 'dark' : 'light';
+  w.tone = tone;
+  const CSS_TEXT = CSS_BY_TONE[tone];
   let style = document.querySelector('style[data-wasw-style]');
   if (!want.size && !L.length) { if (style) style.remove(); }
   else if (!style || style.textContent !== CSS_TEXT) {
@@ -488,6 +589,12 @@ const PAINT_CODE = (list, look) => `(() => {
     bottom = cs.flexDirection === 'column-reverse' ? Math.abs(el.scrollTop) <= 120 : el.scrollHeight - el.clientHeight - el.scrollTop <= 120;
     break;
   }
+  // 往上翻着看（不在最下面）：记下屏幕上第一条消息的位置，放完译文后把它挪回原处，正在看的内容不跟着跳
+  let pin = null;
+  if (sc && !bottom) {
+    const top = sc.getBoundingClientRect().top;
+    for (const m of msgs) { const r = m.getBoundingClientRect(); if (r.height && r.bottom > top) { pin = { m, y: r.top }; break; } }
+  }
   // 点过的消息这次不在列表里（已经滚出最近读到的范围）：主进程不会处理，按钮恢复能点
   const listed = new Set(L.map((e) => e && e.h));
   for (const h of clicks) if (!listed.has(h)) for (const b of document.querySelectorAll('[data-wasw-tr] button[data-h="' + CSS.escape(h) + '"]')) b.disabled = false;
@@ -496,11 +603,35 @@ const PAINT_CODE = (list, look) => `(() => {
     const m = n.parentElement && n.parentElement.closest('[data-id]');
     if (!main || !m || !main.contains(n) || !want.has(m.getAttribute('data-id'))) { n.remove(); changed = true; }
   }
+  // 译文放哪：{ parent, after }。有正文的放在正文块里（末尾）。没有正文（语音）：放在气泡里播放条那一层的下面（时间在播放条那一层里面的话，就在时间下面）。
+  // 真 WhatsApp 的气泡里第一个子元素常常不是内容：气泡尾巴的小图标（宽 8px）、读屏用的隐藏发件人标签，放进去会一字一行，所以先跳过它们
+  const decor = (c, sized) => {
+    if (c.hasAttribute('data-icon') || c.getAttribute('aria-hidden') === 'true' || c.hasAttribute('data-wasw-tr')) return true;
+    if (getComputedStyle(c).position === 'absolute') return true;
+    if (sized) {
+      const r = c.getBoundingClientRect();
+      if (r.width <= 2 || r.height <= 2) return true;
+    }
+    return !c.textContent.trim() && !c.querySelector('button, [role], [data-icon], canvas, svg, img, audio');
+  };
+  const flexRow = (el) => { const cs = getComputedStyle(el); return cs.display.includes('flex') && cs.flexDirection.startsWith('row'); };
   const anchorOf = (msg) => {
-    for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return b;
-    // 没有正文（语音）：放在气泡里
-    const bub = msg.matches(S.mIn) ? msg : msg.querySelector(S.mIn) || msg;
-    return bub.firstElementChild || bub;
+    for (const sel of S.body) for (const b of msg.querySelectorAll(sel)) if (!b.closest(S.skip)) return { parent: b, after: null };
+    const bub = bubOf(msg);
+    const mark = [...bub.querySelectorAll(S.voice)].find((x) => !x.closest('[data-wasw-tr]'));
+    // 页面没排版（宽 0，比如页面被隐藏）时不看尺寸，只看标记
+    const sized = bub.getBoundingClientRect().width > 0;
+    const kids = [...bub.children].filter((c) => !decor(c, sized));
+    let parent = (mark && kids.find((c) => c.contains(mark))) || kids[0] || bub;
+    let after = null;
+    if (mark && parent !== mark && parent.contains(mark)) {
+      let row = mark;
+      while (row.parentElement && row.parentElement !== parent) row = row.parentElement;
+      if (row.parentElement === parent) after = row;
+    }
+    // 放的位置是横向排的（播放条和别的元素并排）：译文放在这一行的下面，不插进中间
+    while (parent !== bub && parent.parentElement && flexRow(parent)) { after = parent; parent = parent.parentElement; }
+    return { parent, after };
   };
   const stop = (ev) => { ev.stopPropagation(); };
   const button = (label, h) => {
@@ -519,15 +650,51 @@ const PAINT_CODE = (list, look) => `(() => {
     });
     return b;
   };
+  // 小铅笔：点了记下这条译文块和气泡的位置（页面 CSS 像素），叫醒读页面那边
+  const NS = 'http://www.w3.org/2000/svg';
+  const pencil = (h, open) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('data-wasw-edit', '');
+    b.setAttribute('data-h', h);
+    b.setAttribute('aria-label', '编辑译文');
+    b.setAttribute('aria-haspopup', 'dialog');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of ['M5 19h3.6L18.8 8.8a2.3 2.3 0 0 0-3.6-3.6L5 15.4z', 'M13.6 6.8l3.6 3.6']) {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      svg.append(p);
+    }
+    b.append(svg);
+    // 按下时不让 WhatsApp 和浏览器处理（不把选区点没）
+    b.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+    b.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const blk = b.closest('[data-wasw-tr]');
+      const msg = b.closest('[data-id]');
+      if (!blk || !msg) return;
+      const bub = bubOf(msg);
+      const r = blk.getBoundingClientRect();
+      w.edit = { h, rect: { x: r.left, y: r.top, w: r.width, h: r.height }, top: bub.getBoundingClientRect().top };
+      if (window.__wsChatWatch) window.__wsChatWatch.hit();
+    });
+    return b;
+  };
   for (const e of want.values()) {
     const msg = main.querySelector('[data-id="' + CSS.escape(e.id) + '"]');
     if (!msg) continue;
     const anchor = anchorOf(msg);
     let node = null;
-    for (const c of anchor.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
+    for (const c of anchor.parent.children) if (c.hasAttribute('data-wasw-tr')) { node = c; break; }
     // WhatsApp 换了正文块（比如展开「阅读更多」后重建）时，旧块可能还挂在这条消息的别处：只留一块
     for (const x of msg.querySelectorAll('[data-wasw-tr]')) if (x !== node) { x.remove(); changed = true; }
-    const sig = [e.k, e.t, e.b, e.h].join('|');
+    const sig = [e.k, e.t, e.b, e.h, e.c || 0, e.o ? 1 : 0].join('|');
     if (node && node.getAttribute('data-sig') === sig) continue;
     if (!node) {
       node = document.createElement('div');
@@ -536,7 +703,8 @@ const PAINT_CODE = (list, look) => `(() => {
     }
     node.setAttribute('data-sig', sig);
     const kids = [];
-    if (e.k === 'done' || e.k === 'busy') kids.push(String(e.t || ''));
+    if (e.k === 'done') kids.push(String(e.t || ''), pencil(e.h, !!e.o));
+    else if (e.k === 'busy') kids.push(String(e.t || ''));
     else if (e.k === 'error') {
       const s = document.createElement('span');
       s.setAttribute('data-wasw-bad', '');
@@ -548,23 +716,36 @@ const PAINT_CODE = (list, look) => `(() => {
     pad.setAttribute('data-wasw-pad', '');
     kids.push(pad);
     node.replaceChildren(...kids);
-    if (!node.parentElement) anchor.appendChild(node);
+    if (!node.parentElement) { if (anchor.after) anchor.after.after(node); else anchor.parent.appendChild(node); }
     changed = true;
   }
   if (changed && sc && bottom) {
     if (getComputedStyle(sc).flexDirection === 'column-reverse') sc.scrollTop = 0;
     else sc.scrollTop = sc.scrollHeight;
+  } else if (changed && pin && pin.m.isConnected) {
+    // 浏览器自己的滚动锚定已经补过的话，这里量出来差 0，不会补两次
+    const d = pin.m.getBoundingClientRect().top - pin.y;
+    if (Math.abs(d) >= 1) sc.scrollTop += d;
   }
-  return clicks;
+  return { clicks, edit };
 })()`;
 
+const HASH = /^[0-9a-f]{16}$/;
 async function paintTranslations(wc, list, look) {
-  if (!wc || wc.isDestroyed() || wc.isLoading()) return [];
+  const none = { clicks: [], edit: null };
+  if (!wc || wc.isDestroyed() || wc.isLoading()) return none;
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 60) : [], look || {}) }]);
-    return Array.isArray(r) ? r.filter((h) => typeof h === 'string' && /^[0-9a-f]{16}$/.test(h)) : [];
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: PAINT_CODE(Array.isArray(list) ? list.slice(0, 100) : [], look || {}) }]);
+    if (!r || typeof r !== 'object') return none;
+    const clicks = Array.isArray(r.clicks) ? r.clicks.filter((h) => typeof h === 'string' && HASH.test(h)) : [];
+    const e = r.edit;
+    const num = (v) => (Number.isFinite(v) ? v : 0);
+    const edit = e && typeof e === 'object' && typeof e.h === 'string' && HASH.test(e.h) && e.rect && typeof e.rect === 'object'
+      ? { h: e.h, rect: { x: num(e.rect.x), y: num(e.rect.y), w: num(e.rect.w), h: num(e.rect.h) }, top: num(e.top) }
+      : null;
+    return { clicks, edit };
   } catch {
-    return [];
+    return none;
   }
 }
 
@@ -725,19 +906,46 @@ async function readOwnNumber(wc) {
   }
 }
 
-// 页面里当前的焦点是不是聊天输入框。只读 document.activeElement，不移动焦点、不改页面。
-// 返回 'compose'（在输入框里）| 'other'（在搜索框等别处，或哪里都不在）| 'unknown'（页面在加载或读不到）
-const FOCUS_CODE = `(() => {
-  const el = document.activeElement;
-  if (!el || !el.isContentEditable) return 'other';
-  return ${JSON.stringify(SELECTORS.composeBox)}.some((s) => el.closest(s)) ? 'compose' : 'other';
+// 「放进输入框」前把光标放进对话下方的输入框（用户点过消息、在搜索框里时焦点不在那里）。
+// 光标已经在输入框里就不动（用户可能把光标放在了中间）；不在就 focus()，并把光标放到已有文字的最后。
+// 只移动焦点和光标，不打字、不按键、不改页面内容。调用前先 wc.focus()：页面没有焦点时 focus() 的焦点事件要等页面拿到焦点才发，
+// 弹窗把焦点拉回去这种情况就查不出来，所以先等页面真的有了焦点（最多约 300 毫秒）。
+// 返回 'compose'（光标在输入框里了）| 'none'（没有打开对话，或输入框看不见）| 'other'（放不进去，比如被弹窗挡住）| 'unknown'（页面在加载或读不到）
+const FOCUS_COMPOSE_CODE = `(async () => {
+  for (let i = 0; i < 20 && !document.hasFocus(); i += 1) await new Promise((r) => setTimeout(r, 15));
+  let box = null;
+  for (const s of ${JSON.stringify(SELECTORS.composeBox)}) {
+    for (const el of document.querySelectorAll(s)) {
+      const edit = el.isContentEditable ? el : el.querySelector('[contenteditable="true"]');
+      if (edit && edit.getClientRects().length) { box = edit; break; }
+    }
+    if (box) break;
+  }
+  if (!box) return 'none';
+  const inBox = () => { const a = document.activeElement; return !!a && (a === box || box.contains(a)); };
+  if (inBox()) return 'compose';
+  box.focus();
+  if (!inBox()) return 'other';
+  // 光标放到最后一段文字的末尾。没有文字时不动：空的输入框里 focus() 放的位置就对，自己放反而可能多出一个空行
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let last = null;
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.data) last = n;
+  const sel = document.getSelection();
+  if (last && sel) {
+    const r = document.createRange();
+    r.setStart(last, last.data.length);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  return 'compose';
 })()`;
 
-async function composeFocus(wc) {
+async function focusCompose(wc) {
   if (wc.isDestroyed() || wc.isLoading()) return 'unknown';
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: FOCUS_CODE }]);
-    return ['compose', 'other'].includes(r) ? r : 'unknown';
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: FOCUS_COMPOSE_CODE }]);
+    return ['compose', 'none', 'other'].includes(r) ? r : 'unknown';
   } catch {
     return 'unknown';
   }
@@ -823,5 +1031,5 @@ async function readSelection(wc) {
   }
 }
 
-module.exports = { SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, composeFocus, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
+module.exports = { MAX_MSGS_LIMIT, SELECTORS, loginState, readChatList, readOpenChat, waitChatChange, stopChatWatch, paintTranslations, PAINT_CODE, readChatPeer, lookupPeerPhone, readOwnNumber, focusCompose, composeState, readSelection, parseWid, READ_CHAT_CODE, READ_PEER_CODE, SELECTION_CODE, parsePre };
 

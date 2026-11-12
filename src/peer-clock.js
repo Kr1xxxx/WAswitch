@@ -10,6 +10,41 @@ const EVERY = 2000;
 const FOUND_MS = 10 * 60 * 1000; // 查到的号码记 10 分钟
 const MISS_MS = 60 * 1000; // 查不到的 1 分钟后再查（可能刚打开、本地数据还没写好）
 
+// 查过的号码按“账号|编号|标题”记一会儿，顶栏和 CRM 采集共用。号码只在主进程里用，不写日志
+const looked = new Map(); // key -> { digits, until }
+function remembered(key) {
+  const hit = looked.get(key);
+  return hit && hit.until > Date.now() ? hit : null;
+}
+function remember(key, digits) {
+  if (looked.size > 300) looked.clear();
+  looked.set(key, { digits, until: Date.now() + (digits ? FOUND_MS : MISS_MS) });
+}
+
+// CRM 采集用：网页号打开的对话（readOpenChat 读到的 { chat, title }）是哪个号码。
+// 编号里有号码就用编号的；标题本身是号码（没存名字的联系人）用标题；隐私编号（@lid）或新版页面认不出编号时，
+// 查一次 WhatsApp 自己的本地数据（lookupPeerPhone）。群、查不到都返回 ''。
+// 编号认不出时只能按标题找同名联系人：只有 readOpenChat 断定是和标题那个人的单聊（oneToOne）才找，
+// 不然名字一样的群会被当成这个联系人
+async function webPeerNumber(wc, accId, r) {
+  if (!r || !wc) return '';
+  const id = fromChatId(r.chat);
+  if (id.group) return '';
+  if (id.digits) return id.digits;
+  const t = fromText(r.title);
+  if (t) return t;
+  if (!r.chat && !r.title) return '';
+  if (!r.chat && r.oneToOne !== true) return '';
+  const key = `${accId}|${r.chat}|${r.title}`;
+  const hit = remembered(key);
+  if (hit) return hit.digits;
+  let digits = '';
+  try { ({ digits } = await waPage.lookupPeerPhone(wc, { chat: r.chat, title: r.title })); } catch { digits = ''; }
+  if (!/^\d{7,15}$/.test(String(digits || ''))) digits = '';
+  remember(key, digits);
+  return digits;
+}
+
 function setupPeerClock(ctx) {
   const { findAcc, isLite, views, problems, liteChat, parkedCustomer } = ctx;
   let last = ''; // 上次发给界面的内容，没变就不发
@@ -25,15 +60,14 @@ function setupPeerClock(ctx) {
   }
 
   // 编号和标题里都没有号码时查一次，结果按“账号|编号|标题”记住。号码只在这里用，不写日志
-  const looked = new Map(); // key -> { digits, until }
   const logged = new Set(); // 查不到的原因每个对话只记一次日志（不带号码和名字）
   async function lookup(acc, r, wc) {
     const id = fromChatId(r.chat);
     if (id.group || id.digits || fromText(r.title)) return '';
     if (!r.chat && !r.title) return '';
     const key = `${acc.id}|${r.chat}|${r.title}`;
-    const hit = looked.get(key);
-    if (hit && hit.until > Date.now()) return hit.digits;
+    const hit = remembered(key);
+    if (hit) return hit.digits;
     let digits = '';
     let why = '';
     let stores = [];
@@ -43,8 +77,7 @@ function setupPeerClock(ctx) {
     } else if (wc) {
       ({ digits, why, stores } = await waPage.lookupPeerPhone(wc, r));
     }
-    if (looked.size > 300) looked.clear();
-    looked.set(key, { digits, until: Date.now() + (digits ? FOUND_MS : MISS_MS) });
+    remember(key, digits);
     const kind = /@lid$/.test(r.chat) ? 'lid' : r.chat ? 'other' : 'none';
     if (!digits && !logged.has(key)) {
       logged.add(key);
@@ -99,4 +132,4 @@ function setupPeerClock(ctx) {
   return { tick, stop: () => clearInterval(timer) };
 }
 
-module.exports = { setupPeerClock };
+module.exports = { setupPeerClock, webPeerNumber };

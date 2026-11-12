@@ -135,7 +135,7 @@ function setupEditorIpc(ctx) {
       const proxyChanged = !acc || acc.proxy !== proxyStored
         || proxy.passwordFor(acc.proxy, acc.proxyPassword, String(proxyText || ''), password) !== proxy.decryptPassword(acc.proxyPassword);
       if (parsed && proxyChanged) {
-        if (!testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
+        if (!testedNow) return { error: '请先点「测试」，代理测试通过后才能保存' };
         const pe = await primaryExit(id);
         if (lastTest !== testedNow) return { error: '测试结果已变化，请重新测试后保存' };
         if (pe.error) return { error: pe.error };
@@ -144,7 +144,7 @@ function setupEditorIpc(ctx) {
     }
 
     // 后台分来的号第一次保存：填了代理必须测试通过；不填就是直连（编辑页有一行风险提示，不拦）
-    if (acc && acc.teamNeedsProxy && mode === 'web' && parsed && !testedNow) return { error: '请先点“测试”，代理测试通过后才能保存' };
+    if (acc && acc.teamNeedsProxy && mode === 'web' && parsed && !testedNow) return { error: '请先点「测试」，代理测试通过后才能保存' };
 
     // 密码：新填的优先；地址里带的其次；都没有时，只有主机、端口、用户名都没变才保留原来的，否则清掉
     const plan = proxy.passwordPlan(acc ? acc.proxy : '', String(proxyText || ''), password);

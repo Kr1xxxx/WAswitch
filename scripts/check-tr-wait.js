@@ -1,4 +1,4 @@
-// 翻译服务商太忙（429）、等着重试时：转圈的按钮显示还要等几秒，倒数到 0 回到「翻译中」；
+// 来财太忙（429）、等着重试时：转圈的按钮显示还要等几秒，倒数到 0 回到「翻译中」；
 // 翻译页和工作台各管各的（lane），翻完、取消后不留倒计时。
 // 真的 shell 页面 + 假的主进程（fixtures/tr-wait-fake-preload.js）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-tr-wait.js
@@ -56,9 +56,8 @@ app.whenReady().then(async () => {
   await js(() => window.__wait({ lane: 'page', ms: 5000 }));
   await wait(50);
   assert(await js(() => window.__release('这顶假发周五前能到柏林吗？')));
-  await wait(50);
-  assert(await js(() => window.__release('这顶假发周五之前可以寄到柏林吗？'))); // 对照栏
-  await wait(100);
+  await wait(150);
+  assert.strictEqual(await js(() => window.__pending.length), 0, '只走来财：只有一栏，没有对照栏的请求');
   g = await goText();
   assert(g.st !== 'busy' && !/秒/.test(g.text), JSON.stringify(g));
   await wait(2000); // 等「已翻译」回到「翻译」
@@ -66,8 +65,6 @@ app.whenReady().then(async () => {
   await js(() => { const t = document.querySelector('.tp-in .tp-text'); t.value = '这顶假发周五前能到柏林吗？'; t.dispatchEvent(new Event('input', { bubbles: true })); document.querySelector('.tp-go').click(); });
   await wait(100);
   assert(await js(() => window.__release('Can this wig reach Berlin by Friday?')));
-  await wait(50);
-  assert(await js(() => window.__release('Will this wig arrive in Berlin before Friday?')));
   await wait(2200);
   await js(() => document.querySelector('.tp-fix').click());
   await wait(100);
@@ -90,8 +87,8 @@ app.whenReady().then(async () => {
   // 工作台
   await js(() => {
     window.__calls = [];
-    const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items: [], paused: '', auto: true, dailyCap: 500, hasProvider: true, needKey: null,
-      primaryId: 'z', fallbackId: 'h', providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }, { id: 'h', name: '腾讯混元', model: 'hy-mt2-plus' }],
+    const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items: [], paused: '', auto: true, dailyCap: 500, hasProvider: true,
+      primaryId: 'cloud', fallbackId: '', providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }],
       modes: { out: [{ id: 'o', name: '商务', direction: 'out' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i', outModeId: 'o',
       langs: ['英语', '德语'], target: '德语', targetSrc: 'detected', autoTarget: '德语', canRemember: true };
     window.__dock = d;

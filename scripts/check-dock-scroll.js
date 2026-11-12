@@ -11,8 +11,8 @@ const scenario = async (mode) => {
   const base = 'Hallo! Ich habe Ihre Anzeige gesehen. Ist das Modell noch verfügbar und wie lange dauert der Versand nach München?';
   const zh = '你好！我看到了你的广告。这个型号还有货吗？发货到慕尼黑要多久？';
   const items = Array.from({ length: 14 }, (_, i) => ({ h: `h${i}`, text: `#${i} ${base.slice(0, 30 + (i * 23) % 90)}`, t: `10:${String(i).padStart(2, '0')}`, state: 'queued', tr: '' }));
-  const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items, paused: '', auto: true, dailyCap: 500, hasProvider: true, needKey: null,
-    primaryId: 'z', fallbackId: '', providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
+  const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items, paused: '', auto: true, dailyCap: 500, hasProvider: true,
+    primaryId: 'cloud', fallbackId: '', providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
     langs: ['英语', '德语'], target: '德语', targetSrc: 'detected', autoTarget: '德语', canRemember: true };
   window.__dock = d;
   const push = () => window.__cbs.dock(JSON.parse(JSON.stringify(d)));

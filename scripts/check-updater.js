@@ -1,8 +1,9 @@
 // 自检：自动更新模块。
-// 1. 静态检查：updater 不碰任何账号的会话；只走本机直连（不用账号代理，也不用系统代理）。
-// 2. 只允许 GitHub 的地址；版本比较；解析 releases.atom 和 latest-mac.yml。
-// 3. Mac 流程（自己下载 zip、解压、App 退出后脚本替换）：用假的 electron.net 跑一遍——正常下载并校验通过、sha512 不对时删掉、
-//    重定向到别的主机时失败、已是最新版时不下载、连续失败 3 次标黄、新版本还在上传（404）时不算失败。
+// 1. 静态检查：updater 不碰任何账号的会话；和团队同步一样直连（不用系统代理，也不用任何账号的代理）；不再连 GitHub。
+// 2. 只允许来财的更新地址（laicrm.com/api/device/update/）；版本比较；解析 latest-mac.yml；失败原因的中文（401、403、下载时的 status 401）。
+// 3. Mac 流程（自己下载 zip、解压、App 退出后脚本替换）：用假的 electron.net 跑一遍——每个请求带设备令牌、没登录团队不检查、
+//    正常下载并校验通过、sha512 不对时删掉、任何重定向都失败、已是最新版时不下载、连续失败 3 次标黄、新版本还在上传（404）时不算失败。
+// 4. Windows：electron-updater 用 generic 方式读来财，检查前换上令牌，只放行来财的地址。
 // 运行：node scripts/check-updater.js（不需要 Electron，也不联网）
 const fs = require('fs');
 const os = require('os');
@@ -20,8 +21,14 @@ const code = src.replace(/\/\/.*$/gm, ''); // 去掉注释再查
 check(!/persist:/.test(code) && !/wa-/.test(code), 'updater 不引用账号分区（persist: / wa-）');
 check(!/require\(['"]\.\/proxy['"]\)/.test(code), 'updater 不引用 proxy 模块');
 check(!/defaultSession/.test(code), 'updater 不用默认会话（默认会话跟随系统代理）');
-check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都只设直连，不设任何别的代理');
-check(/redirect:\s*'manual'/.test(code), 'Mac 下载手动跟重定向（每一跳都检查主机）');
+check((code.match(/setProxy\(\{ mode: 'direct' \}\)/g) || []).length === 2 && !/setProxy\(\{(?! mode: 'direct' \})/.test(code), 'Mac 和 Windows 两条路都直连（和团队同步一样），不设任何别的代理');
+check(/redirect:\s*'manual'/.test(code) && !/requestWith\([^)]*next/.test(code), 'Mac 下载不跟重定向（令牌不会带到别处）');
+check(!/github|releases\.atom|releases\/download/i.test(code), 'updater 不再连 GitHub');
+check(/require\('\.\/team'\)/.test(code) && /const FEED = `\$\{TEAM_SERVER\}\/api\/device\/update\/`/.test(code), '更新地址和团队同步是同一个来财（TEAM_SERVER）');
+{
+  const winCheck = (code.match(/async check\(\) \{[\s\S]*?\n  \}\n/) || [''])[0];
+  check(winCheck.indexOf('requestHeaders') > 0 && winCheck.indexOf('requestHeaders') < winCheck.indexOf('checkForUpdates()'), 'Windows：每次检查前换上设备令牌');
+}
 check(/const CHECK_EVERY_MS = 60 \* 60 \* 1000;/.test(code) && /const FIRST_CHECK_MS = 60 \* 1000;/.test(code), '启动 1 分钟后查一次，之后每 1 小时查一次');
 
 // 用户点了更新之后装之前，主进程的 busyReason 要等手上的事做完：打字、发消息、扫码、页面加载
@@ -36,6 +43,10 @@ const trayBlock = (mainSrc.match(/updateMenu: \(\) => \{[\s\S]*?\n  \},/) || [''
 check(handlerLines.includes('update:install') && trayBlock.includes('updater.install()')
   && !/dialog|showMessageBox|confirm\(/.test(handlerLines + trayBlock), 'main.js：更新按钮和托盘菜单只调 install() 或 openMacInstaller()，不经过确认框');
 const shellSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'shell', 'shell.js'), 'utf8');
+check(/deviceToken: \(\) => \(team \? team\.tokenPlain\(\) : ''\)/.test((mainSrc.match(/function setupUpdater\(\) \{[\s\S]*?\n\}\n/) || [''])[0]), 'main.js：更新用团队登录的设备令牌');
+const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+check(JSON.stringify(pkg.build.publish) === JSON.stringify([{ provider: 'generic', url: 'https://laicrm.com/api/device/update/' }]), 'package.json：安装包里写的更新地址是来财（generic）');
+check(!/GitHub|Releases 页面/.test(src.replace(/^\s*\/\/.*$/gm, '')) && !/Releases 页面/.test(mainSrc) && !/下载页/.test((shellSrc.match(/function updateBox\(u\) \{[\s\S]*?\n\}\n/) || [''])[0]), '更新的提示里不再提 GitHub、Releases 和下载页');
 check(!/重启更新|现在重启并更新|重启以更新|下好后自动重启/.test(shellSrc + mainSrc + src), '更新按钮统一叫“立即更新”，没有旧名字');
 check((shellSrc.match(/window\.wa\.updateInstall\(\)/g) || []).length >= 2
   && !/updateInstall\(\)[^\n]*confirm|confirm[^\n]*updateInstall/.test(shellSrc), '界面上点“立即更新”直接调 updateInstall，不经过 confirm');
@@ -44,16 +55,19 @@ check((shellSrc.match(/window\.wa\.updateInstall\(\)/g) || []).length >= 2
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-upd-'));
 const routes = new Map(); // url -> { status, body, location }
 const requested = [];
+const sentHeaders = []; // 每个请求带的头（小写的名字）
 const proxies = []; // [分区名, mode]
 const usedSessions = new Set();
 const fakeNet = {
   request({ url, session: ses }) {
     usedSessions.add(ses && ses.name);
     const req = new EventEmitter();
-    req.setHeader = () => {};
+    const hdr = {};
+    req.setHeader = (k, v) => { hdr[String(k).toLowerCase()] = v; };
     req.abort = () => { req.aborted = true; };
     req.end = () => setImmediate(() => {
       requested.push(url);
+      sentHeaders.push(hdr);
       const r = routes.get(url);
       if (!r) { req.emit('error', new Error(`net::ERR_NAME_NOT_RESOLVED ${url}`)); return; }
       if (r.hang) return; // 连上了但一直没有回应
@@ -83,55 +97,66 @@ const fakeElectron = {
   },
   shell: { showItemInFolder: (f) => opened.push(f), openPath: async (f) => { opened.push(f); return ''; } },
 };
+// 假的 electron-updater：记下 setFeedURL、开关和放行规则
+const fakeAuto = new EventEmitter();
+fakeAuto.feeds = [];
+fakeAuto.setFeedURL = (o) => fakeAuto.feeds.push(o);
+fakeAuto.netSession = { webRequest: { onBeforeRequest: (fn) => { fakeAuto.filter = fn; } } };
 const origLoad = Module._load;
 Module._load = function load(request, ...rest) {
   if (request === 'electron') return fakeElectron;
+  if (request === 'electron-updater') return { autoUpdater: fakeAuto };
   return origLoad.call(this, request, ...rest);
 };
 Object.defineProperty(process, 'platform', { value: 'darwin' });
 
-const { Updater, UPDATER_PARTITION, allowedUrl, compareVersions, latestTagFromAtom, parseLatestYml } = require('../src/updater');
+const { Updater, UPDATER_PARTITION, FEED, NO_TOKEN_TEXT, allowedUrl, compareVersions, parseLatestYml, updateErrorText } = require('../src/updater');
 
 // ---------- 2. 小工具 ----------
-check(allowedUrl('https://github.com/Kr1xxxx/WAswitch/releases.atom'), '允许 github.com');
-check(allowedUrl('https://objects.githubusercontent.com/x'), '允许 objects.githubusercontent.com');
-check(!allowedUrl('http://github.com/x'), '不允许 http');
-check(!allowedUrl('https://github.com.evil.example/x') && !allowedUrl('https://evil.example/github.com'), '不允许冒充 github 的主机');
+check(FEED === 'https://laicrm.com/api/device/update/', `更新地址是来财（${FEED}）`);
+check(allowedUrl(`${FEED}latest-mac.yml`) && allowedUrl(`${FEED}WAswitch-Setup-1.0.7.exe`), '允许来财的更新文件');
+check(!allowedUrl('https://github.com/Kr1xxxx/WAswitch/releases/download/v1.0.7/latest.yml') && !allowedUrl('https://objects.githubusercontent.com/x'), '不再允许 GitHub 的地址');
+check(!allowedUrl('http://laicrm.com/api/device/update/latest.yml'), '不允许 http');
+check(!allowedUrl('https://laicrm.com/api/device/join') && !allowedUrl('https://laicrm.com/api/device/update/a/b') && !allowedUrl('https://laicrm.com:8443/api/device/update/latest.yml'), '只允许来财的 /api/device/update/ 下面一层（别的接口、子目录、别的端口都不行）');
+check(!allowedUrl('https://laicrm.com.evil.example/api/device/update/x') && !allowedUrl('https://evil.example/api/device/update/laicrm.com'), '不允许冒充来财的主机');
+{
+  const t = (e, msg) => updateErrorText(e, msg || String(e.message).split('\n')[0]).text;
+  check(t(Object.assign(new Error('来财返回 401'), { statusCode: 401 })) === '登录已过期，重新登录后再检查更新', '401：登录已过期');
+  check(t(Object.assign(new Error('来财返回 403'), { statusCode: 403 })) === '这台电脑已被停用', '403：这台电脑已被停用');
+  check(t(new Error('Cannot download "https://laicrm.com/api/device/update/WAswitch-Setup-1.0.7.exe", status 401: Unauthorized')) === '登录已过期，重新登录后再检查更新', '下载时的 "status 401" 也认得出来');
+  check(t(new Error('HttpError: 403 Forbidden\n{"ok":false,"error":"revoked"}')) === '这台电脑已被停用', 'electron-updater 检查时的 HttpError 403 也认得出来');
+  check(/新版本可能还在发布中/.test(t(Object.assign(new Error('x'), { statusCode: 404 }))) && /来财那边/.test(t(Object.assign(new Error('x'), { statusCode: 502 }))), '404 和 5xx 的中文');
+  check(/^连不上来财/.test(t(new Error('net::ERR_CONNECTION_RESET'))), `网络错误说连不上来财（${t(new Error('net::ERR_CONNECTION_RESET'))}）`);
+}
 check(compareVersions('0.2.1', '0.2.0') > 0 && compareVersions('v0.10.0', '0.9.9') > 0 && compareVersions('0.2.0', '0.2.0') === 0, '版本比较（数字按大小，不按字符）');
 check(compareVersions('0.3.0', '0.3.0-beta.2') > 0 && compareVersions('0.3.0-beta.10', '0.3.0-beta.2') > 0, '版本比较（预发布版）');
-const atom = `<?xml version="1.0"?><feed><entry><link rel="alternate" type="text/html" href="https://github.com/Kr1xxxx/WAswitch/releases/tag/v0.3.0"/></entry>
-<entry><link rel="alternate" type="text/html" href="https://github.com/Kr1xxxx/WAswitch/releases/tag/v0.2.0"/></entry></feed>`;
-check(latestTagFromAtom(atom) === 'v0.3.0', '从 releases.atom 取最新 tag');
 
 // ---------- 3. Mac 流程 ----------
 const dmg = crypto.randomBytes(300 * 1024);
 const sha = crypto.createHash('sha512').update(dmg).digest('base64');
-const yml = (s) => `version: 0.3.0
+const yml = (s, v = '0.3.0') => `version: ${v}
 files:
-  - url: WAswitch-0.3.0-arm64.dmg
+  - url: WAswitch-${v}-arm64.dmg
     sha512: zzz
     size: 10
-  - url: WAswitch-0.3.0-arm64.zip
+  - url: WAswitch-${v}-arm64.zip
     sha512: ${s}
     size: ${dmg.length}
-path: WAswitch-0.3.0-arm64.zip
+path: WAswitch-${v}-arm64.zip
 sha512: zzz
 releaseDate: '2026-10-24T00:00:00.000Z'
 `;
 const parsed = parseLatestYml(yml(sha));
 check(parsed.version === '0.3.0' && parsed.files.length === 2 && parsed.files[1].sha512 === sha && parsed.files[1].size === dmg.length, '解析 latest-mac.yml');
 
-const base = 'https://github.com/Kr1xxxx/WAswitch';
-const dmgUrl = `${base}/releases/download/v0.3.0/WAswitch-0.3.0-arm64.zip`;
-const asset = 'https://objects.githubusercontent.com/github-production-release-asset/1';
-function serve({ ymlSha = sha, dmgLocation = asset, tag = 'v0.3.0' } = {}) {
+const ymlUrl = `${FEED}latest-mac.yml`;
+const asset = `${FEED}WAswitch-0.3.0-arm64.zip`;
+function serve({ ymlSha = sha, zipLocation = '', version = '0.3.0' } = {}) {
   routes.clear();
-  routes.set(`${base}/releases.atom`, { body: Buffer.from(atom.replace('v0.3.0', tag)) });
-  routes.set(`${base}/releases/download/v0.3.0/latest-mac.yml`, { location: `${asset}-yml` });
-  routes.set(`${asset}-yml`, { body: Buffer.from(yml(ymlSha)) });
-  routes.set(dmgUrl, { location: dmgLocation });
-  routes.set(asset, { body: dmg });
+  routes.set(ymlUrl, { body: Buffer.from(yml(ymlSha, version)) });
+  routes.set(asset, zipLocation ? { location: zipLocation } : { body: dmg });
   routes.set('https://evil.example/dmg', { body: dmg });
+  routes.set(`${FEED}moved.zip`, { body: dmg });
 }
 const notes = [];
 let installFailedCalls = 0;
@@ -151,9 +176,10 @@ const fakeOps = {
   launch: (script, args) => launched.push({ script, args }),
 };
 let idle = null;
+let token = 'tok-1';
 const make = () => new Updater({
   onChange() {}, idleReason: () => idle, beforeInstall: async () => {}, installFailed: async () => { installFailedCalls += 1; },
-  notify: (t, b, click) => notes.push({ t, click }), idleMs: 200, macOps: fakeOps,
+  notify: (t, b, click) => notes.push({ t, click }), idleMs: 200, macOps: fakeOps, deviceToken: () => token,
 });
 const updatesDir = path.join(home, 'updates');
 
@@ -170,9 +196,10 @@ const updatesDir = path.join(home, 'updates');
   notes[0].click();
   check(opened.includes(staged) && opened.includes('/Applications'), 'Mac 手动：点通知在 Finder 里选中新 WAswitch.app 并打开「应用程序」');
   check(u.state.manual && launched.length === 0 && quits === 0, 'Mac 手动：不在「应用程序」里时不自动替换');
-  check(requested.every((x) => allowedUrl(x)), 'Mac：所有请求都是 GitHub 的地址');
+  check(requested.length === 2 && requested[0] === ymlUrl && requested[1] === asset && requested.every((x) => allowedUrl(x)), `Mac：只请求来财的 latest-mac.yml 和 zip（${requested.join(' ')}）`);
+  check(sentHeaders.length === 2 && sentHeaders.every((h) => h.authorization === 'Bearer tok-1'), 'Mac：每个请求都带设备令牌');
 
-  check(proxies.length === 1 && proxies[0][0] === UPDATER_PARTITION && proxies[0][1] === 'direct', `Mac：更新专用会话设成直连（${JSON.stringify(proxies)}）`);
+  check(proxies.length === 1 && proxies[0][0] === UPDATER_PARTITION && proxies[0][1] === 'direct', `Mac：更新专用会话直连（${JSON.stringify(proxies)}）`);
   check(usedSessions.size === 1 && usedSessions.has(UPDATER_PARTITION), 'Mac：所有请求都走更新专用会话（不走默认会话）');
 
   // 已下载并校验过：不再下载
@@ -189,59 +216,129 @@ const updatesDir = path.join(home, 'updates');
   check(u.state.status === 'error' && /校验不通过/.test(u.state.lastResult), `Mac：sha512 不一致时报错（${u.state.lastResult}）`);
   check(!fs.existsSync(file) && !fs.existsSync(`${file}.part`), 'Mac：校验不通过的文件已删除');
 
-  // 重定向到别的主机：失败，不请求那个地址
-  serve({ dmgLocation: 'https://evil.example/dmg' });
+  // 写盘出错（磁盘满、没权限）：报更新失败，不能是没人接的 error 事件（会弹错并重启软件）
+  {
+    serve();
+    fs.mkdirSync(`${file}.part`, { recursive: true }); // 占住 .part：写文件流一打开就出错
+    const uncaught = [];
+    const onUncaught = (e) => uncaught.push(e);
+    process.on('uncaughtException', onUncaught);
+    const uw = make();
+    await uw.check();
+    await new Promise((r) => setTimeout(r, 100));
+    process.off('uncaughtException', onUncaught);
+    check(!uncaught.length, `Mac：写盘出错不崩（${uncaught.map((e) => e.code || e.message).join(' ')}）`);
+    check(uw.state.status === 'error' && uw.state.failures === 1 && /磁盘/.test(uw.state.lastResult), `Mac：写盘出错时提示更新失败（${uw.state.status} ${uw.state.lastResult}）`);
+    check(!fs.existsSync(`${file}.part`) && !fs.existsSync(file), 'Mac：写盘出错后不留 .part');
+  }
+
+  // 重定向到别的主机：失败，不请求那个地址（令牌不会带过去）
+  serve({ zipLocation: 'https://evil.example/dmg' });
   requested.length = 0;
   await u.check();
-  check(u.state.status === 'error' && /不允许/.test(u.state.lastResult) && !requested.includes('https://evil.example/dmg'), `Mac：重定向到别的主机视为失败，也不会去请求（${u.state.lastResult}）`);
+  check(u.state.status === 'error' && /跳转/.test(u.state.lastResult) && !requested.includes('https://evil.example/dmg'), `Mac：重定向到别的主机视为失败，也不会去请求（${u.state.lastResult}）`);
   check(u.state.failures === 2 && !u.snapshot().warn, '失败 2 次还不标黄');
+  // 来财不跳转：就算跳到来财自己的地址也当失败
+  serve({ zipLocation: `${FEED}moved.zip` });
+  requested.length = 0;
+  await u.check();
+  check(u.state.status === 'error' && !requested.includes(`${FEED}moved.zip`), `Mac：跳到来财自己的地址也不跟（${u.state.lastResult}）`);
+  u.set({ failures: 2 });
   await u.check();
   check(u.state.failures === 3 && u.snapshot().warn, '连续失败 3 次标黄');
   check(u.state.lastCheckAt > 0, '记录上次检查时间');
 
   // 已是最新版
-  serve({ tag: 'v0.2.0' });
+  serve({ version: '0.2.0' });
   u = make();
   await u.check();
-  check(u.state.status === 'none' && u.state.failures === 0, `已是最新版时不下载（${u.state.lastResult}）`);
+  check(u.state.status === 'none' && u.state.failures === 0 && !u.state.needLogin, `已是最新版时不下载（${u.state.lastResult}）`);
+
+  // 没登录团队：不发任何请求，不算失败，提示先登录
+  serve();
+  token = '';
+  requested.length = 0;
+  u = make();
+  u.set({ failures: 2 });
+  u.userUpdate();
+  check(u.state.status === 'none' && u.state.needLogin && u.state.lastResult === NO_TOKEN_TEXT && u.state.failures === 0 && !u.state.userAsked && requested.length === 0,
+    `没登录团队：不检查、不算失败（${u.state.lastResult}）`);
+  token = 'tok-2';
+  await u.check();
+  check(u.state.status === 'downloaded' && !u.state.needLogin && sentHeaders[sentHeaders.length - 1].authorization === 'Bearer tok-2', '登录后下一次照常检查，用新的令牌');
+  fs.rmSync(updatesDir, { recursive: true, force: true });
+
+  // 来财说登录过期（401）、这台电脑被停用（403）：按失败记，说清楚原因
+  routes.set(ymlUrl, { status: 401 });
+  u = make();
+  await u.check();
+  check(u.state.status === 'error' && u.state.lastResult === '失败：登录已过期，重新登录后再检查更新' && u.state.failures === 1, `401：提示重新登录（${u.state.lastResult}）`);
+  routes.set(ymlUrl, { status: 403 });
+  await u.check();
+  check(u.state.status === 'error' && u.state.lastResult === '失败：这台电脑已被停用', `403：提示这台电脑已被停用（${u.state.lastResult}）`);
+  token = 'tok-1';
 
   // 新版本刚发布、latest-mac.yml 还没传上去（404）：不算失败，稍后自己再查
   serve();
-  routes.set(`${base}/releases/download/v0.3.0/latest-mac.yml`, { status: 404 });
+  routes.set(ymlUrl, { status: 404 });
   u = make();
   u.set({ failures: 2 });
   await u.check();
-  check(u.state.status === 'none' && u.state.failures === 0 && /0\.3\.0.*上传/.test(u.state.lastResult) && u.pendingTimer, `新版本还在上传时不算失败、稍后再查（${u.state.lastResult}）`);
+  check(u.state.status === 'none' && u.state.failures === 0 && /上传/.test(u.state.lastResult) && u.pendingTimer, `新版本还在上传时不算失败、稍后再查（${u.state.lastResult}）`);
   clearTimeout(u.pendingTimer);
-  routes.set(`${base}/releases.atom`, { status: 404 });
+  serve();
+  routes.set(asset, { status: 404 });
   u = make();
   await u.check();
-  check(u.state.status === 'error' && /404/.test(u.state.lastResult), `别的地址 404 仍然算失败（${u.state.lastResult}）`);
+  check(u.state.status === 'error' && /找不到更新文件/.test(u.state.lastResult) && u.state.failures === 1, `安装包 404 仍然算失败（${u.state.lastResult}）`);
 
-  // Windows：electron-updater 的会话设成直连；找不到 latest.yml 不算失败
+  // Windows：electron-updater 用 generic 方式读来财，只放行来财的地址
+  {
+    const w = make();
+    w.mac = false;
+    w.setupElectronUpdater();
+    check(fakeAuto.feeds.length === 1 && fakeAuto.feeds[0].provider === 'generic' && fakeAuto.feeds[0].url === FEED, `Windows：electron-updater 读来财（${JSON.stringify(fakeAuto.feeds)}）`);
+    check(fakeAuto.disableDifferentialDownload === true && fakeAuto.disableWebInstaller === true && fakeAuto.autoDownload === true, 'Windows：整包下载（来财不支持一次取多段），不用网络安装包');
+    const filtered = (url) => { let r; fakeAuto.filter({ url }, (x) => { r = x; }); return r.cancel; };
+    check(!filtered(`${FEED}latest.yml`) && !filtered(`${FEED}WAswitch-Setup-1.0.7.exe`), 'Windows：放行来财的 latest.yml 和安装包');
+    check(filtered('https://github.com/Kr1xxxx/WAswitch/releases/download/v1.0.7/latest.yml') && filtered('https://laicrm.com/api/device/join'), 'Windows：拦下 GitHub 和来财别的接口');
+    fakeAuto.removeAllListeners();
+  }
+  // Windows：会话直连；检查前换上令牌；找不到 latest.yml 不算失败
   {
     const winProxy = [];
     const w = make();
     w.mac = false;
+    let seen = null;
     w.updater = {
       netSession: { async setProxy(c) { winProxy.push(c.mode); } },
-      async checkForUpdates() { const e = new Error('Cannot find latest.yml'); e.code = 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'; throw e; },
+      async checkForUpdates() { seen = this.requestHeaders; const e = new Error('Cannot find latest.yml'); e.code = 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND'; throw e; },
     };
     await w.check();
     check(winProxy.join() === 'direct', 'Windows：检查前把 electron-updater 的会话设成直连');
+    check(seen && seen.authorization === 'Bearer tok-1', 'Windows：检查（和随后的下载）带设备令牌');
     check(w.state.status === 'none' && w.state.failures === 0 && w.pendingTimer, `Windows：latest.yml 还没传上去时不算失败（${w.state.lastResult}）`);
     clearTimeout(w.pendingTimer);
-    w.updater.netSession.setProxy = async () => { throw new Error('设不了'); };
-    w.directReady = false;
+    // 下载时来财回 401：electron-updater 只给一句 "status 401"
+    w.updater.checkForUpdates = async () => { throw new Error('Cannot download "https://laicrm.com/api/device/update/WAswitch-Setup-0.3.0.exe", status 401: Unauthorized'); };
+    await w.check();
+    check(w.state.status === 'error' && /登录已过期/.test(w.state.lastResult), `Windows：下载时 401 提示重新登录（${w.state.lastResult}）`);
+    // 没登录团队：不调 checkForUpdates
+    token = '';
     let called = false;
     w.updater.checkForUpdates = async () => { called = true; return {}; };
     await w.check();
-    check(!called && w.state.status === 'error', 'Windows：设不了直连就不检查（不会退回走代理）');
+    check(!called && w.state.status === 'none' && w.state.needLogin, 'Windows：没登录团队不检查');
+    token = 'tok-1';
+    w.updater.netSession.setProxy = async () => { throw new Error('设不了'); };
+    w.netReady = false;
+    await w.check();
+    check(!called && w.state.status === 'error', 'Windows：会话设不好就不检查');
   }
 
   // 请求挂住：超时算失败，状态不会一直停在“检查中”
   serve();
-  routes.set(`${base}/releases.atom`, { hang: true });
+  routes.set(ymlUrl, { hang: true });
   u = make();
   let t0 = Date.now();
   await u.check();
@@ -264,7 +361,7 @@ const updatesDir = path.join(home, 'updates');
   u.set({ status: 'downloading', percent: 10 });
   u.watchdog(Date.now() + 31 * 60 * 1000);
   check(u.state.status === 'error', '下载 30 分钟没进度按失败处理');
-  serve({ tag: 'v0.2.0' });
+  serve({ version: '0.2.0' });
   await u.check();
   check(u.state.status === 'none', '卡住复位后下次检查照常进行');
 
@@ -311,7 +408,7 @@ const updatesDir = path.join(home, 'updates');
   check(launched.length === 1 && quits === 1, `Mac：用户点了更新，下好后窗口开着也直接重启安装（${u.state.status} ${u.state.lastResult}）`);
   idle = null;
   // 已是最新版：用户的“要更新”不留着
-  serve({ tag: 'v0.2.0' });
+  serve({ version: '0.2.0' });
   u = make();
   u.userUpdate();
   for (let i = 0; i < 50 && u.state.status === 'checking'; i += 1) await new Promise((r) => setTimeout(r, 20));

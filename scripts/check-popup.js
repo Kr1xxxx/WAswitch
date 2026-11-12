@@ -1,13 +1,16 @@
 // 自检：自带通知弹窗窗口（真的 Electron 窗口 + 真的弹窗页面）。
 // 检查：右上角、不抢焦点、最多 3 张 + “还有 N 条”、同一客户合并、聊天锁遮住名字和内容、
-// 点“打开”回到主进程、到时间自动收走、空闲后窗口关掉、勿扰时不弹。
+// 点“打开”回到主进程、到时间自动收走、空闲后窗口关掉、勿扰时不弹、
+// 拔掉接上显示器和改缩放后重新摆到该在的屏幕右上角（假的几块屏幕）、
+// 鼠标不在卡片上时窗口一定点穿（页面没报“移开了”也一样：窗口被挪走、卡片收走、鼠标跳到透明处）。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
 //      加 SHOT_DIR=目录 会把弹窗截图存下来（PR 里贴图用）
 const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
+const { EventEmitter } = require('events');
 const { app, ipcMain, screen } = require('electron');
-const { PopupWindow } = require('../src/popup');
+const { PopupWindow, pickDisplay, spotOn, WIN_W, WIN_H } = require('../src/popup');
 
 app.disableHardwareAcceleration(); // xvfb 下没有显卡，透明窗口截图要走软件渲染
 // 弹窗窗口空闲后会被关掉，这是测试里唯一的窗口；不接这个事件 Electron 会在窗口全关时直接退出（exit 0），后半段就不会跑
@@ -38,9 +41,11 @@ const popup = new PopupWindow({
   onLater: (c) => later.push(c),
   idleSeconds: () => idleSeconds,
 }, { idleCloseMs: 1500 });
-ipcMain.on('popup:ready', (e) => popup.onReady(e.sender));
-ipcMain.on('popup:hover', (e, on) => popup.onHover(e.sender, on === true));
-ipcMain.on('popup:act', (e, { uid, action } = {}) => popup.onAction(e.sender, Number(uid), action));
+const popups = [popup]; // 后面“显示器插拔”那段另建一个，事件按页面分给各自的窗口
+ipcMain.on('popup:ready', (e) => popups.forEach((p) => p.onReady(e.sender)));
+ipcMain.on('popup:hover', (e, on) => popups.forEach((p) => p.onHover(e.sender, on === true)));
+ipcMain.on('popup:layout', (e, rects) => popups.forEach((p) => p.onLayout(e.sender, rects)));
+ipcMain.on('popup:act', (e, { uid, action } = {}) => popups.forEach((p) => p.onAction(e.sender, Number(uid), action)));
 
 const page = (js) => popup.win.webContents.executeJavaScript(js);
 async function until(fn, ms = 5000) {
@@ -76,6 +81,40 @@ app.whenReady().then(async () => {
   assert.match(await page('document.querySelector(".nt .txt").textContent'), /Liefertermin/, '写最后一条消息');
   await shot('popup-stack.png');
 
+  // 时间文字：一小时内写“现在”“N 分钟前”，更早的按日历日写（隔夜还在的卡片不能只写钟点）。
+  // 页面里把 Date.now 钉在一个固定时刻，主进程这边改卡片的 at，再让页面重画；不依赖真实日期。
+  {
+    const NOW = new Date(2026, 5, 15, 9, 30).getTime(); // 本机时间 2026-06-15 09:30
+    const at = (...a) => new Date(...a).getTime();
+    const cases = [
+      [NOW - 30 * 1000, '现在'],
+      [NOW - 5 * 60 * 1000, '5 分钟前'],
+      [at(2026, 5, 15, 7, 5), '07:05'], // 今天，2 小时多前
+      [at(2026, 5, 14, 23, 50), '昨天 23:50'], // 只差 10 小时，但已是昨天
+      [at(2026, 5, 14, 9, 0), '昨天 09:00'],
+      [at(2026, 0, 3, 8, 7), '1月3日 08:07'],
+      [at(2025, 9, 28, 23, 50), '2025年10月28日 23:50'],
+    ];
+    await page(`window.__realNow = Date.now; Date.now = () => ${NOW}; 0`);
+    for (const [ts, want] of cases) {
+      popup.queue.items[0].at = ts;
+      popup.refresh();
+      assert(await until(async () => (await page('document.querySelector(".nt time").textContent')) === want), `时间文字应为“${want}”，实际“${await page('document.querySelector(".nt time").textContent')}”`);
+    }
+    // 最长的写法也要放得下：名字不被挤掉、卡片不撑宽、时间不换行
+    popup.queue.items[0].at = at(2025, 9, 28, 23, 50);
+    popup.refresh();
+    assert(await until(async () => /^2025年/.test(await page('document.querySelector(".nt time").textContent'))));
+    const fit = await page('(() => { const nt = document.querySelector(".nt"); const r = (e) => e.getBoundingClientRect(); const t = nt.querySelector("time"); const who = nt.querySelector(".who"); const l1 = nt.querySelector(".line1"); return { tH: r(t).height, lineH: parseFloat(getComputedStyle(t).lineHeight) || r(t).height, whoW: r(who).width, whoScroll: who.scrollWidth, whoRight: r(who).right, tLeft: r(t).left, tRight: r(t).right, l1Right: r(l1).right, ntRight: r(nt).right }; })()');
+    assert(fit.tH <= fit.lineH * 1.5, `最长的时间不换行 ${JSON.stringify(fit)}`);
+    assert(fit.whoRight <= fit.tLeft + 0.5, `名字没被时间挤到一起 ${JSON.stringify(fit)}`);
+    assert(fit.tRight <= fit.ntRight + 0.5, `时间没超出卡片 ${JSON.stringify(fit)}`);
+    await shot('popup-old-time.png');
+    await page('Date.now = window.__realNow; 0'); // 还原
+    for (const c of popup.queue.items) c.at = Date.now();
+    popup.refresh();
+  }
+
   // 关闭按钮（Mac 在卡片左上角往外伸）和它的阴影要整个在窗口里；卡片在屏幕上的位置不因此挪动
   const gap = process.platform === 'darwin' ? 10 : 12;
   const geo = await page('(() => { const c = document.querySelector(".nt").getBoundingClientRect(); const x = document.querySelector(".nt .x").getBoundingClientRect(); return { cardTop: c.top, xTop: x.top, xLeft: x.left }; })()');
@@ -109,6 +148,19 @@ app.whenReady().then(async () => {
   assert.strictEqual(popup.queue.size, 4, '打开后收走这一张');
   await page('document.querySelector(".nt .btn:not(.pri)").click()');
   assert(await until(() => later.length === 1), '点稍后传回主进程');
+
+  // 设置里关掉“稍后提醒”：新消息卡片上只剩“打开”，按钮没了也不会再传“稍后”
+  settings.popupLater = false;
+  popup.refresh();
+  assert(await until(async () => (await page('document.querySelectorAll(".nt .btn:not(.pri)").length')) === 0), '关掉稍后提醒：卡片上没有“稍后”');
+  assert.strictEqual(await page('document.querySelectorAll(".nt .btn.pri").length'), await page('document.querySelectorAll(".nt").length'), '关掉稍后提醒：每张卡还有“打开”');
+  const c0 = popup.queue.view().shown[0];
+  popup.onAction(w.webContents, c0.uid, 'later');
+  assert.strictEqual(later.length, 1, '关掉稍后提醒：页面旧的“稍后”点击也不传回主进程');
+  popup.show({ key: c0.key, kind: c0.kind, accId: c0.accId, chat: c0.chat, text: c0.text, count: c0.count }); // 放回去，后面的检查照旧是 3 张
+  settings.popupLater = true;
+  popup.refresh();
+  assert(await until(async () => (await page('document.querySelectorAll(".nt .btn:not(.pri)").length')) > 0), '打开稍后提醒：“稍后”回来');
 
   // 页面说“鼠标停在卡上”，但鼠标其实不在窗口里（xvfb 下光标在屏幕中间）：不信，不暂停倒计时、不关点穿
   popup.onHover(w.webContents, true);
@@ -163,6 +215,203 @@ app.whenReady().then(async () => {
   assert(await until(() => popup.win && popup.ready && popup.win.isVisible()), '关掉后来新提醒：重新建窗口');
   assert.match(await page('document.querySelector(".nt .who").textContent'), /售后 US/, '号自己的提醒：标题是账号名');
 
+  await checkDisplays();
+  await checkHoverRelease();
+
   fs.writeSync(2, '通知弹窗自检通过\n'); // 写到 stderr：app.exit 会把还没刷出去的 stdout 丢掉
   app.exit(0);
 }).catch((e) => { console.error(e); app.exit(1); });
+
+// 拔掉、接上显示器，改缩放，任务栏挪位置：弹窗要回到该在的那块屏幕右上角。
+// 用假的屏幕（两块并排放在 xvfb 的大屏里），主窗口位置也是假的
+async function checkDisplays() {
+  // 主窗口在哪块屏幕就放哪块；主窗口不在任何屏幕上（那块刚被拔掉、窗口藏在托盘里还记着旧位置）就放主屏
+  const L = { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 640, height: 1024 }, workArea: { x: 0, y: 0, width: 640, height: 984 } };
+  const R = { id: 2, scaleFactor: 2, bounds: { x: 640, y: 0, width: 640, height: 1024 }, workArea: { x: 640, y: 0, width: 640, height: 1024 } };
+  assert.strictEqual(pickDisplay([L, R], L, { x: 700, y: 100, width: 500, height: 600 }), R, '主窗口在右边那块：放右边');
+  assert.strictEqual(pickDisplay([L, R], L, { x: 400, y: 100, width: 500, height: 600 }), R, '跨两块：放占得多的那块');
+  assert.strictEqual(pickDisplay([L], L, { x: 1900, y: 100, width: 500, height: 600 }), L, '主窗口在拔掉的屏幕上：放主屏');
+  assert.strictEqual(pickDisplay([L, R], R, null), R, '没有主窗口：放主屏');
+  assert.notStrictEqual(spotOn(L, 'win32').key, spotOn({ ...L, scaleFactor: 1.5 }, 'win32').key, '缩放变了要重建');
+  assert.strictEqual(spotOn(L, 'win32').key, spotOn({ ...R, scaleFactor: 1 }, 'win32').key, '缩放一样的另一块屏幕：只挪不重建');
+
+  // Windows 上跨缩放挪窗口第一次摆不对：读回来不对就再设一次
+  const sets = [];
+  const fakeWin = {
+    b: null,
+    wrongOnce: true, // 像 Windows 那样：从另一种缩放的屏幕挪过来，第一次大小按旧缩放换算错了
+    setBounds(b) { sets.push(b); this.b = this.wrongOnce ? { ...b, width: b.width * 1.5, height: b.height * 1.5 } : { ...b }; this.wrongOnce = false; },
+    getBounds() { return this.b; },
+  };
+  popup.place(fakeWin, spotOn(L, process.platform));
+  assert.strictEqual(sets.length, 2, '第一次大小不对：再设一次');
+  const sL = spotOn(L, process.platform);
+  assert.deepStrictEqual(fakeWin.b, { x: sL.x, y: sL.y, width: WIN_W, height: WIN_H }, '再设一次后位置大小都对');
+  sets.length = 0;
+  popup.place(fakeWin, sL);
+  assert.strictEqual(sets.length, 1, '摆对了就只设一次');
+
+  class FakeScreen extends EventEmitter {
+    constructor(displays) { super(); this.displays = displays; }
+    getAllDisplays() { return this.displays; }
+    getPrimaryDisplay() { return this.displays[0]; }
+    getCursorScreenPoint() { return screen.getCursorScreenPoint(); }
+  }
+  const fake = new FakeScreen([L, R]);
+  let mainBounds = { x: 700, y: 100, width: 500, height: 600 }; // WAswitch 主窗口在外接屏（右边）上
+  const p = new PopupWindow({
+    getWindow: () => ({ isDestroyed: () => false, getBounds: () => mainBounds }),
+    account: (id) => ACC[id] || null,
+    locked: () => false,
+    settings: () => ({ popupSeconds: 0, popupSound: false, popupDnd: false }),
+    onOpen: () => {},
+    onLater: () => {},
+    idleSeconds: () => 0,
+  }, { idleCloseMs: 60 * 1000, screen: fake });
+  popups.push(p);
+  const at = (d) => { const s = spotOn(d, process.platform); return { x: s.x, y: s.y, width: WIN_W, height: WIN_H }; };
+  const on = async (d) => {
+    const w = p.win;
+    return !!(w && !w.isDestroyed() && p.ready && w.isVisible()) && JSON.stringify(w.getBounds()) === JSON.stringify(at(d));
+  };
+  const shows = async (who) => (await p.win.webContents.executeJavaScript('document.querySelector(".nt .who") && document.querySelector(".nt .who").textContent')) === who;
+
+  p.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo! Ist der Liefertermin noch der 12.11.?', count: 1 });
+  assert(await until(() => on(R)), `先弹在外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  const w1 = p.win;
+
+  // 拔掉外接屏：主窗口藏在托盘里，系统没挪它，还记着外接屏上的位置
+  fake.displays = [L];
+  fake.emit('display-removed', {}, R);
+  assert(await until(() => p.win !== w1 && on(L), 3000), `拔掉后回到剩下那块屏幕的右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  assert(w1.isDestroyed(), '旧窗口（按外接屏的缩放建的）换掉了');
+  assert(await until(() => shows('Emma Schneider')), '卡片还在，内容照样显示');
+  const w2 = p.win;
+
+  // 接上外接屏：系统过一会儿才把主窗口挪回去，第二次检查时跟过去
+  mainBounds = { x: 50, y: 100, width: 500, height: 600 }; // 拔掉时系统把主窗口挪到了笔记本屏上
+  fake.displays = [L, R];
+  fake.emit('display-added', {}, R);
+  fake.emit('display-metrics-changed', {}, L, ['workArea']);
+  await wait(800);
+  assert.strictEqual(p.win, w2, '主窗口还在笔记本屏上：弹窗不动');
+  assert(await on(L), '还在笔记本屏右上角');
+  mainBounds = { x: 700, y: 100, width: 500, height: 600 };
+  assert(await until(() => p.win !== w2 && on(R), 4000), `主窗口被挪回外接屏后，弹窗也回到外接屏右上角 ${p.win && JSON.stringify(p.win.getBounds())}`);
+  assert(await until(() => shows('Emma Schneider')), '回去以后卡片照样显示');
+  const w3 = p.win;
+
+  // 同一块屏幕，任务栏挪到上边（工作区变了，缩放没变）：只挪位置，不重建
+  const R2 = { ...R, workArea: { x: 640, y: 40, width: 640, height: 984 } };
+  fake.displays = [L, R2];
+  fake.emit('display-metrics-changed', {}, R2, ['workArea']);
+  assert(await until(() => on(R2), 3000), `工作区变了：挪到新的右上角 ${JSON.stringify(p.win.getBounds())}`);
+  assert.strictEqual(p.win, w3, '屏幕和缩放没变：不重建窗口');
+
+  // 改了缩放：重建
+  const R3 = { ...R2, scaleFactor: 1.5 };
+  fake.displays = [L, R3];
+  fake.emit('display-metrics-changed', {}, R3, ['scaleFactor']);
+  assert(await until(() => p.win !== w3 && on(R3), 3000), '缩放变了：按新缩放重建窗口');
+  const w4 = p.win;
+
+  // 两块屏幕缩放一样时，主窗口被挪到另一块：弹窗只挪过去，不重建（卡片不会空一下再出现）
+  const L2 = { ...L, scaleFactor: R3.scaleFactor };
+  fake.displays = [L2, R3];
+  mainBounds = { x: 50, y: 100, width: 500, height: 600 };
+  fake.emit('display-metrics-changed', {}, L2, ['scaleFactor']);
+  assert(await until(() => on(L2), 3000), `缩放一样：挪到另一块屏幕的右上角 ${JSON.stringify(p.win.getBounds())}`);
+  assert.strictEqual(p.win, w4, '缩放一样：不重建窗口');
+
+  // 卡片都收走了、窗口藏着时拔掉显示器：直接关掉，下次按新的屏幕建
+  p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');
+  assert(await until(() => p.win && !p.win.isVisible(), 2000), '收走后窗口藏起来');
+  fake.displays = [L];
+  fake.emit('display-removed', {}, R3);
+  assert(await until(() => p.win === null, 2000), '藏着的窗口在屏幕变了以后关掉');
+  p.show({ key: 'm:us:James O’Connor', kind: 'msg', accId: 'us', chat: 'James O’Connor', text: 'Thanks!', count: 1 });
+  assert(await until(() => on(L), 5000), '再来一条：建在剩下那块屏幕的右上角');
+  p.onAction(p.win.webContents, p.queue.items[0].uid, 'close');
+}
+
+// 窗口不点穿时整块（连透明的地方）都挡点击。鼠标一离开卡片就要恢复点穿，不能等页面报“移开了”：
+// 窗口被挪走、鼠标一下跳出去时页面收不到（Windows 上用真鼠标测出来，拔掉显示器后主窗口右上角要点两下才响应）。
+// 这里用假的鼠标位置，页面不知道鼠标动了，只看主进程自己能不能发现
+async function checkHoverRelease() {
+  class CursorScreen extends EventEmitter {
+    constructor() { super(); this.cursor = { x: 0, y: 0 }; }
+    getAllDisplays() { return screen.getAllDisplays(); }
+    getPrimaryDisplay() { return screen.getPrimaryDisplay(); }
+    getCursorScreenPoint() { return this.cursor; }
+  }
+  const fake = new CursorScreen();
+  const p = new PopupWindow({
+    getWindow: () => null,
+    account: (id) => ACC[id] || null,
+    locked: () => false,
+    settings: () => ({ popupSeconds: 0, popupSound: false, popupDnd: false }), // 不自动消失：倒计时不走，像离开电脑后回来时那样
+    onOpen: () => {},
+    onLater: () => {},
+    idleSeconds: () => 0,
+  }, { idleCloseMs: 60 * 1000, screen: fake });
+  popups.push(p);
+  p.show({ key: 'm:de:Emma Schneider', kind: 'msg', accId: 'de', chat: 'Emma Schneider', text: 'Hallo! Ist der Liefertermin noch der 12.11.?', count: 1 });
+  p.show({ key: 'm:fr:Lucas Martin', kind: 'msg', accId: 'fr', chat: 'Lucas Martin', text: 'Bonjour, pouvez-vous m’envoyer le devis ?', count: 1 });
+  const cardsDrawn = async () => !!(p.win && p.ready && p.win.isVisible() && p.cardRects && p.cardRects.length) &&
+    (await p.win.webContents.executeJavaScript('document.querySelectorAll(".nt").length')) === p.queue.size;
+  assert(await until(cardsDrawn), '弹窗显示出来，页面报了卡片位置');
+  assert.strictEqual(p.ticker, null, '卡片不自动消失：倒计时没在走（悬停兜底不能靠它）');
+  const w = p.win;
+  let ignoring = true;
+  const setIgnore = w.setIgnoreMouseEvents.bind(w);
+  w.setIgnoreMouseEvents = (ig, o) => { ignoring = ig; return setIgnore(ig, o); };
+  const cards = async () => (await p.win.webContents.executeJavaScript('[...document.querySelectorAll(".nt")].map((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })'));
+  const onCard = (r) => { const b = w.getBounds(); return { x: Math.round(b.x + r.x + r.width / 2), y: Math.round(b.y + r.y + r.height / 2) }; };
+  const below = (r) => { const b = w.getBounds(); return { x: Math.round(b.x + r.x + r.width / 2), y: Math.round(b.y + r.y + r.height + 40) }; };
+  const hover = () => { p.onHover(w.webContents, true); return !!p.queue.hoverSince && ignoring === false; };
+  const released = () => !p.queue.hoverSince && ignoring === true;
+
+  let [top, second] = await cards();
+  fake.cursor = onCard(top);
+  assert(hover(), '鼠标在卡片上：窗口接收点击');
+  await wait(400);
+  assert(!released(), '鼠标一直在卡片上：一直接收点击');
+
+  // 鼠标跳到最下面那张卡片下方的透明处，页面没报“移开了”
+  fake.cursor = below(second);
+  assert(await until(released, 1000), '鼠标到了透明处：很快恢复点穿');
+  let resets = 0;
+  const send = p.send.bind(p);
+  p.send = (st) => { if (st && st.resetHover) resets += 1; return send(st); };
+  assert(!hover(), '鼠标在透明处时页面说“停在卡上”：不信');
+  assert.strictEqual(ignoring, true, '还是点穿');
+  assert.strictEqual(resets, 1, '不信时让页面也忘掉“停在卡上”，之后真停到卡上还会再报');
+  p.send = send;
+
+  // 鼠标停在卡片上时窗口被挪走（拔掉显示器时系统会挪它），鼠标没动
+  fake.cursor = onCard(top);
+  assert(hover(), '回到卡片上：接收点击');
+  const b0 = w.getBounds();
+  w.setPosition(b0.x - 400, b0.y + 300);
+  assert(await until(released, 1000), `窗口被挪走、鼠标留在原地：恢复点穿 ${JSON.stringify(w.getBounds())}`);
+  p.render(); // 摆回右上角
+  assert(await until(() => JSON.stringify(w.getBounds()) === JSON.stringify(b0), 1000), '摆回右上角');
+
+  // 鼠标停在第二张卡上时这张被收走：底下变成透明处
+  [top, second] = await cards();
+  fake.cursor = onCard(second);
+  assert(hover(), '在第二张卡上：接收点击');
+  p.dropKey('m:de:Emma Schneider'); // 收走的是上面那张（最新的在上），第二张挪上去，鼠标底下空了
+  assert(await until(async () => (await cards()).length === 1, 2000), '收走了一张');
+  assert(await until(released, 1000), '鼠标底下的卡片挪走了：恢复点穿');
+
+  // 窗口不点穿时主进程每 0.1 秒核对一次；点穿以后就不再核对
+  fake.cursor = onCard((await cards())[0]);
+  assert(hover(), '接收点击');
+  assert(p.hoverTimer, '不点穿期间在核对鼠标位置');
+  p.onHover(w.webContents, false);
+  assert(released() && !p.hoverTimer, '页面报“移开了”：恢复点穿，停止核对');
+
+  p.onAction(w.webContents, p.queue.items[0].uid, 'close');
+  assert(await until(() => !w.isVisible(), 2000), '收走后窗口藏起来');
+}

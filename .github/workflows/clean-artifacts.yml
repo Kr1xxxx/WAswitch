@@ -1,0 +1,34 @@
+# 手动运行一次：删掉本仓库放了一天以上的 Actions 构建产物（artifact）。
+# 现在的发布产物只留 1 天，会自己过期；要清的只是 #304 以前留下的。安装包本身在 Releases 和来财（来财留新旧两个版本），不受影响。
+# 私有仓库只有 500 MB 存储；2026-11-02 以前的发布每次留约 350 MB、存 90 天，占满后发布在上传 MCP 模块那一步失败
+# （Artifact storage quota has been hit）。发布用的产物只在 job 之间传文件、留 1 天，删掉不影响已发的版本。
+# 删完 GitHub 要 6 到 12 小时才重新算用量，之后再发布。和发布共用 concurrency，不会删掉正在发布的产物。
+name: clean-artifacts
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 删掉放了一天以上的构建产物
+        run: |
+          cutoff=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq ".artifacts[] | select(.created_at < \"$cutoff\") | .id")
+          n=0
+          for id in $ids; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            n=$((n+1))
+          done
+          echo "删掉 $n 个构建产物"

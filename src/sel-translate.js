@@ -17,6 +17,8 @@ const BTN = { width: 64 + PAD * 2, height: 28 + PAD * 2 };
 const CARD_W = 320 + PAD * 2;
 const CARD_MIN_H = 44 + PAD * 2;
 const CARD_MAX_H = 260 + PAD * 2;
+const TR_MAX_H = 400 + PAD * 2; // 气泡译文的编辑小窗（mode tr）最高
+const TR_TOGGLE_MS = 600; // 编辑小窗收起后这么久内又点了同一条的铅笔：当作「再点一次 = 收起」，不再打开
 const GAP = 4; // 和选区之间
 const IDLE_CLOSE_MS = 30 * 1000; // 视图是一个单独的渲染进程（约 100 MB）：收起 30 秒没再用就关掉
 const CHECK_DELAY_MS = 40; // 松开鼠标后等页面把选区定下来（双击选词）
@@ -49,15 +51,19 @@ function quietKey(ev) {
 //   translate(text) -> Promise<{ text } | { error }>
 //   copy(text) -> Promise<boolean>（真的写进剪贴板了才是 true）
 //   focus() -> 键盘焦点还给当前账号页面
+//   mouseUp(id) -> 账号页面上松开了鼠标左键
+//   trEdit：气泡译文的编辑小窗（translate-ipc.js 的 trEdit）{ save(id, h, text), fix(id, h, text), take(id, h, yes), draft(id, h, text), closed(id, h) }
 // 退出软件拆视图时 view.webContents 可能已经是 undefined：一律先看它还在不在
 const wcOk = (v) => !!v && !!v.webContents && !v.webContents.isDestroyed();
 
 function createSelTranslate(deps) {
   let view = null;
   let ready = false;
-  // 正显示着的：{ id, text, at（账号页面位置，变了就收起）, sel, zoom, mode: 'button' | 'card', st（译文窗状态）, h }
+  // 正显示着的：{ id, text, at（账号页面位置，变了就收起）, sel, zoom, mode: 'button' | 'card' | 'tr', st（译文窗 / 编辑小窗的状态）, h（视图高度）, mh（tr：哪条消息） }
   let shown = null;
   let seq = 0; // 每次按下/滚动/新的松开 +1：读选区、翻译期间又动了就作废
+  let hides = 0; // 每次收起 +1：编辑小窗打开期间收起过就不再打开（松开鼠标读选区不算）
+  let lastTr = null; // 最近一次收起的编辑小窗 { id, mh, at }：再点同一个铅笔当作收起；收起后才到的草稿也记到这条上
   let idleTimer = null;
   let stopped = false; // 软件在退出：不再建视图
 
@@ -80,7 +86,8 @@ function createSelTranslate(deps) {
       clearTimeout(giveBackTimer);
       giveBackTimer = setTimeout(() => {
         giveBackTimer = null;
-        if (!own.isDestroyed() && own.isFocused() && lastDown < focusAt - 100) deps.focus();
+        // 编辑小窗要的就是焦点在小窗里（打字），不还
+        if (!own.isDestroyed() && own.isFocused() && lastDown < focusAt - 100 && !(shown && shown.mode === 'tr')) deps.focus();
       }, 50);
     });
     own.on('before-mouse-event', (_e, ev) => { if (ev.type === 'mouseDown') lastDown = Date.now(); });
@@ -101,8 +108,14 @@ function createSelTranslate(deps) {
   }
   function hide() {
     seq += 1;
+    hides += 1;
     if (!shown) return;
+    const was = shown;
     shown = null;
+    if (was.mode === 'tr') {
+      lastTr = { id: was.id, mh: was.mh, at: Date.now() };
+      if (deps.trEdit) deps.trEdit.closed(was.id, was.mh);
+    }
     if (wcOk(view)) {
       // 焦点在按钮/译文窗上（点过它）：还给聊天页，不然收起后打字没反应
       const hadFocus = view.webContents.isFocused();
@@ -118,12 +131,18 @@ function createSelTranslate(deps) {
   const alive = () => wcOk(view);
   function push() {
     if (!alive() || !ready || !shown) return;
+    if (shown.mode === 'tr') {
+      view.webContents.send('seltr:state', { ...shown.st, mode: 'tr', open: !!shown.first });
+      shown.first = false;
+      return;
+    }
     view.webContents.send('seltr:state', shown.mode === 'card' ? { mode: 'card', ...shown.st } : { mode: 'button' });
   }
   function place() {
     if (!alive() || !shown) return;
-    const card = shown.mode === 'card';
-    const size = card ? { width: CARD_W, height: Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, shown.h || CARD_MIN_H)) } : BTN;
+    const card = shown.mode === 'card' || shown.mode === 'tr';
+    const max = shown.mode === 'tr' ? TR_MAX_H : CARD_MAX_H;
+    const size = card ? { width: CARD_W, height: Math.max(CARD_MIN_H, Math.min(max, shown.h || CARD_MIN_H)) } : BTN;
     view.setBounds(placeBox(shown.sel, JSON.parse(shown.at), shown.zoom, size, card ? 'left' : 'right'));
   }
   // 新建的视图页面画好（seltr:ready）才显示，不闪一块空白；3 秒还没好（或期间又动了鼠标键盘）就这次不显示
@@ -131,13 +150,15 @@ function createSelTranslate(deps) {
     for (let i = 0; i < 120 && !ready && v === view && wcOk(v); i += 1) await new Promise((r) => setTimeout(r, 25));
     return ready && v === view && wcOk(v);
   }
-  async function show(next) {
+  // valid()：等视图准备好期间这次还算不算数（默认：期间没动过鼠标键盘）
+  async function show(next, valid) {
     if (stopped) return false;
     const run = seq;
+    const ok = valid || (() => run === seq);
     const v = ensureView();
     clearTimeout(idleTimer);
     idleTimer = null;
-    if (!(await waitReady(v)) || run !== seq || !deps.canShow(next.id)) {
+    if (!(await waitReady(v)) || !ok() || !deps.canShow(next.id)) {
       if (!shown) armIdle();
       return false;
     }
@@ -164,7 +185,8 @@ function createSelTranslate(deps) {
     if (run !== seq || !deps.canShow(id)) return;
     const found = await locate(id, wc);
     if (run !== seq || !deps.canShow(id)) return;
-    if (!found) { hide(); return; }
+    // 读不到选区：收起按钮和译文窗。编辑小窗不收（点铅笔时它是松开鼠标以后才打开的；点别处的按下已经收起过了）
+    if (!found) { if (shown && shown.mode !== 'tr') hide(); return; }
     await show({ ...found, mode: 'button' });
   }
 
@@ -193,6 +215,7 @@ function createSelTranslate(deps) {
       if (t === 'mouseUp') {
         if (ev.button && ev.button !== 'left') return;
         check(id, wc);
+        if (deps.mouseUp) deps.mouseUp(id); // 可能刚点了气泡里的铅笔：让译文那边马上看一次
       } else if (t === 'rawKeyDown' || t === 'keyDown') {
         if (!quietKey(ev)) hide();
       } else if (t === 'mouseDown' || t === 'mouseWheel' || t === 'contextMenu' || t === 'gestureScrollBegin') {
@@ -227,6 +250,33 @@ function createSelTranslate(deps) {
     if (await show({ ...found, mode: 'card', st: { busy: true }, h: 0 })) translate();
   }
 
+  // ---- 气泡译文的编辑小窗（点网页号气泡里译文末尾的小铅笔，translate-ipc.js 叫） ----
+  // rect：译文块在页面上的位置，top：气泡上沿（页面 CSS 像素）。放在译文块下面，左边对齐；下面放不下放到气泡上面
+  // 返回 true = 打开了；false = 没打开（这次是「再点一次 = 收起」，或期间又收起过、号不在显示）
+  async function openTr({ id, wc, h, rect, top, entry, draft }) {
+    if (stopped || !entry || typeof h !== 'string' || !rect) return false;
+    if (shown && shown.mode === 'tr' && shown.id === id && shown.mh === h) { hide(); return false; }
+    if (lastTr && lastTr.id === id && lastTr.mh === h && Date.now() - lastTr.at < TR_TOGGLE_MS) { lastTr = null; return false; }
+    const pageView = deps.viewOf(id);
+    if (!pageView || pageView.webContents !== wc || wc.isDestroyed() || !deps.canShow(id)) return false;
+    hide();
+    const n = (v) => (Number.isFinite(v) ? v : 0);
+    const sel = { x: n(rect.x), y: n(rect.y), w: n(rect.w), h: n(rect.h), top: Number.isFinite(top) ? top : n(rect.y) };
+    const gen = hides;
+    const next = { id, text: '', at: JSON.stringify(pageView.getBounds()), sel, zoom: wc.getZoomFactor(), mode: 'tr', mh: h, h: 0, first: true, st: { ...entry, draft: typeof draft === 'string' ? draft : '' } };
+    if (!(await show(next, () => gen === hides))) return false;
+    if (alive()) view.webContents.focus(); // 焦点给小窗（textarea 在页面里自己 focus）
+    return true;
+  }
+  // 这条的状态变了（保存了、纠错中、纠错好了、出建议）：entry 为空 = 这条不在了，收起
+  function updateTr(entry) {
+    if (!shown || shown.mode !== 'tr') return;
+    if (!entry) { hide(); return; }
+    shown.st = { ...entry, draft: shown.st.draft };
+    push();
+  }
+  const hideTr = () => { if (shown && shown.mode === 'tr') hide(); };
+
   // 只接受这个小视图自己发来的
   const fromView = (e) => alive() && e.sender === view.webContents;
   ipcMain.on('seltr:ready', (e) => { if (fromView(e)) { ready = true; push(); } });
@@ -241,11 +291,33 @@ function createSelTranslate(deps) {
     return (await deps.copy(text)) === true;
   });
   ipcMain.on('seltr:size', (e, h) => {
-    if (!fromView(e) || !shown || shown.mode !== 'card' || !Number.isFinite(h)) return;
+    if (!fromView(e) || !shown || (shown.mode !== 'card' && shown.mode !== 'tr') || !Number.isFinite(h)) return;
     shown.h = Math.ceil(h) + PAD * 2;
     place();
   });
   ipcMain.on('seltr:hide', (e) => { if (fromView(e)) hide(); });
+  // 编辑小窗：改哪一条一律用主进程记着的 shown，不信小视图传来的
+  const trOn = (e) => fromView(e) && shown && shown.mode === 'tr' && deps.trEdit;
+  const txt = (t) => (typeof t === 'string' ? t.slice(0, 4000) : '');
+  ipcMain.on('seltr:tr-save', (e, text) => {
+    if (!trOn(e) || !txt(text).trim()) return;
+    const cur = shown;
+    if (deps.trEdit.save(cur.id, cur.mh, txt(text)) && shown === cur) hide(); // 保存了就收起
+  });
+  ipcMain.on('seltr:tr-fix', (e, text) => { if (trOn(e)) deps.trEdit.fix(shown.id, shown.mh, txt(text)); });
+  ipcMain.on('seltr:tr-take', (e, yes) => {
+    if (!trOn(e)) return;
+    const cur = shown;
+    if (deps.trEdit.take(cur.id, cur.mh, yes === true) && yes === true && shown === cur) hide(); // 采用了就收起
+  });
+  ipcMain.on('seltr:tr-draft', (e, text) => {
+    if (!fromView(e) || !deps.trEdit) return;
+    // 收起时最后几个字可能晚一点才到：记到刚收起的那条上
+    const t = shown && shown.mode === 'tr' ? shown : lastTr && Date.now() - lastTr.at < 2000 ? lastTr : null;
+    if (!t) return;
+    if (t === shown) shown.st.draft = txt(text);
+    deps.trEdit.draft(t.id, t.mh, txt(text));
+  });
 
   // 退出软件时调（main.js 的 before-quit）：拆掉视图，之后不再响应
   function shutdown() {
@@ -254,7 +326,11 @@ function createSelTranslate(deps) {
     closeView();
   }
 
-  return { watch, hide, sync, fromMenu, close: closeView, shutdown, get shown() { return shown ? { id: shown.id, text: shown.text, mode: shown.mode } : null; } };
+  return {
+    watch, hide, sync, fromMenu, openTr, updateTr, hideTr, close: closeView, shutdown,
+    get shown() { return shown ? { id: shown.id, text: shown.text, mode: shown.mode, h: shown.mh || '' } : null; },
+    get bounds() { return shown && alive() ? view.getBounds() : null; },
+  };
 }
 
 module.exports = { createSelTranslate, placeBox, placeButton, quietKey, BTN, CARD_W, PAD };

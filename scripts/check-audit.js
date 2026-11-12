@@ -229,7 +229,7 @@ const msg = (chat, n, text, out = false) => ({ id: String(out) + '_' + chat + '_
       const dest = path.join(dir, 'download-' + kind);
       if (kind === 'directory') fs.writeFileSync(dest, 'file');
       else { fs.mkdirSync(dest); fs.mkdirSync(path.join(dest, 'waswitch-mcp.js.part')); }
-      const mod = new McpModule({ dir: dest, dataDir: dir, expected, owner: 'test', repo: 'test',
+      const mod = new McpModule({ dir: dest, dataDir: dir, expected, feed: 'https://laicrm.com/api/device/update/', deviceToken: () => 'synthetic-token',
         fetch: async (_url, { onData, signal }) => {
           onData(bytes, bytes.length, bytes.length);
           // Keep network pending until output-stream error aborts it.

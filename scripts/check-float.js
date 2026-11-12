@@ -2,7 +2,7 @@
 // 对外不出现 data-id、删号清缓存；再用 Electron 打开一个仿 WhatsApp 的页面，检查只读脚本读到的内容。
 // 不连网络，不发真实请求。
 const assert = require('assert');
-const { FloatCore, fromLite, hashOf, msgHash } = require('../src/floatcore');
+const { FloatCore, inlineEntry, inlineClicks, fromLite, hashOf, msgHash, msgKey, chatOf } = require('../src/floatcore');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 消息编号带上对话（真 WhatsApp 的消息编号各不相同；按消息编号认消息，不同对话不能撞号）
@@ -11,7 +11,7 @@ const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `$
 async function core() {
   let now = Date.parse('2026-10-24T10:00:00Z');
   const sent = [];
-  // 没有免费服务商（智谱、混元都没填密钥）：更早的消息不在后台补翻
+  // 没有免费的路（deps.hasFree 说没有）：更早的消息不在后台补翻
   const fc = new FloatCore({ now: () => now, translate: async (text, o = {}) => { if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' }; sent.push(text); return { text: `译:${text}`, warn: [] }; } });
   // 第一次看到一个对话：12 条收到的，只自动翻最后 5 条
   const first = Array.from({ length: 12 }, (_, i) => msg(i));
@@ -92,6 +92,7 @@ async function core() {
   assert.strictEqual(fc.viewOf('A').items.length, 0);
   console.log('悬浮翻译逻辑自检通过');
   await keyRetry();
+  await scrolledHistory();
   await persisted();
   await noWordsGist();
   await sendNoJump();
@@ -101,6 +102,7 @@ async function core() {
   await catchUpOlder();
   await parallelAuto();
   await lidSwitch();
+  await titleChange();
   await slowLanes();
   await translateVia();
   await sameMessageOtherText();
@@ -292,9 +294,9 @@ async function textDrift() {
   console.log('同一条消息显示格式变了不重翻自检通过');
 }
 
-// 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）用免费的智谱、混元再翻，
-// 每条最多再翻 3 次，DeepL 不用、额度不多扣；等着的时候显示「翻译」；用户点了马上翻、定时到了不再翻；
-// 密钥、内容、余额、没有免费服务商的不重翻；后台补翻失败先停再接着补；网络换了马上再试；删号不再翻（shen 2026-10-30）
+// 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）走 slow 那条路再翻，
+// 每条最多再翻 3 次；等着的时候显示「翻译」；用户点了马上翻、定时到了不再翻；
+// 登录、内容、额度、没有免费的路的不重翻；后台补翻失败先停再接着补；网络换了马上再试；删号不再翻（shen 2026-10-30）
 async function autoRetry() {
   const chat = '4915112345678@c.us';
   const m = (n, text = `Hallo ${n}`) => ({ id: `false_${chat}_3RT${n}`, out: false, text });
@@ -313,7 +315,7 @@ async function autoRetry() {
   const st = (fc, acc, h) => fc.accs.get(acc).items.get(h);
   // 1. 服务器出错一次：不点任何东西，过一会儿自己有译文；重翻走的是免费那条路（slow），额度只算第一次
   {
-    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '智谱服务器出错', kind: 'server' } : null));
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '来财那边出错了', kind: 'server' } : null));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(1)] }, opts);
     await sleep(10);
     const h = msgHash('R', m(1).id);
@@ -321,7 +323,7 @@ async function autoRetry() {
     assert.strictEqual(fc.viewOf('R').items[0].state, 'manual', '等着重翻时显示「翻译」，不显示报错');
     assert.strictEqual(fc.viewOf('R').items[0].err, '');
     await settle(fc);
-    assert.deepStrictEqual(calls, [{ text: 'Hallo 1', slow: false }, { text: 'Hallo 1', slow: true }], '重翻只走免费那条路，不换 DeepL');
+    assert.deepStrictEqual(calls, [{ text: 'Hallo 1', slow: false }, { text: 'Hallo 1', slow: true }], '重翻只走 slow 那条路');
     assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].tr], ['done', '译:Hallo 1']);
     assert.strictEqual(fc.viewOf('R').today, 1, '重翻不算额度');
   }
@@ -343,7 +345,7 @@ async function autoRetry() {
     assert.strictEqual(fc.viewOf('R').items[0].state, 'error');
     assert.strictEqual(fc.waits.length, 0, '用户点的失败不排自动重翻');
   }
-  // 3. 密钥、内容、余额、没有免费服务商、语言：不自动重翻
+  // 3. 登录、内容、额度、没有免费的路、语言：不自动重翻
   for (const kind of ['auth', 'input', 'quota', 'nofree', 'lang', 'model', 'config', 'big', 'bad', 'cancel']) {
     const { fc, calls } = mk(() => ({ error: '不行', kind }));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(3)] }, opts);
@@ -351,22 +353,22 @@ async function autoRetry() {
     assert.strictEqual(calls.length, 1, `${kind} 不重翻`);
     assert.strictEqual(fc.viewOf('R').items[0].state, 'error', kind);
   }
-  // 4. 重翻时没有免费服务商（默认是付费的、智谱混元都没填）：显示原来那次的报错
+  // 4. 重翻时没有免费的路：显示原来那次的报错
   {
-    const { fc, calls } = mk((text, n, o) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : { error: 'DeepL 服务器出错', kind: 'server' }));
+    const { fc, calls } = mk((text, n, o) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : { error: '来财那边出错了，请稍后再试', kind: 'server' }));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(4)] }, opts);
     await settle(fc);
     assert.strictEqual(calls.length, 2);
-    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', '来财那边出错了，请稍后再试']);
   }
-  // 4b. 智谱、混元都没填密钥（deps.hasFree 说没有）：不等，直接显示报错
+  // 4b. deps.hasFree 说没有免费的路（现在总是这样）：不等，直接显示报错
   {
-    const { fc, calls } = mk(() => ({ error: 'DeepL 服务器出错', kind: 'server' }));
+    const { fc, calls } = mk(() => ({ error: '来财那边出错了，请稍后再试', kind: 'server' }));
     fc.deps.hasFree = () => false;
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(8)] }, opts);
     await sleep(10);
     assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', 'DeepL 服务器出错']);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', '来财那边出错了，请稍后再试']);
     assert.strictEqual(fc.waits.length, 0);
   }
   // 5. 等着重翻时用户点「翻译」：马上翻，定时到了不再翻
@@ -478,7 +480,7 @@ async function translateVia() {
       transcribe: async () => { now += 5000; return { text: 'Hallo, ist das noch lieferbar?', seconds: 3 }; },
       translate: async (text, o = {}) => {
         now += o.fix ? 3000 : 1234;
-        return o.fix ? { text: `纠:${text}`, provider: '腾讯混元', model: 'hy-mt2-plus', warn: [] } : { text: `译:${text}`, provider: '智谱', model: 'glm-4-flash', warn: [] };
+        return o.fix ? { text: `纠:${text}`, provider: '来财', model: 'DeepSeek', warn: [] } : { text: `译:${text}`, provider: '来财', model: 'DeepSeek', warn: [] };
       },
     });
     return { store, fc };
@@ -493,7 +495,7 @@ async function translateVia() {
   await sleep(30);
   // 1. 翻好的一条有 via：at 是翻好的时间，ms 按假时钟，只有 5 项
   const v1 = get(fc, 1).via;
-  assert.deepStrictEqual(v1, { at: v1.at, ms: 1234, name: '智谱', model: 'glm-4-flash', fix: false });
+  assert.deepStrictEqual(v1, { at: v1.at, ms: 1234, name: '来财', model: 'DeepSeek', fix: false });
   assert(v1.at <= now && v1.at >= Date.parse('2026-10-30T20:45:00Z') + 1234, `at 是翻好的时间 ${v1.at}`);
   const allKeys = fc.viewOf('V').items.flatMap((x) => Object.keys(x.via));
   assert(allKeys.every((k) => ['at', 'ms', 'name', 'model', 'fix'].includes(k)), `viewOf 的 via 只有那 5 项 ${allKeys}`);
@@ -511,7 +513,7 @@ async function translateVia() {
   await sleep(30);
   const f2 = get(fc, 2);
   assert.strictEqual(f2.fixed, true);
-  assert.deepStrictEqual(f2.via, { at: f2.via.at, ms: 3000, name: '腾讯混元', model: 'hy-mt2-plus', fix: true });
+  assert.deepStrictEqual(f2.via, { at: f2.via.at, ms: 3000, name: '来财', model: 'DeepSeek', fix: true });
   assert(f2.via.at > v2.at);
   // 改过再纠错：结果只当建议，via 还是原来的；采用后才换成纠错那次
   assert(fc.manual('V', get(fc, 1).h, true));
@@ -520,7 +522,7 @@ async function translateVia() {
   assert.deepStrictEqual(get(fc, 1).via, v1, '建议还没采用，via 不变');
   assert(fc.suggestion('V', get(fc, 1).h, true));
   const f1 = get(fc, 1);
-  assert.deepStrictEqual(f1.via, { at: f1.via.at, ms: 3000, name: '腾讯混元', model: 'hy-mt2-plus', fix: true });
+  assert.deepStrictEqual(f1.via, { at: f1.via.at, ms: 3000, name: '来财', model: 'DeepSeek', fix: true });
   assert(f1.via.at > v1.at);
   // 改过再纠错，不用建议：via 还是原来的；再采用不了（建议已清）
   assert(fc.edit('V', get(fc, 3).h, '我也改了'));
@@ -587,7 +589,7 @@ async function translateVia() {
   await sleep(50);
   const vi = fc.viewOf('V').items[0];
   assert.strictEqual(vi.state, 'done');
-  assert.deepStrictEqual(vi.via, { at: vi.via.at, ms: 1234, name: '智谱', model: 'glm-4-flash', fix: false }, '语音的用时只算翻译');
+  assert.deepStrictEqual(vi.via, { at: vi.via.at, ms: 1234, name: '来财', model: 'DeepSeek', fix: false }, '语音的用时只算翻译');
   store.flush();
   ({ store, fc } = make());
   fc.ingest('V', { title: 'Lukas', msgs: [{ id: vid, out: false, text: '', voice: 3, t: { h: 20, mi: 59, at: now } }] }, opts);
@@ -727,6 +729,105 @@ async function lidSwitch() {
   assert.strictEqual(store.seenChat('Z', hashOf('Z', 'm0')), null, '最旧的先删');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('同一个对话换编号不重翻自检通过');
+}
+
+// 页面上的 data-id 没有 true_/false_ 前缀时，消息编号是 wa-page.js 用顶栏标题补出来的（chat:<标题>_<页面编号>）。
+// 标题一会儿一变（顶栏读到的是「在线」「正在输入…」「最后上线时间」，或改了备注名）时不能当成新对话重翻
+// （shen 2026-11-02「翻译一会会自动重新翻译一遍」）：这次运行里不重翻，重启后标题又变了也不重翻
+async function titleChange() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-title-'));
+  const calls = [];
+  const logs = [];
+  const make = () => {
+    const store = new TrStore(dir);
+    const fc = new FloatCore({ store, parallel: () => 3, log: (x) => logs.push(x),
+      translate: async (text, o = {}) => { calls.push((o.slow ? '慢:' : '') + text); await sleep(5); return { text: `译:${text}` }; } });
+    return { store, fc };
+  };
+  const idle = async (fc) => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(10); };
+  const IN = [0, 2, 5, 8, 11, 14, 17, 19];
+  const at = (i) => ({ h: 10, mi: i % 60, at: 1e12 + i * 60000 });
+  // 真 WhatsApp 的消息编号：20 位十六进制
+  const rid = (i) => `3EB0A1B2C3D4E5F6${String(i).padStart(4, '0')}`;
+  const win = (title, from = 0, n = 20) => Array.from({ length: n }, (_, k) => {
+    const i = from + k;
+    const inc = IN.includes(i % 20);
+    return { id: `${!inc}_chat:${title}_${rid(i)}`, out: !inc, text: inc ? `Kunde ${i}` : `Ich ${i}`, t: at(i) };
+  });
+  const opts = { auto: true, dailyCap: 500 };
+  let { store, fc } = make();
+  // 编号：标题不算在消息编号里；页面编号里带着对话的按那个对话认，和带前缀的同一条消息认成一条
+  assert.strictEqual(msgKey(`false_chat:online_${rid(1)}`), msgKey(`false_chat:typing…_${rid(1)}`));
+  assert.strictEqual(msgKey(`false_chat:Anna_4915112345678@c.us_${rid(1)}`), msgKey(`false_4915112345678@c.us_${rid(1)}`));
+  assert.strictEqual(chatOf(`false_chat:Anna_4915112345678@c.us_${rid(1)}`), '4915112345678@c.us');
+  assert.strictEqual(chatOf(`false_chat:Anna_${rid(1)}`), 'chat:Anna');
+  // 页面编号不像消息编号（每个对话自己数的 1、2、3）：两个对话会撞号，照旧整条用
+  assert.strictEqual(msgKey('false_chat:Anna_1'), 'false_chat:Anna_1');
+  assert.notStrictEqual(msgKey('false_chat:Anna_1'), msgKey('false_chat:Lucas_1'));
+  // 按内容算的编号（读不到 data-id）离开对话就不唯一：照旧整条用
+  assert.strictEqual(msgKey('false_chat:Anna_h1x2y3.1'), 'false_chat:Anna_h1x2y3.1');
+  assert.notStrictEqual(msgKey('false_chat:Anna_h1x2y3.1'), msgKey('false_chat:Ben_h1x2y3.1'));
+  // 1. 打开对话：顶栏读到「click here for contact info」，8 条客户消息
+  fc.ingest('W', { title: 'click here for contact info', msgs: win('click here for contact info'), bottom: true }, opts);
+  await idle(fc);
+  assert.strictEqual(calls.filter((c) => !c.startsWith('慢:')).length, 5, '最新 5 条照常');
+  for (const it of fc.viewOf('W').items.filter((x) => x.state !== 'done')) fc.manual('W', it.h);
+  await idle(fc);
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  const key0 = fc.viewOf('W').chatKey;
+  calls.length = 0;
+  // 2. 一会儿后顶栏变成「online」「typing…」：同一批消息，0 次，还是同一个对话，翻译栏不多不少
+  for (const title of ['online', 'typing…', 'online']) {
+    fc.ingest('W', { title, msgs: win(title), bottom: true }, opts);
+    await idle(fc);
+  }
+  assert.deepStrictEqual(calls, [], '顶栏标题变了不重翻');
+  assert.strictEqual(fc.viewOf('W').items.length, 8);
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  assert.strictEqual(fc.viewOf('W').chatKey, key0, '草稿、客户语言跟着对话走');
+  assert(logs.some((x) => x.includes('换了编号')), '认出是同一个对话时记一行日志');
+  // 3. 标题是「last seen…」时来了新消息：只翻新的那条
+  fc.ingest('W', { title: 'last seen today at 14:20', msgs: win('last seen today at 14:20', 1), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, ['Kunde 20'], '只翻新来的');
+  fc.ingest('W', { title: 'online', msgs: win('online', 2), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, ['Kunde 20'], '自己发的不翻');
+  // 4. 重启后顶栏又是另一个样子：0 次，译文都在，还是同一个对话
+  store.flush();
+  ({ store, fc } = make());
+  calls.length = 0;
+  fc.ingest('W', { title: 'Emma Schneider', msgs: win('Emma Schneider', 2), bottom: true }, opts);
+  await idle(fc);
+  assert.deepStrictEqual(calls, [], '重启后标题变了也不重翻');
+  assert(fc.viewOf('W').items.every((x) => x.state === 'done'));
+  assert(fc.viewOf('W').items.some((x) => x.text === 'Kunde 20'), '标题是别的样子时翻的那条也在');
+  assert.strictEqual(fc.viewOf('W').chatKey, key0);
+  // 5. 两个不同的对话（消息编号不同）标题不一样：不会归到一起
+  fc.ingest('W', { title: 'Lucas Martin', msgs: [{ id: `false_chat:Lucas Martin_${rid(40)}`, out: false, text: 'Bonjour', t: at(40) }], bottom: true }, opts);
+  await idle(fc);
+  assert.notStrictEqual(fc.viewOf('W').chatKey, key0, '别的对话');
+  assert.deepStrictEqual(calls, ['Bonjour']);
+  // 6. 两个对话的页面编号都是 1、2、3（不像消息编号）：不能归成一个，各翻各的
+  calls.length = 0;
+  const seq = (title, words) => words.map((text, i) => ({ id: `false_chat:${title}_${i + 1}`, out: false, text, t: at(50 + i) }));
+  fc.ingest('S', { title: 'Anna', msgs: seq('Anna', ['Hallo', 'Preis?', 'Danke']), bottom: true }, opts);
+  await idle(fc);
+  const keyA = fc.viewOf('S').chatKey;
+  fc.ingest('S', { title: 'Lucas', msgs: seq('Lucas', ['Bonjour', 'Prix?', 'Merci']), bottom: true }, opts);
+  await idle(fc);
+  assert.notStrictEqual(fc.viewOf('S').chatKey, keyA, '页面编号一样的两个对话不归到一起');
+  assert.deepStrictEqual(fc.viewOf('S').items.map((x) => x.text), ['Bonjour', 'Prix?', 'Merci'], '翻译栏是 Lucas 的消息');
+  assert.deepStrictEqual(calls, ['Hallo', 'Preis?', 'Danke', 'Bonjour', 'Prix?', 'Merci'], '各翻各的');
+  store.flush();
+  const raw = fs.readFileSync(path.join(dir, 'W', '_chats.json'), 'utf8');
+  assert(!/Kunde|Emma|online|click/.test(raw), '别名表里只有 hash');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('顶栏标题变了不重翻自检通过');
 }
 
 // 2026-10-29 之前存的译文记录没有原文（shen「英文的可以也存吗」）：重启后补回来的旧消息先只有译文；
@@ -1000,7 +1101,7 @@ async function slowLanes() {
   console.log('后台补翻同时 3 条、给新消息让位置自检通过');
 }
 
-// 最后 5 条没翻的照常自动翻，存着的不占名额；更早的用免费的智谱或混元在后台慢慢补（slow），最新的先翻，不算额度；
+// 最后 5 条没翻的照常自动翻，存着的不占名额；更早的有免费的路时在后台慢慢补（slow，现在没有），最新的先翻，不算额度；
 // 没有免费服务商就留着「翻译」按钮；同一次运行里切走再切回也补；补的时候来了新消息先翻新的；用户点了马上翻
 // 用免费服务商时收到的消息最多同时翻 3 条（shen 2026-10-29「提速做,同时做的仅限于免费 API」），付费的一次一条；
 // 每条只算一次额度；说忙的那条过一会儿再来，不卡住别的
@@ -1099,7 +1200,7 @@ async function catchUpOlder() {
   await idle();
   assert.strictEqual(sent[sent.length - 1], 'Are you there?');
   assert.strictEqual(fc.viewOf('N').today, 6);
-  // 没有免费服务商：留着「翻译」按钮，不报错；之后填了密钥，切走再切回就补上
+  // 没有免费的路：留着「翻译」按钮，不报错；之后有了，切走再切回就补上
   free = false;
   sent.length = 0;
   const chat2 = '4915112345678@c.us';
@@ -1344,37 +1445,48 @@ function scrollNoBottom() {
   console.log('说不清停在哪时翻译栏也不变自检通过');
 }
 
-// 填好密钥后：“没填密钥 / 密钥不对”失败的自动重翻；别的原因失败的不动；照每天上限；别的对话里的忘掉；纠错失败的恢复原译文
+// 登录团队后：“没登录 / 没开通”失败的自动重翻；别的原因失败的不动；照每天上限；别的对话里的忘掉；纠错失败的恢复原译文
 async function keyRetry() {
   const now = Date.parse('2026-10-24T10:00:00Z');
-  let mode = 'nokey';
+  let mode = 'nologin';
   const sent = [];
   const fc = new FloatCore({ now: () => now, translate: async (text) => {
     sent.push(text);
-    if (mode === 'nokey') return text.includes('quota') ? { error: '智谱账户没余额了', kind: 'quota' } : { error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' };
+    if (mode === 'nologin') {
+      if (text.includes('quota')) return { error: '本月翻译额度用完了，请找管理员', kind: 'quota' };
+      if (text.includes('setup')) return { error: '翻译还没开通，请找管理员在来财填 DeepSeek key', kind: 'config' };
+      return { error: '先登录团队才能翻译', kind: 'auth' };
+    }
     return { text: `译:${text}`, warn: [] };
   } });
   // 另一个对话先失败一条，然后切走
   fc.ingest('K', { title: 'old', msgs: [msg(1, false, '900@c.us', 'old chat')] }, { auto: true, dailyCap: 500 });
   await sleep(20);
-  const msgs = [msg(1, false, '901@c.us', 'a'), msg(2, false, '901@c.us', 'b quota'), msg(3, false, '901@c.us', 'c')];
+  const msgs = [msg(1, false, '901@c.us', 'a'), msg(2, false, '901@c.us', 'b quota'), msg(3, false, '901@c.us', 'c'), msg(4, false, '901@c.us', 'd setup')];
   fc.ingest('K', { title: 'Emma', msgs }, { auto: true, dailyCap: 500 });
   await sleep(20);
   let items = fc.viewOf('K').items;
-  assert.deepStrictEqual(items.map((x) => x.state), ['error', 'error', 'error']);
-  assert.strictEqual(items[0].errPid, 'zp');
-  // 别的服务商的密钥：不重翻
+  assert.deepStrictEqual(items.map((x) => x.state), ['error', 'error', 'error', 'error']);
+  assert(!('errPid' in items[0]), '报错不再带服务商');
   mode = 'ok';
   sent.length = 0;
-  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: (pid) => pid === 'dl' }), []);
-  // 智谱的密钥填好了：只重翻缺密钥的两条，没余额那条不动
-  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: (pid) => pid === 'zp' }), ['K']);
+  // match 不认：不重翻
+  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: () => false }), []);
+  // 只认 auth（默认）：没开通那条不动
+  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500 }), ['K']);
   await sleep(20);
   assert.deepStrictEqual(sent.sort(), ['a', 'c']);
   items = fc.viewOf('K').items;
-  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'error', 'done']);
+  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'error', 'done', 'error']);
+  // 登录后（translate-ipc 的 retryCloudErrors）：auth、config 都重翻，额度用完那条不动
+  sent.length = 0;
+  assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, kinds: ['auth', 'config'], match: () => true }), ['K']);
+  await sleep(20);
+  assert.deepStrictEqual(sent, ['d setup']);
+  items = fc.viewOf('K').items;
+  assert.deepStrictEqual(items.map((x) => x.state), ['done', 'error', 'done', 'done']);
   assert.strictEqual(items[0].tr, '译:a');
-  assert.strictEqual(items[1].err, '智谱账户没余额了');
+  assert.strictEqual(items[1].err, '本月翻译额度用完了，请找管理员');
   // 切回之前的对话：失败的那条按新消息补翻
   sent.length = 0;
   fc.ingest('K', { title: 'old', msgs: [msg(1, false, '900@c.us', 'old chat')] }, { auto: true, dailyCap: 500 });
@@ -1382,7 +1494,7 @@ async function keyRetry() {
   assert.deepStrictEqual(sent, ['old chat']);
   assert.strictEqual(fc.viewOf('K').items[0].tr, '译:old chat');
   // 每天上限到了：不重翻，旧报错也不再显示，退回“翻译”按钮
-  const fc2 = new FloatCore({ now: () => now, translate: async () => ({ error: '智谱还没填密钥', kind: 'auth', providerId: 'zp' }) });
+  const fc2 = new FloatCore({ now: () => now, translate: async () => ({ error: '先登录团队才能翻译', kind: 'auth' }) });
   fc2.ingest('L', { title: 'x', msgs: [msg(1, false, '902@c.us'), msg(2, false, '902@c.us')] }, { auto: true, dailyCap: 3 });
   await sleep(20);
   let n = 0;
@@ -1392,8 +1504,8 @@ async function keyRetry() {
   assert.strictEqual(n, 1);
   assert.deepStrictEqual(fc2.viewOf('L').items.map((x) => [x.state, x.err]), [['done', ''], ['manual', '']]);
   assert.strictEqual(fc2.viewOf('L').paused, 'day');
-  // 纠错失败（密钥问题）：原译文恢复，不再请求
-  const fc3 = new FloatCore({ now: () => now, translate: async (text, o) => (o.fix ? { error: '智谱的密钥不对或没有权限', kind: 'auth', providerId: 'zp' } : { text: `译:${text}`, warn: [] }) });
+  // 纠错失败（登录失效）：原译文恢复，不再请求
+  const fc3 = new FloatCore({ now: () => now, translate: async (text, o) => (o.fix ? { error: '团队登录失效，请重新登录', kind: 'auth' } : { text: `译:${text}`, warn: [] }) });
   fc3.ingest('M', { title: 'x', msgs: [msg(1, false, '903@c.us')] }, { auto: true, dailyCap: 500 });
   await sleep(20);
   const hm = fc3.viewOf('M').items[0].h;
@@ -1403,7 +1515,120 @@ async function keyRetry() {
   fc3.deps.translate = async () => { throw new Error('不该再请求'); };
   fc3.retryKeyErrors({ dailyCap: 500, match: () => true });
   assert.deepStrictEqual([fc3.viewOf('M').items[0].state, fc3.viewOf('M').items[0].tr], ['done', '译:hola 1']);
-  console.log('填好密钥自动重翻自检通过');
+  console.log('登录团队后自动重翻自检通过');
+}
+
+// 译文显示在消息下面、往上翻聊天记录（1.0.4 bug 检查第 3 条）：屏幕上看得到的旧消息（history）
+// 存过的显示译文，没翻过的只给按钮、不自动翻；点了才翻，上下文用它前面的；翻译栏（view）不动；之后正常读到时接着用
+async function scrolledHistory() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore, textKey } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-hist-'));
+  try {
+    const store = new TrStore(dir);
+    const chat = '910@c.us';
+    const old = Array.from({ length: 30 }, (_, i) => msg(i, i % 7 === 3, chat, `frage ${i}`));
+    const ck = hashOf('H', `chat|${chat}`);
+    store.putKey('H', ck, textKey('frage 1'), { tr: '存:1', text: 'frage 1' });
+    const sent = [];
+    let fail = false;
+    const fc = new FloatCore({ store, translate: async (text, o = {}) => {
+      sent.push({ text, ctx: (o.context || []).map((m) => m.text) });
+      return fail ? { error: '先登录团队才能翻译', kind: 'auth' } : { text: `译:${text}`, warn: [] };
+    } });
+    // 停在最下面：最后 20 条（双方）
+    fc.ingest('H', { title: 'Emma', msgs: old.slice(-20), bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    const autoSent = sent.length;
+    const viewBefore = fc.viewOf('H').items.map((x) => x.h).join();
+    // 往上翻：这次读数（最后 20 条已经是更早的）照旧不用
+    assert.strictEqual(fc.ingest('H', { title: 'Emma', msgs: old.slice(0, 20), bottom: false }, { auto: true, dailyCap: 500 }), false);
+    const vis = old.slice(0, 12);
+    const hist = fc.history('H', vis);
+    await sleep(20);
+    assert.strictEqual(sent.length, autoSent, '往上翻不自动翻');
+    const st = (i) => hist.get(msgHash('H', old[i].id));
+    assert.strictEqual(st(1).state, 'done');
+    assert.strictEqual(st(1).tr, '存:1');
+    assert.strictEqual(st(0).state, 'manual');
+    assert.strictEqual(st(3), undefined, '自己发的不放');
+    assert.strictEqual(fc.viewOf('H').items.map((x) => x.h).join(), viewBefore, '翻译栏不动');
+    // 再看一次：同一条，不重新查
+    assert.strictEqual(fc.history('H', vis).get(msgHash('H', old[0].id)), st(0));
+    // 点「翻译」：上下文是它前面看得到的几条（双方）
+    assert(fc.manual('H', msgHash('H', old[8].id)));
+    await sleep(20);
+    assert.strictEqual(sent.length, autoSent + 1);
+    assert.deepStrictEqual(sent[sent.length - 1], { text: 'frage 8', ctx: ['frage 0', 'frage 1', 'frage 2', 'frage 3', 'frage 4', 'frage 5', 'frage 6', 'frage 7'] });
+    assert.strictEqual(st(8).state, 'done');
+    assert.strictEqual(store.get('H', ck, 'frage 8').tr, '译:frage 8', '点过的存盘');
+    // 气泡译文的编辑小窗：往上翻看到的旧消息也能改、纠错、采用建议，entry 能找到（不带 data-id）
+    const h8 = msgHash('H', old[8].id);
+    const e8 = fc.entry('H', h8);
+    assert.strictEqual(e8.tr, '译:frage 8');
+    assert.strictEqual(e8.orig, true);
+    assert(Array.isArray(e8.rows) && e8.rows[0][0] === '翻译时间', '有翻译信息');
+    assert(!JSON.stringify(e8).includes('@c.us'), 'entry 不带 data-id');
+    assert.strictEqual(fc.entry('H', 'ffffffffffffffff'), null);
+    assert(fc.edit('H', h8, '改:8'), '旧消息能改');
+    assert.strictEqual(fc.entry('H', h8).edited, true);
+    assert.strictEqual(store.get('H', ck, 'frage 8').tr, '改:8', '改的存盘');
+    assert(fc.manual('H', h8, true));
+    assert(['queued', 'running'].includes(fc.entry('H', h8).state), '纠错中');
+    await sleep(20);
+    assert.strictEqual(fc.entry('H', h8).suggest, '译:frage 8', '改过的再纠错只给建议');
+    assert.strictEqual(fc.entry('H', h8).tr, '改:8');
+    assert(fc.suggestion('H', h8, true), '旧消息能采用建议');
+    assert.strictEqual(fc.entry('H', h8).tr, '译:frage 8');
+    assert.strictEqual(fc.entry('H', h8).fixed, true);
+    // 纠错失败：原来的译文还在（消息下面照旧显示译文，见 translate-ipc.js 的 inlineEntry），entry 带报错
+    fail = true;
+    fc.manual('H', h8, true);
+    await sleep(20);
+    assert.strictEqual(fc.entry('H', h8).state, 'error');
+    assert.strictEqual(fc.entry('H', h8).tr, '译:frage 8');
+    assert.deepStrictEqual([fc.entry('H', h8).err, 'errPid' in fc.entry('H', h8)], ['先登录团队才能翻译', false]);
+    fail = false;
+    fc.retryKeyErrors({ dailyCap: 500, match: () => true });
+    assert.strictEqual(fc.entry('H', h8).state, 'done');
+    // 没登录失败的：登录后退回按钮，不自动重翻
+    fail = true;
+    fc.manual('H', msgHash('H', old[9].id));
+    await sleep(20);
+    assert.strictEqual(st(9).state, 'error');
+    fail = false;
+    const n = sent.length;
+    assert.deepStrictEqual(fc.retryKeyErrors({ dailyCap: 500, match: () => true }), ['H']);
+    await sleep(20);
+    assert.strictEqual(st(9).state, 'manual');
+    assert.strictEqual(sent.length, n);
+    // 往上翻看过的这条之后被正常读到（比如新开对话读到了）：接着用，不重翻
+    const fc2h = msgHash('H', old[11].id);
+    fc.manual('H', fc2h);
+    await sleep(20);
+    const m = sent.length;
+    fc.ingest('H', { title: 'Emma', msgs: old.slice(0, 20), bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert.strictEqual(fc.viewOf('H').items.find((x) => x.h === fc2h).tr, '译:frage 11');
+    assert(!sent.slice(m).some((x) => x.text === 'frage 11'), '看过的不重翻');
+    // 往上翻时新来的客户消息先在屏幕上见过（还是「翻译」按钮）：回到最下面照常自动翻
+    const newer = msg(500, false, chat, 'frage neu');
+    fc.history('H', [newer]);
+    await sleep(20);
+    assert(!sent.some((x) => x.text === 'frage neu'), '只在屏幕上见过时不翻');
+    fc.ingest('H', { title: 'Emma', msgs: [...old.slice(0, 19), newer], bottom: true }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert(sent.some((x) => x.text === 'frage neu'), '回到最下面照常自动翻');
+    // 最多记 HIST_MAX 条
+    const many = Array.from({ length: 200 }, (_, i) => msg(1000 + i, false, '911@c.us', `x ${i}`));
+    for (let i = 0; i < many.length; i += 40) fc.history('H', many.slice(i, i + 40));
+    assert(fc.accs.get('H').hist.size <= 150);
+    console.log('往上翻看到的旧消息自检通过');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // 译文存盘：切走再切回、重启后直接显示，不再调模型；手动改的也存；删号也保留
@@ -1435,18 +1660,43 @@ async function noWordsGist() {
   assert.deepStrictEqual(sent, ['And ok…'], '时间、编号不翻，存过的不再翻');
   const items = fc.viewOf('G').items;
   assert.deepStrictEqual(items.map((x) => [x.state, x.tr]), [['done', '谢谢，请发送发票'], ['done', '已付\n【要点】我自己写的'], ['skip', ''], ['skip', ''], ['done', '译:And ok…']]);
+  // 中文原文不翻（shen 2026-11-02）：不自动翻、不占额度、不给「翻译」按钮；自己发的也不翻；其他语言照常
+  {
+    const sent2 = [];
+    const f2 = new FloatCore({ translate: async (text) => { sent2.push(text); return { text: `译:${text}`, warn: [] }; } });
+    const c2 = '888@c.us';
+    const zh = [msg(1, false, c2, '好的，我明天付款'), msg(2, false, c2, '好'), msg(3, false, c2, 'ok 好的'), msg(4, false, c2, 'Hola, ¿cuánto cuesta?'),
+      msg(5, true, c2, 'Hello, the price is 10 EUR'), msg(6, false, c2, 'Mi pedido de 订单 12345'), msg(7, false, c2, 'こんにちは、ありがとう')];
+    f2.ingest('Z', { title: 'z', msgs: zh }, { auto: true, dailyCap: 500 });
+    await sleep(20);
+    assert.deepStrictEqual(sent2, ['Hola, ¿cuánto cuesta?', 'Mi pedido de 订单 12345', 'こんにちは、ありがとう'], '中文和自己发的不翻，其他语言照常翻');
+    const zi = f2.viewOf('Z').items;
+    assert.deepStrictEqual(zi.slice(0, 3).map((x) => x.state), ['skip', 'skip', 'skip']);
+    assert(!f2.manual('Z', zi[0].h), '中文消息没有翻译按钮');
+    // 中文夹英文行业词、型号还是中文（汉字数不少于外文单词数）；外文夹一两个汉字照常翻；链接里的英文不算
+    const { isChinese } = require('../src/langdetect');
+    for (const t of ['请发 invoice 给我', 'iPhone 15 Pro Max 有货吗', '订单号 ABC12345 已发', '價格多少？', '看这个 https://x.com/lace-front-wig 好看吗']) assert(isChinese(t), t);
+    for (const t of ['Mi pedido de 订单 12345', 'Please send the invoice', 'こんにちは', '안녕하세요', '12345']) assert(!isChinese(t), t);
+    // 消息下面：中文不翻的不显示翻译按钮；语音转出来的中文要把转出来的字显示出来
+    assert.strictEqual(inlineEntry(zi[0]), null);
+    assert.deepStrictEqual(inlineEntry({ state: 'skip', voice: 5, text: '好的，我明天付款' }), { k: 'done', t: '好的，我明天付款' });
+    assert.strictEqual(inlineEntry({ state: 'skip', voice: 5, text: '' }), null);
+    // 往上翻时看到的中文旧消息也一样
+    const hs = f2.history('Z', [msg(20, false, c2, '谢谢你')]);
+    assert.strictEqual([...hs.values()][0].state, 'skip');
+  }
   // 不翻的：点不了翻译、改不了
   assert(!fc.manual('G', items[2].h));
   assert(!fc.edit('G', items[2].h, 'x'));
   // 用户自己的「收到」模式要要点：存着的要点不删；客户原文里本来就有【要点】也不删
   let keep = true;
   const fc2 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  store.put('G', ck, '客户写的【要点】', { tr: '客户\n【要点】原文就有' });
+  store.put('G', ck, 'The client wrote this【要点】', { tr: '客户\n【要点】原文就有' });
   fc2.ingest('G', { title: 'g', msgs: [msg(1, false, chat, 'Thanks, please send the invoice')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc2.viewOf('G').items[0].tr, '谢谢，请发送发票\n\n【要点】客户要求发送发票');
   keep = false;
   const fc3 = new FloatCore({ store, keepGist: () => keep, translate: async (text) => ({ text: `译:${text}`, warn: [] }) });
-  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, '客户写的【要点】')] }, { auto: false, dailyCap: 500 });
+  fc3.ingest('G', { title: 'g', msgs: [msg(9, false, chat, 'The client wrote this【要点】')] }, { auto: false, dailyCap: 500 });
   assert.strictEqual(fc3.viewOf('G').items.at(-1).tr, '客户\n【要点】原文就有');
   fs.rmSync(dir, { recursive: true, force: true });
 }
@@ -1682,6 +1932,22 @@ async function scrollStable(w, waPage) {
   console.log('上下滑聊天记录时翻译栏不变自检通过');
 }
 
+// 网页号气泡里点了「翻译」「重试」，放的时候用户已经换到别的号：不翻，但按钮不能一直灰着（点过次数加一，下次放这个号时重画成能点的）
+{
+  const counts = new Map();
+  const list = [{ h: 'h1' }, { h: 'h2' }];
+  let p = inlineClicks(['h1', 'h1'], list, 'A', 'A', counts);
+  assert.deepStrictEqual(p, { run: ['h1'], repaint: true }, '当前号：点了就翻，同一条点两下算一次');
+  assert.strictEqual(counts.get('h1'), 1);
+  p = inlineClicks(['h2'], list, 'A', 'B', counts);
+  assert.deepStrictEqual(p.run, [], '换了号：不翻');
+  assert.strictEqual(counts.get('h2'), 1, '换了号：点过次数照样加，按钮下次重画成能点的');
+  assert.strictEqual(p.repaint, true);
+  p = inlineClicks(['gone'], list, 'A', 'A', counts);
+  assert.deepStrictEqual(p, { run: [], repaint: false }, '这次没放出去的：交给页面自己恢复');
+  console.log('气泡按钮点了以后换号自检通过');
+}
+
 core().then(() => {
   // 只读脚本：在 Electron 里跑（由 xvfb-run electron 调用时才跑）
   if (!process.versions.electron) return;
@@ -1741,9 +2007,10 @@ core().then(() => {
     const r3 = await waPage.readOpenChat(w.webContents);
     assert.strictEqual(r3.msgs[r3.msgs.length - 1].text, 'newest', '最新消息不能被字数上限挤掉');
     assert(r3.msgs.reduce((n, m) => n + m.text.length, 0) <= 20000);
-    // 新版页面：编号没有 true_/false_ 前缀、标题不带 title 属性，靠气泡 class 认方向
+    // 新版页面：编号没有 true_/false_ 前缀、标题不带 title 属性，靠气泡 class 认方向。
+    // 名字下面那行（「在线」「正在输入…」）带 title、头像也带 title：标题要读名字，不能读成会变的那行
     await w.webContents.executeJavaScript(`(() => {
-      document.querySelector('#main').innerHTML = '<header><span dir="auto">Anna Müller</span></header><div role="application">'
+      document.querySelector('#main').innerHTML = '<header><div title="Profile details" role="button"><img alt=""></div><div role="button"><div><span dir="auto">Anna Müller</span></div><div><span id="sub" title="online">online</span></div></div></header><div role="application">'
         + '<div role="row"><div data-id="3EB0AA" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] Anna: "><span dir="ltr"><span>Guten Morgen, ist das Paket schon unterwegs?</span></span></div></div></div>'
         + '<div role="row"><div data-id="3EB0BB" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Ja, heute verschickt.</span></span></div></div></div></div>';
       return 1; })()`);
@@ -1752,6 +2019,41 @@ core().then(() => {
     assert.strictEqual(r4.title, 'Anna Müller');
     assert.deepStrictEqual(r4.msgs.map((m) => [m.out, m.text]), [[false, 'Guten Morgen, ist das Paket schon unterwegs?'], [true, 'Ja, heute verschickt.']]);
     assert(r4.msgs.every((m) => /^(true|false)_chat:Anna Müller_/.test(m.id)), '补出的编号要能认出是哪个对话');
+    await w.webContents.executeJavaScript(`(() => { const s = document.getElementById('sub'); s.textContent = 'typing…'; s.title = 'typing…'; return 1; })()`);
+    const r4b = await waPage.readOpenChat(w.webContents);
+    assert.strictEqual(r4b.title, 'Anna Müller', '名字下面那行变了，标题不变');
+    assert.deepStrictEqual(r4b.msgs.map((m) => m.id), r4.msgs.map((m) => m.id), '消息编号不变');
+    assert.strictEqual(r4.group, false, '新版编号的单聊不算群（CRM 采集靠它查号码）');
+    // 新版编号的群：编号里认不出对话，收到的消息有两个发送人就算群，CRM 采集不收
+    await w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">Team DACH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0G1" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] Lena Weber: "><span class="selectable-text"><span>Hallo zusammen</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0G2" class="message-in"><div data-pre-plain-text="[09:11, 26/10/2026] Paul Schmitt: "><span class="selectable-text"><span>Moin</span></span></div></div></div></div>';
+      return 1; })()`);
+    const rg = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rg.ok && rg.msgs.length === 2, JSON.stringify(rg));
+    assert.strictEqual(rg.group, true, '两个发送人：算群');
+    assert.strictEqual(rg.oneToOne, false);
+    // 只有一个人说过话：名字就是标题才算单聊；不是标题（同名的群里只有一个人说过话）不算
+    const one = (sender) => w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">ACME GmbH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0S1" class="message-in"><div data-pre-plain-text="[09:10, 26/10/2026] ${sender}: "><span class="selectable-text"><span>Invoice attached</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0S2" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Thanks</span></span></div></div></div></div>';
+      return 1; })()`);
+    await one('Lena Weber');
+    const rs = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rs.ok && rs.group === false && rs.oneToOne === false, '发送人不是标题：不断定是单聊 ' + JSON.stringify(rs));
+    await one('ACME GmbH');
+    const rt = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rt.ok && rt.group === false && rt.oneToOne === true, '发送人就是标题：单聊 ' + JSON.stringify(rt));
+    // 认不准收发的消息（没有气泡 class、位置也看不出）可能是群里别人发的：也不断定是单聊
+    await w.webContents.executeJavaScript(`(() => {
+      document.querySelector('#main').innerHTML = '<header><div role="button"><div><span dir="auto">ACME GmbH</span></div></div></header><div role="application">'
+        + '<div role="row"><div data-id="3EB0Q1"><div data-pre-plain-text="[09:10, 26/10/2026] Lena Weber: "><span class="selectable-text"><span>Invoice attached</span></span></div></div></div>'
+        + '<div role="row"><div data-id="3EB0Q2" class="message-out"><div data-pre-plain-text="[09:11, 26/10/2026] Ich: "><span class="selectable-text"><span>Thanks</span></span></div></div></div></div>';
+      return 1; })()`);
+    const rq = await waPage.readOpenChat(w.webContents, { max: waPage.MAX_MSGS_LIMIT });
+    assert(rq.ok && rq.msgs.length === 2 && rq.group === false && rq.oneToOne === false, '认不准收发：不断定是单聊 ' + JSON.stringify(rq));
     // 刚点开、还没有消息的对话：算读到了，只是没有消息
     await w.webContents.executeJavaScript(`document.querySelector('#main').innerHTML = '<header><span title="Lucas">Lucas</span></header><div role="application"></div>'; 1`);
     const r5 = await waPage.readOpenChat(w.webContents);

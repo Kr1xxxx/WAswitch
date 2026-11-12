@@ -5,6 +5,7 @@
 // 运行：node scripts/check-mcp-helpers.js（npm run check:mcp 里也会跑）
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const path = require('path');
 const { McpController } = require('../src/mcp/server');
 const { normLang, phoneDigits, localNow, daypart, LANG_NAMES, TR_PER_MIN } = require('../src/mcp/helpers');
@@ -12,6 +13,8 @@ const { LANGS } = require('../src/translate');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const { ToolListChangedNotificationSchema } = require('@modelcontextprotocol/sdk/types.js');
+// 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
+const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
 let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
@@ -43,7 +46,7 @@ function fakeHooks() {
     translate: async (args) => {
       state.trCalls.push(args);
       if (state.trDelay) await new Promise((r) => setTimeout(r, state.trDelay));
-      return state.trAnswers.shift() || { text: `[${args.target}] ${args.text}`, provider: '智谱', fallback: false, ms: 5, warn: [] };
+      return state.trAnswers.shift() || { text: `[${args.target}] ${args.text}`, provider: '来财', ms: 5, warn: [] };
     },
   };
 }
@@ -69,7 +72,7 @@ async function main() {
 
   // ---------- 接到 MCP 服务器上 ----------
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'waswitch-mcp-helpers-'));
-  const port = 40000 + Math.floor(Math.random() * 20000);
+  const port = await freePort();
   fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify({ enabled: false, port }));
   const hooks = fakeHooks();
   const st = hooks.state;
@@ -77,7 +80,7 @@ async function main() {
   await ctl.init();
   await ctl.setEnabled(true);
   const s = ctl.status();
-  check(s.running && s.helpers === false, '辅助工具默认关');
+  check(s.running && s.helpers === false, `辅助工具默认关${s.error ? `（${s.error}）` : ''}`);
 
   const client = new Client({ name: 'check-mcp-helpers', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(s.url), { requestInit: { headers: { Authorization: `Bearer ${s.token}` } } }));
@@ -113,7 +116,7 @@ async function main() {
   // ---------- 翻译 ----------
   const t1 = json(await call('translate_text', { text: 'Thanks, I will send the invoice today.', target: 'de' }));
   const c1 = st.trCalls[st.trCalls.length - 1];
-  check(t1.text === '[德语] Thanks, I will send the invoice today.' && t1.target === '德语' && t1.provider === '智谱', '翻译走软件设置，de 换成 德语');
+  check(t1.text === '[德语] Thanks, I will send the invoice today.' && t1.target === '德语' && t1.provider === '来财', '翻译走软件设置，de 换成 德语');
   check(c1.mode.name === '标准' && /\{目标语言\}/.test(c1.mode.prompt) && c1.source === '' && !('context' in c1), '没给模式时忠实直译，不带对话上下文');
   await call('translate_text', { text: 'Bonjour', target: 'English', source: 'fr', mode: '商务正式' });
   const c2 = st.trCalls[st.trCalls.length - 1];
@@ -124,10 +127,13 @@ async function main() {
   const t5 = await call('translate_text', { text: '   ', target: 'de' });
   check(t3.isError && /不认识目标语言/.test(t3.content[0].text) && t4.isError && /商务正式/.test(t4.content[0].text) && t5.isError && st.trCalls.length === n0,
     '语言、模式不对或文字是空的直接说明，不去翻译');
-  st.trAnswers.push({ error: '智谱还没填密钥', kind: 'auth', providerId: 'p1' });
+  st.trAnswers.push({ error: '先登录团队才能翻译', kind: 'auth' });
   const t6 = await call('translate_text', { text: 'Hello', target: 'de' });
-  check(t6.isError && /智谱还没填密钥/.test(t6.content[0].text) && /设置 › 翻译/.test(t6.content[0].text), '密钥没填时说明去 设置 › 翻译 填');
-  st.trAnswers.push({ text: 'Rufen Sie mich an: +49 30 1234567', provider: '智谱', warn: ['+49 30 1234567'] });
+  check(t6.isError && /先登录团队才能翻译/.test(t6.content[0].text) && /请用户在 WAswitch 里登录团队/.test(t6.content[0].text) && !/密钥|服务商/.test(t6.content[0].text), '没登录团队时说明请用户登录团队，不再叫人填密钥');
+  st.trAnswers.push({ error: '翻译还没开通，请找管理员在来财填 DeepSeek key', kind: 'config' });
+  const t6b = await call('translate_text', { text: 'Hello', target: 'de' });
+  check(t6b.isError && /找管理员/.test(t6b.content[0].text) && !/设置 › 翻译|密钥/.test(t6b.content[0].text), '来财没开通时照来财的话说，不叫人去设置里填');
+  st.trAnswers.push({ text: 'Rufen Sie mich an: +49 30 1234567', provider: '来财', warn: ['+49 30 1234567'] });
   const t7 = json(await call('translate_text', { text: 'Call me', target: 'de' }));
   check(/\+49 30 1234567/.test(t7.warning || ''), '译文多出原文没有的联系方式时提醒');
 

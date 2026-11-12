@@ -41,6 +41,13 @@ const run = (clip, text) => makeCopyText(clip, async (ms) => { waits.push(ms); }
   const long = 'x'.repeat(5000);
   check(await run(c, long) === true && c.get().length === 4000, '最长复制 4000 字');
 
+  // 写剪贴板再贴的地方都走 copyText：「插入」「放进输入框」不能直接 clipboard.writeText 后就贴（写不进去会贴出旧内容）
+  const read = (f) => require('fs').readFileSync(require('path').join(__dirname, '..', 'src', f), 'utf8');
+  const ins = read('compose-insert.js');
+  check(/await copyText\(text\)\)\) return 'clip'/.test(ins), "「插入」用 copyText 确认写进去，没写上返回 'clip'");
+  check(ins.indexOf('copyText(text)') > -1 && ins.indexOf('copyText(text)') < ins.indexOf('.paste()') && !/clipboard\.writeText/.test(ins), '「插入」先确认再 paste，不直接写剪贴板');
+  check(/copyText,\n/.test(read('main.js').slice(read('main.js').indexOf('async function insertText'))), 'main.js 的 insertText 把 copyText 交给 compose-insert.js');
+
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);
 })();

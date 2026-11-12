@@ -18,6 +18,12 @@ assert.strictEqual(T.when(at(2025, 12, 31, 23, 59), at(2026, 1, 1, 0, 1)), '昨�
 assert.strictEqual(T.when(at(2025, 12, 30, 23, 59), at(2026, 1, 1, 0, 1)), '2025年12月30日 23:59', '跨年');
 assert.strictEqual(T.when(at(2026, 10, 30, 0, 1), at(2026, 10, 30, 0, 2)), '00:01', '零点后一分钟');
 
+// 列表只写日期那一半：今天钟点，别的天不写钟点
+assert.strictEqual(T.day(at(2026, 10, 30, 20, 45), now), '20:45');
+assert.strictEqual(T.day(at(2026, 10, 29, 9, 5), now), '昨天');
+assert.strictEqual(T.day(at(2026, 10, 28, 20, 45), now), '10月28日');
+assert.strictEqual(T.day(at(2025, 10, 28, 20, 45), now), '2025年10月28日');
+
 // 用时：10 秒以内一位小数，10 秒以上取整，一分钟以上 1 分 5 秒
 assert.strictEqual(T.took(400), '0.4 秒');
 assert.strictEqual(T.took(1234), '1.2 秒');

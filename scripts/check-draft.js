@@ -2,12 +2,15 @@
 //   A. draft-place.js 的判断（假的主进程）：什么时候直接放、什么时候在顶部问、一次一条、用户点按钮后怎么放
 //   B. 网页版：仿 WhatsApp 的本地页 + 真的剪贴板和 paste。草稿出现在输入框里，没有任何按键、Enter、发送点击，剪贴板换回原样
 //   C. 轻量模式：真的 src/shell/lite.js 聊天页。草稿填进输入框，liteSend 没被调用
+//   D. 翻译页的「放进输入框」、话术的「插入」：新版 WhatsApp 结构的页面 + 旁边的工作台视图。焦点不在输入框时也放进去
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-draft.js（窗口要显示出来，xvfb 下看不见）
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, clipboard, ClipboardItem } = require('electron');
+const { app, BrowserWindow, BaseWindow, WebContentsView, clipboard, ClipboardItem } = require('electron');
 const waPage = require('../src/wa-page');
 const { createDraftPlacer, chatMatches, jidNumber } = require('../src/draft-place');
+const { pasteToCompose } = require('../src/compose-insert');
+const { makeCopyText } = require('../src/copy-text');
 
 let failures = 0;
 const out = (line) => fs.writeSync(1, `${line}\n`);
@@ -132,19 +135,173 @@ async function partB(win) {
   await placer.answer(true);
   check(st.request && /先在 WhatsApp 里打开和「Anna Müller」的对话/.test(st.request.note) && (await compose()) === '', '网页版：用户点按钮时对话不对，横幅写明先打开那个对话，不放');
 
-  // 用户打开了 Anna 的对话（这里用号码起草），光标在搜索框
+  // 用户打开了 Anna 的对话（这里用号码起草），光标在搜索框：用户点了按钮，就先把光标放进输入框再放
   await page("document.querySelector('#main header span').setAttribute('title', 'Anna Müller'); document.querySelector('[data-id]').setAttribute('data-id', 'false_4915123456789@c.us_C'); document.getElementById('search').focus(); true");
   st.request = { ...st.request, chat: '+49 1512 3456789', note: '' };
-  await placer.answer(true);
-  check(st.request && /先点一下对话下方/.test(st.request.note) && (await compose()) === '', '网页版：光标不在输入框时不放，横幅提示先点输入框');
-
-  await focusCompose();
   await clipboard.writeText('second original');
   await placer.answer(true);
   ev = await page('window.__ev');
-  check(!st.request && (await compose()).includes('wrong chat?'), '网页版：用户点按钮后放进去（按号码认对话），横幅消失');
+  check(!st.request && (await compose()).includes('wrong chat?'), '网页版：光标在搜索框时用户点按钮，先把光标放进输入框再放（按号码认对话），横幅消失');
+  check((await page("document.getElementById('search').textContent")) === '', '网页版：搜索框里没被写进去');
   check(ev.keys === 0 && ev.enter === 0 && ev.sendClicks === 0 && ev.sent.length === 0, '网页版：用户点按钮放进去，也没有按键、没发送');
   check((await clipboard.readText()) === 'second original', '网页版：用户点按钮放完后剪贴板也换回去');
+
+  // 自动放时不动用户的焦点：光标在搜索框就不放，在顶部问
+  await page("document.getElementById('compose').textContent = ''; document.getElementById('search').focus(); true");
+  r = await placer.place({ accountId: 'w1', chat: 'Anna Müller', text: 'auto draft', client: 'test' });
+  check(r.result === 'pending' && /光标不在/.test(r.why) && (await compose()) === '' && (await page('document.activeElement.id')) === 'search',
+    `网页版：自动放时光标在搜索框，不放、不动焦点，在顶部问（${r.result} ${r.why}）`);
+  st.request = null;
+
+  // 用户点横幅按钮时焦点在软件界面上（旁边的视图），WhatsApp 页面里开着会把焦点拉回去的弹窗：不放，横幅留着写明
+  const side = new WebContentsView({ webPreferences: { sandbox: true } });
+  win.contentView.addChildView(side);
+  side.setBounds({ x: 600, y: 0, width: 300, height: 600 });
+  await side.webContents.loadURL('data:text/html;charset=utf-8,<textarea id="in"></textarea>');
+  await page(`(() => {
+    const d = document.createElement('div');
+    d.id = 'dlg'; d.setAttribute('role', 'dialog'); d.innerHTML = '<button id="dlg-ok">OK</button>';
+    document.body.append(d);
+    document.addEventListener('focusin', (e) => { if (d.isConnected && !d.contains(e.target)) document.getElementById('dlg-ok').focus(); });
+    document.getElementById('dlg-ok').focus();
+  })(); true`);
+  side.webContents.focus();
+  await wait(30);
+  st.request = { kind: 'draft', nonce: 99, id: 'w1', chat: 'Anna Müller', text: 'dialog draft', client: 'test', note: '' };
+  const t0 = Date.now();
+  await placer.answer(true);
+  const ms = Date.now() - t0;
+  check(st.request && /没能把光标放进聊天输入框/.test(st.request.note) && (await compose()) === '',
+    `网页版：用户点按钮时页面开着弹窗，不放，横幅写明（${st.request ? st.request.note : '横幅没了'}）`);
+  check(ms < 500, `网页版：用户点按钮后不白等页面焦点（${ms} 毫秒）`);
+  await page("document.getElementById('dlg').remove(); true");
+  win.contentView.removeChildView(side);
+  side.webContents.close();
+  st.request = null;
+}
+
+// 翻译页的「放进输入框」、话术的「插入」（compose-insert.js + wa-page.js 的 focusCompose）：
+// 新版 WhatsApp 结构的页面在一个视图里，工作台在旁边另一个视图里（用户刚在工作台里打完字，焦点在工作台）。
+// WhatsApp 页面里的焦点在消息上、搜索框里、哪里都不在时，都要放进对话下方的输入框，不用用户先点输入框（shen 2026-11-12「这个没有用」）
+async function partD() {
+  const win = new BaseWindow({ width: 1000, height: 600, show: true });
+  const wa = new WebContentsView({ webPreferences: { sandbox: true } });
+  const dock = new WebContentsView({ webPreferences: { sandbox: true } });
+  win.contentView.addChildView(wa);
+  win.contentView.addChildView(dock);
+  wa.setBounds({ x: 0, y: 0, width: 620, height: 600 });
+  dock.setBounds({ x: 620, y: 0, width: 380, height: 600 });
+  const wc = wa.webContents;
+  await wc.loadFile(path.join(__dirname, 'fixtures', 'wa-compose-new.html'));
+  await dock.webContents.loadURL('data:text/html;charset=utf-8,<textarea id="in">你的 logo 可以发给我</textarea>');
+  win.focus();
+  const page = (code) => wc.executeJavaScript(code);
+  const compose = () => page("document.getElementById('compose').innerText.replace(/\\n+$/, '')");
+  const active = () => page("(() => { const a = document.activeElement; return a ? (a.id || a.getAttribute('data-id') || a.tagName) : ''; })()");
+  // 用户在 WhatsApp 里点了某处（或什么都没点），然后在右边工作台里打字
+  const userAt = async (code) => {
+    wc.focus();
+    await page(`(() => { ${code} })(); true`);
+    dock.webContents.focus();
+    await dock.webContents.executeJavaScript("document.getElementById('in').focus(); true");
+    await wait(30);
+  };
+  let blocked = '';
+  let copyOk = true;
+  const realCopy = makeCopyText(clipboard);
+  const insert = (text) => pasteToCompose(text, {
+    blocked: () => blocked, wc: () => wc, focusCompose: waPage.focusCompose,
+    copyText: (t) => (copyOk ? realCopy(t) : Promise.resolve(false)),
+  });
+  const settle = () => wait(150);
+  const reset = (html = '<p class="selectable-text copyable-text" dir="auto"><br></p>') => page(`document.getElementById('compose').innerHTML = ${JSON.stringify(html)}; true`);
+  const en = 'You can send me your logo and I\'ll help you with the design.';
+
+  // 1. 用户点过一条消息（焦点在消息那一行上）
+  await userAt("document.querySelector('[data-id]').focus()");
+  check((await active()) === '3EB0C4A1F2D3E4B5A6978869504A3B2C', '准备：WhatsApp 页面里的焦点在消息上，工作台在打字');
+  let r = await insert(en);
+  await settle();
+  check(r === 'ok' && (await compose()) === en, `焦点在消息上：放进了输入框（${r}，${JSON.stringify(await compose())}）`);
+  check((await active()) === 'compose' && wc.isFocused(), '放完光标在 WhatsApp 的输入框里，可以接着改');
+  check((await clipboard.readText()) === en, '剪贴板换成了这段（和以前一样，界面上写明了）');
+
+  // 2. 光标在左上角搜索框里
+  await reset();
+  await userAt("document.getElementById('search').focus()");
+  r = await insert('Hello Emma');
+  await settle();
+  check(r === 'ok' && (await compose()) === 'Hello Emma' && (await page("document.getElementById('search').value")) === '', `焦点在搜索框：放进输入框，搜索框里没有（${r}）`);
+
+  // 3. 页面里哪里都没有焦点
+  await reset();
+  await userAt('document.activeElement && document.activeElement.blur()');
+  check((await active()) === 'BODY', '准备：页面里没有焦点');
+  r = await insert('Guten Tag');
+  await settle();
+  check(r === 'ok' && (await compose()) === 'Guten Tag', `哪里都没有焦点：放进输入框（${r}）`);
+
+  // 4. 输入框里已经有字、焦点在别处：接在后面，不插到前面
+  await reset('<p class="selectable-text copyable-text" dir="auto"><span data-lexical-text="true">Hi Emma, </span></p>');
+  await userAt("document.querySelector('[data-id]').focus()");
+  r = await insert('the samples ship today.');
+  await settle();
+  check(r === 'ok' && (await compose()) === 'Hi Emma, the samples ship today.', `输入框里已有字：接在后面（${JSON.stringify(await compose())}）`);
+
+  // 5. 光标本来就在输入框中间：贴在光标处，不挪到最后
+  await reset('<p class="selectable-text copyable-text" dir="auto"><span data-lexical-text="true">AB</span></p>');
+  await userAt("const t = document.querySelector('#compose span').firstChild; document.getElementById('compose').focus(); const g = document.createRange(); g.setStart(t, 1); g.collapse(true); getSelection().removeAllRanges(); getSelection().addRange(g)");
+  r = await insert('-');
+  await settle();
+  check(r === 'ok' && (await compose()) === 'A-B', `光标已在输入框中间：贴在光标处（${JSON.stringify(await compose())}）`);
+
+  // 6. 整个过程没有按键、没按 Enter、没点发送
+  let ev = await page('window.__ev');
+  check(ev.keys === 0 && ev.enter === 0 && ev.sendClicks === 0 && ev.sent.length === 0, '整个过程没有按键、没按 Enter、没点发送');
+
+  // 7. 弹窗挡着（焦点被拉回弹窗）：不贴，返回 focus
+  await reset();
+  await page("document.getElementById('dialog').hidden = false; true");
+  await userAt("document.getElementById('dialog-ok').focus()");
+  await clipboard.writeText('ORIGINAL');
+  r = await insert('blocked by dialog');
+  await settle();
+  check(r === 'focus' && (await compose()) === '' && (await clipboard.readText()) === 'ORIGINAL', `弹窗挡着放不进输入框：不贴、不碰剪贴板（${r}）`);
+  await page("document.getElementById('dialog').hidden = true; true");
+
+  // 8. 剪贴板没写上：不贴
+  copyOk = false;
+  await userAt("document.querySelector('[data-id]').focus()");
+  r = await insert('clipboard busy');
+  await settle();
+  check(r === 'clip' && (await compose()) === '', `剪贴板没写上：不贴（${r}）`);
+  copyOk = true;
+
+  // 9. 写剪贴板期间换了号：不贴
+  let calls = 0;
+  r = await pasteToCompose('switched', {
+    blocked: () => (calls++ >= 2 ? 'changed' : ''), wc: () => wc, focusCompose: waPage.focusCompose, copyText: realCopy,
+  });
+  await settle();
+  check(r === 'changed' && (await compose()) === '', `写剪贴板期间换了号：不贴（${r}）`);
+
+  // 10. 输入框不在 footer 里（以防 WhatsApp 再改）：按 data-testid 也认
+  await page("const f = document.querySelector('footer'); f.replaceWith(...f.childNodes); true");
+  await userAt("document.getElementById('search').focus()");
+  r = await insert('testid');
+  await settle();
+  check(r === 'ok' && (await compose()) === 'testid', `输入框不在 footer 里：按 data-testid 找到（${r}）`);
+
+  // 11. 没打开对话（右边是空白页）：不贴、不碰剪贴板，告诉用户先打开对话
+  await page("document.getElementById('main').remove(); true");
+  await userAt("document.getElementById('search').focus()");
+  await clipboard.writeText('ORIGINAL');
+  r = await insert('no chat');
+  await settle();
+  check(r === 'no_chat' && (await page("document.getElementById('search').value")) === '' && (await clipboard.readText()) === 'ORIGINAL', `没打开对话：不贴、不碰剪贴板（${r}）`);
+  ev = await page('window.__ev');
+  check(ev.keys === 0 && ev.enter === 0 && ev.sendClicks === 0, '后面几种情况也没有按键、没发送');
+  win.destroy();
 }
 
 async function partC(win) {
@@ -178,6 +335,7 @@ app.whenReady().then(async () => {
     await partA();
     await partB(win);
     await partC(win);
+    await partD();
   } catch (e) {
     out(`失败：出错 ${e && e.stack}`);
     failures += 1;

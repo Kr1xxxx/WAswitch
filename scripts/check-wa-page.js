@@ -125,17 +125,19 @@ app.whenReady().then(async () => {
   const up = await cw.executeJavaScript(`new Promise((ok) => { const r = indexedDB.open('model-storage', 811); r.onblocked = () => ok('blocked'); r.onsuccess = () => { r.result.close(); ok('ok'); }; r.onerror = () => ok('error'); setTimeout(() => ok('timeout'), 3000); })`);
   check(up === 'ok', `查完以后页面自己升级数据库不被挡住（${up}）`);
 
+  // 「放进输入框」前把光标放进对话下方的输入框（focusCompose）：焦点在别处时移进来；只动焦点，不改页面
   const focusOn = (sel) => cw.executeJavaScript(`document.querySelector(${JSON.stringify(sel)}).focus(); void 0`);
-  check(await waPage.composeFocus(cw) === 'other', '焦点哪里都不在：不是输入框');
-  await focusOn('#side [contenteditable]');
-  check(await waPage.composeFocus(cw) === 'other', '焦点在左上角搜索框：不是输入框');
-  await focusOn('#main footer button');
-  check(await waPage.composeFocus(cw) === 'other', '焦点在输入框旁边的按钮：不是输入框');
-  await focusOn('#main footer [contenteditable]');
+  const inCompose = () => cw.executeJavaScript('document.activeElement === document.querySelector("#main footer [contenteditable]")');
   const html = await cw.executeJavaScript('document.documentElement.outerHTML');
-  check(await waPage.composeFocus(cw) === 'compose', '焦点在聊天输入框：是输入框');
-  check(await cw.executeJavaScript('document.activeElement === document.querySelector("#main footer [contenteditable]")'), '读焦点没有把焦点移走');
-  check(await cw.executeJavaScript('document.documentElement.outerHTML') === html, '读焦点前后页面 HTML 完全相同');
+  check(await waPage.focusCompose(cw) === 'compose' && await inCompose(), '焦点哪里都不在：光标放进输入框');
+  await focusOn('#side [contenteditable]');
+  check(await waPage.focusCompose(cw) === 'compose' && await inCompose(), '焦点在左上角搜索框：光标移进输入框');
+  await focusOn('#main footer button');
+  check(await waPage.focusCompose(cw) === 'compose' && await inCompose(), '焦点在输入框旁边的按钮：光标移进输入框');
+  check(await waPage.focusCompose(cw) === 'compose' && await inCompose(), '光标已经在输入框里：不动');
+  check(await cw.executeJavaScript('document.documentElement.outerHTML') === html, '放光标前后页面 HTML 完全相同');
+  await cw.executeJavaScript("document.querySelector('#main footer').remove(); void 0");
+  check(await waPage.focusCompose(cw) === 'none', '没有输入框（没打开对话）：返回 none');
   chat.destroy();
 
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');

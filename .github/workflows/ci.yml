@@ -13,7 +13,11 @@ permissions:
 
 jobs:
   checks:
+    # 只用 GitHub 自带的机器，写死，不读仓库变量。仓库公开后外人的 PR 也会跑这个 job，
+    # 换到自己的机器（self-hosted）等于让外人在那台机器上跑任意代码。要换机器先把仓库改回私有。
     runs-on: ubuntu-latest
+    # 卡住的自检不占着机器
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -52,7 +56,7 @@ jobs:
         run: node scripts/check-float.js && xvfb-run -a npx electron --no-sandbox scripts/check-float.js
       - name: 账号数据放 D 盘（没有 D 就 C、老电脑搬家、搬后号还登录着）
         run: xvfb-run -a npm run check:datadir
-      - name: 语音转文字自检（切段、智谱请求、轻量号下载、转写后翻译；解码和语音行）
+      - name: 语音转文字自检（切段、来财请求、轻量号下载、转写后翻译；解码和语音行）
         run: npm run check:asr && xvfb-run -a npx electron --no-sandbox scripts/check-voice.js
       - name: 翻译页滚动自检（翻译时列表不跳）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-dock-scroll.js
@@ -86,8 +90,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-trpage-busy.js
       - name: 翻译限流时按钮倒计时
         run: xvfb-run -a npx electron --no-sandbox scripts/check-tr-wait.js
-      - name: 翻译密钥：智谱、混元、DeepL 总有密钥框
-        run: xvfb-run -a npx electron --no-sandbox scripts/check-tr-keys.js
+      - name: 设置 › 翻译只走来财（没有密钥框、没开通或额度用完时一行提示、900×600 不裁）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-tr-settings.js
       - name: 团队后台和团队模式自检
         run: npm run check:team
       - name: 并发、账号隔离和采集隐私回归
@@ -108,12 +112,16 @@ jobs:
         run: xvfb-run -a node scripts/check-write-fail.js
       - name: 工作台每次打开、换号、换客户都在翻译页
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-panel-tab.js
+      - name: 后台要求必须登录时锁成登录页，登录后账号才启动，被停用后全部停下
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-login-lock.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
       - name: 没打开对话时点开一个对话，翻译页 1 秒内显示消息
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-nochat.js
       - name: 译文显示在 WhatsApp 消息下面（失败重试、换回右侧工作台）
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
+      - name: 往上翻聊天记录，更早的客户消息下面也有译文或「翻译」按钮
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-history.js
       - name: 轻量号的译文显示在消息下面
         run: xvfb-run -a npx electron --no-sandbox scripts/check-lite-tr.js
       - name: 内存回收不会反复刷新
@@ -126,6 +134,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
       - name: 自动更新自检
         run: npm run check:updater
+      - name: 发版时传到来财的脚本自检（本机假后台）
+        run: npm run check:upload-release
       - name: 代理端口检测自检
         run: npm run check:ports
       - name: 安全写文件和新账号 id 自检
@@ -150,7 +160,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # 2026-11-11 起先不跑：shen 说要打包时再打开（删掉 if 这一行）。发版打包在 release.yml，不受影响。
   package-win:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -173,7 +185,8 @@ jobs:
         run: |
           grep -q '^sha512: ' dist/latest.yml
           ls dist/*.exe.blockmap
-          grep -q 'provider: github' dist/win-unpacked/resources/app-update.yml
+          grep -q 'provider: generic' dist/win-unpacked/resources/app-update.yml
+          grep -q 'laicrm.com/api/device/update' dist/win-unpacked/resources/app-update.yml
       - name: 安装包里没有 MCP 代码和它的库，只有校验值和设置窗口的页面
         run: node scripts/check-packaged-mcp.js dist/win-unpacked/resources/app.asar
       - name: 打包后启动冒烟

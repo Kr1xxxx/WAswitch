@@ -58,7 +58,7 @@ app.whenReady().then(async () => {
   // Mac 手动
   await state(base(upd({ manual: true, mac: true })));
   c = await card();
-  assert(c.btns.join() === '稍后,打开安装包' && c.text.includes('拖进“应用程序”'), `Mac 手动卡片：${c.text}`);
+  assert(c.btns.join() === '稍后,打开安装包' && c.text.includes('拖进「应用程序」'), `Mac 手动卡片：${c.text}`);
 
   // 「稍后」只在等手上的事时通知主进程（没点过更新就没有要取消的）
   await state(base(upd()));
@@ -93,5 +93,17 @@ app.whenReady().then(async () => {
   await state(base(upd({ status: 'downloading', percent: 40, manual: true, mac: true }), 'settings'));
   a = await about();
   assert(a.btns.join() === '下好后打开安装包', `关于页 Mac 手动下载中：${a.btns}`);
+  // 没有新版本、新版本在上传、检查失败：三种一眼分得开（shen 2026-11-06：「这次检查没成功」有歧义）
+  await state(base(upd({ status: 'none', version: '', current: '1.0.7', lastResult: '已是最新版本' }), 'settings'));
+  a = await about();
+  assert(a.text.includes('已是最新版本') && a.text.includes('当前版本 1.0.7') && a.btns.join() === '检查并更新', `关于页没有新版本：${a.text}`);
+  await state(base(upd({ status: 'none', pending: true, version: '1.0.8', lastResult: '新版本 1.0.8 正在上传，稍后自动再查' }), 'settings'));
+  a = await about();
+  assert(a.text.includes('新版本 1.0.8 正在上传') && !a.text.includes('已是最新'), `关于页新版本在上传：${a.text}`);
+  await state(base(upd({ status: 'error', errorText: '连不上来财（连接超时）', lastResult: '失败：连不上来财（连接超时）', failures: 3, warn: true }), 'settings'));
+  a = await about();
+  assert(a.text.includes('检查更新失败') && a.text.includes('连不上来财（连接超时）') && !/没检查成功|已是最新|下载页|GitHub/.test(a.text), `关于页检查失败：${a.text}`);
+  assert((a.text.match(/连不上来财/g) || []).length === 1, `失败原因只写一次：${a.text}`);
+  await shot('about-error');
   done(0, 'check-update-card: ok');
 }).catch((e) => done(1, `check-update-card 失败：${e && e.stack || e}`));

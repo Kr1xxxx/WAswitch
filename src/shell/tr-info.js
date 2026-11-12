@@ -17,6 +17,12 @@
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
   }
 
+  // 列表里只写一半：今天写钟点，别的天只写日期（昨天、10月28日、2025年10月28日）
+  function day(at, now = Date.now()) {
+    const s = when(at, now);
+    return s.includes(' ') ? s.slice(0, s.lastIndexOf(' ')) : s;
+  }
+
   // 10 秒以内一位小数，10 秒以上取整，一分钟以上 1 分 5 秒
   function took(ms) {
     const tenths = Math.round(ms / 100);
@@ -44,7 +50,7 @@
   // 这条的时间能不能点：有译文（翻好的）、页面上读到了消息时间、记着翻译情况
   const openable = (it) => !!it && it.state === 'done' && !!it.t && rows(it.via).length > 0;
 
-  const api = { when, took, who, rows, openable };
+  const api = { when, day, took, who, rows, openable };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TrInfo = api;
 })(typeof window !== 'undefined' ? window : globalThis);

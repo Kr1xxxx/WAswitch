@@ -9,12 +9,23 @@ const EVENT_TEXT = { dropped: '掉线', recovered: '恢复', exit_changed: '出�
 const ROLE_TEXT = { owner: '老板', supervisor: '主管', agent: '坐席' };
 // 和 WAswitch 侧栏的颜色一致（radix.js 由 scripts/make-colors.js 从 src/colors/radix.js 复制过来）
 const COLORS = RADIX.ACCOUNT_COLORS;
+// 编辑表单里颜色下拉显示的名字，和 COLORS 一一对应，叫法和软件侧栏一样（src/shell/shell.js 的 COLOR_NAMES）
+const COLOR_NAMES = ['绿色', '紫色', '橙色', '蓝色', '粉色', '灰色'];
 // 旧版存的颜色换成新的；没有颜色时用灰色
 const swatchColor = (c) => RADIX.accountColor(c) || 'var(--slate-9)';
 
 let me = null;
 let tab = 'overview';
 let timer = null;
+
+// 会话令牌放 localStorage（7 天有效，省得每次打开都收一封信）；不用 cookie
+const TOKEN_KEY = 'waswitch-admin-token';
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } }
+function setToken(t) { try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* 存不了就只在这一页有效 */ } }
+let memToken = getToken();
+const token = () => memToken;
+function saveToken(t) { memToken = t || ''; setToken(memToken); }
+class NeedLogin extends Error {}
 
 // ---------- 小工具 ----------
 function el(tag, attrs = {}, ...kids) {
@@ -45,22 +56,97 @@ function ago(ms, serverNow) {
   if (s < 86400) return `${Math.round(s / 3600)} 小时前`;
   return `${Math.round(s / 86400)} 天前`;
 }
-const time = (ms) => new Date(ms).toLocaleString('zh-CN', { hour12: false });
+// 本机时间、24 小时制、到分钟：今年的写 11/08 13:23，别的年份加两位年 12/30/25 13:23（月/日/年）
+function time(ms, now = Date.now()) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  const day = `${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+  return `${d.getFullYear() === new Date(now).getFullYear() ? day : `${day}/${p(d.getFullYear() % 100)}`} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 async function api(method, path, body) {
+  const headers = method === 'GET' ? {} : { 'content-type': 'application/json', 'x-waswitch-admin': '1' };
+  if (token()) headers.authorization = `Bearer ${token()}`;
   const res = await fetch(`/api/admin/${path}`, {
-    method,
-    headers: method === 'GET' ? {} : { 'content-type': 'application/json', 'x-waswitch-admin': '1' },
+    method, headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     credentials: 'same-origin',
   });
   let data = {};
   try { data = await res.json(); } catch { /* 非 JSON（比如 Access 登录页） */ }
+  if (res.status === 401 && path !== 'session' && path !== 'code') { saveToken(''); throw new NeedLogin(data.error || '请先登录'); }
   if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
   return data;
 }
 async function act(fn, okText) {
-  try { await fn(); if (okText) toast(okText); await render(); } catch (e) { toast(e.message); }
+  try { await fn(); if (okText) toast(okText); await render(); } catch (e) { if (e instanceof NeedLogin) render(); else toast(e.message); }
+}
+
+// ---------- 登录（邮箱验证码） ----------
+const field = (label, input) => el('label', { class: 'field' }, el('span', {}, label), input);
+let lastEmail = '';
+try { lastEmail = localStorage.getItem('waswitch-admin-email') || ''; } catch { /* 没有就空着 */ }
+
+// 两个表单：邮箱框回车 = 获取验证码，验证码框回车 = 登录（都是浏览器原生提交，输入法选字时的回车不会提交）
+function loginView(note = '') {
+  const email = el('input', { type: 'email', autocomplete: 'email', maxlength: 254, required: true, value: lastEmail, spellcheck: 'false' });
+  const send = el('button', { class: 'btn', type: 'submit' }, '获取验证码');
+  const code = el('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, pattern: '[0-9]{6}', required: true });
+  const sent = el('p', { class: 'muted', hidden: true });
+  const err = el('p', { class: 'bad', hidden: !note }, note);
+  const showErr = (m) => { err.textContent = m; err.hidden = false; };
+  let tick = null;
+  function countdown(n) {
+    clearInterval(tick);
+    send.disabled = true;
+    const show = () => { send.textContent = `${n} 秒后重新获取`; };
+    show();
+    tick = setInterval(() => { n -= 1; if (n > 0) show(); else { clearInterval(tick); send.disabled = false; send.textContent = '获取验证码'; } }, 1000);
+  }
+  const askForm = el('form', { class: 'pair', onsubmit: async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    try {
+      const r = await api('POST', 'code', { email: email.value });
+      lastEmail = email.value.trim().toLowerCase();
+      try { localStorage.setItem('waswitch-admin-email', lastEmail); } catch { /* 下次手填 */ }
+      sent.textContent = `已发到 ${lastEmail}`;
+      sent.hidden = false;
+      countdown(r.resend_after_s || 60);
+      code.focus();
+    } catch (x) { showErr(x.message); }
+  } }, field('邮箱', email), send);
+  const loginForm = el('form', { class: 'pair', onsubmit: async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    try {
+      const r = await api('POST', 'session', { email: email.value, code: code.value });
+      clearInterval(tick);
+      saveToken(r.token);
+      render();
+    } catch (x) { showErr(x.message); code.value = ''; code.focus(); }
+  } }, field('验证码', code), el('button', { class: 'btn primary', type: 'submit' }, '登录'));
+  const box = el('div', { class: 'auth' }, el('h1', {}, '登录团队后台'), askForm, sent, loginForm, err);
+  return [box, lastEmail ? send : email];
+}
+
+function showAuth([form, focus]) {
+  clearTimeout(timer);
+  document.getElementById('tabs').replaceChildren();
+  document.getElementById('me').replaceChildren();
+  document.getElementById('main').replaceChildren(form);
+  focus.focus();
+}
+
+async function authPage(note) {
+  showAuth(loginView(note));
+}
+
+async function logout() {
+  try { await api('DELETE', 'session'); } catch { /* 会话已经没了也一样 */ }
+  saveToken('');
+  me = null;
+  authPage();
 }
 
 // ---------- 页面 ----------
@@ -69,8 +155,8 @@ const TABS = [['overview', '总览'], ['accounts', '账号与坐席'], ['people'
 function renderTabs() {
   const nav = document.getElementById('tabs');
   nav.replaceChildren(...TABS.filter(([id]) => id !== 'settings' || me.user.role === 'owner')
-    .map(([id, label]) => el('button', { class: tab === id ? 'on' : '', type: 'button', onclick: () => { tab = id; render(); } }, label)));
-  document.getElementById('me').textContent = `${me.user.name}（${ROLE_TEXT[me.user.role]}）`;
+    .map(([id, label]) => el('button', { class: tab === id ? 'on' : '', type: 'button', onclick: () => { tab = id; renderTabs(); render(); } }, label)));
+  document.getElementById('me').replaceChildren(el('span', {}, `${me.user.name}（${ROLE_TEXT[me.user.role]}）`), btn('退出', logout, 'link'));
 }
 
 function statusCell(a, now) {
@@ -118,7 +204,6 @@ async function overviewPage() {
         el('td', {}, proxyCell(a)),
         el('td', {}, exitCell(a)),
         el('td', { class: 'muted' }, a.reported_at ? ago(a.reported_at, now) : '—')))))),
-    el('p', { class: 'muted' }, '每 30 秒自动刷新。WAswitch 每 2 分钟上报一次，电脑 6 分钟没上报算离线。'),
   ];
 }
 
@@ -138,7 +223,7 @@ async function accountsPage() {
     });
     return el('tr', {},
       el('td', {}, el('span', { class: 'swatch', style: `background:${swatchColor(a.color)}` }), a.label, a.number_label ? el('div', { class: 'muted' }, a.number_label) : null),
-      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', a.crm_sync === 1 ? el('div', { class: 'muted', title: '同步到来财：已写入 / 对不上客户或被拒收已丢弃' }, `CRM ${a.crm_stored || 0} / 丢 ${a.crm_dropped || 0}`) : null),
+      el('td', {}, a.mode === 'lite' ? '轻量' : '网页', el('div', { class: 'muted', title: '已同步到来财的聊天条数' }, `来财 ${a.crm_stored || 0}${a.crm_dropped ? ` 没收下 ${a.crm_dropped}` : ''}`)),
       el('td', {}, a.group_id ? groups.get(a.group_id) || '' : ''),
       el('td', {}, ...(a.user_name ? [a.user_name, el('div', { class: 'muted' }, a.device_name)] : [el('span', { class: 'muted' }, '未分配')])),
       el('td', {}, a.expected_country || el('span', { class: 'muted' }, '不检查')),
@@ -148,13 +233,11 @@ async function accountsPage() {
         btn('记录', () => showEvents(a)),
         !a.device_id && me.user.role === 'owner' ? btn('删除记录', () => confirm(`删除「${a.label}」的后台记录？`) && act(() => api('DELETE', `accounts/${a.id}`), '已删除'), 'danger') : null));
   });
-  const crmOn = data.accounts.some((a) => a.crm_sync === 1);
-  const crmNote = !crmOn ? null : data.crm && data.crm.auth_fail_at
-    ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${new Date(data.crm.auth_fail_at).toLocaleString()}），已暂停推送。请检查两边的推送密钥。`)
+  const crmNote = !data.accounts.length ? null : data.crm && data.crm.auth_fail_at
+    ? el('p', { class: 'bad' }, `聊天同步：来财拒绝了签名（${time(data.crm.auth_fail_at)}），已暂停推送。请检查两边的推送密钥。`)
     : data.crm && !data.crm.push ? el('p', { class: 'muted' }, '聊天同步：推送还没开，员工电脑上的聊天先留在本机（最多 7 天）。') : null;
   return [
     crmNote,
-    el('p', { class: 'muted' }, '账号由员工在 WAswitch 里"加入团队"时自动出现在这里。分给别人后，新电脑需要自己填代理并扫码；代理和登录数据不会经过后台。'),
     el('div', { class: 'wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, ['账号', '模式', '组', '分给', '应在国家', '操作'].map((h) => el('th', {}, h)))),
       el('tbody', {}, rows))),
@@ -165,22 +248,20 @@ async function accountsPage() {
 function editAccount(a) {
   const f = {
     label: el('input', { value: a.label, maxlength: 40 }),
-    number_label: el('input', { value: a.number_label || '', maxlength: 40, placeholder: '号码备注（手填）' }),
-    color: el('select', {}, COLORS.map((c) => el('option', { value: c, selected: c === RADIX.accountColor(a.color) }, c))),
-    expected_country: el('input', { value: a.expected_country || '', maxlength: 2, placeholder: '如 US', size: 4 }),
-    note: el('input', { value: a.note || '', maxlength: 500, placeholder: '备注（会显示给员工）', size: 30 }),
+    number_label: el('input', { value: a.number_label || '', maxlength: 40 }),
+    color: el('select', {}, COLORS.map((c, i) => el('option', { value: c, selected: c === RADIX.accountColor(a.color) }, COLOR_NAMES[i]))),
+    expected_country: el('input', { value: a.expected_country || '', maxlength: 2, size: 4 }),
+    note: el('input', { value: a.note || '', maxlength: 500, size: 30 }),
   };
-  // 同步到 CRM：只有老板能开；开了以后员工侧栏会一直显示 CRM 标记
-  const crm = me.user.role === 'owner' ? el('input', { type: 'checkbox', checked: a.crm_sync === 1 }) : null;
+  const names = { label: '账号', number_label: '号码备注', color: '颜色', expected_country: '应在国家', note: '备注' };
   const group = me.user.role === 'owner' ? el('select', {}, el('option', { value: '' }, '未分组'), me.groups.map((g) => el('option', { value: g.id, selected: g.id === a.group_id }, g.name))) : null;
-  const form = el('form', { class: 'row', onsubmit: (e) => {
+  const form = el('form', { class: 'row fields', onsubmit: (e) => {
     e.preventDefault();
     const body = Object.fromEntries(Object.entries(f).map(([k, n]) => [k, n.value.trim()]));
     body.expected_country = body.expected_country.toUpperCase();
     if (group) body.group_id = group.value;
-    if (crm) body.crm_sync = crm.checked;
     act(() => api('PATCH', `accounts/${a.id}`, body), '已保存');
-  } }, el('b', {}, `编辑「${a.label}」`), Object.values(f), group, crm ? el('label', { title: '这个号单聊里的文字消息会同步到 CRM；员工那边会一直看到 CRM 标记' }, crm, ' 同步聊天到 CRM') : null, el('button', { class: 'btn primary', type: 'submit' }, '保存'));
+  } }, el('b', {}, `编辑「${a.label}」`), Object.entries(f).map(([k, n]) => field(names[k], n)), group && field('组', group), el('button', { class: 'btn primary', type: 'submit' }, '保存'));
   document.getElementById('detail').replaceChildren(form);
 }
 
@@ -193,13 +274,39 @@ async function showEvents(a) {
   } catch (e) { toast(e.message); }
 }
 
+
+function deviceLine(d, now) {
+  const status = d.revoked_at ? '已停用' : d.logged_out_at ? '已退出登录' : ago(d.last_seen_at, now);
+  return el('div', { class: 'device' },
+    el('span', { class: `dot ${d.revoked_at ? 'bad' : !d.logged_out_at && now - d.last_seen_at < 6 * 60 * 1000 ? 'good' : ''}` }),
+    d.name, el('span', { class: `seg ${d.revoked_at ? 'bad' : 'muted'}` }, status), el('span', { class: 'muted seg' }, `v${d.app_version || '?'} ${d.platform}`),
+    d.revoked_at ? btn('恢复', () => act(() => api('POST', `devices/${d.id}/restore`), '已恢复'))
+      : btn('停用电脑', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
+    btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); }),
+    d.held_hides ? el('div', { class: 'warn' }, `这台电脑一次要收回 ${d.held_hides} 个号（超过一半），已暂停执行。`,
+      d.confirm_hides ? el('span', { class: 'muted' }, ' 已确认，等电脑下次同步。')
+        : btn('确认收回', () => confirm('确认让这台电脑停止并隐藏这些号？') && act(() => api('POST', `devices/${d.id}/confirm-hides`), '已确认'))) : null);
+}
+
+// 改邮箱：在列表上方打开一个小表单
+function emailForm(box, u) {
+  const input = el('input', { type: 'email', value: u.email || '', maxlength: 254, spellcheck: 'false', placeholder: '邮箱' });
+  const form = el('form', { class: 'row', onsubmit: (e) => {
+    e.preventDefault();
+    act(async () => { await api('PATCH', `users/${u.id}`, { email: input.value }); box.replaceChildren(); }, '已保存');
+  } }, el('b', {}, `${u.name} 的邮箱`), input,
+  el('button', { class: 'btn primary', type: 'submit' }, '保存'), btn('取消', () => box.replaceChildren()));
+  box.replaceChildren(form);
+  input.focus();
+}
+
 async function peoplePage() {
   const data = await api('GET', 'users');
   const now = data.server_time;
   const owner = me.user.role === 'owner';
   const groups = new Map(me.groups.map((g) => [g.id, g.name]));
   const name = el('input', { placeholder: '名字', maxlength: 40, required: true });
-  const email = el('input', { placeholder: '邮箱（主管和老板必填，用来登录后台）', maxlength: 120, size: 32 });
+  const email = el('input', { type: 'email', placeholder: '工作邮箱', maxlength: 254, required: true, spellcheck: 'false', size: 28 });
   const role = owner ? el('select', {}, ['agent', 'supervisor', 'owner'].map((r) => el('option', { value: r }, ROLE_TEXT[r]))) : null;
   const group = owner ? el('select', {}, el('option', { value: '' }, '不分组'), me.groups.map((g) => el('option', { value: g.id }, g.name))) : null;
   const add = el('form', { class: 'row', onsubmit: (e) => {
@@ -207,31 +314,20 @@ async function peoplePage() {
     act(() => api('POST', 'users', { name: name.value, email: email.value, role: role ? role.value : 'agent', group_id: group ? group.value : undefined }), '已添加');
   } }, name, email, role, group, el('button', { class: 'btn primary', type: 'submit' }, '添加'));
 
-  const codeBox = el('div');
+  const box = el('div');
   const rows = data.users.map((u) => {
     const devs = data.devices.filter((d) => d.user_id === u.id);
     return el('tr', {},
-      el('td', {}, u.name, u.disabled_at ? el('span', { class: 'bad' }, '（已停用）') : null, u.email ? el('div', { class: 'muted' }, u.email) : null),
+      el('td', {}, u.name, u.disabled_at ? el('span', { class: 'bad' }, '（已停用）') : null,
+        el('div', { class: u.email ? 'muted' : 'warn' }, u.email || '没填邮箱')),
       el('td', {}, ROLE_TEXT[u.role], u.group_id ? el('div', { class: 'muted' }, groups.get(u.group_id) || '') : null),
-      el('td', {}, devs.length ? devs.map((d) => el('div', {},
-        el('span', { class: `dot ${d.revoked_at ? 'bad' : now - d.last_seen_at < 6 * 60 * 1000 ? 'good' : ''}` }),
-        d.name, el('span', { class: 'muted seg' }, d.revoked_at ? '已停用' : ago(d.last_seen_at, now)), el('span', { class: 'muted seg' }, `v${d.app_version || '?'} ${d.platform}`),
-        d.revoked_at ? btn('恢复', () => act(() => api('POST', `devices/${d.id}/restore`), '已恢复'))
-          : btn('停用', () => confirm(`停用「${d.name}」？这台电脑下次连上后台时，团队号会停止并隐藏（数据保留，可以恢复）。`) && act(() => api('POST', `devices/${d.id}/revoke`), '已停用'), 'danger'),
-        btn('改名', () => { const n = prompt('电脑名称', d.name); if (n) act(() => api('PATCH', `devices/${d.id}`, { name: n }), '已改名'); }),
-        d.held_hides ? el('div', { class: 'warn' }, `这台电脑一次要收回 ${d.held_hides} 个号（超过一半），已暂停执行。`,
-          d.confirm_hides ? el('span', { class: 'muted' }, ' 已确认，等电脑下次同步。')
-            : btn('确认收回', () => confirm('确认让这台电脑停止并隐藏这些号？') && act(() => api('POST', `devices/${d.id}/confirm-hides`), '已确认'))) : null))
-        : el('span', { class: 'muted' }, '还没登记电脑')),
+      el('td', {}, devs.length ? devs.map((d) => deviceLine(d, now)) : el('span', { class: 'muted' }, '还没登录过')),
       el('td', {},
-        u.disabled_at ? null : btn('生成登记码', () => act(async () => {
-          const r = await api('POST', `users/${u.id}/enroll-code`);
-          codeBox.replaceChildren(el('div', { class: 'card' }, `给 ${u.name} 的登记码（15 分钟内有效，只能用一次）：`, el('div', { class: 'code' }, r.code),
-            el('div', { class: 'muted' }, '在 WAswitch 设置 → 团队 里填入后台地址和这个码。')));
-        })),
+        btn('要求重新登录', () => act(async () => { const r = await api('POST', `users/${u.id}/signout`); if (r.self) saveToken(''); }, '已要求重新登录')),
+        btn('改邮箱', () => emailForm(box, u)),
         u.id === me.user.id ? null : btn(u.disabled_at ? '启用' : '停用', () => act(() => api('PATCH', `users/${u.id}`, { disabled: !u.disabled_at }), '已保存'), u.disabled_at ? '' : 'danger')));
   });
-  return [el('h2', {}, '添加人员'), add, codeBox, el('h2', {}, '人员和电脑'),
+  return [el('h2', {}, '添加人员'), add, box,
     el('div', { class: 'wrap' }, el('table', {}, el('thead', {}, el('tr', {}, ['人', '角色', '电脑', '操作'].map((h) => el('th', {}, h)))), el('tbody', {}, rows)))];
 }
 
@@ -244,12 +340,8 @@ async function auditPage() {
 }
 
 function settingsPage() {
-  const allow = el('input', { type: 'checkbox', checked: me.settings.allow_private });
-  allow.addEventListener('change', () => act(() => api('PUT', 'settings', { allow_private: allow.checked }), '已保存'));
   const gname = el('input', { placeholder: '组名', maxlength: 40, required: true });
   return [
-    el('h2', {}, '私人号'),
-    el('label', {}, allow, ' 允许员工在团队电脑上保留没加入团队的私人号（关掉后，私人号会停止并隐藏，数据不删）'),
     el('h2', {}, '小组'),
     el('form', { class: 'row', onsubmit: (e) => { e.preventDefault(); act(() => api('POST', 'groups', { name: gname.value }), '已添加'); } }, gname, el('button', { class: 'btn primary', type: 'submit' }, '添加小组')),
     el('ul', {}, me.groups.map((g) => el('li', {}, g.name))),
@@ -260,15 +352,18 @@ const PAGES = { overview: overviewPage, accounts: accountsPage, people: peoplePa
 
 async function render() {
   const main = document.getElementById('main');
+  if (!token()) { await authPage(); return; }
   try {
     me = await api('GET', 'me');
     renderTabs();
     main.replaceChildren(...[await PAGES[tab]()].flat().filter(Boolean));
   } catch (e) {
+    if (e instanceof NeedLogin) { await authPage(e.message); return; }
     main.replaceChildren(el('p', { class: 'bad' }, e.message));
   }
   clearTimeout(timer);
   if (tab === 'overview') timer = setTimeout(() => { if (!document.hidden) render(); else timer = setTimeout(render, 30000); }, 30000);
 }
 
-render();
+if (typeof module === 'object' && module.exports) module.exports = { time, COLOR_NAMES }; // 给 server/test/run.mjs 用
+else render();

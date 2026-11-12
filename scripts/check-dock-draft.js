@@ -15,8 +15,8 @@ const KC = 'cccccccccccccccc';
 const helpers = () => {
   window.__base = (over) => ({ accountId: 'a1', readable: 'ok', title: 'Emma Wilson', chatKey: 'aaaaaaaaaaaaaaaa', draft: null,
     items: [{ h: 'h1', text: 'Hi, is the 613 blonde wig still available?', t: '10:01', state: 'done', tr: '你好，613 金色假发还有货吗？' }],
-    paused: '', auto: true, dailyCap: 500, hasProvider: true, needKey: null, primaryId: 'z', fallbackId: '',
-    providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], modes: { out: [{ id: 'o', name: '标准' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
+    paused: '', auto: true, dailyCap: 500, hasProvider: true, primaryId: 'cloud', fallbackId: '',
+    providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], modes: { out: [{ id: 'o', name: '标准' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
     langs: ['英语', '德语'], target: '英语', targetSrc: 'default', autoTarget: '英语', canRemember: true, ...over });
   window.__push = (over) => { const d = window.__base(over); window.__dock = d; window.__cbs.dock(JSON.parse(JSON.stringify(d))); };
   window.__wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -161,6 +161,13 @@ const part3 = async () => {
   window.__type('.dk-in', '!');
   await window.__wait(450);
   out.editedAfter = window.__last(D);
+  // 剪贴板被占着没写上（主进程返回 'clip'）：提示重点一次，草稿不能被当成用掉了
+  window.__insertResult = 'clip';
+  document.querySelector('.dk-insert').click();
+  await window.__wait(450);
+  const clipMsg = document.querySelector('.dk-msg');
+  out.clip = { text: clipMsg ? clipMsg.textContent : '', bad: !!(clipMsg && clipMsg.classList.contains('bad')), draft: window.__last(D) };
+  window.__insertResult = 'ok';
   // 4) 换目标语言（dock:lang 返回的状态也走 dockAdopt）：回复框不变
   window.__dock = window.__base({ title: 'Sophie Martin', chatKey: D, draft: null, target: '德语', targetSrc: 'manual' });
   const before = window.__box().text;
@@ -227,6 +234,71 @@ const part4 = async () => {
   return out;
 };
 
+// 对方写中文（shen 2026-11-06）：自动选择时写中文不调模型，原文就是译文；手动选了语言照常翻；写外文翻成中文
+const part5 = async () => {
+  const out = {};
+  window.__cbs.state({ accounts: [{ id: 'a1', name: 'Shop', color: '#3b82f6' }], groups: [], activeId: 'a1', page: 'account', panelOpen: true, panelTab: 'translate', platform: 'linux', collapsed: false });
+  const calls = [];
+  window.__trRun = (a) => { calls.push(a); return Promise.resolve({ text: `TR(${a.target}):${a.text}`, warn: [] }); };
+  const say = () => { const m = document.querySelector('.dk-msg'); return m ? m.textContent : ''; };
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  await window.__wait(100);
+  out.tip = document.querySelectorAll('.dk-bar-sel')[1].title;
+  // 1) 点翻译：不调模型，原文进译文框，提示不用翻
+  window.__type('.dk-in', '您好，今天发货');
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.btn = { calls: calls.length, out: window.__box().out, say: say() };
+  // 2) 放进输入框：也不调模型
+  window.__insertResult = 'ok';
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.insert = { calls: calls.length, out: window.__box().out };
+  // 3) 回车（清掉译文，直接放）：不调模型
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  window.__type('.dk-in', '，谢谢');
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.second = { calls: calls.length, out: window.__box().out };
+  // 4) 写外文：翻成中文
+  document.querySelector('.dk-in').value = 'When can you ship?';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.foreign = { calls: calls.length, target: calls[0] && calls[0].target, out: window.__box().out };
+  // 5) 手动选了德语：中文照常翻成德语
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '德语', targetSrc: 'manual', autoTarget: '中文' });
+  document.querySelector('.dk-in').value = '您好';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  out.manual = { calls: calls.length, target: calls[1] && calls[1].target, out: window.__box().out };
+  // 6) 对方写中文时按回车：不调模型，直接放进输入框
+  window.__push({ title: '王芳', chatKey: 'ffffffffffffffff', draft: null, target: '中文', targetSrc: 'detected', autoTarget: '中文' });
+  await window.__wait(50);
+  document.querySelector('.dk-in').value = '好的';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  window.__inserted = [];
+  document.querySelector('.dk-in').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await window.__wait(100);
+  out.enter = { calls: calls.length, inserted: window.__inserted.slice() };
+  // 7) 英文对话里译文和原文一样（数字、OK）：放进输入框直接放，不再翻一遍
+  window.__push({ title: 'Emma Wilson', chatKey: 'eeeeeeeeeeeeeeee', draft: null, target: '英语', targetSrc: 'detected', autoTarget: '英语' });
+  await window.__wait(50);
+  window.__trRun = (a) => { calls.push(a); return Promise.resolve({ text: a.text, warn: [] }); };
+  document.querySelector('.dk-in').value = '10:30 ok';
+  document.querySelector('.dk-in').dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('.dk-outhead .dk-btn')].find((b) => /翻译/.test(b.textContent)).click();
+  await window.__wait(100);
+  const before = calls.length;
+  window.__inserted = [];
+  document.querySelector('.dk-insert').click();
+  await window.__wait(100);
+  out.same = { calls: calls.length - before, inserted: window.__inserted.slice() };
+  window.__trRun = null;
+  return out;
+};
+
 let w = null;
 const errs = [];
 app.whenReady().then(async () => {
@@ -280,6 +352,8 @@ app.whenReady().then(async () => {
   assert.strictEqual(r3.used.d, null, `放进输入框后草稿删掉 ${JSON.stringify(r3.used)}`);
   assert.strictEqual(r3.usedBox.text, '补一句，明天发货', '这次框里还在');
   assert(r3.editedAfter.d && r3.editedAfter.d.text === '补一句，明天发货!', '放进去以后再改就又存');
+  assert(r3.clip.bad && r3.clip.text.includes('没贴上') && r3.clip.text.includes('再点一次'), `剪贴板没写上：红字提示再点一次 ${JSON.stringify(r3.clip)}`);
+  assert(r3.clip.draft.d && r3.clip.draft.d.text === '补一句，明天发货!', '没贴上时草稿还在');
   assert(r3.langKept, '换目标语言不换回复框');
 
   await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
@@ -295,6 +369,17 @@ app.whenReady().then(async () => {
   assert.deepStrictEqual(r4.acc, ['translate'], `换号，话术页回到翻译 ${JSON.stringify(r4.acc)}`);
   assert.deepStrictEqual(r4.editing, [], `填着表单时换对话、换号都不切 ${JSON.stringify(r4.editing)}`);
   assert.deepStrictEqual(r4.afterEdit, ['translate'], `表单关了以后换对话照样切 ${JSON.stringify(r4.afterEdit)}`);
+  await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
+  await w.webContents.executeJavaScript(`(${helpers})()`);
+  const r5 = await w.webContents.executeJavaScript(`(${part5})()`);
+  assert(r5.tip.includes('对方用中文'), `语言条提示说明写中文不翻 ${r5.tip}`);
+  assert.deepStrictEqual(r5.btn, { calls: 0, out: '您好，今天发货', say: '对方写中文，不用翻' }, `中文聊天点翻译：不调模型 ${JSON.stringify(r5.btn)}`);
+  assert.deepStrictEqual(r5.insert, { calls: 0, out: '您好，今天发货' }, `放进输入框也不调模型 ${JSON.stringify(r5.insert)}`);
+  assert.deepStrictEqual(r5.second, { calls: 0, out: '您好，今天发货，谢谢' }, `改了原文再放进输入框：用新的原文 ${JSON.stringify(r5.second)}`);
+  assert.deepStrictEqual(r5.foreign, { calls: 1, target: '中文', out: 'TR(中文):When can you ship?' }, `写外文照样翻成中文 ${JSON.stringify(r5.foreign)}`);
+  assert.deepStrictEqual(r5.manual, { calls: 2, target: '德语', out: 'TR(德语):您好' }, `手动选了语言照常翻 ${JSON.stringify(r5.manual)}`);
+  assert.deepStrictEqual(r5.enter, { calls: 2, inserted: ['好的'] }, `对方写中文按回车直接放进输入框 ${JSON.stringify(r5.enter)}`);
+  assert.deepStrictEqual(r5.same, { calls: 0, inserted: ['10:30 ok'] }, `译文和原文一样时放进输入框不再翻 ${JSON.stringify(r5.same)}`);
   assert.deepStrictEqual(errs, [], '页面没有报错');
   console.log('回复草稿自检通过（停手存、翻译存、换对话先存再换、切回和重启恢复、翻译途中换对话不串、未认出对话时归位、清空删、空对话、刚换对话就打字、放进输入框后不留、换号换对话回翻译页）');
   app.exit(0);

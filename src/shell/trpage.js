@@ -1,8 +1,8 @@
-// 左侧栏「翻译」页（shen 2026-10-28 选的方案 A）：左边原文，右边两个模型的译文上下对照，
-// 每栏自己选模型，第二栏可以收起（收起后只翻第一栏）。不跟任何对话绑定，不读、不碰 WhatsApp 页面。
+// 左侧栏「翻译」页（shen 2026-10-28 选的方案 A）：左边原文，右边译文。翻译只走来财（#209），只有一个模型：
+// 两栏对照、选模型只在有两个以上模型时才出现（现在不出现）。不跟任何对话绑定，不读、不碰 WhatsApp 页面。
 // 自动 = 中文翻成英语，别的语言翻成中文（和工作台回复同一套规则，见 reply-lang.js）。
 // 页面元素只建一次，之后原地更新：按钮状态的过渡动画才能播出来，打字时也不会被重画打断。
-// 用到 shell.js 的 h、icon、trOpenKey（运行时才调用，加载顺序没关系）。
+// 用到 shell.js 的 h、icon（运行时才调用，加载顺序没关系）。
 
 const TP_KEY = 'trPage';
 const TP_HIST_MAX = 10; // 最近记录最多留十条；记录区固定五行高，多的在区内滚动
@@ -16,7 +16,7 @@ const tp = {
   autoFold: false, // 原文太长（超出输入框）：这一次自动收起对照栏，只翻一栏（不改记下的展开/收起）
   hist: [],
   busy: false,
-  waitUntil: 0, // 服务商太忙、等着重试：等到什么时候（转圈的按钮上倒计时）
+  waitUntil: 0, // 来财太忙、等着重试：等到什么时候（转圈的按钮上倒计时）
   cancelled: false, // 这次翻译被取消了：第二栏不再翻
   ui: null,
 };
@@ -43,7 +43,7 @@ function tpOff(btn, off) {
 
 function tpProviders() { return (tp.cfg && tp.cfg.providers) || []; }
 function tpProvName(p) { return p.model ? `${p.name} ${p.model}` : p.name; }
-// 选的模型被删了：第一栏回到默认服务商，第二栏用备用的或别的一个
+// 选的模型不在了：第一栏回到默认的，第二栏用别的一个（只有一个模型时第二栏是空的）
 function tpFixPicks() {
   const provs = tpProviders();
   const has = (id) => provs.some((p) => p.id === id);
@@ -79,21 +79,21 @@ function tpFillModels(sel, cur, taken) {
   }
   sel.value = cur;
   const free = provs.filter((p) => p.id !== taken).length;
-  sel.classList.toggle('single', free < 2);
+  // 只有一个模型能选：不显示下拉
+  sel.hidden = free < 2;
   sel.disabled = tp.busy || free < 2;
   tpFitSelect(sel);
 }
-// 纠错要能看懂改过的译文：混元 hy-mt 和 DeepL 只会照原文重翻，这两种不给纠错
+// 这一栏选着模型才能纠错（来财的 DeepSeek 会纠错）
 function tpCanFix(id) {
-  const p = tpProviders().find((x) => x.id === id);
-  return !!p && p.preset !== 'deepl' && !/^hy-mt/i.test(p.model || '');
+  return tpProviders().some((x) => x.id === id);
 }
 // 下拉框按选中的名字定宽（原生 select 会按最长的选项撑开，箭头离字很远）
 // 用一个看不见的同字号文字量宽度（字号写在 CSS 的 .tp-measure 里）
 let tpMeasure = null;
 function tpFitSelect(sel) {
   const opt = sel.options[sel.selectedIndex];
-  if (!opt || !sel.isConnected) return;
+  if (!opt || !sel.isConnected || sel.hidden) return;
   if (!tpMeasure || !tpMeasure.isConnected) { tpMeasure = h('span', { class: 'tp-measure', 'aria-hidden': 'true' }); tp.el.append(tpMeasure); }
   tpMeasure.textContent = opt.textContent;
   const cs = getComputedStyle(sel);
@@ -171,11 +171,10 @@ function tpBuild() {
     h('div', { class: 'tp-hist-head' }, h('span', null, '最近记录'),
       h('button', { class: 'tp-link', type: 'button', onclick: () => tpClearHist() }, '清空')),
     histList);
-  const provs = h('div', { class: 'tp-provs' });
-  const ui = { input, inCount, clear, go, src, tgt, swap, o1, o2, open2, hist, histList, provs };
+  const ui = { input, inCount, clear, go, src, tgt, swap, o1, o2, open2, hist, histList };
   tp.ui = ui;
   tp.el = h('div', { class: 'tp' },
-    h('div', { class: 'tp-head' }, h('h1', null, '翻译'), ui.provs),
+    h('div', { class: 'tp-head' }, h('h1', null, '翻译')),
     h('div', { class: 'tp-body' },
       h('div', { class: 'tp-bar' }, src, swap, tgt),
       h('div', { class: 'tp-grid' },
@@ -186,7 +185,7 @@ function tpBuild() {
   return tp.el;
 }
 
-// 服务商太忙、等着重试：转圈的按钮（翻译、纠错）把「翻译中」换成还要等几秒，等完换回来
+// 来财太忙、等着重试：转圈的按钮（翻译、纠错）把「翻译中」换成还要等几秒，等完换回来
 let tpWaitTimer = 0;
 function tpWaitPaint() {
   const left = tp.waitUntil ? Math.ceil((tp.waitUntil - Date.now()) / 1000) : 0;
@@ -306,7 +305,7 @@ function tpFoldFx(on) {
   }
 }
 
-// 栏里的报错：服务商名在底栏已经有了，这里只说缺什么，后面跟一个去处理的链接
+// 栏里的报错：设置的问题后面跟一个去设置的链接
 function tpShowOut(o, r) {
   const err = r && r.error && r.kind !== 'cancel' ? r : null;
   o.err.replaceChildren();
@@ -314,16 +313,12 @@ function tpShowOut(o, r) {
   o.box.hidden = !!err;
   if (!err) return;
   tpFx(o.err);
-  if (err.kind === 'auth' && err.providerId) {
-    const p = tpProviders().find((x) => x.id === err.providerId);
-    o.err.append(h('span', null, p && !p.hasKey ? '密钥未填写' : '密钥无效'),
-      h('button', { class: 'tp-link', type: 'button', onclick: () => trOpenKey(err.providerId) }, p && !p.hasKey ? '填写' : '修改'));
-  } else if (err.kind === 'config') {
+  if (err.kind === 'config') {
     o.err.append(h('span', null, err.error),
       h('button', { class: 'tp-link', type: 'button', onclick: () => { settingsTab = 'translate'; window.wa.showPage('settings'); render(true); } }, '设置'));
   } else o.err.append(h('span', null, err.error));
 }
-// 只有网络、超时、服务商忙这类重试可能有用的失败，主按钮才变「重试」
+// 只有网络、超时、来财忙这类重试可能有用的失败，主按钮才变「重试」
 const TP_RETRY = ['network', 'timeout', 'overload', 'server', 'busy', 'empty', 'other'];
 
 function tpUpdate() {
@@ -353,40 +348,6 @@ function tpUpdate() {
   // 没译文时「复制」先藏起来（位置留着，有了译文不跳）
   for (const o of [ui.o1, ui.o2]) o.copy.classList.toggle('tp-empty', !o.box.value.trim());
   tpFitSelect(ui.o1.model); tpFitSelect(ui.o2.model);
-  tpQuota();
-}
-
-// 右上角：三个翻译服务商，填了密钥才算已启用。智谱、混元免费不限量；DeepL 每个使用者每月 10 万字符（换密钥也接着算，每月 1 号清零）
-const TP_PROVS = [['zhipu', '智谱'], ['hunyuan', '腾讯混元'], ['deepl', 'DeepL']];
-function tpWan(n) {
-  if (n < 1000) return String(n);
-  return `${(Math.floor(n / 1000) / 10).toString()}万`;
-}
-function tpQuota() {
-  const ui = tp.ui;
-  const provs = tpProviders();
-  const rows = TP_PROVS.map(([preset, name]) => {
-    const list = provs.filter((p) => p.preset === preset);
-    const p = list.find((x) => x.hasKey) || list[0];
-    return { preset, name, id: p ? p.id : '', on: !!(p && p.hasKey), used: (p && p.usage && p.usage.used) || 0, cap: (p && p.usage && p.usage.cap) || 100000 };
-  });
-  const want = JSON.stringify(rows);
-  if (ui.provs.dataset.v === want) return;
-  ui.provs.dataset.v = want;
-  ui.provs.replaceChildren(...rows.map(({ preset, name, id, on, used, cap }) => {
-    let quota;
-    if (preset === 'deepl') {
-      const pct = Math.min(100, (used / cap) * 100);
-      quota = h('span', { class: 'tp-prov-quota' },
-        h('span', { class: `tp-meter${pct >= 100 ? ' full' : pct >= 90 ? ' near' : ''}`, role: 'progressbar', 'aria-label': 'DeepL 本月已用字符', 'aria-valuemin': '0', 'aria-valuemax': String(cap), 'aria-valuenow': String(used) },
-          h('span', { class: 'tp-meter-fill', style: { width: `${pct}%` } })),
-        h('span', null, `${tpWan(used)} / ${tpWan(cap)}`));
-    } else quota = h('span', { class: 'tp-prov-quota' }, '无限免费');
-    // 点一下去填（或改）这个服务商的密钥；列表里还没有这个服务商，就打开它的空密钥框
-    return h('button', { class: 'tp-prov', type: 'button', title: on ? false : '填写密钥', onclick: () => trOpenKey(id, preset) },
-    h('span', { class: 'tp-prov-top' }, h('span', { class: 'tp-prov-name' }, name), h('span', { class: `tp-prov-on${on ? ' on' : ''}` }, on ? '已启用' : '未启用')),
-    quota);
-  }));
 }
 
 // fresh：刚加了一条，新的那行淡入，列表回到最上面
@@ -459,9 +420,7 @@ function tpAsk(row, onYes, byKey) {
 }
 
 function tpTime(at) {
-  const d = new Date(at);
-  const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  return TrInfo.when(at);
 }
 
 async function tpRun() {
@@ -480,13 +439,13 @@ async function tpRun() {
   if (!both) { ui.o2.box.value = ''; tpShowOut(ui.o2, null); }
   tpUpdate();
   let r1;
-  try { r1 = await window.wa.trPage({ text, source, target, providerId: tp.p1 }); } catch { r1 = { error: '翻译失败' }; }
+  try { r1 = await window.wa.trPage({ text, source, target }); } catch { r1 = { error: '翻译失败' }; }
   if (r1 && !r1.error) tpSetOut(ui.o1, r1.text); else tpShowOut(ui.o1, r1);
   tp.detected = (r1 && r1.detected) || '';
-  if (both && !tp.cancelled) await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
+  if (both && !tp.cancelled) await tpRunOne(ui.o2, { text, source, target });
   tp.busy = false; tpWait(0);
   const ok = r1 && !r1.error;
-  // 只有重试可能有用的失败才显示「重试」；没填密钥、取消这些回到「翻译」
+  // 只有重试可能有用的失败才显示「重试」；没登录、取消这些回到「翻译」
   const res = ok ? { ok: true } : TP_RETRY.includes(r1 && r1.kind) || !(r1 && r1.kind) ? { ok: false } : {};
   if (ok) {
     tp.hist = [{ src: text, out: r1.text, from: source || tp.detected, to: target, at: Date.now() }, ...tp.hist.filter((x) => x.src !== text)].slice(0, TP_HIST_MAX);
@@ -495,7 +454,6 @@ async function tpRun() {
   }
   tpLabels();
   tpUpdate();
-  tpLoadCfg(); // DeepL 用量变了
   return res;
 }
 
@@ -538,7 +496,7 @@ async function tpRerun(which) {
     tp.busy = true;
     o.box.value = ''; tpShowOut(o, null);
     tpUpdate();
-    const ok = await tpRunOne(o, { text, source, target, providerId: which === 1 ? tp.p1 : tp.p2 });
+    const ok = await tpRunOne(o, { text, source, target });
     tp.busy = false; tpWait(0);
     tpUpdate();
     tpLoadCfg();
@@ -555,7 +513,7 @@ async function tpFillCompare() {
   await tpGoBusy(async () => {
     tp.busy = true;
     tpUpdate();
-    const ok = await tpRunOne(ui.o2, { text, source, target, providerId: tp.p2 });
+    const ok = await tpRunOne(ui.o2, { text, source, target });
     tp.busy = false; tpWait(0);
     tpUpdate();
     tpLoadCfg();
@@ -573,8 +531,7 @@ async function tpFix(which) {
   tp.busy = true;
   tpUpdate();
   let r;
-  // 纠错用这一栏选的模型（按钮就在模型旁边）
-  try { r = await window.wa.trPage({ text, source, target, fix: true, draft, providerId: which === 1 ? tp.p1 : tp.p2 }); } catch { r = { error: '纠错失败' }; }
+  try { r = await window.wa.trPage({ text, source, target, fix: true, draft }); } catch { r = { error: '纠错失败' }; }
   tp.busy = false; tpWait(0);
   const ok = r && !r.error;
   if (ok) { tpSetOut(o, r.text); tpShowOut(o, null); } else tpShowOut(o, r);
@@ -604,7 +561,7 @@ function tpSwap() {
   tpFx(ui.input);
 }
 
-// 认出的语言不在下拉里（服务商不支持）就当认不出
+// 认出的语言不在下拉里就当认不出
 function tpDetect(text) {
   const l = typeof LangDetect !== 'undefined' ? LangDetect.detectLang(text) : '';
   return tpLangs().includes(l) ? l : '';
@@ -617,13 +574,13 @@ async function tpLoadCfg() {
   tp.cfg = r.config;
   const was = [tp.p1, tp.p2];
   tpFixPicks();
-  // 服务商被删了、栏换了模型：那栏的旧译文不再对得上，清掉
+  // 栏换了模型：那栏的旧译文不再对得上，清掉
   if (tp.ui) [[tp.ui.o1, was[0], tp.p1], [tp.ui.o2, was[1], tp.p2]].forEach(([o, a, b]) => { if (a !== b) { o.box.value = ''; tpShowOut(o, null); } });
   tpSavePrefs();
   if (tp.ui) { tpLabels(); tpUpdate(); }
 }
 
-// shell.js 的 render 每次显示翻译页时调用：返回同一个元素；刚切进来时重新读一次服务商（设置里可能改过）
+// shell.js 的 render 每次显示翻译页时调用：返回同一个元素；刚切进来时重新读一次配置
 function trPage(entering) {
   if (!tp.el) { tpBuild(); tpLabels(); tpUpdate(); }
   if (entering) {

@@ -6,12 +6,26 @@ const fs = require('fs');
 const path = require('path');
 
 const WIN_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+function cleanName(name) {
+  const n = String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_').replace(/\s+/g, ' ').trim();
+  return n.replace(/[. ]+$/, ''); // Windows 不允许结尾是点或空格
+}
 function safeName(name, fallback) {
-  let n = String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_').replace(/\s+/g, ' ').trim();
-  n = n.replace(/[. ]+$/, ''); // Windows 不允许结尾是点或空格
+  let n = cleanName(name);
   if (WIN_RESERVED.test(n)) n = `_${n}`;
   n = n.slice(0, 80).replace(/[. ]+$/, '');
   return n || fallback;
+}
+// 文件名：太长时只截掉名字部分，扩展名要留着（没有扩展名 Windows 打不开）。
+// 扩展名只认 1 到 10 个字母或数字；别的情况当没有扩展名，整体照 safeName 截到 80 个字。
+function safeFileName(name, fallback) {
+  let n = cleanName(name);
+  if (WIN_RESERVED.test(n)) n = `_${n}`;
+  let ext = path.extname(n);
+  if (!/^\.[A-Za-z0-9]{1,10}$/.test(ext)) ext = '';
+  let stem = n.slice(0, n.length - ext.length);
+  if (stem.length + ext.length > 80) stem = stem.slice(0, 80 - ext.length).replace(/[. ]+$/, '');
+  return stem ? stem + ext : fallback;
 }
 
 // downloadsPath()：系统“下载”文件夹；getAccounts()：全部账号；findAcc(id)：按编号找号
@@ -51,8 +65,7 @@ function createDownloads({ downloadsPath, getAccounts, findAcc, warn = console.w
         fs.mkdirSync(dir, { recursive: true });
         if (!fs.statSync(dir).isDirectory()) throw new Error('not a folder');
         fs.accessSync(dir, fs.constants.W_OK);
-        const name = safeName(path.basename(item.getFilename() || ''), 'download');
-        target = uniquePath(dir, WIN_RESERVED.test(name) ? `_${name}` : name);
+        target = uniquePath(dir, safeFileName(path.basename(item.getFilename() || ''), 'download'));
       } catch (e) {
         warn(`账号 ${id} 的下载文件夹不可写（${e.code || e.message}），改用另存为对话框`);
       }
@@ -65,4 +78,4 @@ function createDownloads({ downloadsPath, getAccounts, findAcc, warn = console.w
   return { setup, downloadDirOf, isDownloading: (id) => active.has(id) };
 }
 
-module.exports = { createDownloads, safeName };
+module.exports = { createDownloads, safeName, safeFileName };

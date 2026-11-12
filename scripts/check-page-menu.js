@@ -34,10 +34,10 @@ function checkTemplates() {
   assert.deepStrictEqual(t({ isEditable: true }), ['剪切', '复制', '粘贴', '全选'], '输入框：剪切复制粘贴全选');
   assert.deepStrictEqual(t({ isEditable: true, mediaType: 'image', hasImageContents: true }), ['剪切', '复制', '粘贴', '全选'], '输入框里不加复制图片');
   assert.deepStrictEqual(pageMenuTemplate(params({ isEditable: true }), act).map((i) => i.enabled), [true, true, false, true], '输入框各项的可用状态跟 editFlags 走');
-  assert.deepStrictEqual(t({ misspelledWord: 'helo', dictionarySuggestions: ['hello', 'help'], isEditable: true }), ['hello', 'help', '把“helo”加入词典', '-', '剪切', '复制', '粘贴', '全选'], '拼写建议在最前面');
-  assert.deepStrictEqual(t({ misspelledWord: 'helo' }), ['没有拼写建议', '把“helo”加入词典', '-'], '没有建议时的提示照旧');
+  assert.deepStrictEqual(t({ misspelledWord: 'helo', dictionarySuggestions: ['hello', 'help'], isEditable: true }), ['hello', 'help', '把「helo」加入词典', '-', '剪切', '复制', '粘贴', '全选'], '拼写建议在最前面');
+  assert.deepStrictEqual(t({ misspelledWord: 'helo' }), ['没有拼写建议', '把「helo」加入词典', '-'], '没有建议时的提示照旧');
   const withSpell = t({ misspelledWord: 'helo', dictionarySuggestions: ['hello'], mediaType: 'image', hasImageContents: true });
-  assert.deepStrictEqual(withSpell, ['hello', '把“helo”加入词典', '-', '复制图片'], '拼写建议之后才是复制图片');
+  assert.deepStrictEqual(withSpell, ['hello', '把「helo」加入词典', '-', '复制图片'], '拼写建议之后才是复制图片');
   // click 接到对应的动作
   const items = pageMenuTemplate(params({ mediaType: 'image', hasImageContents: true, selectionText: 'Bonjour' }), act);
   items[0].click();

@@ -26,8 +26,8 @@ const setup = () => {
   items[8].via = { at: Date.now() - 3600000, ms: 65000, name: 'OpenRouter', model: 'openai/gpt-4o-mini-2024-07-18-with-a-very-long-suffix-name', fix: true };
   items[8].fixed = true;
   items[9].via = { at: day(1, 9, 5), ms: 12000, name: 'DeepL', model: '', fix: false };
-  const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items, paused: '', auto: true, dailyCap: 500, hasProvider: true, needKey: null,
-    primaryId: 'z', fallbackId: '', providers: [{ id: 'z', name: '智谱', model: 'glm-4-flash' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
+  const d = { accountId: 'a1', readable: 'ok', title: 'Lukas Becker', items, paused: '', auto: true, dailyCap: 500, hasProvider: true,
+    primaryId: 'cloud', fallbackId: '', providers: [{ id: 'cloud', name: '来财', model: 'DeepSeek' }], modes: { out: [{ id: 'o', name: '商务' }], in: [{ id: 'i', name: '收到' }] }, inModeId: 'i',
     langs: ['英语', '德语'], target: '德语', targetSrc: 'detected', autoTarget: '德语', canRemember: true };
   window.__dock = d;
   window.__push = () => window.__cbs.dock(JSON.parse(JSON.stringify(d)));
