@@ -84,7 +84,7 @@ function tpFillModels(sel, cur, taken) {
   sel.disabled = tp.busy || free < 2;
   tpFitSelect(sel);
 }
-// 这一栏选着模型才能纠错（来财的 DeepSeek 会纠错）
+// 这一栏选着模型才能纠错（来财会纠错，用哪家由管理员在来财里选）
 function tpCanFix(id) {
   return tpProviders().some((x) => x.id === id);
 }
