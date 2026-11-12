@@ -152,6 +152,32 @@ async function partB(win) {
   check(r.result === 'pending' && /光标不在/.test(r.why) && (await compose()) === '' && (await page('document.activeElement.id')) === 'search',
     `网页版：自动放时光标在搜索框，不放、不动焦点，在顶部问（${r.result} ${r.why}）`);
   st.request = null;
+
+  // 用户点横幅按钮时焦点在软件界面上（旁边的视图），WhatsApp 页面里开着会把焦点拉回去的弹窗：不放，横幅留着写明
+  const side = new WebContentsView({ webPreferences: { sandbox: true } });
+  win.contentView.addChildView(side);
+  side.setBounds({ x: 600, y: 0, width: 300, height: 600 });
+  await side.webContents.loadURL('data:text/html;charset=utf-8,<textarea id="in"></textarea>');
+  await page(`(() => {
+    const d = document.createElement('div');
+    d.id = 'dlg'; d.setAttribute('role', 'dialog'); d.innerHTML = '<button id="dlg-ok">OK</button>';
+    document.body.append(d);
+    document.addEventListener('focusin', (e) => { if (d.isConnected && !d.contains(e.target)) document.getElementById('dlg-ok').focus(); });
+    document.getElementById('dlg-ok').focus();
+  })(); true`);
+  side.webContents.focus();
+  await wait(30);
+  st.request = { kind: 'draft', nonce: 99, id: 'w1', chat: 'Anna Müller', text: 'dialog draft', client: 'test', note: '' };
+  const t0 = Date.now();
+  await placer.answer(true);
+  const ms = Date.now() - t0;
+  check(st.request && /没能把光标放进聊天输入框/.test(st.request.note) && (await compose()) === '',
+    `网页版：用户点按钮时页面开着弹窗，不放，横幅写明（${st.request ? st.request.note : '横幅没了'}）`);
+  check(ms < 500, `网页版：用户点按钮后不白等页面焦点（${ms} 毫秒）`);
+  await page("document.getElementById('dlg').remove(); true");
+  win.contentView.removeChildView(side);
+  side.webContents.close();
+  st.request = null;
 }
 
 // 翻译页的「放进输入框」、话术的「插入」（compose-insert.js + wa-page.js 的 focusCompose）：

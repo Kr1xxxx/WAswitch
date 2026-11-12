@@ -139,8 +139,9 @@ function createDraftPlacer(deps) {
         if (!byUser && !st.empty) return 'not_empty';
         return st.focus === 'compose' ? '' : 'focus';
       };
-      // 用户点了按钮：对话对了就把光标放进输入框（自动放时不动用户的焦点）
-      const focusBox = async () => { if (byUser && valid()) await deps.waPage.focusCompose(wc); };
+      // 用户点了按钮：对话对了就把光标放进输入框（自动放时不动用户的焦点）。
+      // 先把键盘焦点给页面：用户刚点的是软件界面，页面没焦点时 focusCompose 要白等，也查不出弹窗把焦点拉回去
+      const focusBox = async () => { if (byUser && valid()) { wc.focus(); await deps.waPage.focusCompose(wc); } };
       await focusBox();
       const initialError = stateError(await deps.waPage.composeState(wc, probe));
       if (initialError) return initialError;
