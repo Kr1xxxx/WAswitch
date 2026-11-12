@@ -20,6 +20,18 @@ function checkChat(b) {
   if (b.temperature !== undefined && !(Number.isFinite(b.temperature) && b.temperature >= 0 && b.temperature <= 1.5)) return 'temperature';
   if (b.max_tokens !== undefined && !(Number.isInteger(b.max_tokens) && b.max_tokens >= 16 && b.max_tokens <= 8192)) return 'max_tokens';
   if (b.purpose !== undefined && !['translate', 'fix', 'test'].includes(b.purpose)) return 'purpose';
+  // 1.0.13 起：给混元翻译模型的 mt_messages（一条 user 消息）、给 DeepL 的 deepl
+  if (b.mt_messages !== undefined) {
+    const m = b.mt_messages;
+    if (!Array.isArray(m) || m.length !== 1 || !m[0] || m[0].role !== 'user' || typeof m[0].content !== 'string' || !m[0].content || m[0].content.length > 24000) return 'mt_messages';
+  }
+  if (b.deepl !== undefined) {
+    const d = b.deepl;
+    if (!d || typeof d !== 'object' || typeof d.text !== 'string' || !d.text || d.text.length > 24000) return 'deepl';
+    if (typeof d.target_lang !== 'string' || !/^[A-Z]{2}(-[A-Z]{2,4})?$/.test(d.target_lang)) return 'deepl_target';
+    if (d.source_lang !== undefined && !(typeof d.source_lang === 'string' && /^[A-Z]{2}$/.test(d.source_lang))) return 'deepl_source';
+    if (d.context !== undefined && !(typeof d.context === 'string' && d.context.length <= 24000)) return 'deepl_context';
+  }
   return '';
 }
 function checkAudio(b) {

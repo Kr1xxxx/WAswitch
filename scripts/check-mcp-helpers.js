@@ -130,9 +130,9 @@ async function main() {
   st.trAnswers.push({ error: '先登录团队才能翻译', kind: 'auth' });
   const t6 = await call('translate_text', { text: 'Hello', target: 'de' });
   check(t6.isError && /先登录团队才能翻译/.test(t6.content[0].text) && /请用户在 WAswitch 里登录团队/.test(t6.content[0].text) && !/密钥|服务商/.test(t6.content[0].text), '没登录团队时说明请用户登录团队，不再叫人填密钥');
-  st.trAnswers.push({ error: '翻译还没开通，请找管理员在来财填 DeepSeek key', kind: 'config' });
+  st.trAnswers.push({ error: '翻译还没开通，请找管理员在来财 设置 › WAswitch 填密钥', kind: 'config' });
   const t6b = await call('translate_text', { text: 'Hello', target: 'de' });
-  check(t6b.isError && /找管理员/.test(t6b.content[0].text) && !/设置 › 翻译|密钥/.test(t6b.content[0].text), '来财没开通时照来财的话说，不叫人去设置里填');
+  check(t6b.isError && /找管理员在来财/.test(t6b.content[0].text) && !/设置 › 翻译/.test(t6b.content[0].text), '来财没开通时照来财的话说（找管理员在来财填），不叫人去 WAswitch 的设置里填');
   st.trAnswers.push({ text: 'Rufen Sie mich an: +49 30 1234567', provider: '来财', warn: ['+49 30 1234567'] });
   const t7 = json(await call('translate_text', { text: 'Call me', target: 'de' }));
   check(/\+49 30 1234567/.test(t7.warning || ''), '译文多出原文没有的联系方式时提醒');

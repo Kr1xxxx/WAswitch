@@ -46,8 +46,11 @@ assert(zh(f.text) && f.detail === 'net::ERR_CONNECTION_RESET', JSON.stringify(f)
 // 翻译走来财（#209）：来财的错误码换成中文，不带英文原话；429 带上要等多久
 const T = require('../src/translate');
 assert.deepEqual(T.cloudError(401, { error: 'login_required' }), { kind: 'auth', text: '团队登录失效，请重新登录' });
-assert.deepEqual(T.cloudError(409, { error: 'no_key' }), { kind: 'config', text: '翻译还没开通，请找管理员在来财填 DeepSeek key' });
-assert.equal(T.cloudError(402, { error: 'no_balance' }).text, 'DeepSeek 余额不足，请找管理员');
+assert.deepEqual(T.cloudError(409, { error: 'no_key' }), { kind: 'config', text: '翻译还没开通，请找管理员在来财 设置 › WAswitch 填密钥' });
+assert.equal(T.cloudError(402, { error: 'no_balance' }).text, '翻译服务余额不足，请找管理员');
+assert.equal(T.cloudError(402, { error: 'no_balance', provider: 'DeepSeek' }).text, 'DeepSeek余额不足，请找管理员');
+assert.equal(T.cloudError(422, { error: 'bad_key', provider: '智谱' }).text, '来财的智谱密钥不对，请找管理员');
+assert.equal(T.cloudError(502, { error: 'unreachable', provider: 'DeepL' }).text, '来财连不上DeepL，请稍后再试');
 assert.equal(T.cloudError(402, { error: 'over_budget' }).text, '本月翻译额度用完了，请找管理员');
 assert.deepEqual(T.cloudError(429, { error: 'rate_limited', retry_after_s: 2 }), { kind: 'overload', text: '来财请求太频繁，请重试', retryAfter: 2000 });
 assert.equal(T.cloudError(429, {}, 3000).retryAfter, 3000, '没给 retry_after_s 用 Retry-After 头');
