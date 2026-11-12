@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const time = (t) => new Date(t).toLocaleTimeString();
+const time = (t) => TrInfo.when(t);
 
 function render(s) {
   $('enabled').checked = s.enabled;
