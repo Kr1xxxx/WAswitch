@@ -1719,7 +1719,7 @@ function quickTiles() {
   else if (cw.error) trTile = qkTile('翻译', '连不上来财', 'warn', '', trMore);
   else if (!cw.ready) trTile = qkTile('翻译', '还没开通', 'bad', '请找管理员', trMore);
   else if (cw.overBudget) trTile = qkTile('翻译', '额度用完了', 'bad', '请找管理员', trMore);
-  else trTile = qkTile('翻译', '可以用', 'ok', '来财 DeepSeek', trMore);
+  else trTile = qkTile('翻译', '可以用', 'ok', '来财', trMore);
   // 隔离自检：显示这次打开软件后最近一次的结果（和自检页同一份）
   let ckTile;
   if (checkRunning) ckTile = qkTile('隔离自检', '检查中…', '', '', null);

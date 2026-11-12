@@ -1454,7 +1454,7 @@ async function keyRetry() {
     sent.push(text);
     if (mode === 'nologin') {
       if (text.includes('quota')) return { error: '本月翻译额度用完了，请找管理员', kind: 'quota' };
-      if (text.includes('setup')) return { error: '翻译还没开通，请找管理员在来财填 DeepSeek key', kind: 'config' };
+      if (text.includes('setup')) return { error: '翻译还没开通，请找管理员在来财 设置 › WAswitch 填密钥', kind: 'config' };
       return { error: '先登录团队才能翻译', kind: 'auth' };
     }
     return { text: `译:${text}`, warn: [] };

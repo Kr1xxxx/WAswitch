@@ -106,7 +106,7 @@ app.whenReady().then(async () => {
     await shot('tr-quick-nologin-900');
     await go('ok', 'quick', false);
     await until(() => { const t = [...document.querySelectorAll('.qk-tile')].find((x) => x.querySelector('.qk-k').textContent === '翻译'); return t && t.querySelector('.qk-v').textContent === '可以用'; });
-    assert.deepStrictEqual(await tile(), { v: '可以用', s: '来财 DeepSeek', act: '查看' });
+    assert.deepStrictEqual(await tile(), { v: '可以用', s: '来财', act: '查看' });
     await js(() => { window.__status = { ready: false, overBudget: false }; });
     await go('ok', 'quick', false);
     await until(() => { const t = [...document.querySelectorAll('.qk-tile')].find((x) => x.querySelector('.qk-k').textContent === '翻译'); return t && t.querySelector('.qk-v').textContent === '还没开通'; });

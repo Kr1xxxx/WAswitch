@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   // 登录着：并行通道只有来财
   assert.deepStrictEqual(tr.raceSet().map((p) => p.id), ['cloud']);
   let r = await tr.raceFree({ text: 'Hello', mode, target: '中文' });
-  assert.deepStrictEqual([r.text, r.provider, r.model], ['Hola', '来财', 'DeepSeek'], '点译文时间显示「来财 DeepSeek」');
+  assert.deepStrictEqual([r.text, r.provider, r.model], ['Hola', '来财', ''], '来财没说用的哪家：点译文时间显示「来财」');
   assert(!tr.busy, '不占用户翻译用的通道');
   // 三条一起翻：三个请求同时在路上，总时间不是三倍
   cloud.reset(); max = 0;
@@ -46,9 +46,9 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   tr.cancel();
   assert.strictEqual((await user).kind, 'cancel');
   // 报错：没有备用可换，原样返回（不带服务商）
-  cloud.reset(); cloud.next({ status: 502, error: 'unreachable' });
+  cloud.reset(); cloud.next({ status: 502, error: 'unreachable', extra: { provider: '智谱' } });
   r = await tr.raceFree({ text: 'Hello', mode, target: '中文' }, { paid: () => { throw new Error('不该再有付费备用'); } });
-  assert.deepStrictEqual([r.kind, r.error, cloud.calls.length], ['server', '来财连不上 DeepSeek，请稍后再试', 1]);
+  assert.deepStrictEqual([r.kind, r.error, cloud.calls.length], ['server', '来财连不上智谱，请稍后再试', 1]);
   assert(!('providerId' in r) && !r.fallback);
   // 调用方取消：这条通道马上停
   cloud.reset(); cloud.next('hang');
