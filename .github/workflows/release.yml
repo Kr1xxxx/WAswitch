@@ -1,6 +1,6 @@
 # 打 tag（例如 v0.2.0）时自动打包 Windows 和 macOS 安装包，发到公开的 Kr1xxxx/WAswitch 的 Releases。
 # 也可以在 Actions 里对 main 手动运行：tag 取 package.json 的版本号，发布时建（推不了 tag 的环境用）。
-# 源码在私有仓库 Kr1xxxx/WAswitch-src；公开的 WAswitch 只放安装包和下载说明，永远不放源码。
+# 源码和安装包都在公开仓库 Kr1xxxx/WAswitch（2026-11-03 决定不拆仓库）。下面「拆仓库时」的步骤只在源码另放一个仓库时运行，现在不跑。
 # 已装的软件（1.0.7 起）从来财（laicrm.com/api/device/update/）更新、下载 MCP 文件，带团队登录的设备令牌
 # （package.json 的 build.publish、src/updater.js、src/mcp-module.js）。GitHub Releases 只留历史。
 # 发完 GitHub Release 后，scripts/upload-cloud-release.mjs 把安装包、Mac 的 zip、MCP 文件和 latest.yml / latest-mac.yml
@@ -12,12 +12,12 @@
 # 不要手动往 Release 或来财里上传安装包。版本号必须比上一个大（package.json 的 version 和 tag 一致，tag 带 v）。
 # MCP 接口不在安装包里：先在一台机器上打成单独的文件 waswitch-mcp-<版本>.js（mcp-module），
 # 两个安装包都带上它的 sha512（src/mcp-module.json），用户在设置里下载时按这个校验。
-# job 之间不用 Actions 的构建产物（artifact）传文件：私有仓库的 500 MB 存储按整月累计，2026-11 被旧产物用完后发不了版。
+# job 之间不用 Actions 的构建产物（artifact）传文件：仓库私有时（2026-11-02 到 11-12）只有 500 MB 存储、按整月累计，被旧产物用完后发不了版。
 # 改成先建一个草稿 Release，MCP 文件和安装包都直接传到草稿上，下一步再从草稿下载；最后把草稿发出去（这时才建 tag）。
 # Release 里的文件不占 Actions 存储。上次失败留下的同名草稿会先删掉重建。
-# 没拆仓库时（源码和安装包都在 Kr1xxxx/WAswitch，私有，2026-11-03 决定先不拆）：发到本仓库自己的 Releases，
+# 没拆仓库时（现在就是：源码和安装包都在 Kr1xxxx/WAswitch，2026-11-03 决定不拆）：发到本仓库自己的 Releases，
 # 用本仓库的 GITHUB_TOKEN（publish 这一步给写权限），不同步下载说明（会盖掉源码的 README），也不做不登录下载检查
-# （私有仓库不登录下不了）。
+# （拆仓库时才需要）。
 name: release
 
 on:
