@@ -6,8 +6,12 @@
 //      软件马上重新加载这个号，不等兜底
 //   2. 主脚本连着失败（服务器把请求重置掉），页面空着：兜底在空白一段时间后重新加载，先悄悄重来
 //   3. 连着失败好几次：显示「WhatsApp 页面打不开」，之后脚本恢复，页面画出来时提示自己收起
+//      （重试那次又空白时提示不收起）
 //   4. 慢但正常：主脚本下得很慢（一直有字节在到）、或者先只画一个进度条：都不重新加载
-// 兜底的等待时间在开发版里用 WASWITCH_TEST_BLANK_MS 缩短到 3 秒（正式版 20 秒）。
+//   5. 页面有字、但认不出登录状态（配对码页、「在此使用」、WhatsApp 改了结构）：刚开始加载时网络变了会重新加载，
+//      过了那段时间再变就不重新加载
+// 兜底的等待时间在开发版里用 WASWITCH_TEST_BLANK_MS 缩短到 3 秒（正式版 20 秒），
+// 第 5 段的时间用 WASWITCH_TEST_NET_RELOAD_MS 缩短到 6 秒（正式版 3 分钟）。
 // 运行：node scripts/check-blank-view.js（Linux 无界面环境用 xvfb-run）
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
@@ -22,6 +26,7 @@ const root = path.join(__dirname, '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 const BLANK_MS = 3000;
+const NET_RELOAD_MS = 6000;
 
 async function cdp(wsUrl) {
   const ws = new WebSocket(wsUrl);
@@ -42,6 +47,7 @@ async function cdp(wsUrl) {
 const SHELL = `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>WhatsApp</title></head>
 <body><div id="app"></div><script>addEventListener('load', () => { const s = document.createElement('script'); s.src = '/app.js?t=' + Date.now(); document.body.appendChild(s); });</script></body></html>`;
 const CHATS = 'document.getElementById("app").innerHTML = \'<div id="side"><div id="pane-side">Emma Schneider</div></div>\';';
+const UNKNOWN = 'document.getElementById("app").innerHTML = \'<div class="landing">Use WhatsApp on your phone</div>\';';
 const PROGRESS = 'document.getElementById("app").innerHTML = \'<progress style="width:300px;height:8px"></progress>\';';
 
 (async () => {
@@ -78,6 +84,7 @@ const PROGRESS = 'document.getElementById("app").innerHTML = \'<progress style="
         return;
       }
       res.writeHead(200, js);
+      if (st.mode === 'unknown') return res.end(UNKNOWN);
       if (st.mode === 'progress') return res.end(`${PROGRESS} setTimeout(() => { ${CHATS} }, ${BLANK_MS * 3});`);
       return res.end(CHATS);
     }
@@ -93,7 +100,7 @@ const PROGRESS = 'document.getElementById("app").innerHTML = \'<progress style="
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'DE', seed: 1 },
   }]));
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')), WASWITCH_TEST_BLANK_MS: String(BLANK_MS), WASWITCH_TEST_NET_SIGNAL: '1' };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')), WASWITCH_TEST_BLANK_MS: String(BLANK_MS), WASWITCH_TEST_NET_RELOAD_MS: String(NET_RELOAD_MS), WASWITCH_TEST_NET_SIGNAL: '1' };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   st.mode = 'hold';
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
@@ -142,14 +149,18 @@ const PROGRESS = 'document.getElementById("app").innerHTML = \'<progress style="
     check(!(await problemShown()), '只失败一次时不显示「页面打不开」');
     await sleep(BLANK_MS); // 让软件看到页面画出来了，再开始下一段
 
-    // 3. 连着失败：第三次显示「WhatsApp 页面打不开」，恢复后收起
-    st.resets = 3;
+    // 3. 连着失败：第三次显示「WhatsApp 页面打不开」，重试那次又空白时提示还在，恢复后收起
+    st.resets = 4;
     const shells3 = st.shells;
     await reload();
     const ms3 = await waitFor(problemShown, BLANK_MS * 8);
     check(ms3 >= 0, `连着空白三次后显示「WhatsApp 页面打不开」（${ms3} 毫秒）`);
     check(st.shells - shells3 === 3, `显示提示前悄悄重来了两次（外壳加载 ${st.shells - shells3} 次）`);
-    const ms3b = await waitFor(async () => !(await problemShown()) && st.resets === 0, 30000);
+    // 约 10 秒后自动重试，这次主脚本又失败：外壳加载完了，提示不能收起
+    const retried = await waitFor(() => st.shells - shells3 === 4 && st.resets === 0, 20000);
+    await sleep(1000);
+    check(retried >= 0 && await problemShown(), '自动重试那次又空白时，「WhatsApp 页面打不开」没有收起');
+    const ms3b = await waitFor(async () => !(await problemShown()) && st.shells - shells3 >= 5, 40000);
     check(ms3b >= 0, `主脚本恢复后提示自己收起（${ms3b} 毫秒）`);
     check(await waitFor(shown, 5000) >= 0, '收起后对话列表显示出来');
     await sleep(BLANK_MS);
@@ -168,6 +179,24 @@ const PROGRESS = 'document.getElementById("app").innerHTML = \'<progress style="
     const ms5 = await waitFor(shown, BLANK_MS * 8);
     check(ms5 > BLANK_MS * 2, `只画了进度条时等它往下走（${ms5} 毫秒）`);
     check(st.shells === shells5 + 1, `画了进度条时没有重新加载（外壳加载 ${st.shells - shells5} 次）`);
+
+    // 5. 页面有字、认不出登录状态
+    st.mode = 'unknown';
+    const textShown = async () => { try { return !!(await pageC.evaluate("!!document.querySelector('.landing')")); } catch { return false; } };
+    await reload();
+    await waitFor(textShown, 10000);
+    await sleep(1000);
+    const shells6 = st.shells;
+    process.kill(child.pid, 'SIGUSR2');
+    await waitFor(() => st.shells > shells6, 3000);
+    check(st.shells === shells6 + 1, `刚开始加载、认不出登录状态时网络变了，重新加载了（外壳加载 ${st.shells - shells6} 次）`);
+    await waitFor(textShown, 10000);
+    await sleep(NET_RELOAD_MS + 1000);
+    const shells7 = st.shells;
+    process.kill(child.pid, 'SIGUSR2');
+    await sleep(3000);
+    check(st.shells === shells7 && await textShown(), `加载好一阵后再变网络，认不出登录状态的页面不重新加载（外壳加载 ${st.shells - shells7} 次）`);
+    check(!(await problemShown()), '认不出登录状态的页面不显示「页面打不开」');
     shellC.close(); pageC.close();
   } catch (e) {
     console.error(e);

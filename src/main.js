@@ -1521,7 +1521,11 @@ const BLANK_POLL_MS = Math.min(2000, BLANK_MS / 4);
 const BLANK_BUSY_MS = 120000;
 const BLANK_SILENT = 2;
 const blankCount = new Map(); // id -> 连着空白了几次，页面画出来后清零
-const BLANK_PROBLEM = { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: '页面没能加载完整，正在自动重试。', retrying: true, blank: true };
+const loadStartedAt = new Map(); // id -> 最近一次开始加载的时间（还没开始过加载的号没有）
+const BLANK_PROBLEM = { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: '页面没能加载完整。', retrying: true, blank: true };
+// 网络切换时，认不出登录状态的号只在开始加载后这段时间里重新加载：之后还认不出多半是配对码页、「在此使用」、
+// 同步进度，或者 WhatsApp 改了页面结构，不能每次换节点都整页重来
+const NET_RELOAD_MS = (!app.isPackaged && Number(process.env.WASWITCH_TEST_NET_RELOAD_MS)) || 180000;
 
 function watchBlank(acc, view, ses) {
   const wc = view.webContents;
@@ -1559,7 +1563,7 @@ function watchBlank(acc, view, ses) {
       }
     } finally { running = false; }
   }
-  wc.on('did-start-loading', () => { since = Date.now(); if (!running) loop(); });
+  wc.on('did-start-loading', () => { since = Date.now(); loadStartedAt.set(acc.id, since); if (!running) loop(); });
 }
 
 function onBlank(acc) {
@@ -1614,12 +1618,14 @@ async function onNetworkChange() {
     await ses.closeAllConnections().catch(() => {});
   }
   // 开机时网络常在号加载到一半时才通：上面断开连接会掐断还在下载的 WhatsApp 脚本，页面外壳到了却一直空白。
-  // 还没加载完、还没认出登录状态的号重新加载一次（连不上的号由 reconnectStuck 管）
+  // 还没加载完、页面空着、刚开始加载还没认出登录状态的号重新加载一次（连不上的号由 reconnectStuck 管；
+  // 还没开始过加载的号可能还在挂指纹，不动）
   for (const acc of visibleAccounts()) {
-    if (isLite(acc) || problems.has(acc.id) || pendingLoad.has(acc.id)) continue;
+    if (isLite(acc) || problems.has(acc.id) || pendingLoad.has(acc.id) || !loadStartedAt.has(acc.id)) continue;
     const wc = views.get(acc.id)?.webContents;
     if (!wc || wc.isDestroyed()) continue;
-    if (wc.isLoading() || (await waPage.pageShown(wc)) !== 'shown' || (await waPage.loginState(wc)) === 'unknown') {
+    const fresh = Date.now() - loadStartedAt.get(acc.id) < NET_RELOAD_MS;
+    if (wc.isLoading() || (await waPage.pageShown(wc)) !== 'shown' || (fresh && (await waPage.loginState(wc)) === 'unknown')) {
       console.log(`账号 ${acc.id} 网络切换时还没加载完，重新加载`);
       reconnect(acc.id);
     }
@@ -2045,6 +2051,7 @@ async function createView(acc, loadDelay = 0) {
 function destroyView(id) {
   clearRetry(id);
   blankCount.delete(id);
+  loadStartedAt.delete(id);
   pendingLoad.delete(id);
   const view = views.get(id);
   if (!view) return;
