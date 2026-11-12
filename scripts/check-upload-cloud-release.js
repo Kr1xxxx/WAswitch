@@ -2,7 +2,8 @@
 // 用本机的假后台（node:http）当来财的上传接口和 GitHub 的 OIDC 令牌接口，不联网。
 // 查：传哪些文件（不传 blockmap）、ymls 最后传、全部传完才 publish、分块拼回来和原文件一样、
 // 每个请求带 OIDC 令牌（audience 对）、401 时换新令牌、5xx 重试、一直失败时取消上传并非 0 退出、
-// 4xx 不重试、缺 yml 时不传、上传地址只认来财或本机、输出里没有令牌。
+// 4xx 不重试、缺 yml 时不传、上传地址只认来财或本机、输出里没有令牌；
+// --mac-only 时不传 exe 和 latest.yml、publish 带 mac_only，release.yml 的 WINDOWS 开关关着时只打 Mac。
 // 运行：node scripts/check-upload-cloud-release.js
 const fs = require('fs');
 const os = require('os');
@@ -83,7 +84,7 @@ const server = http.createServer((req, res) => {
     }
     if (route === 'abort' && req.method === 'POST') { st.aborted.push(data.upload_id); json(res, 200, { ok: true }); return; }
     if (route === 'publish' && req.method === 'POST') {
-      st.published = { version: data.version, files: [...st.files.keys()] };
+      st.published = { version: data.version, files: [...st.files.keys()], body: data };
       json(res, 200, { ok: true, version: data.version, pruned: ['WAswitch-Setup-1.0.5.exe'] });
       return;
     }
@@ -91,10 +92,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-function run(dir, tag, env = {}) {
+function run(dir, tag, env = {}, extra = []) {
   return new Promise((resolve) => {
     const port = server.address().port;
-    execFile(process.execPath, [SCRIPT, dir, tag], {
+    execFile(process.execPath, [SCRIPT, dir, tag, ...extra], {
       env: {
         PATH: process.env.PATH,
         ACTIONS_ID_TOKEN_REQUEST_URL: `http://127.0.0.1:${port}/oidc?api-version=2.0`,
@@ -141,6 +142,7 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswi
     check(UPLOADED.every((n) => st.files.get(n) && st.files.get(n).equals(files[n])), '分块拼回来和原文件一模一样');
     check(st.calls.filter((c) => c.route === 'part').length === 3 + 2 + 5, '按来财给的块大小分块（3 + 2 + 每个小文件 1 块）');
     check(st.published && st.published.version === '1.0.7' && st.published.files.length === UPLOADED.length && st.calls[st.calls.length - 1].route === 'publish', '全部传完才 publish，版本号去掉了 v');
+    check(st.published && JSON.stringify(st.published.body) === '{"v":1,"version":"1.0.7"}', `不带 --mac-only 时 publish 和以前一样（${st.published && JSON.stringify(st.published.body)}）`);
     check(st.oidc.length >= 1 && st.oidc.every((o) => o.audience === 'laicrm-waswitch-release' && o.apiVersion === '2.0' && o.auth === 'bearer req-tok'), 'OIDC 令牌：audience 对、原来的查询参数还在、带 GitHub 给的请求令牌');
     check(st.tokensIssued === 1 && st.calls.every((c) => c.auth === 'Bearer jwt-secret-1'), '令牌没过 4 分钟就一直用同一个，每个请求都带');
     check(!/jwt-secret|req-tok/.test(r.out) && /WAswitch-Setup-1\.0\.7\.exe/.test(r.out), '输出只有文件名和大小，没有令牌');
@@ -179,6 +181,35 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswi
     check(r.code !== 0 && st.calls.length === 0 && /latest-mac\.yml/.test(r.out), '缺 latest-mac.yml 时一个都不传');
     fs.rmSync(dir2, { recursive: true, force: true });
 
+    // 缺 latest.yml（没带 --mac-only）：一个都不传
+    const dir3 = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-cloudrel-'));
+    fs.writeFileSync(path.join(dir3, 'latest-mac.yml'), 'version: 1.0.7\n');
+    fs.writeFileSync(path.join(dir3, 'WAswitch-1.0.7-arm64.zip'), 'x');
+    reset();
+    r = await run(dir3, 'v1.0.7');
+    check(r.code !== 0 && st.calls.length === 0 && /latest\.yml/.test(r.out), '没带 --mac-only、缺 latest.yml 时一个都不传');
+
+    // --mac-only：同一个目录里有 exe 和 latest.yml 也不传，publish 带 mac_only
+    reset();
+    r = await run(dir, 'v1.0.7', {}, ['--mac-only']);
+    const MAC = UPLOADED.filter((n) => n !== 'WAswitch-Setup-1.0.7.exe' && n !== 'latest.yml');
+    check(r.code === 0 && [...st.files.keys()].join() === MAC.join(), `--mac-only：只传 dmg、zip、MCP 文件和 latest-mac.yml（${[...st.files.keys()].join(' ')}）${r.code ? `\n${r.out}` : ''}`);
+    check(st.published && st.published.body.mac_only === true && st.published.version === '1.0.7' && st.calls[st.calls.length - 1].route === 'publish', '--mac-only：最后 publish，带 mac_only: true');
+    // --mac-only，只有 Mac 的文件（发版时就是这样）：照常传完
+    reset();
+    r = await run(dir3, 'v1.0.7', {}, ['--mac-only']);
+    check(r.code === 0 && [...st.files.keys()].join() === 'WAswitch-1.0.7-arm64.zip,latest-mac.yml' && st.published, `--mac-only：没有 exe 和 latest.yml 也能传（${[...st.files.keys()].join(' ')}）`);
+    // --mac-only 缺 latest-mac.yml：一个都不传
+    fs.rmSync(path.join(dir3, 'latest-mac.yml'));
+    reset();
+    r = await run(dir3, 'v1.0.7', {}, ['--mac-only']);
+    check(r.code !== 0 && st.calls.length === 0 && /latest-mac\.yml/.test(r.out), '--mac-only 缺 latest-mac.yml 时一个都不传');
+    fs.rmSync(dir3, { recursive: true, force: true });
+    // 多给参数：不传
+    reset();
+    r = await run(dir, 'v1.0.7', {}, ['--windows']);
+    check(r.code !== 0 && st.calls.length === 0, '不认识的参数：不传');
+
     // 版本号不对、上传地址不是来财：不传
     reset();
     r = await run(dir, 'v1.0');
@@ -195,6 +226,12 @@ const UPLOADED = ['WAswitch-1.0.7-arm64.dmg', 'WAswitch-1.0.7-arm64.zip', 'WAswi
     const edit = pub.indexOf('gh release edit "$TAG" --repo "$PUBLIC_REPO" --draft=false');
     check(edit > 0 && pub.indexOf('upload-cloud-release.mjs dist "$TAG"') > edit, 'release.yml：发完 GitHub Release 后传到来财');
     check(!/upload-artifact|download-artifact/.test(wf), 'release.yml：job 之间不用构建产物（私有仓库存储按月累计，会满）');
+    // Windows 开关（2026-11-11 起关着）：只打 Mac，草稿里不要求 exe 和 latest.yml，传来财带 --mac-only
+    const sw = /^env:\n(?:\s*#.*\n)*\s+WINDOWS: '(true|false)'$/m.exec(wf);
+    check(sw && sw[1] === 'false', `release.yml：开关 WINDOWS 在顶层、现在是 'false'（${sw && sw[1]}）`);
+    check(/os: \$\{\{ fromJSON\(needs\.mcp-module\.outputs\.os\) \}\}/.test(wf) && /os=\["macos-latest"\]/.test(wf) && /os=\["windows-latest","macos-latest"\]/.test(wf), 'release.yml：打包的系统跟着开关（关着只有 macos-latest）');
+    check(/need=\([^)]*latest-mac\.yml[^)]*\)/.test(pub) && !/need=\([^)]*(\.exe|'latest\.yml')[^)]*\)/.test(pub) && /\[ "\$WINDOWS" = true \] && need\+=\('WAswitch-Setup-\*\.exe' 'latest\.yml'\)/.test(pub), 'release.yml：exe 和 latest.yml 只在开关开着时才要求');
+    check(/upload-cloud-release\.mjs dist "\$TAG" \$\(\[ "\$WINDOWS" = true \] \|\| echo --mac-only\)/.test(pub), 'release.yml：开关关着时传来财带 --mac-only');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     server.close();
