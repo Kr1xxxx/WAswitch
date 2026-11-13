@@ -161,6 +161,26 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   const w=waits.filter((x)=>x>0);
   assert.equal(w.length,3,JSON.stringify(waits)); assert.deepEqual(waits.map((x)=>x>0),[true,false,true,false,true,false],JSON.stringify(waits));
   [5,10,20].forEach((b,i)=>assert(w[i]>=Math.floor(b*0.85)&&w[i]<=Math.ceil(b*1.15),JSON.stringify(waits)));
+  // 语音转出来的文字：purpose voice（纠错仍是 fix）；queued_ms 每次真发请求前现算，太忙重试时起点不变
+  let clk=1000;
+  cloud.reset(); cloud.next(busy);
+  r=await tr.translate({text:'Hallo',mode,voice:true,queuedMs:()=>{clk+=250;return clk-1000;}});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  assert.deepEqual(chats().map((x)=>[x.body.purpose,x.body.queued_ms]),[['voice',250],['voice',500]],'重发的那次带的是到重发时一共等的');
+  cloud.reset(); await tr.translate({text:'Hallo',mode,voice:true,fix:true,draft:'你好',queuedMs:()=>5});
+  assert.equal(chats()[0].body.purpose,'fix'); assert(!('queued_ms' in chats()[0].body),'纠错不带等了多久');
+  cloud.reset(); await tr.translate({text:'Hallo',mode});
+  assert.equal(chats()[0].body.purpose,'translate'); assert(!('queued_ms' in chats()[0].body),'没给 queuedMs 就不带');
+  // 只发 0 到 1 小时的整数毫秒；算不出来就不带
+  for (const [ms,want] of [[1234.6,1235],[-40,0],[5e9,3600000],[3600000,3600000],[NaN,undefined],[Infinity,undefined]]) {
+    cloud.reset(); r=await tr.translate({text:'Hallo',mode,queuedMs:()=>ms});
+    assert.equal(r.text,'Hola',String(ms)); assert.strictEqual(chats()[0].body.queued_ms,want,String(ms));
+  }
+  cloud.reset(); r=await tr.translate({text:'Hallo',mode,queuedMs:()=>{throw new Error('x');}});
+  assert.equal(r.text,'Hola'); assert(!('queued_ms' in chats()[0].body));
+  // 收到的消息走的单独通道（raceFree）也带上
+  cloud.reset(); r=await tr.raceFree({text:'Hallo',mode,voice:true,queuedMs:()=>42});
+  assert.deepEqual([chats()[0].body.purpose,chats()[0].body.queued_ms],['voice',42]);
   // 重试 3 次还忙：只说一句太忙
   cloud.reset(); cloud.next(...busyN(4));
   r=await tr.translate({text:'你好',mode}); assert.deepEqual([r.kind,r.error,chats().length],['overload','来财请求太频繁，请重试',4]);

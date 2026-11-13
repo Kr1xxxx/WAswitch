@@ -108,6 +108,98 @@ async function core() {
   await sameMessageOtherText();
   await textDrift();
   await autoRetry();
+  await queuedWait();
+}
+
+// 发给来财的 purpose 和 queued_ms（只做统计）：语音转出来的文字标 voice；新消息自动翻译时带上从排队到发出等了多久
+// （语音从转文字之前算起）。用户点的、纠错、后台补翻、重翻的不带。假时钟只在这里走，等了多久正好算得出来
+async function queuedWait() {
+  const chat = '4930123456@c.us';
+  const m = (n, text = `Guten Tag ${n}`) => ({ id: `false_${chat}_3QW${n}`, out: false, text });
+  const voiceMsg = (n) => ({ id: `false_${chat}_3QV${n}`, out: false, text: '', voice: 0, raw: `3QV${n}` });
+  const opts = { auto: true, dailyCap: 500 };
+  const settle = async (fc, ms = 1500) => { const end = Date.now() + ms; while (Date.now() < end && (fc.running || fc.queue.length || fc.vrunning || fc.vq.length || fc.waits.length)) await sleep(5); };
+  const mk = (plan = () => null, extra = {}) => {
+    let clock = Date.parse('2026-11-13T09:00:00Z');
+    const calls = [];
+    const fc = new FloatCore({
+      now: () => clock, parallel: () => 1, retryMs: [20],
+      transcribe: async (acc, src) => { clock += 5000; return { text: `Sprachnachricht ${src.dataId}`, seconds: 4 }; }, // 转文字花了 5 秒
+      translate: async (text, o = {}) => {
+        clock += 1234; // 发请求前又过了 1.234 秒
+        calls.push({ text, fix: !!o.fix, slow: !!o.slow, voice: o.voice, queued: typeof o.queuedMs === 'function' ? o.queuedMs() : undefined });
+        return plan(text, calls.length - 1) || { text: `译:${text}`, warn: [] };
+      },
+      ...extra,
+    });
+    return { fc, calls };
+  };
+  // 文字消息自动翻：purpose 照旧，等了 1234 毫秒
+  {
+    const { fc, calls } = mk();
+    fc.ingest('Q', { title: 'Jonas', bottom: true, msgs: [m(1)] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual(calls, [{ text: 'Guten Tag 1', fix: false, slow: false, voice: false, queued: 1234 }]);
+    // 两条一起来、一次只翻一条：第二条等的包括第一条在翻的时间
+    fc.ingest('Q', { title: 'Jonas', bottom: true, msgs: [m(1), m(2), m(3)] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual(calls.slice(1).map((c) => [c.text, c.queued]), [['Guten Tag 2', 1234], ['Guten Tag 3', 2468]]);
+    // 用户点「翻译」、点「纠错」：不带
+    assert(fc.manual('Q', msgHash('Q', m(1).id)));
+    await settle(fc);
+    assert(fc.manual('Q', msgHash('Q', m(2).id), true));
+    await settle(fc);
+    assert.deepStrictEqual(calls.slice(3).map((c) => [c.fix, c.queued]), [[false, undefined], [true, undefined]]);
+  }
+  // 语音自动转、自动翻：voice，等的时间包括转文字的 5 秒；对语音纠错：fix 照样带着 voice（来财那边记成 fix），不带等了多久
+  {
+    const { fc, calls } = mk();
+    fc.ingest('V', { title: 'Lena', bottom: true, msgs: [voiceMsg(1)] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual(calls, [{ text: 'Sprachnachricht 3QV1', fix: false, slow: false, voice: true, queued: 6234 }]);
+    assert(fc.manual('V', msgHash('V', voiceMsg(1).id), true));
+    await settle(fc);
+    assert.deepStrictEqual(calls[1], { text: 'Sprachnachricht 3QV1', fix: true, slow: false, voice: true, queued: undefined });
+  }
+  // 后台补翻更早的：不带（第一次打开对话，最后 5 条自动翻，更早的交给后台）
+  {
+    const { fc, calls } = mk();
+    fc.ingest('B', { title: 'Paul', bottom: true, msgs: Array.from({ length: 7 }, (_, i) => m(i)) }, opts);
+    await settle(fc);
+    // 后台补翻的两条走自己的道，夹在中间翻，也占了时间：后面几条等得更久
+    assert.deepStrictEqual(calls.filter((c) => !c.slow).map((c) => c.queued), [1234, 4936, 6170, 7404, 8638], '最后 5 条：排在后面的等得更久');
+    assert.deepStrictEqual(calls.filter((c) => c.slow).map((c) => c.queued), [undefined, undefined], '后台补翻不带');
+  }
+  // 第一次失败、过一会儿自己重翻：重翻那次不带
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '来财那边出错了', kind: 'server' } : null));
+    fc.ingest('R', { title: 'Mia', bottom: true, msgs: [m(1)] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual(calls.map((c) => [c.slow, c.queued]), [[false, 1234], [true, undefined]]);
+  }
+  // 用户自己在翻（busy）、等一下再发：起点不变，发出去那次带的是一共等了多久
+  {
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '让用户先翻', kind: 'busy' } : null));
+    fc.ingest('U', { title: 'Noah', bottom: true, msgs: [m(1)] }, opts);
+    await settle(fc);
+    assert.deepStrictEqual(calls.map((c) => c.queued), [1234, 2468]);
+    assert.strictEqual(fc.viewOf('U').items[0].tr, '译:Guten Tag 1');
+  }
+  // 时钟往回拨了：FloatCore 照实给出负数，发请求时（translate.js 的 queuedWait）收成 0；只做统计，不影响翻译
+  {
+    const { fc, calls } = mk();
+    fc.deps.translate = async (text, o = {}) => { calls.push(o.queuedMs()); return { text: '译', warn: [] }; };
+    const back = fc.deps.now;
+    let t = back();
+    fc.deps.now = () => t;
+    fc.ingest('N', { title: 'Emil', bottom: true, msgs: [m(1)] }, opts);
+    t -= 5000;
+    await settle(fc);
+    assert(calls.length === 1 && calls[0] <= 0, JSON.stringify(calls));
+    const { queuedWait: wait } = require('../src/translate');
+    assert.strictEqual(wait(() => calls[0]), 0);
+  }
+  console.log('排队等了多久、语音标记自检通过');
 }
 
 // 同一条消息（消息编号一样）重启后页面上读到的文字有细微差别（不可见字符、空格、弯引号）：认得出是翻过的，不重翻
