@@ -13,6 +13,8 @@ const PROTOCOL = 1;
 const MAX_INPUT = 4000;
 const MAX_BODY = 256 * 1024;
 const TIMEOUT_MS = 30000;
+// 检查翻译服务：来财那边每家最多试 8 秒，整个回答 10 秒内回来
+const CHECK_TIMEOUT_MS = 15000;
 // 来财说太忙（429）：给了 retry_after_s（或 Retry-After）就按它等，没给就 1.5、3、6 秒（各自加减 15% 随机，
 // 几个号同时撞上限流时不会一起再撞一次）。最多重试 3 次；要等超过 20 秒的不等，直接报太忙
 const RETRY_MS = 1500;
@@ -321,6 +323,38 @@ function cloudError(status, j, after = null) {
   if (status === 502) return { kind: 'server', text: `来财连不上${who}，请稍后再试` };
   if (status >= 500) return { kind: 'server', text: '来财那边出错了，请稍后再试' };
   return { kind: 'other', text: `来财返回了错误（${status}）` };
+}
+// 来财 ai/status { check: true } 回答里的 services：每个选用的翻译服务一行。防坏数据：最多 8 行，字段只认对的类型
+const SERVICE_MAX = 8;
+function serviceRows(list) {
+  if (!Array.isArray(list)) return null;
+  const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+  const out = [];
+  for (const r of list.slice(0, 64)) {
+    if (out.length >= SERVICE_MAX) break;
+    if (!r || typeof r !== 'object') continue;
+    const provider = str(r.provider, 40);
+    if (!provider) continue;
+    const roles = Array.isArray(r.roles) ? r.roles.map((x) => str(x, 10)).filter(Boolean).slice(0, 4) : [];
+    const row = { provider, model: str(r.model, 40), roles, key: r.key === true, state: str(r.state, 40) };
+    if (Number.isFinite(r.ms) && r.ms >= 0 && r.ms <= 60000) row.ms = Math.round(r.ms);
+    out.push(row);
+  }
+  return out;
+}
+// 一行服务的状态码 -> 界面上的字：{ text, time, tone: 'ok' | 'bad' | 'off' }。码和 cloudError 是同一批
+const SERVICE_TEXT = {
+  no_key: ['没填密钥', 'off'], bad_key: ['密钥不对', 'bad'], no_balance: ['余额不足', 'bad'], over_budget: ['本月额度用完', 'bad'],
+  rate_limited: ['请求太频繁', 'bad'], timeout: ['超时', 'bad'], unreachable: ['连不上', 'bad'], empty: ['连不上', 'bad'],
+};
+function serviceText(row) {
+  const state = row && typeof row.state === 'string' ? row.state : '';
+  if (state === 'ok') {
+    const time = row && Number.isFinite(row.ms) ? `${Math.max(0.1, Math.round(row.ms / 100) / 10).toFixed(1)} 秒` : '';
+    return { text: '正常', time, tone: 'ok' };
+  }
+  const t = Object.prototype.hasOwnProperty.call(SERVICE_TEXT, state) ? SERVICE_TEXT[state] : null;
+  return t ? { text: t[0], time: '', tone: t[1] } : { text: '不能用', time: '', tone: 'bad' };
 }
 // 语音转文字的错误：大部分和翻译一样，语音专有的几种单独说
 function asrError(status, j, after = null) {
@@ -654,6 +688,25 @@ class Translator {
     }
   }
 
+  // 设置 › 翻译 的「翻译服务」：来财给每个选用的服务试翻一句。{ services: [行] }、{ services: null }（来财还没有这个功能）或 { error, kind }
+  async cloudCheck() {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort('timeout'), CHECK_TIMEOUT_MS);
+    try {
+      const res = await this.callCloud('ai/status', { check: true }, ac.signal);
+      const j = res.json;
+      if (!res.ok) { const e = cloudError(res.status, j, res.retryAfter); return { error: e.text, kind: e.kind }; }
+      if (!j || j.ok !== true) return { error: '来财没有回答', kind: 'other' };
+      const rows = serviceRows(j.services);
+      return { services: rows && rows.map((r) => ({ ...r, ...serviceText(r) })) };
+    } catch (e) {
+      if (e && e.kind === 'timeout') return { error: '超过 15 秒没有回应', kind: 'timeout' };
+      return { error: (e && e.text) || '连不上来财', kind: (e && e.kind) || 'network' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // { text, mode, target, source, context, draft, fix } -> { text, provider, model, fallback, ms, warn[] } 或 { error, kind }
   // provider、model：来财这次用的哪家（fallback：默认的那家没成，用了备用的）
   // fix：这是纠错（来财那边记成 purpose: fix）
@@ -768,4 +821,4 @@ class Translator {
   }
 }
 
-module.exports = { queuedWait, QUEUED_MAX, retryAfterMs, backoffMs, RETRY_MAX, RETRY_WAIT_MAX, WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, DAILY_CAPS, Translator, CLOUD, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, fillPrompt, buildMessages, buildMtMessages, glossaryPairs, DEEPL_LANGS, deeplBody, chatBody, contextBlock, cleanOutput, extraContacts, cloudError, asrError };
+module.exports = { queuedWait, QUEUED_MAX, retryAfterMs, backoffMs, RETRY_MAX, RETRY_WAIT_MAX, WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, DAILY_CAPS, Translator, CLOUD, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, fillPrompt, buildMessages, buildMtMessages, glossaryPairs, DEEPL_LANGS, deeplBody, chatBody, contextBlock, cleanOutput, extraContacts, cloudError, asrError, serviceRows, serviceText, SERVICE_MAX };

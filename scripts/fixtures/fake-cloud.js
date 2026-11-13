@@ -43,10 +43,17 @@ function checkAudio(b) {
   return '';
 }
 
+const SERVICES = [
+  { provider: '智谱', model: 'glm-4-flash', roles: ['默认'], key: true, state: 'ok', ms: 812 },
+  { provider: 'DeepL', model: '', roles: ['纠错'], key: true, state: 'bad_key' },
+  { provider: '腾讯混元', model: 'hy-mt2-plus', roles: ['备用'], key: false, state: 'no_key' },
+];
 // 默认回答：翻译回 Hola，转写回「第 n 段」，状态是开通了、没超额
 function defaultAnswer(route, body, n) {
   if (route === 'ai/chat') return json(200, { ok: true, text: 'Hola', usage: { input_tokens: 12, output_tokens: 3 } });
   if (route === 'ai/transcribe') return json(200, { ok: true, text: `第${n}段` });
+  // 1.0.14 起：带 check: true 时多回 services（每个选用的翻译服务试翻一句的结果）
+  if (route === 'ai/status' && body && body.check === true) return json(200, { ok: true, ready: true, over_budget: false, services: SERVICES });
   if (route === 'ai/status') return json(200, { ok: true, ready: true, over_budget: false });
   return json(404, { ok: false, error: 'not_found' });
 }
@@ -59,7 +66,7 @@ function fakeCloud({ token = TOKEN, server = SERVER } = {}) {
     if (opt.headers.Authorization !== `Bearer ${token}`) return json(401, { ok: false, error: 'login_required' });
     if (String(opt.body).length > max) return json(413, { ok: false, error: 'too_large' });
     if (!body || body.v !== 1) return json(426, { ok: false, error: 'old_version' });
-    const bad = route === 'ai/chat' ? checkChat(body) : route === 'ai/transcribe' ? checkAudio(body) : '';
+    const bad = route === 'ai/chat' ? checkChat(body) : route === 'ai/transcribe' ? checkAudio(body) : route === 'ai/status' && body.check !== undefined && body.check !== true ? 'check' : '';
     if (bad) return json(400, { ok: false, error: 'bad_input', why: bad });
     st.n[route] = (st.n[route] || 0) + 1;
     let p = st.plan.length ? st.plan.shift() : null;
@@ -102,4 +109,4 @@ function fakeCloud({ token = TOKEN, server = SERVER } = {}) {
   };
 }
 
-module.exports = { fakeCloud, SERVER, TOKEN };
+module.exports = { fakeCloud, SERVER, TOKEN, SERVICES };

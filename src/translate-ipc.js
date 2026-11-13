@@ -33,6 +33,8 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:config', () => trState());
   // 设置页的提醒：来财那边开通了没有、这个月额度用完没有（{ ready, overBudget } 或 { error, kind }）
   handleShell('tr:cloud-status', () => ctx.translator.cloudStatus());
+  // 设置 › 翻译 的「翻译服务」：每个选用的服务能不能用（{ services } 或 { error, kind }）
+  handleShell('tr:cloud-check', () => ctx.translator.cloudCheck());
   // 刚登录团队后：之前因为“先登录团队”或来财没开通失败的收到消息自动重翻（别的原因失败的不动）
   function retryCloudErrors() {
     if (!floatCore || !ctx.translator.cloud()) return;
