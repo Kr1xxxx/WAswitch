@@ -19,7 +19,9 @@ function checkChat(b) {
   if (total > 24000) return 'too_long';
   if (b.temperature !== undefined && !(Number.isFinite(b.temperature) && b.temperature >= 0 && b.temperature <= 1.5)) return 'temperature';
   if (b.max_tokens !== undefined && !(Number.isInteger(b.max_tokens) && b.max_tokens >= 16 && b.max_tokens <= 8192)) return 'max_tokens';
-  if (b.purpose !== undefined && !['translate', 'fix', 'test'].includes(b.purpose)) return 'purpose';
+  if (b.purpose !== undefined && !['translate', 'fix', 'test', 'voice'].includes(b.purpose)) return 'purpose';
+  // 1.0.14 起：voice（语音转出来的文字）、queued_ms（自动翻译排队等了多久，只做统计）
+  if (b.queued_ms !== undefined && !(Number.isInteger(b.queued_ms) && b.queued_ms >= 0 && b.queued_ms <= 3600000)) return 'queued_ms';
   // 1.0.13 起：给混元翻译模型的 mt_messages（一条 user 消息）、给 DeepL 的 deepl
   if (b.mt_messages !== undefined) {
     const m = b.mt_messages;

@@ -244,6 +244,15 @@ function buildMessages(mode, text, langs, context, draft, role) {
   ];
 }
 
+// 排队等了多久（发给来财的 queued_ms）：0 到 1 小时的整数毫秒；没给或算不出来返回 null（不带这个字段）
+const QUEUED_MAX = 3600000;
+function queuedWait(fn) {
+  if (typeof fn !== 'function') return null;
+  let ms;
+  try { ms = fn(); } catch { return null; }
+  return Number.isFinite(ms) ? Math.min(QUEUED_MAX, Math.max(0, Math.round(ms))) : null;
+}
+
 // 发给来财 ai/chat 的请求：三种写法都带上，来财按管理员选的那家用。
 // 太大时（来财最多 64 KB）先去掉 DeepL 和混元的上下文，再不发混元的（来财那时用 messages），最后不发 DeepL 的
 const bytesOf = (o) => Buffer.byteLength(JSON.stringify({ v: PROTOCOL, ...o }), 'utf8');
@@ -649,7 +658,9 @@ class Translator {
   // provider、model：来财这次用的哪家（fallback：默认的那家没成，用了备用的）
   // fix：这是纠错（来财那边记成 purpose: fix）
   // onWait(ms)：太忙要等着重试时告诉界面还要等多久（按钮上倒计时），等完再调一次 onWait(0)
-  async translate({ text, mode, target, source, context, draft, fix, onWait } = {}) {
+  // voice：text 是客户语音转出来的文字（来财记成 purpose: voice，纠错仍是 fix）
+  // queuedMs()：新消息自动翻译时，这条从排队到现在等了多少毫秒；每次真发请求前问一次，带成 queued_ms（只做统计）
+  async translate({ text, mode, target, source, context, draft, fix, voice, queuedMs, onWait } = {}) {
     if (typeof text !== 'string' || !text.trim()) return { error: '先放一段要翻译的文字', kind: 'input' };
     if (text.length > MAX_INPUT) return { error: `一次最多 ${MAX_INPUT} 个字`, kind: 'input' };
     if (!mode || typeof mode.prompt !== 'string') return { error: '先选一个翻译模式', kind: 'input' };
@@ -659,7 +670,7 @@ class Translator {
     const role = this.roleText(langs.target);
     const temperature = Number.isFinite(mode.temperature) ? Math.min(1.5, Math.max(0, mode.temperature)) : 0.3;
     const maxTokens = Math.min(8000, Math.max(256, Math.ceil(text.length * 3)));
-    const purpose = fix === true ? 'fix' : 'translate';
+    const purpose = fix === true ? 'fix' : voice === true ? 'voice' : 'translate';
     const body = chatBody({ mode, text, langs, context, draft, role, temperature, maxTokens, purpose });
     const controller = new AbortController(); // 用户点“取消”
     this.busy = { controller };
@@ -671,7 +682,8 @@ class Translator {
       const onCancel = () => attempt.abort('cancel');
       controller.signal.addEventListener('abort', onCancel);
       const timer = setTimeout(() => attempt.abort('timeout'), TIMEOUT_MS);
-      try { return await this.call(body, attempt.signal); } finally {
+      const waited = fix === true ? null : queuedWait(queuedMs);
+      try { return await this.call(waited === null ? body : { ...body, queued_ms: waited }, attempt.signal); } finally {
         clearTimeout(timer);
         controller.signal.removeEventListener('abort', onCancel);
       }
@@ -756,4 +768,4 @@ class Translator {
   }
 }
 
-module.exports = { retryAfterMs, backoffMs, RETRY_MAX, RETRY_WAIT_MAX, WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, DAILY_CAPS, Translator, CLOUD, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, fillPrompt, buildMessages, buildMtMessages, glossaryPairs, DEEPL_LANGS, deeplBody, chatBody, contextBlock, cleanOutput, extraContacts, cloudError, asrError };
+module.exports = { queuedWait, QUEUED_MAX, retryAfterMs, backoffMs, RETRY_MAX, RETRY_WAIT_MAX, WIG_TERMS, LASH_TERMS, roleWithTerms, roleWithWig, DAILY_CAPS, Translator, CLOUD, LANGS, DEFAULT_MODES, RETIRED_MODES, retireModes, UPDATED_MODES, updateModes, fillPrompt, buildMessages, buildMtMessages, glossaryPairs, DEEPL_LANGS, deeplBody, chatBody, contextBlock, cleanOutput, extraContacts, cloudError, asrError };

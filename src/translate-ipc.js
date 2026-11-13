@@ -267,7 +267,7 @@ function setupTranslateIpc(ctx) {
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
       transcribe: (accId, src, _seconds, opts) => transcribeVoice(accId, src, opts),
-      translate: (text, { fix, context, prev, slow, signal } = {}) => {
+      translate: (text, { fix, context, prev, slow, signal, voice, queuedMs } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
@@ -275,11 +275,11 @@ function setupTranslateIpc(ctx) {
         if (slow) return slowTranslate();
         // 登录着团队：收到的消息各走各的通道发给来财，不占用户翻译用的那条，可以同时翻好几条（见 parallel）
         if (!fix && ctx.translator.raceSet().length) {
-          return ctx.translator.raceFree({ text, mode, target: '中文', context });
+          return ctx.translator.raceFree({ text, mode, target: '中文', context, voice, queuedMs });
         }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
+        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix, voice, queuedMs });
       },
     });
     // 同时翻几条：登录着团队 3 条，没登录 1 条（反正都是「先登录团队」）

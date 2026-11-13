@@ -100,6 +100,62 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   fc2.ingest('B', { title: 'Ana', msgs: [{ id: 'false_222@c.us_ID222N1', out: false, text: 'hola' }] }, { auto: true, dailyCap: 500 });
   await sleep(30);
   assert.deepStrictEqual([fc2.viewOf('B').items[0].state, fc2.viewOf('B').items[0].err], ['error', '来财那边出错了，请稍后再试']);
+  // 经过真的 translate-ipc.js 接法（FloatCore → Translator → 来财）：语音转出来的文字标 purpose voice，
+  // 新消息自动翻译带 queued_ms（语音从转文字前算起）；用户点的不带；纠错是 fix、不带
+  {
+    const Module = require('module');
+    const R = require('../src/records');
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-race-ipc-'));
+    const fakeElectron = { app: { getPath: () => userData }, session: { fromPartition: () => ({ setProxy: async () => {} }) }, ipcMain: { handle() {}, on() {} }, clipboard: {}, shell: {}, WebContentsView: function () {} };
+    const origLoad = Module._load;
+    Module._load = function (request, ...rest) { return request === 'electron' ? fakeElectron : origLoad.call(this, request, ...rest); };
+    // 译文存在临时的 userData 里：Windows 上装着软件时 pickDir 会选 D:\WAswitch\translations（真的译文记录），自检不能写进去
+    const trstore = require('../src/trstore');
+    const origPick = trstore.pickDir;
+    trstore.pickDir = (fallback) => fallback;
+    const { setupTranslateIpc } = require('../src/translate-ipc');
+    trstore.pickDir = origPick;
+    Module._load = origLoad;
+    const modeStore = new R.Records(userData, 'tmodes');
+    modeStore.upsert({ name: 'In', direction: 'in', prompt: '翻译成中文' });
+    const real = { handleShell: () => {}, onShell: () => {}, modeStore, translator: tr, activeId: '' };
+    const ipc = setupTranslateIpc(new Proxy(real, { get: (t, k) => (k in t ? t[k] : () => {}) }));
+    ipc.setupFloatCore();
+    const core = ipc.floatCore;
+    assert.strictEqual(path.dirname(core.deps.store.dir), userData, '译文只写进临时目录');
+    let clock = Date.parse('2026-11-13T09:00:00Z');
+    core.deps.now = () => clock;
+    core.deps.transcribe = async () => { clock += 3000; return { text: 'Bonjour, vous avez du stock ?', seconds: 4 }; };
+    const settle = async () => { for (let i = 0; i < 100 && (core.running || core.queue.length || core.vrunning || core.vq.length); i += 1) await sleep(10); };
+    const chats = () => cloud.calls.filter((c) => c.route === 'ai/chat').map((c) => c.body);
+    // 先打开对话（只有自己发的一条）：之后来的才是新消息，带 queued_ms。一次只翻一条，每个请求在路上 0.8 秒：第二条等了第一条的 0.8 秒
+    core.deps.parallel = () => 1;
+    const fetch0 = cloud.session.fetch;
+    cloud.session.fetch = async (url, opt) => { clock += 800; return fetch0(url, opt); };
+    const t1 = { id: 'false_333@c.us_ID333T1', out: false, text: 'Bonjour' };
+    const t2 = { id: 'false_333@c.us_ID333T2', out: false, text: 'Vous livrez en France ?' };
+    const mine = { id: 'true_333@c.us_ID333M1', out: true, text: 'Bonjour Claire' };
+    core.ingest('W', { title: 'Claire', bottom: true, msgs: [mine] }, { auto: true, dailyCap: 500 });
+    cloud.reset();
+    core.ingest('W', { title: 'Claire', bottom: true, msgs: [mine, t1, t2] }, { auto: true, dailyCap: 500 });
+    await settle();
+    core.ingest('W', { title: 'Claire', bottom: true, msgs: [mine, t1, t2, { id: 'false_333@c.us_ID333V1', out: false, text: '', voice: 0, raw: 'ID333V1' }] }, { auto: true, dailyCap: 500 });
+    await settle();
+    let b = chats();
+    assert.deepStrictEqual(b.map((x) => [x.purpose, x.queued_ms]), [['translate', 0], ['translate', 800], ['voice', 3000]], JSON.stringify(b.map((x) => [x.purpose, x.queued_ms])));
+    const items = core.viewOf('W').items;
+    cloud.reset();
+    assert(core.manual('W', items[0].h));
+    await settle();
+    const voiceItem = items.find((it) => typeof it.voice === 'number');
+    assert(voiceItem, JSON.stringify(items));
+    assert(core.manual('W', voiceItem.h, true)); // 对语音转出来的文字纠错
+    await settle();
+    b = chats();
+    assert.deepStrictEqual(b.map((x) => [x.purpose, 'queued_ms' in x]), [['translate', false], ['fix', false]], '用户点的、纠错（语音也是）都不带');
+    cloud.session.fetch = fetch0;
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('收到的消息走来财、并行翻译自检通过');
 })().catch((e) => { console.error(e); process.exit(1); });
