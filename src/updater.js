@@ -10,11 +10,14 @@
 // 1.0.6 及更早的版本只认 GitHub，更新不到 1.0.7，要手动装一次 1.0.7（覆盖安装，数据都在）。
 // 启动 1 分钟后查一次，之后每 1 小时查一次，有新版就自动下载。
 //
-// Windows：electron-updater 下载并校验 sha512。下载好后两种安装时机：
+// Windows：electron-updater 下载并校验 sha512。下载好后三种安装时机：
 //   - 用户点“立即更新”（侧栏、关于页或托盘菜单）：马上静默安装并自动重新打开，不弹任何确认；
 //   - 用户点“检查并更新”：下好后自动安装并重新打开，只等用户手上的事做完（30 秒内打过字、在编辑账号等）；
-//   - 都没点：窗口缩在托盘、所有账号都没有未读、10 分钟内没有新消息、没有账号在登录或扫码、
-//     没有消息在发、没有页面在重建时，自动静默安装并重启（重启后回到托盘）。窗口开着不会自己重启。
+//   - 都没点：人不在（窗口缩在托盘，或整台电脑 5 分钟没有键盘鼠标操作）、而且软件手上没事
+//     （没有消息在发、没有号在登录或扫码、没有页面在加载或重建、不在编辑账号）时，自动静默安装并重新打开
+//     （在托盘里装的，重启后回到托盘）。有没有未读不管。
+//     每个版本这样自己装最多试一次（userData 里的 update-auto-tried.json），装失败不会每次空闲都重启一回；
+//     点“立即更新”照样能装。
 // macOS：没有签名证书，electron-updater 的 Mac 流程（Squirrel.Mac）用不了，自己做：
 //   从来财下载 latest-mac.yml 和里面写的 zip，按 latest-mac.yml 里的 sha512 校验，用 ditto 解压，确认是 WAswitch.app、版本号对得上。
 //   App 在「应用程序」里且有写权限时，和 Windows 一样的安装时机：App 退出后由一个小脚本替换旧的 WAswitch.app、
@@ -27,6 +30,7 @@ const fs = require('fs');
 const path = require('path');
 const { finished } = require('stream/promises');
 const errtext = require('./errtext');
+const { writeFileAtomic } = require('./atomic');
 const { TEAM_SERVER } = require('./team');
 
 // 更新文件的地址：来财的 /api/device/update/<文件名>（Windows 的 latest.yml 和安装包、Mac 的 latest-mac.yml 和 zip、MCP 文件）
@@ -43,6 +47,7 @@ const STUCK_CHECKING_MS = 5 * 60 * 1000; // 检查超过 5 分钟没结果
 const STUCK_DOWNLOAD_MS = 30 * 60 * 1000; // 下载 30 分钟没有进度
 const PENDING_RETRY_MS = 10 * 60 * 1000; // 新版本还在上传时，过这么久再查
 const MAC_QUIT_WAIT_S = 25; // 替换脚本最多等旧版本退出这么久
+const AUTO_TRIED_FILE = 'update-auto-tried.json'; // 没点按钮自己装过的版本：{ version, at }
 const APP_ID = 'com.waswitch.app';
 const UPDATER_PARTITION = 'waswitch-updater'; // 更新专用的临时会话（不是 persist:，不碰账号）
 
@@ -271,6 +276,7 @@ class Updater {
       this.set({ status: 'dev', lastResult: '开发版不检查更新' });
       return;
     }
+    this.clearAutoTried();
     if (!this.mac) this.setupElectronUpdater();
     else this.setupMac();
     this.timers.push(setTimeout(() => this.check(), FIRST_CHECK_MS));
@@ -325,7 +331,7 @@ class Updater {
     if (s !== 'checking' && s !== 'downloading') this.check();
   }
 
-  // 下好后在等用户停手时点了“稍后”：不自动更新了，改回空闲（缩到托盘）时再装
+  // 下好后在等用户停手时点了“稍后”：不马上更新了，改回人不在时再装（和没点过一样）
   userLater() {
     if (!this.state.userAsked) return;
     clearTimeout(this.waitTimer);
@@ -411,8 +417,8 @@ class Updater {
     autoUpdater.on('error', (e) => { if (!isPending(e)) this.fail(e); });
   }
 
-  // 自动安装：没点任何按钮时，只在用户肯定不在用的时候（缩到托盘且空闲）装，窗口开着不会自己重启。
-  // 用户点了更新：不等缩到托盘，但手上在忙（30 秒内打过字、在编辑账号等）时先等，停手了再重启，免得打到一半的字没了
+  // 自动安装：没点任何按钮时，等人不在、软件手上没事（idleReason 返回 null）再装；同一个版本这样最多装一次。
+  // 用户点了更新：不等人离开，但手上在忙（30 秒内打过字、在编辑账号等）时先等，停手了再重启，免得打到一半的字没了
   maybeAutoInstall() {
     clearTimeout(this.waitTimer);
     this.waitTimer = null;
@@ -428,7 +434,11 @@ class Updater {
         this.waitTimer.unref?.();
         return;
       }
-    } else if (this.hooks.idleReason()) return;
+    } else {
+      if (this.hooks.idleReason()) return;
+      if (this.autoTried(this.state.version)) return; // 这个版本自己装过一次了：等用户点“立即更新”
+      if (!this.noteAutoTried(this.state.version)) return; // 记不下来就不装，免得装失败后反复重启
+    }
     console.log(`${this.state.userAsked ? '用户点了更新，' : ''}自动安装新版本 ${this.state.version}`);
     this.install();
   }
@@ -468,6 +478,41 @@ class Updater {
     if (this.mac || this.state.manual || this.state.status !== 'downloaded') return false;
     await this.install();
     return this.installing;
+  }
+
+  // ---------- 每个版本自己装最多一次 ----------
+
+  autoTriedFile() { return path.join(app.getPath('userData'), AUTO_TRIED_FILE); }
+
+  // 记下的版本：null 是没有记录；文件在但读不出来时返回 true（当作试过了，免得坏文件让软件反复重启）
+  readAutoTried() {
+    try {
+      const v = JSON.parse(fs.readFileSync(this.autoTriedFile(), 'utf8')).version;
+      return typeof v === 'string' && v ? v : true;
+    } catch (e) { return e && e.code === 'ENOENT' ? null : true; }
+  }
+
+  autoTried(version) {
+    const v = this.readAutoTried();
+    return v === true || v === version;
+  }
+
+  // 写下要自己装的版本，读回来对得上才算记下了
+  noteAutoTried(version) {
+    try {
+      writeFileAtomic(this.autoTriedFile(), JSON.stringify({ version, at: Date.now() }));
+      return this.readAutoTried() === version;
+    } catch (e) {
+      console.warn(`记不下自动更新的版本，这次不自己装：${e.message}`);
+      return false;
+    }
+  }
+
+  // 启动时：已经是记下的版本或更新的版本（装成功了），删掉记录
+  clearAutoTried() {
+    const v = this.readAutoTried();
+    if (typeof v !== 'string' || compareVersions(app.getVersion(), v) < 0) return;
+    try { fs.rmSync(this.autoTriedFile(), { force: true }); } catch { /* 删不掉就留着 */ }
   }
 
   // ---------- macOS：自己下载 zip 并校验 ----------

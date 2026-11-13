@@ -36,9 +36,11 @@ app.whenReady().then(async () => {
   await state(base(upd({ status: 'downloading', percent: 40 })));
   let c = await card();
   assert(c && /正在下载 0\.5\.18/.test(c.text), `下载中卡片：${c && c.text}`);
-  assert.strictEqual(await js(() => document.querySelector('#side .updcard').title), '下载好后会提示你');
+  assert.strictEqual(await js(() => document.querySelector('#side .updcard').title), '下载完自动更新', '没点过也是下完自动更新');
   await state(base(upd({ status: 'downloading', percent: 40, userAsked: true })));
   assert.strictEqual(await js(() => document.querySelector('#side .updcard').title), '下载完自动更新');
+  await state(base(upd({ status: 'downloading', percent: 40, manual: true, mac: true })));
+  assert.strictEqual(await js(() => document.querySelector('#side .updcard').title), '下载好后会提示你', 'Mac 手动：下好后提示打开安装包');
 
   // 下好，没点过更新：不写说明行
   await state(base(upd()));
