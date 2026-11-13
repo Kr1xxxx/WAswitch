@@ -25,9 +25,9 @@ const tr=mk(dir);
 tr.setLashTerms(false); tr.setWigTerms(false); // 睫毛、假发词汇都默认开；下面这些检查只看模式提示词，先关掉（词汇单独在后面查）
 const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
 (async()=>{
-  // 只有一个服务：来财 DeepSeek；配置里没有任何密钥
+  // 只有一个通道：来财（用哪家事先不知道，只写「来财」）；配置里没有任何密钥
   const pub=tr.publicConfig();
-  assert.deepEqual(pub.providers,[{id:'cloud',preset:'cloud',name:'来财',model:'DeepSeek'}]);
+  assert.deepEqual(pub.providers,[{id:'cloud',preset:'cloud',name:'来财',model:''}]);
   assert.equal(pub.primaryId,'cloud'); assert.equal(pub.fixId,'cloud'); assert.equal(pub.fallbackId,'');
   assert(!('network' in pub) && !('presets' in pub) && !('canEncrypt' in pub), JSON.stringify(Object.keys(pub)));
   assert.equal(pub.loggedIn,true);
@@ -36,7 +36,7 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   const mode={prompt:'to {目标语言}'};
   let r=await tr.translate({text:'你好',mode,target:'西班牙语'});
   assert.equal(r.text,'Hola',JSON.stringify(r));
-  assert.equal(r.provider,'来财'); assert.equal(r.model,'DeepSeek'); // 点译文时间显示「来财 DeepSeek」
+  assert.equal(r.provider,'来财'); assert.equal(r.model,''); assert.equal(r.fallback,false); // 旧的来财不说用的哪家：显示「来财」
   let c=chats()[0];
   assert.equal(c.url,'https://cloud.example/api/device/ai/chat');
   assert.equal(c.opt.redirect,'error'); assert.equal(c.opt.method,'POST');
@@ -45,19 +45,64 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   assert(Number.isInteger(c.body.max_tokens) && c.body.max_tokens>=256, JSON.stringify(c.body));
   assert.deepEqual(c.body.messages.map((m)=>m.role),['system','user']);
   assert(c.body.messages[0].content.startsWith('to 西班牙语'));
-  assert.deepEqual(Object.keys(c.body).sort(),['max_tokens','messages','purpose','temperature','v'],'只发约定里的字段（没有模型名、密钥）');
+  assert.deepEqual(Object.keys(c.body).sort(),['deepl','max_tokens','messages','mt_messages','purpose','temperature','v'],'只发约定里的字段（没有模型名、密钥）');
+  // 混元翻译模型：一条 user 消息，没有 system、没有标签；DeepL：原文 + 目标语言代码，没上下文就不带 context
+  assert.deepEqual(c.body.mt_messages,[{role:'user',content:'把下面的文本翻译成西班牙语，不要额外解释。\n\n你好'}]);
+  assert.deepEqual(c.body.deepl,{text:'你好',target_lang:'ES'});
+  // 来财说了用的哪家：翻译详情显示它（智谱 glm-4-flash；DeepL 没有模型名；用了备用的带 fallback）
+  for (const [ans,want] of [
+    [{provider:'智谱',model:'glm-4-flash'},['智谱','glm-4-flash',false]],
+    [{provider:'腾讯混元',model:'hy-mt2-plus',fallback:true},['腾讯混元','hy-mt2-plus',true]],
+    [{provider:'DeepL',model:''},['DeepL','',false]],
+    [{provider:'  ',model:7},['来财','',false]],
+  ]) {
+    cloud.reset(); cloud.next({status:200,body:{ok:true,text:'Hola',usage:{},...ans}});
+    r=await tr.translate({text:'你好',mode,target:'西班牙语'});
+    assert.deepEqual([r.text,r.provider,r.model,r.fallback],['Hola',...want],JSON.stringify([ans,r]));
+  }
+  // 看得懂客户的语言 + 有上下文：DeepL 带原文语言和上下文；混元按官方模板带上文
+  cloud.reset();
+  r=await tr.translate({text:'Bonjour',mode:{prompt:'p',direction:'in'},target:'中文',source:'法语',context:[{out:false,text:'Prix ?'},{out:true,text:'10 €'}]});
+  c=chats()[0];
+  assert.deepEqual(c.body.deepl,{text:'Bonjour',target_lang:'ZH-HANS',source_lang:'FR',context:'Prix ?\n10 €'});
+  assert.deepEqual(c.body.mt_messages,[{role:'user',content:'客户：Prix ?\n我：10 €\n参考上面的信息，把下面的文本翻译成中文，注意不需要翻译上文，也不要额外解释：\nBonjour'}]);
+  // 没选目标语言：看懂客户的模式翻成中文，别的翻成英语
+  cloud.reset(); await tr.translate({text:'hi',mode:{prompt:'p',direction:'in'}});
+  assert.equal(chats()[0].body.deepl.target_lang,'ZH-HANS'); assert(chats()[0].body.mt_messages[0].content.includes('翻译成中文'));
+  cloud.reset(); await tr.translate({text:'你好',mode:{prompt:'p',direction:'out'}});
+  assert.equal(chats()[0].body.deepl.target_lang,'EN-US'); assert(!('source_lang' in chats()[0].body.deepl));
+  // DeepL 不支持的目标语言（印地语、马来语、菲律宾语）：不发 deepl，其他照发
+  for (const t of ['印地语','马来语','菲律宾语']) {
+    cloud.reset(); r=await tr.translate({text:'你好',mode,target:t});
+    c=chats()[0]; assert.equal(r.text,'Hola'); assert(!('deepl' in c.body),t); assert(c.body.mt_messages[0].content.includes(`翻译成${t}`),t);
+  }
+  // 原文语言 DeepL 不认识：只是不带 source_lang
+  cloud.reset(); await tr.translate({text:'namaste',mode:{prompt:'p',direction:'in'},target:'中文',source:'印地语'});
+  assert.deepEqual(chats()[0].body.deepl,{text:'namaste',target_lang:'ZH-HANS'});
   // 纠错：purpose fix，带上 draft
   cloud.reset();
   r=await tr.translate({text:'Hallo',mode:{prompt:'校对',temperature:0.2},target:'中文',draft:'你好',context:[{out:false,text:'Preis?'}],fix:true});
   assert.equal(r.text,'Hola'); c=chats()[0];
   assert.equal(c.body.purpose,'fix'); assert.equal(c.body.temperature,0.2);
   assert(c.body.messages[0].content.startsWith('校对')&&c.body.messages[1].content.includes('<draft>\n你好')&&c.body.messages[1].content.includes('客户：Preis?'));
+  // 纠错也带混元和 DeepL 的写法：结合上下文把原文重翻（不带 draft）
+  assert.deepEqual(c.body.deepl,{text:'Hallo',target_lang:'ZH-HANS',context:'Preis?'});
+  assert.equal(c.body.mt_messages.length,1); assert(c.body.mt_messages[0].content.endsWith('翻译成中文，注意不需要翻译上文，也不要额外解释：\nHallo')&&!c.body.mt_messages[0].content.includes('你好'));
   // 最长的一次（4000 字 + 上下文 + 草稿 + 角色设定）也在来财的上限里（≤ 24000 字，≤ 64 KB）
   assert(tr.setRolePrompt('x'.repeat(4000)).ok);
   cloud.reset();
   r=await tr.translate({text:'长'.repeat(4000),mode,target:'英语',draft:'d'.repeat(4000),context:Array.from({length:8},()=>({text:'y'.repeat(300)}))});
   assert.equal(r.text,'Hola',JSON.stringify(r));
   assert(chats()[0].body.max_tokens<=8192);
+  assert(chats()[0].body.deepl&&chats()[0].body.mt_messages,'最长的一次三种写法都还在');
+  // 角色设定全是中文、又带满上下文：超过 64 KB 时先去掉 DeepL 和混元的上下文，messages 一直在
+  assert(tr.setRolePrompt('角'.repeat(4000)).ok);
+  cloud.reset();
+  r=await tr.translate({text:'长'.repeat(4000),mode,target:'英语',source:'中文',draft:'稿'.repeat(4000),context:Array.from({length:8},()=>({text:'上'.repeat(300)}))});
+  assert.equal(r.text,'Hola',JSON.stringify(r)); c=chats()[0];
+  assert(Buffer.byteLength(JSON.stringify(c.body))<=64*1024);
+  assert(c.body.messages[1].content.includes('<draft>'));
+  assert(c.body.deepl&&!('context' in c.body.deepl)&&c.body.deepl.source_lang==='ZH',JSON.stringify(c.body.deepl&&Object.keys(c.body.deepl)));
   assert(tr.setRolePrompt('').ok);
   // 来财的回答原样拿来清理（去引号、前缀）
   cloud.reset(); cloud.next({status:200,body:{ok:true,text:'以下是翻译：“Hello there”',usage:{input_tokens:1,output_tokens:1}}});
@@ -76,17 +121,21 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
     [{status:401,error:'login_required'},'auth','团队登录失效，请重新登录'],
     [{status:403,error:'revoked'},'auth','团队登录失效，请重新登录'],
     [{status:403,body:{ok:false,error:'revoked',revoked:true}},'auth','这台电脑已被管理员停用'],
-    [{status:409,error:'no_key'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
-    [{status:409,error:'not_set_up'},'config','翻译还没开通，请找管理员在来财填 DeepSeek key'],
+    [{status:409,error:'no_key'},'config','翻译还没开通，请找管理员在来财 设置 › WAswitch 填密钥'],
+    [{status:409,error:'not_set_up'},'config','翻译还没开通，请找管理员在来财 设置 › WAswitch 填密钥'],
     [{status:402,error:'over_budget'},'quota','本月翻译额度用完了，请找管理员'],
-    [{status:402,error:'no_balance'},'quota','DeepSeek 余额不足，请找管理员'],
-    [{status:422,error:'bad_key'},'config','来财的 DeepSeek key 不对，请找管理员'],
+    [{status:402,error:'no_balance'},'quota','翻译服务余额不足，请找管理员'],
+    [{status:402,error:'no_balance',extra:{provider:'DeepSeek'}},'quota','DeepSeek余额不足，请找管理员'],
+    [{status:422,error:'bad_key'},'config','来财的翻译服务密钥不对，请找管理员'],
+    [{status:422,error:'bad_key',extra:{provider:'智谱'}},'config','来财的智谱密钥不对，请找管理员'],
+    [{status:422,error:'bad_key',extra:{provider:'DeepL'}},'config','来财的DeepL密钥不对，请找管理员'],
     [{status:400,error:'upstream_rejected'},'bad','来财那边拒绝了这次请求（可能文字太长）'],
     [{status:400,error:'bad_input'},'bad','来财那边拒绝了这次请求（可能文字太长）'],
     [{status:413,error:'too_large'},'bad','文字太长，请分几次翻译'],
     [{status:426,error:'old_version'},'config','这个版本太旧，请更新 WAswitch'],
     [{status:504,error:'timeout'},'timeout','来财那边超时了，请稍后再试'],
-    [{status:502,error:'unreachable'},'server','来财连不上 DeepSeek，请稍后再试'],
+    [{status:502,error:'unreachable'},'server','来财连不上翻译服务，请稍后再试'],
+    [{status:502,error:'unreachable',extra:{provider:'腾讯混元'}},'server','来财连不上腾讯混元，请稍后再试'],
     [{status:502,error:'empty'},'empty','来财没有返回译文'],
     [{status:500,error:'x'},'server','来财那边出错了，请稍后再试'],
   ];
@@ -112,6 +161,26 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   const w=waits.filter((x)=>x>0);
   assert.equal(w.length,3,JSON.stringify(waits)); assert.deepEqual(waits.map((x)=>x>0),[true,false,true,false,true,false],JSON.stringify(waits));
   [5,10,20].forEach((b,i)=>assert(w[i]>=Math.floor(b*0.85)&&w[i]<=Math.ceil(b*1.15),JSON.stringify(waits)));
+  // 语音转出来的文字：purpose voice（纠错仍是 fix）；queued_ms 每次真发请求前现算，太忙重试时起点不变
+  let clk=1000;
+  cloud.reset(); cloud.next(busy);
+  r=await tr.translate({text:'Hallo',mode,voice:true,queuedMs:()=>{clk+=250;return clk-1000;}});
+  assert.equal(r.text,'Hola',JSON.stringify(r));
+  assert.deepEqual(chats().map((x)=>[x.body.purpose,x.body.queued_ms]),[['voice',250],['voice',500]],'重发的那次带的是到重发时一共等的');
+  cloud.reset(); await tr.translate({text:'Hallo',mode,voice:true,fix:true,draft:'你好',queuedMs:()=>5});
+  assert.equal(chats()[0].body.purpose,'fix'); assert(!('queued_ms' in chats()[0].body),'纠错不带等了多久');
+  cloud.reset(); await tr.translate({text:'Hallo',mode});
+  assert.equal(chats()[0].body.purpose,'translate'); assert(!('queued_ms' in chats()[0].body),'没给 queuedMs 就不带');
+  // 只发 0 到 1 小时的整数毫秒；算不出来就不带
+  for (const [ms,want] of [[1234.6,1235],[-40,0],[5e9,3600000],[3600000,3600000],[NaN,undefined],[Infinity,undefined]]) {
+    cloud.reset(); r=await tr.translate({text:'Hallo',mode,queuedMs:()=>ms});
+    assert.equal(r.text,'Hola',String(ms)); assert.strictEqual(chats()[0].body.queued_ms,want,String(ms));
+  }
+  cloud.reset(); r=await tr.translate({text:'Hallo',mode,queuedMs:()=>{throw new Error('x');}});
+  assert.equal(r.text,'Hola'); assert(!('queued_ms' in chats()[0].body));
+  // 收到的消息走的单独通道（raceFree）也带上
+  cloud.reset(); r=await tr.raceFree({text:'Hallo',mode,voice:true,queuedMs:()=>42});
+  assert.deepEqual([chats()[0].body.purpose,chats()[0].body.queued_ms],['voice',42]);
   // 重试 3 次还忙：只说一句太忙
   cloud.reset(); cloud.next(...busyN(4));
   r=await tr.translate({text:'你好',mode}); assert.deepEqual([r.kind,r.error,chats().length],['overload','来财请求太频繁，请重试',4]);
@@ -160,6 +229,42 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   cloud.next({status:403,error:'revoked'}); assert.deepEqual(await tr.cloudStatus(),{error:'团队登录失效，请重新登录',kind:'auth'});
   cloud.next('net'); assert.equal((await tr.cloudStatus()).kind,'network');
   cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
+  // 设置页：每个选用的翻译服务能不能用（ai/status check: true）
+  cloud.reset(); let ck=await tr.cloudCheck();
+  assert.deepEqual(cloud.calls[0].body,{v:1,check:true});
+  assert.deepEqual(ck.services.map((r)=>[r.provider,r.roles.join('、'),r.text,r.time,r.tone]),[['智谱','默认','正常','0.8 秒','ok'],['DeepL','纠错','密钥不对','','bad'],['腾讯混元','备用','没填密钥','','off']]);
+  assert.equal(ck.services[0].ms,812); assert.equal(ck.services[2].key,false);
+  // 来财还没有这个功能：没有 services
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:false}}); assert.deepEqual(await tr.cloudCheck(),{services:null});
+  cloud.next({status:200,body:{ok:true,services:'x'}}); assert.deepEqual(await tr.cloudCheck(),{services:null});
+  // 坏数据：超长、类型不对、20 行
+  const junk=[null,'x',{model:'m'},{provider:'   '},{provider:'P'.repeat(80),model:'M'.repeat(80),roles:['默认'.repeat(10),3,'',null,'纠错','备用','语音','多'],key:'true',state:7,ms:'5'},{provider:'Neg',state:'ok',ms:-1},{provider:'Big',state:'ok',ms:60001},{provider:'Zero',state:'ok',ms:0},{provider:'Who',state:'weird'}];
+  for(let i=0;i<20;i++) junk.push({provider:`S${i}`,state:'ok',ms:100});
+  cloud.next({status:200,body:{ok:true,services:junk}}); ck=await tr.cloudCheck();
+  assert.equal(ck.services.length,8,'最多 8 行');
+  const j0=ck.services[0];
+  assert.equal(j0.provider.length,40); assert.equal(j0.model.length,40); assert.deepEqual(j0.roles,['默认默认默认默认默认','纠错','备用','语音']);
+  assert.equal(j0.key,false); assert.equal(j0.state,''); assert(!('ms' in j0)); assert.equal(j0.text,'不能用');
+  assert.deepEqual(ck.services.slice(1,5).map((r)=>[r.provider,r.text,r.time]),[['Neg','正常',''],['Big','正常',''],['Zero','正常','0.1 秒'],['Who','不能用','']]);
+  assert.deepEqual(ck.services[5].roles,[]);
+  cloud.next({status:401,error:'login_required'}); assert.deepEqual(await tr.cloudCheck(),{error:'团队登录失效，请重新登录',kind:'auth'});
+  cloud.next({status:429,error:'rate_limited',extra:{retry_after_s:30}}); assert.equal((await tr.cloudCheck()).kind,'overload');
+  cloud.next('net'); assert.deepEqual(await tr.cloudCheck(),{error:'连不上来财',kind:'network'});
+  cloud.next({status:200,body:'not json'}); assert.equal((await tr.cloudCheck()).error,'来财没有回答');
+  cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudCheck(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
+  // 超时：15 秒没回答就放弃（假时钟太绕，这里把 setTimeout 换成立刻到期）
+  { const real=global.setTimeout; global.setTimeout=(f,ms,...a)=>real(f,ms===15000?5:ms,...a);
+    try { cloud.next('hang'); assert.deepEqual(await tr.cloudCheck(),{error:'超过 15 秒没有回应',kind:'timeout'}); } finally { global.setTimeout=real; } }
+  // 状态码 -> 界面上的字
+  const { serviceText } = require('../src/translate');
+  const st=(state,ms)=>{ const r=serviceText({state,ms}); return [r.text,r.time,r.tone]; };
+  assert.deepEqual(st('ok',812),['正常','0.8 秒','ok']); assert.deepEqual(st('ok',12345),['正常','12.3 秒','ok']); assert.deepEqual(st('ok'),['正常','','ok']);
+  assert.deepEqual(st('no_key'),['没填密钥','','off']); assert.deepEqual(st('bad_key'),['密钥不对','','bad']);
+  assert.deepEqual(st('no_balance'),['余额不足','','bad']); assert.deepEqual(st('over_budget'),['本月额度用完','','bad']);
+  assert.deepEqual(st('rate_limited'),['请求太频繁','','bad']); assert.deepEqual(st('timeout'),['超时','','bad']);
+  assert.deepEqual(st('unreachable'),['连不上','','bad']); assert.deepEqual(st('empty'),['连不上','','bad']);
+  assert.deepEqual(st('upstream_rejected'),['不能用','','bad']); assert.deepEqual(st('toString'),['不能用','','bad']); assert.deepEqual(st(''),['不能用','','bad']);
+  assert.deepEqual(serviceText(null),{text:'不能用',time:'',tone:'bad'});
   // 不认识的老设置文件内容：旧服务商、加密后的密钥、DeepL 用量、翻译网络一次删掉，别的设置照旧
   const dOld=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(dOld,'translate.json'),JSON.stringify({providers:[

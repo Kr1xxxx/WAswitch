@@ -512,7 +512,7 @@ function updateCard() {
   if (!u || s.collapsed || !['downloading', 'downloaded'].includes(u.status)) return null;
   if (u.status === 'downloaded' && updateHidden === u.version) return null;
   if (u.status === 'downloading') {
-    return h('button', { class: 'updcard busy', title: u.userAsked ? '下载完自动更新' : '下载好后会提示你', onclick: openAbout },
+    return h('button', { class: 'updcard busy', title: !u.manual ? '下载完自动更新' : u.userAsked ? '下载完会自动打开安装包' : '下载好后会提示你', onclick: openAbout },
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
@@ -1013,6 +1013,51 @@ function trCloudLoad() {
     if (s.page === 'settings' && (settingsTab === 'translate' || settingsTab === 'quick')) render(true);
   });
 }
+// 每个选用的翻译服务能不能用（tr:cloud-check，来财给每家试翻一句）。rows：上次查到的行（主进程已经配好 text、time、tone），null = 没查到或来财没给 services
+// error：连不上来财时的一行字。seq：每次请求加一，晚到的旧回答不要
+const trCheck = { rows: null, error: '', at: 0, login: '', busy: false, seq: 0 };
+const TR_CHECK_TTL = 5 * 60 * 1000;
+// 进 设置 › 翻译 时查一次，5 分钟内不重查；force：点了「重新检查」。团队登录状态变了就清掉重查，没登录不查
+function trCheckLoad(force = false) {
+  if (!window.wa || typeof window.wa.trCloudCheck !== 'function') return;
+  const login = (s.team && s.team.login) || 'none';
+  if (login !== trCheck.login) Object.assign(trCheck, { rows: null, error: '', at: 0, login, busy: false, seq: trCheck.seq + 1 });
+  if (login !== 'ok') return;
+  if (!force && (trCheck.busy || (trCheck.at && Date.now() - trCheck.at < TR_CHECK_TTL))) return;
+  const seq = ++trCheck.seq;
+  trCheck.busy = true;
+  trCheck.at = Date.now();
+  Promise.resolve().then(() => window.wa.trCloudCheck()).then((r) => r, () => null).then((r) => {
+    if (seq !== trCheck.seq) return;
+    trCheck.busy = false;
+    trCheck.at = Date.now();
+    if (r && Array.isArray(r.services)) { trCheck.rows = r.services; trCheck.error = ''; }
+    else if (r && r.error && ['network', 'timeout', 'server'].includes(r.kind)) { trCheck.rows = null; trCheck.error = '连不上来财'; }
+    // 来财太忙（429）：留着上一次的结果；来财还没有这个功能（services: null）或别的错：不显示这一块
+    else if (!(r && r.kind === 'overload')) { trCheck.rows = null; trCheck.error = ''; }
+    if (s.page === 'settings' && settingsTab === 'translate') render(true);
+  });
+}
+function trCheckBox() {
+  const rows = trCheck.rows || [];
+  if (!rows.length && !trCheck.error) return null;
+  const busy = trCheck.busy;
+  // 连不上来财时只有一行；再查的时候这一行写「检查中…」
+  const items = !rows.length
+    ? [h('span', { class: `tr-svc-err${busy ? ' busy' : ''}` }, busy ? '检查中…' : trCheck.error)]
+    : rows.map((r) => {
+      const st = busy ? { text: '检查中…', time: '', tone: 'off' } : r;
+      return h('div', { class: 'tr-svc' },
+        h('b', { title: r.model ? `${r.provider} ${r.model}` : r.provider }, r.provider),
+        h('span', { class: 'hint' }, r.roles.join('、')),
+        h('span', { class: `tr-svc-st ${st.tone}` }, st.text),
+        h('span', { class: 'tr-svc-ms' }, st.time));
+    });
+  return h('div', { class: 'tr-svcs-wrap' },
+    h('div', { class: 'tr-head' }, h('h2', { class: 'ov-h2' }, '翻译服务'),
+      h('button', { class: 'btn sm', disabled: busy, onclick: () => { trCheckLoad(true); render(true); } }, '重新检查')),
+    h('div', { class: 'box tr-svcs' }, items));
+}
 // 设置 › 翻译 顶上的黄条：没登录团队、没开通、额度用完才有；能用时什么都不显示
 function trCloudWarn() {
   const st = trCloud.st;
@@ -1080,6 +1125,7 @@ function trWigBox(c, apply) {
 function translatePage(page) {
   if (!tr.cfg) { trLoad(); page.append(h('h1', null, '翻译'), h('p', { class: 'lead' }, '加载中…')); return; }
   trCloudLoad();
+  trCheckLoad();
   const c = tr.cfg;
   const apply = (r) => { tr.cfg = r.config; tr.modes = r.modes; if (r.error) trSay = r.error; render(true); };
   const toggle = h('button', { class: 'btn sm', 'aria-expanded': String(trAdvanced), onclick: () => {
@@ -1092,6 +1138,7 @@ function translatePage(page) {
     h('div', { class: 'tr-head' }, h('h1', null, '翻译'), toggle),
     warn ? h('div', { class: 'tr-warn', role: 'status' }, warn) : null,
     trSay ? h('div', { class: 'hint', role: 'status' }, trSay) : null,
+    trCheckBox(),
   ];
   if (!trAdvanced) {
     page.append(...kids(...head,
@@ -1719,7 +1766,7 @@ function quickTiles() {
   else if (cw.error) trTile = qkTile('翻译', '连不上来财', 'warn', '', trMore);
   else if (!cw.ready) trTile = qkTile('翻译', '还没开通', 'bad', '请找管理员', trMore);
   else if (cw.overBudget) trTile = qkTile('翻译', '额度用完了', 'bad', '请找管理员', trMore);
-  else trTile = qkTile('翻译', '可以用', 'ok', '来财 DeepSeek', trMore);
+  else trTile = qkTile('翻译', '可以用', 'ok', '来财', trMore);
   // 隔离自检：显示这次打开软件后最近一次的结果（和自检页同一份）
   let ckTile;
   if (checkRunning) ckTile = qkTile('隔离自检', '检查中…', '', '', null);

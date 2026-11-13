@@ -1495,7 +1495,7 @@ function scheduleRetry(id) {
   clearTimeout(r.timer);
   const delay = Math.min(10000 * 2 ** r.attempt, 60000);
   r.attempt += 1;
-  r.timer = setTimeout(() => reconnect(id), delay);
+  r.timer = setTimeout(() => { r.timer = null; reconnect(id); }, delay);
   retries.set(id, r);
 }
 
@@ -1509,6 +1509,71 @@ async function retryNow(id) {
   if (isLite(acc)) { problems.delete(id); startLite(acc); refresh(); return; }
   if (!views.has(id)) { await createView(acc); refresh(); return; }
   reconnect(id);
+}
+
+// ---------- 页面加载完却一直空白 ----------
+// 页面外壳到了、WhatsApp 的脚本没下完（开机时网络切换断开连接会掐断下载）：did-finish-load 照样触发，
+// 也没有 did-fail-load，页面一直空着（深色外观下一整块黑）。加载完后 20 秒里页面始终没画出东西、
+// 也没有在下载的请求，就重新加载；前两次悄悄重来，之后显示「页面打不开」，按上面的退避继续重试。
+// 慢的页面不算：还在加载、有请求在下（2 分钟内开始的）、或者已经画出了转圈、扫码页，都不重来。
+const BLANK_MS = (!app.isPackaged && Number(process.env.WASWITCH_TEST_BLANK_MS)) || 20000;
+const BLANK_POLL_MS = Math.min(2000, BLANK_MS / 4);
+const BLANK_BUSY_MS = 120000;
+const BLANK_SILENT = 2;
+const blankCount = new Map(); // id -> 连着空白了几次，页面画出来后清零
+const loadStartedAt = new Map(); // id -> 最近一次开始加载的时间（还没开始过加载的号没有）
+const BLANK_PROBLEM = { kind: 'network', title: 'WhatsApp 页面打不开', short: '连不上', text: '页面没能加载完整。', retrying: true, blank: true };
+// 网络切换时，认不出登录状态的号只在开始加载后这段时间里重新加载：之后还认不出多半是配对码页、「在此使用」、
+// 同步进度，或者 WhatsApp 改了页面结构，不能每次换节点都整页重来
+const NET_RELOAD_MS = (!app.isPackaged && Number(process.env.WASWITCH_TEST_NET_RELOAD_MS)) || 180000;
+
+function watchBlank(acc, view, ses) {
+  const wc = view.webContents;
+  // 这个号的会话里正在下载的请求（每个号一个会话）。webRequest 每种事件只能挂一个监听，别处不要再挂
+  const inflight = new Map(); // 请求 id -> 开始时间
+  ses.webRequest.onSendHeaders((d) => { if (d.resourceType !== 'webSocket') inflight.set(d.id, Date.now()); });
+  ses.webRequest.onCompleted((d) => inflight.delete(d.id));
+  ses.webRequest.onErrorOccurred((d) => inflight.delete(d.id));
+  const busy = () => { const now = Date.now(); for (const t of inflight.values()) if (now - t < BLANK_BUSY_MS) return true; return false; };
+  const alive = () => !wc.isDestroyed() && views.get(acc.id) === view;
+  let running = false;
+  let since = 0;
+  async function loop() {
+    running = true;
+    since = Date.now();
+    try {
+      while (alive()) {
+        await new Promise((r) => setTimeout(r, BLANK_POLL_MS));
+        if (!alive()) return;
+        const p = problems.get(acc.id);
+        // 别的错误（代理不通等）有自己的提示和重试；还没轮到加载、正在加载、有请求在下：都不算空白
+        // 已经约好了下一次重试：等它
+        if ((p && !p.blank) || retries.get(acc.id)?.timer || pendingLoad.has(acc.id) || isParked(acc) || wc.isLoading() || busy()) { since = Date.now(); continue; }
+        const st = await waPage.pageShown(wc);
+        if (!alive()) return;
+        if (st === 'shown') {
+          blankCount.delete(acc.id);
+          if (problems.get(acc.id)?.blank) { clearRetry(acc.id); setProblem(acc.id, null); }
+          return;
+        }
+        if (st !== 'empty') { since = Date.now(); continue; }
+        if (Date.now() - since < BLANK_MS) continue;
+        since = Date.now();
+        onBlank(acc);
+      }
+    } finally { running = false; }
+  }
+  wc.on('did-start-loading', () => { since = Date.now(); loadStartedAt.set(acc.id, since); if (!running) loop(); });
+}
+
+function onBlank(acc) {
+  const n = (blankCount.get(acc.id) || 0) + 1;
+  blankCount.set(acc.id, n);
+  console.warn(`账号 ${acc.id} 页面加载完了却一直空白（第 ${n} 次），重新加载`);
+  if (n <= BLANK_SILENT) { reconnect(acc.id); return; }
+  notifier.hold(acc.id);
+  setProblem(acc.id, { ...BLANK_PROBLEM });
+  scheduleRetry(acc.id);
 }
 
 // 把连不上的账号马上重连一次（不清登录、不清聊天）
@@ -1552,6 +1617,19 @@ async function onNetworkChange() {
     // 断开旧连接，WhatsApp 网页会立刻用新线路重连，登录和聊天都不受影响
     await ses.closeAllConnections().catch(() => {});
   }
+  // 开机时网络常在号加载到一半时才通：上面断开连接会掐断还在下载的 WhatsApp 脚本，页面外壳到了却一直空白。
+  // 还没加载完、页面空着、刚开始加载还没认出登录状态的号重新加载一次（连不上的号由 reconnectStuck 管；
+  // 还没开始过加载的号可能还在挂指纹，不动）
+  for (const acc of visibleAccounts()) {
+    if (isLite(acc) || problems.has(acc.id) || pendingLoad.has(acc.id) || !loadStartedAt.has(acc.id)) continue;
+    const wc = views.get(acc.id)?.webContents;
+    if (!wc || wc.isDestroyed()) continue;
+    const fresh = Date.now() - loadStartedAt.get(acc.id) < NET_RELOAD_MS;
+    if (wc.isLoading() || (await waPage.pageShown(wc)) !== 'shown' || (fresh && (await waPage.loginState(wc)) === 'unknown')) {
+      console.log(`账号 ${acc.id} 网络切换时还没加载完，重新加载`);
+      reconnect(acc.id);
+    }
+  }
   const tr = trIpc.translateSession(); // 翻译（发给来财）跟随系统代理
   await tr.forceReloadProxyConfig().catch(() => {});
   await tr.closeAllConnections().catch(() => {});
@@ -1576,6 +1654,8 @@ const directTz = createDirectTz({
 });
 function watchNetwork() {
   directTz.start();
+  // 自检用：开发版收到 SIGUSR2 就当网络变了（scripts/check-blank-view.js）
+  if (!app.isPackaged && process.env.WASWITCH_TEST_NET_SIGNAL) process.on('SIGUSR2', () => onNetworkChange().catch((e) => console.warn('网络切换后重连失败', e)));
   setInterval(async () => {
     if (netBusy) return;
     netBusy = true;
@@ -1854,6 +1934,7 @@ async function createView(acc, loadDelay = 0) {
   selTr.watch(acc.id, wc);
   win.contentView.addChildView(view);
   views.set(acc.id, view);
+  watchBlank(acc, view, ses);
 
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
   // 页面刚开始加载时标题会从 0 涨回刷新前的数：涨回原数不弹、不记，超过原数（真有新消息）照常弹。
@@ -1919,6 +2000,8 @@ async function createView(acc, loadDelay = 0) {
     // 每次加载完都按这个号记下的比例设一次（刷新、崩溃重建后也一样）
     applyZoom(acc);
     if (failed || applied.error) return;
+    // 「页面一直空白」的提示要等页面真画出来才收起（watchBlank），外壳加载完不算
+    if (problems.get(acc.id)?.blank) return;
     clearRetry(acc.id);
     if (problems.has(acc.id)) setProblem(acc.id, null);
   });
@@ -1967,6 +2050,8 @@ async function createView(acc, loadDelay = 0) {
 
 function destroyView(id) {
   clearRetry(id);
+  blankCount.delete(id);
+  loadStartedAt.delete(id);
   pendingLoad.delete(id);
   const view = views.get(id);
   if (!view) return;
@@ -2552,13 +2637,8 @@ const rebuilding = new Set(); // 页面进程崩溃后正在重建的账号
 const webLoadedAt = new Map(); // 网页版账号最近一次页面加载完的时间
 let updater = null;
 
-// 现在能不能自动装更新；不能时返回原因（只记日志用）
-function updateIdleReason() {
-  if (!win || (win.isVisible() && !win.isMinimized())) return '窗口开着';
-  if (win.isVisible()) return '窗口最小化但没缩到托盘';
-  if (notifier.total() > 0) return '有未读';
-  if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
-  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
+// 软件手上有没有事（有就返回原因）：没点按钮的自动更新、搬数据重启前都要等这些做完
+function updateWorkReason() {
   if (pendingLoad.size || [...views.values()].some((v) => !v.webContents.isDestroyed() && v.webContents.isLoading())) return '有页面在加载';
   // 网页版停在二维码页、且 10 分钟内刚加载过：可能有人正要扫码。长期掉线的号不挡更新
   if (accounts.some((a) => !isLite(a) && loginStates.get(a.id) === 'needs_qr' && Date.now() - (webLoadedAt.get(a.id) || 0) < QUIET_MS)) return '有网页版账号在等扫码';
@@ -2566,6 +2646,29 @@ function updateIdleReason() {
   if (liteHost && liteHost.busy()) return '有消息在发';
   if (clearingCache || confirmDialogOpen) return '正在操作';
   return null;
+}
+
+// 搬数据到 D 盘（maybeMoveData）的时机：窗口缩在托盘、没有未读、10 分钟内没有新消息、手上没事；不能时返回原因（只记日志用）
+function updateIdleReason() {
+  if (!win || (win.isVisible() && !win.isMinimized())) return '窗口开着';
+  if (win.isVisible()) return '窗口最小化但没缩到托盘';
+  if (notifier.total() > 0) return '有未读';
+  if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
+  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
+  return updateWorkReason();
+}
+
+// 没点任何按钮时自动装更新的时机：人不在（窗口缩在托盘，或整台电脑 AWAY_S 秒没有键盘鼠标操作）、软件手上没事。
+// 有没有未读、有没有新消息不管（重启十几秒，消息不会丢）。不用 idleSeconds()：它把“窗口没焦点”也算空闲，
+// 用户在别的软件里打字时会被重启的窗口抢走焦点
+const AWAY_S = 5 * 60;
+function updateAwayReason() {
+  if (!win) return '窗口还没建好';
+  if (win.isVisible() && powerMonitor.getSystemIdleTime() < AWAY_S) return '有人在用电脑';
+  // 没在运行的号（停着、待填代理、读不出密钥）没有状态，不挡更新
+  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status))) return '有轻量账号在登录或扫码';
+  if (page === 'editor') return '正在编辑账号';
+  return updateWorkReason();
 }
 
 // 用户点了更新、已经下好：会打断手上操作的几项窗口开不开都要等；
@@ -2587,7 +2690,7 @@ function updateBusyReason() {
 function setupUpdater() {
   updater = new Updater({
     onChange: () => { notifier.refresh(); pushState(); },
-    idleReason: updateIdleReason,
+    idleReason: updateAwayReason,
     busyReason: updateBusyReason,
     beforeInstall: async () => {
       if (!win || !win.isVisible()) fs.writeFileSync(updateMarker(), String(Date.now()));
@@ -2617,7 +2720,7 @@ function setupUpdater() {
   setInterval(maybeMoveData, 10 * 60 * 1000).unref?.();
 }
 
-// 老电脑：账号数据还在 C 盘、D:\WAswitch 能用。和自动更新一样等空闲（窗口在托盘、没有未读、10 分钟没新消息……），
+// 老电脑：账号数据还在 C 盘、D:\WAswitch 能用。等空闲（updateIdleReason：窗口在托盘、没有未读、10 分钟没新消息……），
 // 带 --move-data 重启自己去搬（见 datadir.move），搬完隐藏重启回托盘。每次至少隔 24 小时，最多试 3 次
 function maybeMoveData() {
   if (quitting || process.uptime() < 15 * 60) return;
@@ -3497,8 +3600,8 @@ handleShell('exit:ack', ({ id } = {}) => {
 
 // 关于页：检查更新、立即更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动安装并重新打开
-onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动更新了，改成缩到托盘空闲时再装
-onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动更新
+onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不马上更新了，改成人不在时再装
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后和后台下好一样，人不在时再装
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）

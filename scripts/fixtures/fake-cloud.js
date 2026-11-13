@@ -19,7 +19,21 @@ function checkChat(b) {
   if (total > 24000) return 'too_long';
   if (b.temperature !== undefined && !(Number.isFinite(b.temperature) && b.temperature >= 0 && b.temperature <= 1.5)) return 'temperature';
   if (b.max_tokens !== undefined && !(Number.isInteger(b.max_tokens) && b.max_tokens >= 16 && b.max_tokens <= 8192)) return 'max_tokens';
-  if (b.purpose !== undefined && !['translate', 'fix', 'test'].includes(b.purpose)) return 'purpose';
+  if (b.purpose !== undefined && !['translate', 'fix', 'test', 'voice'].includes(b.purpose)) return 'purpose';
+  // 1.0.14 起：voice（语音转出来的文字）、queued_ms（自动翻译排队等了多久，只做统计）
+  if (b.queued_ms !== undefined && !(Number.isInteger(b.queued_ms) && b.queued_ms >= 0 && b.queued_ms <= 3600000)) return 'queued_ms';
+  // 1.0.13 起：给混元翻译模型的 mt_messages（一条 user 消息）、给 DeepL 的 deepl
+  if (b.mt_messages !== undefined) {
+    const m = b.mt_messages;
+    if (!Array.isArray(m) || m.length !== 1 || !m[0] || m[0].role !== 'user' || typeof m[0].content !== 'string' || !m[0].content || m[0].content.length > 24000) return 'mt_messages';
+  }
+  if (b.deepl !== undefined) {
+    const d = b.deepl;
+    if (!d || typeof d !== 'object' || typeof d.text !== 'string' || !d.text || d.text.length > 24000) return 'deepl';
+    if (typeof d.target_lang !== 'string' || !/^[A-Z]{2}(-[A-Z]{2,4})?$/.test(d.target_lang)) return 'deepl_target';
+    if (d.source_lang !== undefined && !(typeof d.source_lang === 'string' && /^[A-Z]{2}$/.test(d.source_lang))) return 'deepl_source';
+    if (d.context !== undefined && !(typeof d.context === 'string' && d.context.length <= 24000)) return 'deepl_context';
+  }
   return '';
 }
 function checkAudio(b) {
@@ -29,10 +43,17 @@ function checkAudio(b) {
   return '';
 }
 
+const SERVICES = [
+  { provider: '智谱', model: 'glm-4-flash', roles: ['默认'], key: true, state: 'ok', ms: 812 },
+  { provider: 'DeepL', model: '', roles: ['纠错'], key: true, state: 'bad_key' },
+  { provider: '腾讯混元', model: 'hy-mt2-plus', roles: ['备用'], key: false, state: 'no_key' },
+];
 // 默认回答：翻译回 Hola，转写回「第 n 段」，状态是开通了、没超额
 function defaultAnswer(route, body, n) {
   if (route === 'ai/chat') return json(200, { ok: true, text: 'Hola', usage: { input_tokens: 12, output_tokens: 3 } });
   if (route === 'ai/transcribe') return json(200, { ok: true, text: `第${n}段` });
+  // 1.0.14 起：带 check: true 时多回 services（每个选用的翻译服务试翻一句的结果）
+  if (route === 'ai/status' && body && body.check === true) return json(200, { ok: true, ready: true, over_budget: false, services: SERVICES });
   if (route === 'ai/status') return json(200, { ok: true, ready: true, over_budget: false });
   return json(404, { ok: false, error: 'not_found' });
 }
@@ -45,7 +66,7 @@ function fakeCloud({ token = TOKEN, server = SERVER } = {}) {
     if (opt.headers.Authorization !== `Bearer ${token}`) return json(401, { ok: false, error: 'login_required' });
     if (String(opt.body).length > max) return json(413, { ok: false, error: 'too_large' });
     if (!body || body.v !== 1) return json(426, { ok: false, error: 'old_version' });
-    const bad = route === 'ai/chat' ? checkChat(body) : route === 'ai/transcribe' ? checkAudio(body) : '';
+    const bad = route === 'ai/chat' ? checkChat(body) : route === 'ai/transcribe' ? checkAudio(body) : route === 'ai/status' && body.check !== undefined && body.check !== true ? 'check' : '';
     if (bad) return json(400, { ok: false, error: 'bad_input', why: bad });
     st.n[route] = (st.n[route] || 0) + 1;
     let p = st.plan.length ? st.plan.shift() : null;
@@ -88,4 +109,4 @@ function fakeCloud({ token = TOKEN, server = SERVER } = {}) {
   };
 }
 
-module.exports = { fakeCloud, SERVER, TOKEN };
+module.exports = { fakeCloud, SERVER, TOKEN, SERVICES };

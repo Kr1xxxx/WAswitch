@@ -84,7 +84,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   const waPort = await freePort();
   await new Promise((r) => server.listen(waPort, '127.0.0.1', r));
 
-  // 假来财：按消息里的「Nummer N」回中文；第 3 条第一次回 502（来财连不上 DeepSeek）
+  // 假来财：按消息里的「Nummer N」回中文，说用的是智谱 glm-4-flash；第 3 条第一次回 502（来财连不上智谱）
   const calls = [];
   let fail3 = true;
   let failAll = false;
@@ -93,9 +93,9 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     // 带着上下文（前面几条）：要翻的那条在最后
     const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
     calls.push(n || '?');
-    if (failAll) return { status: 502, body: { ok: false, error: 'unreachable' } };
-    if (n === '3' && fail3) { fail3 = false; return { status: 502, body: { ok: false, error: 'unreachable' } }; }
-    return { status: 200, body: { ok: true, text: ANSWER[n] || '（看不懂）', usage: { input_tokens: 10, output_tokens: 5 } } };
+    if (failAll) return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } };
+    if (n === '3' && fail3) { fail3 = false; return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } }; }
+    return { status: 200, body: { ok: true, text: ANSWER[n] || '（看不懂）', usage: { input_tokens: 10, output_tokens: 5 }, provider: '智谱', model: 'glm-4-flash', fallback: false } };
   } });
 
   const dir = path.join(home, 'waswitch');
@@ -324,7 +324,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     const fc = await waitFor(async () => (await card())?.focus, 2000);
     check(fc >= 0, '小窗打开后光标在框里');
     let cd = await card();
-    check(!!cd && JSON.stringify(cd.btns) === JSON.stringify(['纠错', '保存']) && /翻译时间/.test(cd.info) && /模型来财 DeepSeek/.test(cd.info), `小窗里有翻译信息和「纠错」「保存」（${cd && cd.info}）`);
+    check(!!cd && JSON.stringify(cd.btns) === JSON.stringify(['纠错', '保存']) && /翻译时间/.test(cd.info) && /模型智谱 glm-4-flash/.test(cd.info), `小窗里有翻译信息和「纠错」「保存」（${cd && cd.info}）`);
     // 打字进了小窗，没进 WhatsApp 的输入框
     await sc.send('Input.insertText', { text: '（改）' });
     cd = await card();

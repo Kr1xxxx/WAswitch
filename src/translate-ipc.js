@@ -33,6 +33,8 @@ function setupTranslateIpc(ctx) {
   handleShell('tr:config', () => trState());
   // 设置页的提醒：来财那边开通了没有、这个月额度用完没有（{ ready, overBudget } 或 { error, kind }）
   handleShell('tr:cloud-status', () => ctx.translator.cloudStatus());
+  // 设置 › 翻译 的「翻译服务」：每个选用的服务能不能用（{ services } 或 { error, kind }）
+  handleShell('tr:cloud-check', () => ctx.translator.cloudCheck());
   // 刚登录团队后：之前因为“先登录团队”或来财没开通失败的收到消息自动重翻（别的原因失败的不动）
   function retryCloudErrors() {
     if (!floatCore || !ctx.translator.cloud()) return;
@@ -267,7 +269,7 @@ function setupTranslateIpc(ctx) {
       store: trStore,
       keepGist: () => { const m = floatInMode(); return !!m && m.prompt.includes('要点'); },
       transcribe: (accId, src, _seconds, opts) => transcribeVoice(accId, src, opts),
-      translate: (text, { fix, context, prev, slow, signal } = {}) => {
+      translate: (text, { fix, context, prev, slow, signal, voice, queuedMs } = {}) => {
         // 纠错：不用平时的模式，用内置的校对提示词，对照现在的译文和上下文改
         const draft = fix && typeof prev === 'string' ? prev : '';
         const mode = fix ? (draft ? FIX_IN : { prompt: '结合上下文，把用户的文字准确地翻译成中文。', temperature: 0.2 }) : floatInMode();
@@ -275,11 +277,11 @@ function setupTranslateIpc(ctx) {
         if (slow) return slowTranslate();
         // 登录着团队：收到的消息各走各的通道发给来财，不占用户翻译用的那条，可以同时翻好几条（见 parallel）
         if (!fix && ctx.translator.raceSet().length) {
-          return ctx.translator.raceFree({ text, mode, target: '中文', context });
+          return ctx.translator.raceFree({ text, mode, target: '中文', context, voice, queuedMs });
         }
         // 用户点的翻译在等：先让它
         if (userTr.waiting || userTr.running) return Promise.resolve({ error: '让用户先翻', kind: 'busy' });
-        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix });
+        return ctx.translator.translate({ text, mode, target: '中文', context, draft, fix: !!fix, voice, queuedMs });
       },
     });
     // 同时翻几条：登录着团队 3 条，没登录 1 条（反正都是「先登录团队」）

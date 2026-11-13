@@ -36,6 +36,22 @@ const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'u
 const busyFn = (mainSrc.match(/function updateBusyReason\(\) \{[\s\S]*?\n\}\n/) || [''])[0];
 check(/lastTypedAt/.test(busyFn) && /liteHost\.busy\(\)/.test(busyFn) && !/idleSeconds/.test(busyFn), 'main.js：点了更新后，打字、发消息、扫码、页面加载要等；鼠标动了不拖着安装');
 
+// 没点按钮时自己装（shen 2026-11-13）：人不在（托盘，或整台电脑 5 分钟没人动）、手上没事就装，不看未读和新消息
+{
+  const fn = (name) => (mainSrc.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}\\n`)) || [''])[0];
+  const away = fn('updateAwayReason');
+  const work = fn('updateWorkReason');
+  const idleFn = fn('updateIdleReason');
+  const setup = fn('setupUpdater');
+  const moveFn = fn('maybeMoveData');
+  check(/powerMonitor\.getSystemIdleTime\(\) < AWAY_S/.test(away) && /const AWAY_S = 5 \* 60;/.test(mainSrc), 'main.js：窗口开着时看整台电脑 5 分钟没人操作（getSystemIdleTime）');
+  check(away && !/idleSeconds\(/.test(away + work), 'main.js：自己装不用 idleSeconds()（它把窗口没焦点也算空闲）');
+  check(away && !/notifier\.total\(\)|lastNewAt/.test(away + work), 'main.js：自己装不看未读、不看最近的新消息');
+  check(/updateWorkReason\(\)/.test(away) && /page === 'editor'/.test(away) && /liteHost\.busy\(\)/.test(work) && /rebuilding\.size/.test(work) && /isLoading\(\)/.test(work), 'main.js：自己装要等发消息、扫码、加载、重建、编辑账号');
+  check(/notifier\.total\(\) > 0/.test(idleFn) && /lastNewAt/.test(idleFn) && /updateIdleReason\(\)/.test(moveFn), 'main.js：搬数据还用 updateIdleReason（时机不变）');
+  check(/idleReason: updateAwayReason,/.test(setup) && !/idleReason: updateIdleReason/.test(setup), 'main.js：Updater 的 idleReason 接 updateAwayReason');
+}
+
 // 点一次“立即更新”就自动装好并重新打开，中间不弹任何确认（shen 2026-10-29）：更新流程里不能出现对话框，按钮也不能换回别的名字
 check(!/\bdialog\b/.test(code) && !/showMessageBox|showMessageBoxSync|confirm\(/.test(code), 'updater 不弹任何对话框（点更新后不需要确认）');
 const handlerLines = mainSrc.split('\n').filter((l) => /onShell\('update:/.test(l)).join('\n');
@@ -182,6 +198,8 @@ const make = () => new Updater({
   notify: (t, b, click) => notes.push({ t, click }), idleMs: 200, macOps: fakeOps, deviceToken: () => token,
 });
 const updatesDir = path.join(home, 'updates');
+const triedFile = path.join(home, 'update-auto-tried.json'); // 没点按钮自己装过的版本
+const tried = () => { try { return JSON.parse(fs.readFileSync(triedFile, 'utf8')).version; } catch { return null; } };
 
 (async () => {
   // 正常：下载、校验、提示
@@ -395,6 +413,36 @@ const updatesDir = path.join(home, 'updates');
   const l = launched[0];
   check(launched.length === 1 && quits === 1 && l && l.args[0] === String(process.pid) && l.args[1] === bundle && l.args[2] === staged && /install-failed/.test(l.args[3]), `Mac 自动：空闲时启动替换脚本并退出（${JSON.stringify(l && l.args)}）`);
   check(l && fs.readFileSync(l.script, 'utf8') === MAC_INSTALL_SCRIPT, 'Mac 自动：替换脚本写到数据目录');
+  check(tried() === '0.3.0', 'Mac 自动：自己装之前记下了这个版本');
+  // 替换没成功、旧版重新打开（这里同一个进程里再来一次）：同一个版本不再自己装，点“立即更新”照样装
+  {
+    launched.length = 0;
+    quits = 0;
+    const m = make();
+    m.setupMac();
+    idle = '有人在用电脑';
+    await m.check();
+    idle = null;
+    m.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 20));
+    check(m.state.status === 'downloaded' && launched.length === 0 && quits === 0, 'Mac 自动：同一个版本自己装过一次，不再自己装');
+    await m.install();
+    check(launched.length === 1 && quits === 1, 'Mac 自动：自己装过的版本，点“立即更新”仍然装');
+    m.installing = false;
+    launched.length = 0;
+    quits = 0;
+    fs.rmSync(triedFile, { force: true });
+    fs.mkdirSync(triedFile);
+    m.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 20));
+    check(launched.length === 0, 'Mac 自动：记录文件读不出来时不自己装');
+    fs.rmSync(triedFile, { recursive: true, force: true });
+    fs.writeFileSync(triedFile, JSON.stringify({ version: '0.2.9', at: 1 }));
+    m.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 20));
+    check(launched.length === 1 && tried() === '0.3.0', 'Mac 自动：记下的是旧版本时照常自己装');
+    fs.rmSync(triedFile, { force: true });
+  }
   // 用户点“检查并更新”：下好后不等空闲，马上重启安装（一次点击就够）
   fs.rmSync(path.join(updatesDir, 'staging'), { recursive: true, force: true });
   launched.length = 0;
@@ -421,15 +469,57 @@ const updatesDir = path.join(home, 'updates');
     let installs = 0;
     w.updater = { quitAndInstall: () => { installs += 1; } };
     w.set({ status: 'downloaded', version: '0.3.0', manual: false });
-    idle = '窗口开着';
-    // 后台下完、什么都没点：窗口开着不会自己重启，缩到托盘空闲后才装
+    fs.rmSync(triedFile, { force: true }); // 上面 Mac 自己装过 0.3.0
+    idle = '有人在用电脑';
+    // 后台下完、什么都没点：有人在用电脑时不会自己重启，人不在、手上没事时才装
     w.maybeAutoInstall();
     await new Promise((r) => setTimeout(r, 10));
-    check(installs === 0 && !w.state.waitReason, 'Windows：后台下完没点任何按钮，窗口开着不自动装');
+    check(installs === 0 && !w.state.waitReason, 'Windows：后台下完没点任何按钮，有人在用电脑时不自动装');
     idle = null;
     w.maybeAutoInstall();
     await new Promise((r) => setTimeout(r, 10));
-    check(installs === 1, 'Windows：没点任何按钮，缩到托盘空闲后自动装');
+    check(installs === 1 && tried() === '0.3.0', 'Windows：没点任何按钮，人不在时自动装一次，并记下了这个版本');
+    // 装失败、重新打开旧版：同一个版本不再自己装，点“立即更新”照样装
+    w.installing = false;
+    installs = 0;
+    w.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 0, 'Windows：同一个版本自己装过一次，不再自己装');
+    await w.install();
+    check(installs === 1, 'Windows：自己装过的版本，点“立即更新”仍然装');
+    // 记下的是更旧的版本：照常自己装
+    w.installing = false;
+    installs = 0;
+    fs.writeFileSync(triedFile, JSON.stringify({ version: '0.2.5', at: 1 }));
+    w.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 1 && tried() === '0.3.0', 'Windows：记下的是旧版本时照常自己装');
+    // 记录文件读不出来（这里是个目录）：当作试过了，不装
+    w.installing = false;
+    installs = 0;
+    fs.rmSync(triedFile, { force: true });
+    fs.mkdirSync(triedFile);
+    w.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 0, 'Windows：记录文件读不出来时不自己装');
+    fs.rmSync(triedFile, { recursive: true, force: true });
+    // 坏掉的 JSON：也当作试过了
+    fs.writeFileSync(triedFile, '{"vers');
+    w.maybeAutoInstall();
+    await new Promise((r) => setTimeout(r, 10));
+    check(installs === 0, 'Windows：记录文件是坏的时不自己装');
+    fs.rmSync(triedFile, { force: true });
+    // 启动时：当前版本不低于记下的版本（装成功了）就删记录；更低（没装上）就留着
+    fs.writeFileSync(triedFile, JSON.stringify({ version: '0.3.0', at: 1 }));
+    w.clearAutoTried();
+    check(tried() === '0.3.0', '启动时：还是旧版（没装上），记录留着');
+    fs.writeFileSync(triedFile, JSON.stringify({ version: '0.2.0', at: 1 }));
+    w.clearAutoTried();
+    check(!fs.existsSync(triedFile), '启动时：已经是记下的版本，删掉记录');
+    fs.writeFileSync(triedFile, JSON.stringify({ version: '0.1.9', at: 1 }));
+    w.clearAutoTried();
+    check(!fs.existsSync(triedFile), '启动时：比记下的版本还新，删掉记录');
+    w.installing = false;
     // 点“立即更新”（已下好）：不看 busyReason，马上装一次
     idle = '窗口开着';
     installs = 0;

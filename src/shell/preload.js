@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('wa', {
   trConfig: () => ipcRenderer.invoke('tr:config'),
   // 来财那边翻译开通了没有、这个月额度用完没有（设置 › 翻译 的提醒）
   trCloudStatus: () => ipcRenderer.invoke('tr:cloud-status'),
+  // 每个选用的翻译服务能不能用（来财试翻一句）
+  trCloudCheck: () => ipcRenderer.invoke('tr:cloud-check'),
   trRole: (text) => ipcRenderer.invoke('tr:role', text),
   trWig: (on) => ipcRenderer.invoke('tr:wig', on === true),
   trLash: (on) => ipcRenderer.invoke('tr:lash', on === true),

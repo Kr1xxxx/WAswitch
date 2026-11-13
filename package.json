@@ -1,6 +1,10 @@
 {
   "name": "waswitch",
+<<<<<<< HEAD
   "version": "1.0.12",
+=======
+  "version": "1.0.14",
+>>>>>>> origin/main
   "description": "在一个窗口里同时登录多个 WhatsApp 账号（每个账号独立会话）",
   "main": "src/main.js",
   "scripts": {
@@ -24,6 +28,7 @@
     "check:panel-tab": "node scripts/check-panel-tab.js",
     "check:login-lock": "node scripts/check-login-lock.js",
     "check:qr-watch": "node scripts/check-qr-watch.js",
+    "check:blank-view": "node scripts/check-blank-view.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
     "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js",

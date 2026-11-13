@@ -182,7 +182,7 @@ function inlineEntry(it) {
 }
 
 class FloatCore {
-  // deps: { translate(text, modeId) -> Promise<result>, now?(), store?: TrStore }
+  // deps: { translate(text, { fix, prev, context, slow, signal, voice, queuedMs }) -> Promise<result>, now?(), store?: TrStore }
   constructor(deps) {
     this.deps = deps;
     this.accs = new Map(); // accId -> state
@@ -285,7 +285,8 @@ class FloatCore {
   }
 
   // recent：这次读到的最近消息（ingest 还没写回 st.recent 时传进来），上下文从里面截
-  queueAuto(accId, st, item, opts, recent = st.recent) {
+  // fresh：看着对话时新来的消息（不是打开对话、重启、打开自动翻译时补的），只有它记下排队时间
+  queueAuto(accId, st, item, opts, recent = st.recent, fresh = false) {
     if (item.state !== 'manual') return;
     if (item.text.length > AUTO_MAX_CHARS || (isVoice(item) && !item.text && item.voice > VOICE_MAX_S)) { item.note = 'long'; return; }
     if (isVoice(item) && !item.text && !this.deps.transcribe) return;
@@ -293,7 +294,8 @@ class FloatCore {
     if (!this.canAuto(st, opts.dailyCap)) return;
     this.takeAuto(st);
     item.state = 'queued';
-    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h) });
+    // queuedAt：新消息第一次排进自动翻译的时间（语音从转文字之前算起），发请求时带上等了多久（只做统计）
+    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h), ...(fresh ? { queuedAt: this.now() } : {}) });
   }
 
   // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
@@ -424,7 +426,7 @@ class FloatCore {
     // 刚切到这个对话：已经在屏幕上的旧消息里没翻的补上（见 catchUp）；之后新来的都照常自动翻
     if (opts.auto) {
       if (newChat) this.catchUp(accId, st, hs, opts, recent);
-      else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent);
+      else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent, true);
     }
     if (newChat && look.miss && this.deps.store && this.deps.store.info) this.logLook(accId, chat, msgs, look);
     let view = msgs.filter(shown).map((m) => msgHash(accId, m.id));
@@ -868,7 +870,9 @@ class FloatCore {
     }
     let r;
     const t0 = this.now(); // 用时：包括同时发几家、太忙重试的等待、换备用；不包括排队等的时间
-    try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow, ...(job.slow ? { signal: job.ctl.signal } : {}) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
+    // 等了多久只给新消息的自动翻译算：用户点的、纠错、后台补翻、重翻的都不带
+    const waited = Number.isFinite(job.queuedAt) && !job.manual && !job.fix && !job.slow && !job.retry ? { queuedMs: () => this.now() - job.queuedAt } : {};
+    try { r = await this.deps.translate(item.text, { fix: !!job.fix, prev: job.fix ? item.tr : '', context: job.context, slow: !!job.slow, voice: isVoice(item), ...waited, ...(job.slow ? { signal: job.ctl.signal } : {}) }); } catch { r = { error: '翻译失败', kind: 'other' }; }
     if (job.yielded && !(r && r.text)) {
       // 给新消息、用户点的让了位置：回到后台队列最前面，照旧显示「翻译」
       if (this.queue.includes(job)) { item.state = 'queued'; item.bg = true; this.queue.splice(this.queue.indexOf(job), 1); this.queue.unshift(job); } else if (item.state === 'running') { item.state = 'manual'; item.bg = false; } // 让的时候后台补翻已经整体退回按钮了
