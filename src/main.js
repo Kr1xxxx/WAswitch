@@ -2637,13 +2637,8 @@ const rebuilding = new Set(); // 页面进程崩溃后正在重建的账号
 const webLoadedAt = new Map(); // 网页版账号最近一次页面加载完的时间
 let updater = null;
 
-// 现在能不能自动装更新；不能时返回原因（只记日志用）
-function updateIdleReason() {
-  if (!win || (win.isVisible() && !win.isMinimized())) return '窗口开着';
-  if (win.isVisible()) return '窗口最小化但没缩到托盘';
-  if (notifier.total() > 0) return '有未读';
-  if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
-  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
+// 软件手上有没有事（有就返回原因）：没点按钮的自动更新、搬数据重启前都要等这些做完
+function updateWorkReason() {
   if (pendingLoad.size || [...views.values()].some((v) => !v.webContents.isDestroyed() && v.webContents.isLoading())) return '有页面在加载';
   // 网页版停在二维码页、且 10 分钟内刚加载过：可能有人正要扫码。长期掉线的号不挡更新
   if (accounts.some((a) => !isLite(a) && loginStates.get(a.id) === 'needs_qr' && Date.now() - (webLoadedAt.get(a.id) || 0) < QUIET_MS)) return '有网页版账号在等扫码';
@@ -2651,6 +2646,29 @@ function updateIdleReason() {
   if (liteHost && liteHost.busy()) return '有消息在发';
   if (clearingCache || confirmDialogOpen) return '正在操作';
   return null;
+}
+
+// 搬数据到 D 盘（maybeMoveData）的时机：窗口缩在托盘、没有未读、10 分钟内没有新消息、手上没事；不能时返回原因（只记日志用）
+function updateIdleReason() {
+  if (!win || (win.isVisible() && !win.isMinimized())) return '窗口开着';
+  if (win.isVisible()) return '窗口最小化但没缩到托盘';
+  if (notifier.total() > 0) return '有未读';
+  if (Date.now() - notifier.lastNewAt < QUIET_MS) return '10 分钟内有新消息';
+  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status || 'connecting'))) return '有轻量账号在登录或扫码';
+  return updateWorkReason();
+}
+
+// 没点任何按钮时自动装更新的时机：人不在（窗口缩在托盘，或整台电脑 AWAY_S 秒没有键盘鼠标操作）、软件手上没事。
+// 有没有未读、有没有新消息不管（重启十几秒，消息不会丢）。不用 idleSeconds()：它把“窗口没焦点”也算空闲，
+// 用户在别的软件里打字时会被重启的窗口抢走焦点
+const AWAY_S = 5 * 60;
+function updateAwayReason() {
+  if (!win) return '窗口还没建好';
+  if (win.isVisible() && powerMonitor.getSystemIdleTime() < AWAY_S) return '有人在用电脑';
+  // 没在运行的号（停着、待填代理、读不出密钥）没有状态，不挡更新
+  if (accounts.some((a) => isLite(a) && ['connecting', 'qr'].includes(liteStates.get(a.id)?.status))) return '有轻量账号在登录或扫码';
+  if (page === 'editor') return '正在编辑账号';
+  return updateWorkReason();
 }
 
 // 用户点了更新、已经下好：会打断手上操作的几项窗口开不开都要等；
@@ -2672,7 +2690,7 @@ function updateBusyReason() {
 function setupUpdater() {
   updater = new Updater({
     onChange: () => { notifier.refresh(); pushState(); },
-    idleReason: updateIdleReason,
+    idleReason: updateAwayReason,
     busyReason: updateBusyReason,
     beforeInstall: async () => {
       if (!win || !win.isVisible()) fs.writeFileSync(updateMarker(), String(Date.now()));
@@ -2702,7 +2720,7 @@ function setupUpdater() {
   setInterval(maybeMoveData, 10 * 60 * 1000).unref?.();
 }
 
-// 老电脑：账号数据还在 C 盘、D:\WAswitch 能用。和自动更新一样等空闲（窗口在托盘、没有未读、10 分钟没新消息……），
+// 老电脑：账号数据还在 C 盘、D:\WAswitch 能用。等空闲（updateIdleReason：窗口在托盘、没有未读、10 分钟没新消息……），
 // 带 --move-data 重启自己去搬（见 datadir.move），搬完隐藏重启回托盘。每次至少隔 24 小时，最多试 3 次
 function maybeMoveData() {
   if (quitting || process.uptime() < 15 * 60) return;
@@ -3582,8 +3600,8 @@ handleShell('exit:ack', ({ id } = {}) => {
 
 // 关于页：检查更新、立即更新（Mac：打开安装包）
 onShell('update:check', () => updater?.userUpdate()); // 用户点的：下好后自动安装并重新打开
-onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不自动更新了，改成缩到托盘空闲时再装
-onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后照常提醒，不自动更新
+onShell('update:later', () => updater?.userLater()); // 等停手时点了“稍后”：不马上更新了，改成人不在时再装
+onShell('update:check-only', () => updater?.check()); // 侧栏的检查更新按钮：只检查，下好后和后台下好一样，人不在时再装
 onShell('update:install', () => { if (!updater) return; if (updater.state.manual) updater.openMacInstaller(); else updater.install(); });
 
 // 退出前让轻量模式后台进程把凭据和聊天缓存写盘（最多等 4 秒）

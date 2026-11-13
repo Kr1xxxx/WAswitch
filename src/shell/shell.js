@@ -512,7 +512,7 @@ function updateCard() {
   if (!u || s.collapsed || !['downloading', 'downloaded'].includes(u.status)) return null;
   if (u.status === 'downloaded' && updateHidden === u.version) return null;
   if (u.status === 'downloading') {
-    return h('button', { class: 'updcard busy', title: u.userAsked ? '下载完自动更新' : '下载好后会提示你', onclick: openAbout },
+    return h('button', { class: 'updcard busy', title: !u.manual ? '下载完自动更新' : u.userAsked ? '下载完会自动打开安装包' : '下载好后会提示你', onclick: openAbout },
       h('div', { class: 'top' }, h('span', { class: 'updicon' }, icon('update', 13)), h('span', { class: 'grow' }, `正在下载 ${u.version}`), h('b', null, `${u.percent}%`)),
       h('div', { class: 'progress thin' }, h('span', { style: { width: `${u.percent}%` } })));
   }
