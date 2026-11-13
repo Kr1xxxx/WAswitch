@@ -285,7 +285,8 @@ class FloatCore {
   }
 
   // recent：这次读到的最近消息（ingest 还没写回 st.recent 时传进来），上下文从里面截
-  queueAuto(accId, st, item, opts, recent = st.recent) {
+  // fresh：看着对话时新来的消息（不是打开对话、重启、打开自动翻译时补的），只有它记下排队时间
+  queueAuto(accId, st, item, opts, recent = st.recent, fresh = false) {
     if (item.state !== 'manual') return;
     if (item.text.length > AUTO_MAX_CHARS || (isVoice(item) && !item.text && item.voice > VOICE_MAX_S)) { item.note = 'long'; return; }
     if (isVoice(item) && !item.text && !this.deps.transcribe) return;
@@ -293,8 +294,8 @@ class FloatCore {
     if (!this.canAuto(st, opts.dailyCap)) return;
     this.takeAuto(st);
     item.state = 'queued';
-    // queuedAt：第一次排进自动翻译的时间（语音从转文字之前算起），发请求时带上等了多久（只做统计）
-    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h), queuedAt: this.now() });
+    // queuedAt：新消息第一次排进自动翻译的时间（语音从转文字之前算起），发请求时带上等了多久（只做统计）
+    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h), ...(fresh ? { queuedAt: this.now() } : {}) });
   }
 
   // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
@@ -425,7 +426,7 @@ class FloatCore {
     // 刚切到这个对话：已经在屏幕上的旧消息里没翻的补上（见 catchUp）；之后新来的都照常自动翻
     if (opts.auto) {
       if (newChat) this.catchUp(accId, st, hs, opts, recent);
-      else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent);
+      else for (const item of fresh) this.queueAuto(accId, st, item, opts, recent, true);
     }
     if (newChat && look.miss && this.deps.store && this.deps.store.info) this.logLook(accId, chat, msgs, look);
     let view = msgs.filter(shown).map((m) => msgHash(accId, m.id));
