@@ -1,7 +1,10 @@
-// 设置 › 翻译自检用：假的主进程接口。翻译只走来财，配置里没有服务商、密钥；tr:cloud-status 的回答由自检改 window.__status
+// 设置 › 翻译自检用：假的主进程接口。翻译只走来财，配置里没有服务商、密钥；tr:cloud-status 的回答由自检改 window.__status，tr:cloud-check 的改 window.__check
 window.__cbs = {};
 window.__calls = [];
 window.__status = { ready: true, overBudget: false };
+window.__check = { services: null };
+window.__hold = false;
+window.__pending = [];
 window.__cfg = {
   providers: [{ id: 'cloud', preset: 'cloud', name: '来财', model: 'DeepSeek' }], primaryId: 'cloud', fallbackId: '', fixId: 'cloud',
   langs: ['英语', '德语', '法语', '西班牙语', '中文'], wigTerms: true, lashTerms: true,
@@ -14,6 +17,10 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   if (k === 'onState') return (cb) => { window.__cbs.state = cb; };
   if (k === 'trConfig') return async () => state();
   if (k === 'trCloudStatus') return async () => { window.__calls.push(['status']); return JSON.parse(JSON.stringify(window.__status)); };
+  // tr:cloud-check：window.__check 是回答（null = 来财还没有这个功能时 preload 的样子）；__hold 为真时先挂着，自检调 __pending 里的 res、rej 放出去
+  if (k === 'trCloudCheck') return () => { window.__calls.push(['check']);
+    if (!window.__hold) return Promise.resolve(JSON.parse(JSON.stringify(window.__check)));
+    return new Promise((res, rej) => window.__pending.push({ res, rej })); };
   if (k === 'showLogin') return () => { window.__calls.push(['login']); };
   if (k === 'showPage') return async (page) => { window.__calls.push(['page', page]); };
   if (k.startsWith('on')) return () => {};

@@ -472,6 +472,16 @@ button.ov-row:hover, button.ov-logrow:hover { background: var(--slate-3); }
 .tr-row select { flex: 1; min-width: 0; }
 .pn-form .acts select { width: auto; flex: 1; min-width: 0; }
 .tr-warn { background: var(--amber-3); border: var(--hair) solid var(--amber-7); color: var(--amber-11); border-radius: var(--r-m); padding: 6px 8px; font-size: var(--fs-s); }
+.tr-svcs-wrap { display: flex; flex-direction: column; gap: 8px; }
+.box.tr-svcs { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr) auto auto; gap: 12px 16px; align-items: baseline; }
+.tr-svc { display: contents; }
+.tr-svc > b, .tr-svc > .hint { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tr-svc-st, .tr-svc-ms { white-space: nowrap; }
+.tr-svc-st.ok { color: var(--green-11); }
+.tr-svc-st.bad, .tr-svc-err { color: var(--red-11); }
+.tr-svc-st.off, .tr-svc-err.busy, .tr-svc-ms { color: var(--muted); }
+.tr-svc-ms { font-variant-numeric: tabular-nums; }
+.tr-svc-err { grid-column: 1 / -1; }
 .tr-recent summary { cursor: pointer; padding: 4px 0; }
 .tr-old { text-align: left; font: inherit; cursor: pointer; margin-top: 6px; width: 100%; }
 .tr-old .x { max-height: 2.6em; }

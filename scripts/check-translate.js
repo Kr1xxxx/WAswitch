@@ -229,6 +229,42 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   cloud.next({status:403,error:'revoked'}); assert.deepEqual(await tr.cloudStatus(),{error:'团队登录失效，请重新登录',kind:'auth'});
   cloud.next('net'); assert.equal((await tr.cloudStatus()).kind,'network');
   cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
+  // 设置页：每个选用的翻译服务能不能用（ai/status check: true）
+  cloud.reset(); let ck=await tr.cloudCheck();
+  assert.deepEqual(cloud.calls[0].body,{v:1,check:true});
+  assert.deepEqual(ck.services.map((r)=>[r.provider,r.roles.join('、'),r.text,r.time,r.tone]),[['智谱','默认','正常','0.8 秒','ok'],['DeepL','纠错','密钥不对','','bad'],['腾讯混元','备用','没填密钥','','off']]);
+  assert.equal(ck.services[0].ms,812); assert.equal(ck.services[2].key,false);
+  // 来财还没有这个功能：没有 services
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:false}}); assert.deepEqual(await tr.cloudCheck(),{services:null});
+  cloud.next({status:200,body:{ok:true,services:'x'}}); assert.deepEqual(await tr.cloudCheck(),{services:null});
+  // 坏数据：超长、类型不对、20 行
+  const junk=[null,'x',{model:'m'},{provider:'   '},{provider:'P'.repeat(80),model:'M'.repeat(80),roles:['默认'.repeat(10),3,'',null,'纠错','备用','语音','多'],key:'true',state:7,ms:'5'},{provider:'Neg',state:'ok',ms:-1},{provider:'Big',state:'ok',ms:60001},{provider:'Zero',state:'ok',ms:0},{provider:'Who',state:'weird'}];
+  for(let i=0;i<20;i++) junk.push({provider:`S${i}`,state:'ok',ms:100});
+  cloud.next({status:200,body:{ok:true,services:junk}}); ck=await tr.cloudCheck();
+  assert.equal(ck.services.length,8,'最多 8 行');
+  const j0=ck.services[0];
+  assert.equal(j0.provider.length,40); assert.equal(j0.model.length,40); assert.deepEqual(j0.roles,['默认默认默认默认默认','纠错','备用','语音']);
+  assert.equal(j0.key,false); assert.equal(j0.state,''); assert(!('ms' in j0)); assert.equal(j0.text,'不能用');
+  assert.deepEqual(ck.services.slice(1,5).map((r)=>[r.provider,r.text,r.time]),[['Neg','正常',''],['Big','正常',''],['Zero','正常','0.1 秒'],['Who','不能用','']]);
+  assert.deepEqual(ck.services[5].roles,[]);
+  cloud.next({status:401,error:'login_required'}); assert.deepEqual(await tr.cloudCheck(),{error:'团队登录失效，请重新登录',kind:'auth'});
+  cloud.next({status:429,error:'rate_limited',extra:{retry_after_s:30}}); assert.equal((await tr.cloudCheck()).kind,'overload');
+  cloud.next('net'); assert.deepEqual(await tr.cloudCheck(),{error:'连不上来财',kind:'network'});
+  cloud.next({status:200,body:'not json'}); assert.equal((await tr.cloudCheck()).error,'来财没有回答');
+  cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudCheck(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
+  // 超时：15 秒没回答就放弃（假时钟太绕，这里把 setTimeout 换成立刻到期）
+  { const real=global.setTimeout; global.setTimeout=(f,ms,...a)=>real(f,ms===15000?5:ms,...a);
+    try { cloud.next('hang'); assert.deepEqual(await tr.cloudCheck(),{error:'超过 15 秒没有回应',kind:'timeout'}); } finally { global.setTimeout=real; } }
+  // 状态码 -> 界面上的字
+  const { serviceText } = require('../src/translate');
+  const st=(state,ms)=>{ const r=serviceText({state,ms}); return [r.text,r.time,r.tone]; };
+  assert.deepEqual(st('ok',812),['正常','0.8 秒','ok']); assert.deepEqual(st('ok',12345),['正常','12.3 秒','ok']); assert.deepEqual(st('ok'),['正常','','ok']);
+  assert.deepEqual(st('no_key'),['没填密钥','','off']); assert.deepEqual(st('bad_key'),['密钥不对','','bad']);
+  assert.deepEqual(st('no_balance'),['余额不足','','bad']); assert.deepEqual(st('over_budget'),['本月额度用完','','bad']);
+  assert.deepEqual(st('rate_limited'),['请求太频繁','','bad']); assert.deepEqual(st('timeout'),['超时','','bad']);
+  assert.deepEqual(st('unreachable'),['连不上','','bad']); assert.deepEqual(st('empty'),['连不上','','bad']);
+  assert.deepEqual(st('upstream_rejected'),['不能用','','bad']); assert.deepEqual(st('toString'),['不能用','','bad']); assert.deepEqual(st(''),['不能用','','bad']);
+  assert.deepEqual(serviceText(null),{text:'不能用',time:'',tone:'bad'});
   // 不认识的老设置文件内容：旧服务商、加密后的密钥、DeepL 用量、翻译网络一次删掉，别的设置照旧
   const dOld=fs.mkdtempSync(path.join(os.tmpdir(),'tr'));
   fs.writeFileSync(path.join(dOld,'translate.json'),JSON.stringify({providers:[
