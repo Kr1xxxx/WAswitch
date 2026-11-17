@@ -286,8 +286,9 @@ function setupTranslateIpc(ctx) {
     });
     // 同时翻几条：登录着团队 3 条，没登录 1 条（反正都是「先登录团队」）
     floatCore.deps.parallel = () => (ctx.translator.raceSet().length ? 3 : 1);
-    // 后台补翻和自动重翻都走免费的那条路（slowTranslate）：现在没有，失败了直接显示报错和「重试」
-    floatCore.deps.hasFree = () => false;
+    // 后台补翻走免费的那条路（slowTranslate）：现在没有，更早的消息留着「翻译」按钮。自动重翻走和第一次一样的路（不是 slow）
+    // 自检里缩短自动重翻的间隔（只有开发版认，见 check-tr-inline.js）
+    if (!app.isPackaged && process.env.WASWITCH_TEST_RETRY_MS) floatCore.deps.retryMs = process.env.WASWITCH_TEST_RETRY_MS.split(',').map(Number);
     floatCore.onChange = (accId) => { if (accId === ctx.activeId) { pushFloat(); inlineSoon(); trEditSync(); } };
   }
 
