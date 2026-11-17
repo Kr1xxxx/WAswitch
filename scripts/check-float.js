@@ -170,6 +170,13 @@ async function longFolded() {
   await idle(fc);
   assert.deepStrictEqual(sent, [], '重启后展开不发请求');
   assert.strictEqual(it(fc).tr, trFull);
+  // 再重启，这次折起来的文字有格式差别（不可见字符）：也认得，不把半截再翻一遍
+  store.flush();
+  ({ store, fc } = make());
+  read(fc, cut.replace('salon', 'sa\u200blon'));
+  await idle(fc);
+  assert.deepStrictEqual(sent, [], '重启后折起来的文字有格式差别也不重翻');
+  assert.strictEqual(it(fc).tr, trFull);
   // 翻的过程中展开：折起来那段的结果不要，按全文再翻；翻的时候气泡里显示「翻译中…」
   delay = 30;
   sent.length = 0;
@@ -199,6 +206,21 @@ async function longFolded() {
   await idle(fc);
   assert.strictEqual(sent.length, 2, '改回去的用存着的译文');
   assert.strictEqual(it(fc, 3).tr, '译(20字)Friday');
+  // 用户点了「纠错」还没轮到（前面有一条在翻）时文字变了：排着的那次拿掉，按新文字翻一次（自动关着也翻，是用户点的）
+  delay = 30;
+  read(fc, 'Please wait a moment', 7, { auto: true, dailyCap: 500 });
+  await sleep(5);
+  assert(fc.manual('L', msgHash('L', m(3, '').id), true));
+  read(fc, 'I will pay on Tuesday', 3, { auto: false, dailyCap: 500 });
+  await idle(fc);
+  await sleep(40);
+  await idle(fc);
+  delay = 0;
+  assert.deepStrictEqual(sent.slice(2), ['Please wait a moment', 'I will pay on Tuesday'], '排着的纠错拿掉，按新文字翻一次');
+  assert.strictEqual(it(fc, 3).tr, '译(21字)uesday');
+  read(fc, 'I will pay on Friday', 3);
+  await idle(fc);
+  sent.splice(2);
   // 只差格式（弯引号、空格）：照用，不重翻
   read(fc, 'I will pay on Friday ', 3);
   read(fc, 'I will pay on Friday!', 3);

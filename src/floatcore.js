@@ -371,7 +371,7 @@ class FloatCore {
         had = st.hist.get(h); st.hist.delete(h); had.hist = false; st.items.set(h, had);
         // 还没翻的当成新读到的（往上翻时先在屏幕上见过的新消息，回到最下面要照常自动翻）
         if (had.state === 'manual') {
-          if (!isVoice(had) && String(m.text).trim()) had.text = String(m.text);
+          if (!isVoice(had) && String(m.text).trim() && !folded(String(m.text), had.text)) had.text = String(m.text);
           fresh.push(had);
           continue;
         }
@@ -491,7 +491,11 @@ class FloatCore {
     item.short = folded(was, text) ? was : '';
     Object.assign(item, { tr: '', err: '', errKind: '', errCode: '', warn: [], note: '', fixed: false, via: null, suggest: '', suggestVia: null, tries: 0, lastErr: null, bg: false });
     if (item.state === 'running') return true;
-    this.settle(accId, st, item, opts);
+    // 排着还没开始翻的（用户点了纠错、重新翻译）：拿掉，用户点的马上按新文字翻
+    const i = this.queue.findIndex((q) => q.accId === accId && q.h === item.h && !q.taken);
+    const pending = i >= 0 ? this.queue.splice(i, 1)[0] : null;
+    if (pending && pending.manual) this.stale(pending, st, item);
+    else this.settle(accId, st, item, opts);
     return true;
   }
 
@@ -535,7 +539,8 @@ class FloatCore {
     if (!x || x.k === textKey(item.text)) return null;
     const rec = store.getKey(accId, item.ck, x.k);
     if (!rec) return null;
-    if (typeof rec.text === 'string' && rec.text && skel(rec.text) === skel(item.text)) {
+    // 这次读到的是记录里那条长消息折起来的样子（见 folded）：一样用全文的译文
+    if (typeof rec.text === 'string' && rec.text && (skel(rec.text) === skel(item.text) || folded(item.text, rec.text))) {
       store.putKey(accId, item.ck, textKey(item.text), { tr: rec.tr, text: item.text, edited: rec.edited, fixed: rec.fixed, via: viaOf(rec) });
       (this.deps.log || console.log)(`译文记录：同一条消息读到的文字有细微差别（格式差别：${formatDiff(rec.text, item.text)}），沿用原来的译文`);
       return store.getKey(accId, item.ck, textKey(item.text));
@@ -963,7 +968,7 @@ class FloatCore {
     else if (r && r.text) {
       if (job.slow && !job.retry && job.round === this.bgRound) this.bgFails = 0; // 后台补翻这一轮翻成一条：重新计数（停下以前开始、晚回来的不算）
       item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item);
-      if (item.short && this.deps.store && item.ck) this.deps.store.putKey(job.accId, item.ck, textKey(item.short), { tr: item.tr, text: item.text, fixed: item.fixed, via });
+      if (item.short && this.deps.store && item.ck) this.deps.store.putKey(job.accId, item.ck, textKey(item.short), { tr: item.tr, text: item.short, fixed: item.fixed, via });
       item.lastErr = null; item.tries = 0;
     }
     else this.showError(item, r);
