@@ -1,4 +1,4 @@
-# 每次 push 和 PR 自动跑全部自检；再打一个 Windows 包启动 10 秒做冒烟，确认生成了自动更新需要的文件。
+# 每次 push 和 PR 自动跑全部自检。Windows 打包冒烟（package-win：打包后启动 10 秒，确认生成了自动更新需要的文件）2026-11-11 起关着。
 # 软件只发 Windows 和 macOS。自检放在 Ubuntu 上跑只是因为便宜、有 xvfb，不代表支持 Linux。
 # 所有 action 按 commit 固定版本；只读权限。
 name: ci
