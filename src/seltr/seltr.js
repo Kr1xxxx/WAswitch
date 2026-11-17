@@ -1,11 +1,14 @@
-// 网页号账号页面上面的小视图：「翻译」按钮，点了变成悬浮译文窗；或者气泡译文的编辑小窗（点译文末尾的小铅笔）。
+// 网页号账号页面上面的小视图：「复制」「翻译」按钮，点「翻译」变成悬浮译文窗；或者气泡译文的编辑小窗（点译文末尾的小铅笔）。
 // 状态都由主进程推过来（sel-translate.js）
 const card = window.SelCard({
   go: () => window.seltr.go(),
+  copySel: () => window.seltr.copySel(),
   copy: (text) => window.seltr.copy(text),
   retry: () => window.seltr.retry(),
 });
-const sizeSoon = () => requestAnimationFrame(() => window.seltr.size(document.body.firstElementChild.offsetHeight));
+// 现在显示的是哪一块（body 里前面还有 script，不能用 firstElementChild）
+const cur = () => (tr.root && tr.root.isConnected ? tr.root : card.root);
+const sizeSoon = () => requestAnimationFrame(() => window.seltr.size(cur().offsetHeight));
 const tr = window.TrCard({
   save: (text) => window.seltr.trSave(text),
   fix: (text) => window.seltr.trFix(text),
@@ -34,5 +37,5 @@ window.seltr.onState((st) => {
   if (st && st.mode === 'card') sizeSoon();
 });
 // 透明边上点一下当作点空白：收起
-document.addEventListener('mousedown', (e) => { if (!document.body.firstElementChild.contains(e.target)) window.seltr.hide(); });
+document.addEventListener('mousedown', (e) => { if (!cur().contains(e.target)) window.seltr.hide(); });
 window.seltr.ready();

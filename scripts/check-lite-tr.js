@@ -93,6 +93,30 @@ app.whenReady().then(async () => {
     check((await trs())[4] === '请把目录发给我。', '15 秒到了，没有新来信也把压着的译文换上');
     check((await page('getSelection().toString()')).startsWith('Hallo!'), '到时间换译文时选区还在');
     await page('getSelection().removeAllRanges()');
+    // ---- 选中原文后的「复制」「翻译」：复制只复制选中的原文，复制上了才显示「已复制」 ----
+    {
+      await page(sel);
+      // 前面补译文时拉到底的滚动事件下一帧才到（会收起按钮）：等两帧再松开鼠标
+      await page('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))');
+      await page("document.querySelector('.lite-msgs').dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))");
+      await new Promise((r) => setTimeout(r, 60));
+      const pop = () => page("(() => { const w = document.querySelector('.sel-pop'); if (!w || w.hidden) return null; return { btns: [...w.querySelectorAll('.sc-go')].map((b) => b.textContent), ok: !!w.querySelector('.sc-cp.ok') }; })()");
+      let p = await pop();
+      check(!!p && JSON.stringify(p.btns) === JSON.stringify(['复制', '翻译']), `选中原文后出现「复制」「翻译」（${p && p.btns.join(' ')}）`);
+      await page("window.__copyOk = false; document.querySelector('.sel-pop .sc-cp').click(); true");
+      await new Promise((r) => setTimeout(r, 60));
+      p = await pop();
+      check(!!p && !p.ok && p.btns[0] === '复制', '没复制上：按钮保持「复制」');
+      await page("window.__copyOk = true; window.__copied = ''; document.querySelector('.sel-pop .sc-cp').click(); true");
+      await new Promise((r) => setTimeout(r, 60));
+      p = await pop();
+      check(!!p && p.ok && p.btns[0] === '已复制', '复制上了：显示「已复制」');
+      check(await page('window.__copied') === 'Hallo! Gibt es die Perücke auch in 24 Zoll?', '复制的是选中的原文（不带时间）');
+      check((await page('getSelection().toString()')).startsWith('Hallo!'), '点「复制」后选区还在');
+      await page("document.querySelectorAll('.lite-msg .text')[2].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))");
+      check((await pop()) === null, '点别处收起');
+      await page('getSelection().removeAllRanges()');
+    }
     // ---- 气泡译文的小编辑按钮（铅笔）和编辑小窗 ----
     const pencils = () => page("[...document.querySelectorAll('.lite-msg')].map((m) => !!m.querySelector('.lite-tr .lite-tr-edit'))");
     await page(`window.__liteTr({ accountId: 'l1', list: ${JSON.stringify(list)} })`);

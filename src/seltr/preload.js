@@ -1,4 +1,4 @@
-// 选中文字后的「翻译」按钮 / 悬浮译文窗能调用的接口（只有这几个）。WhatsApp 页面拿不到这些。
+// 选中文字后的「复制」「翻译」按钮 / 悬浮译文窗能调用的接口（只有这几个）。WhatsApp 页面拿不到这些。
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('seltr', {
@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('seltr', {
   ready: () => ipcRenderer.send('seltr:ready'),
   go: () => ipcRenderer.send('seltr:go'),
   retry: () => ipcRenderer.send('seltr:retry'),
+  copySel: () => ipcRenderer.invoke('seltr:copy-sel'),
   copy: (text) => ipcRenderer.invoke('seltr:copy', typeof text === 'string' ? text : ''),
   size: (h) => ipcRenderer.send('seltr:size', Number(h) || 0),
   hide: () => ipcRenderer.send('seltr:hide'),

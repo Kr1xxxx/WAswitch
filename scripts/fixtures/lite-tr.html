@@ -8,7 +8,7 @@
 <style>body { margin: 0; } #host { position: fixed; inset: 0; display: flex; }</style>
 </head><body><div id="host"></div>
 <!-- 只加载软件界面里的轻量模式聊天页（src/shell/lite.js）和真的样式，给「译文显示在消息下面」的自检用（scripts/check-lite-tr.js）。
-     h()、segs()、rawDetail()、icon() 和 window.wa 是最小的替身；点了气泡里的按钮记在 window.__items。
+     h()、segs()、rawDetail()、icon() 和 window.wa 是最小的替身；点了气泡里的按钮记在 window.__items，选中文字后点「复制」复制的字记在 window.__copied。
      编辑小窗：window.__entries[h] 是主进程 FloatCore.entry 的替身，保存、纠错、建议记在 window.__calls。 -->
 <script>
   function h(tag, attrs, ...children) {
@@ -39,8 +39,11 @@
     trItem: async (acc, h) => (window.__entries[h] ? { ...window.__entries[h] } : null),
     dockEdit: async (acc, h, text) => { window.__calls.push(['edit', h, text]); if (window.__entries[h]) Object.assign(window.__entries[h], { tr: text, edited: true }); return true; },
     dockSuggest: async (acc, h, take) => { window.__calls.push(['take', h, take]); return true; },
+    panelCopy: async (text) => { window.__copied = text; return window.__copyOk !== false; },
+    selTranslate: async (acc, text) => ({ text: `ZH:${text}` }),
   };
 </script>
+<script src="../../src/seltr/card.js"></script>
 <script src="../../src/seltr/trcard.js"></script>
 <script src="../../src/shell/tr-info.js"></script>
 <script src="../../src/shell/lite.js"></script>

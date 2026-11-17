@@ -1,6 +1,7 @@
-// 自检：选中文字后的「翻译」小视图不能抢走键盘焦点，聊天里选中的字第一次 Ctrl+C 就复制得到（src/sel-translate.js）。
+// 自检：选中文字后的「复制」「翻译」小视图不能抢走键盘焦点，聊天里选中的字第一次 Ctrl+C 就复制得到（src/sel-translate.js）。
 // 1. 第一次选字（小视图新建）：焦点留在账号页面，复制到的是聊天里选中的字
 // 2. 小视图空闲关掉后再选字（重建）：同样
+// 2b. 按钮旁的「复制」：复制选中的原文，成功才显示「已复制」，焦点回到账号页面
 // 3. 用户点了小视图：焦点留在它上面；点「翻译」后焦点回到账号页面，聊天里的选区还在，复制到的是原文
 // 5. 气泡译文的编辑小窗（mode tr）：打开后焦点留在小窗里（打字进小窗）；松开鼠标读不到选区不收；按下页面收起、焦点回账号页面；
 //    收起后马上又点同一个铅笔当作收起；保存交给 trEdit 并收起
@@ -15,6 +16,8 @@ let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.on('window-all-closed', () => {});
+// 中途出错（比如按钮被收起、找不到）：算失败退出，不卡住
+process.on('unhandledRejection', (e) => { console.log(`失败：中途出错 ${e && e.message}`); app.exit(1); });
 
 app.whenReady().then(async () => {
   let copyOk = true;
@@ -55,6 +58,15 @@ app.whenReady().then(async () => {
   // Ctrl+C 做的事：对有键盘焦点的页面执行复制
   const copyNow = async () => { await clipboard.writeText('(空)'); const f = webContents.getFocusedWebContents(); if (f) f.copy(); await wait(300); return clipboard.readText(); };
   const overlay = () => webContents.getAllWebContents().find((w) => /seltr[\\/]index\.html/.test(w.getURL()));
+  // 在小视图里像鼠标那样点一个按钮：按下、松开都走输入事件（页面里会先收到 mousedown，再收到 click）。
+  // 只调 .click() 测不出「按下就被收起」（#366 审计：mousedown 判断成点在外面，按钮先收起，复制、翻译都没做）
+  const realClick = async (w, css) => {
+    const p = await w.executeJavaScript(`(() => { const r = document.querySelector(${JSON.stringify(css)}).getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+    w.focus();
+    w.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: p.x, y: p.y });
+    w.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+    w.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  };
 
   // 1 第一次选字，小视图新建
   const t1 = await pick('m1');
@@ -69,6 +81,27 @@ app.whenReady().then(async () => {
   check(wc.isFocused(), '小视图重建后，键盘焦点还在账号页面');
   check(await copyNow() === t2, '重建后第一次 Ctrl+C 也复制得到');
 
+  // 2b 按钮旁边的「复制」：复制选中的原文，复制上了才变成绿色对勾「已复制」，点完焦点回到账号页面
+  {
+    const ovb = overlay();
+    check(!!ovb && await ovb.executeJavaScript("[...document.querySelectorAll('.sc-go')].map((b) => b.textContent).join('|')") === '复制|翻译', '按钮状态是「复制」「翻译」两个');
+    const fit = ovb && await ovb.executeJavaScript("(() => { const r = document.querySelector('.sc').getBoundingClientRect(); return { w: r.right + 6, h: r.bottom + 6, sw: document.body.scrollWidth, ww: innerWidth, wh: innerHeight }; })()");
+    check(!!fit && fit.w <= fit.ww && fit.h <= fit.wh && fit.sw <= fit.ww, `两个按钮放得下，不被裁（${JSON.stringify(fit)}）`);
+    const cpState = () => ovb.executeJavaScript("(() => { const b = document.querySelector('.sc-cp'); return { ok: b.classList.contains('ok'), seen: b.textContent, w: b.offsetWidth, sw: b.scrollWidth }; })()");
+    const clickCp = async () => { await realClick(ovb, '.sc-cp'); await wait(500); };
+    copyOk = false; await clipboard.writeText('(空)'); await clickCp();
+    let st = await cpState();
+    check(!st.ok && st.seen === '复制' && await clipboard.readText() === '(空)', '没复制上：按钮保持「复制」');
+    copyOk = true; await clickCp();
+    st = await cpState();
+    check(st.ok && st.seen === '已复制' && st.sw <= st.w && await clipboard.readText() === t2, `复制上了：显示「已复制」，剪贴板是选中的原文（${JSON.stringify(st)}）`);
+    check(wc.isFocused() && !ovb.isFocused(), '点「复制」后焦点回到账号页面');
+    check(!!selTr.shown && selTr.shown.mode === 'button', '复制后按钮还在');
+    await wait(1900);
+    st = await cpState();
+    check(!st.ok && st.seen === '复制', '过一会儿变回「复制」');
+  }
+
   // 3 用户点了小视图：焦点留在它上面；点「翻译」后焦点回到账号页面
   const ov = overlay();
   check(!!ov, '找得到翻译小视图');
@@ -76,7 +109,7 @@ app.whenReady().then(async () => {
     // 真点击时焦点事件和鼠标按下事件同一毫秒到（sendInputEvent 不走这个事件，所以直接发）
     ov.focus(); ov.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: 38, y: 20 }); await wait(300);
     check(ov.isFocused() && !wc.isFocused(), '用户点了小视图：焦点留在小视图（不被抢回）');
-    await ov.executeJavaScript('window.seltr.go()');
+    await realClick(ov, '.sc-go:not(.sc-cp)');
     await wait(400);
     check(wc.isFocused() && !ov.isFocused(), '点「翻译」后焦点回到账号页面');
     check(await wc.executeJavaScript('getSelection().toString()') === t2, '聊天里的选区还在');
@@ -84,8 +117,10 @@ app.whenReady().then(async () => {
 
     // 4 译文窗的「复制」：复制上了才显示「已复制」，没复制上按钮保持原样；点完焦点回到账号页面
     const label = () => ov.executeJavaScript("document.querySelector('.sc-btn') && document.querySelector('.sc-btn').textContent");
-    const clickCopy = async () => { ov.focus(); await ov.executeJavaScript("document.querySelector('.sc-btn').click()"); await wait(500); };
+    const clickCopy = async () => { await realClick(ov, '.sc-btn'); await wait(500); };
     check(await label() === '复制', '译文出来后有「复制」按钮');
+    const hgt = await ov.executeJavaScript("document.querySelector('.sc').offsetHeight");
+    check(!!selTr.bounds && hgt > 0 && selTr.bounds.height === Math.max(44, hgt) + 12, `译文窗的视图高度跟着内容（内容 ${hgt}，视图 ${selTr.bounds && selTr.bounds.height}）`);
     copyOk = false; await clipboard.writeText('(空)'); await clickCopy();
     check(await label() === '复制' && await clipboard.readText() === '(空)', '没复制上：按钮保持「复制」，不显示「已复制」');
     copyOk = true; await clickCopy();
