@@ -98,8 +98,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
-      - name: 临时：故意失败，确认汇总 checks 变红（合并前去掉）
-        run: 'false'
       - name: 卡片、翻译页按自己的大小排版（容器查询）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-container-layout.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
