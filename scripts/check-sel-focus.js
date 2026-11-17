@@ -16,6 +16,8 @@ let failures = 0;
 const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.on('window-all-closed', () => {});
+// 中途出错（比如按钮被收起、找不到）：算失败退出，不卡住
+process.on('unhandledRejection', (e) => { console.log(`失败：中途出错 ${e && e.message}`); app.exit(1); });
 
 app.whenReady().then(async () => {
   let copyOk = true;
@@ -56,6 +58,15 @@ app.whenReady().then(async () => {
   // Ctrl+C 做的事：对有键盘焦点的页面执行复制
   const copyNow = async () => { await clipboard.writeText('(空)'); const f = webContents.getFocusedWebContents(); if (f) f.copy(); await wait(300); return clipboard.readText(); };
   const overlay = () => webContents.getAllWebContents().find((w) => /seltr[\\/]index\.html/.test(w.getURL()));
+  // 在小视图里像鼠标那样点一个按钮：按下、松开都走输入事件（页面里会先收到 mousedown，再收到 click）。
+  // 只调 .click() 测不出「按下就被收起」（#366 审计：mousedown 判断成点在外面，按钮先收起，复制、翻译都没做）
+  const realClick = async (w, css) => {
+    const p = await w.executeJavaScript(`(() => { const r = document.querySelector(${JSON.stringify(css)}).getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+    w.focus();
+    w.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: p.x, y: p.y });
+    w.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+    w.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+  };
 
   // 1 第一次选字，小视图新建
   const t1 = await pick('m1');
@@ -77,7 +88,7 @@ app.whenReady().then(async () => {
     const fit = ovb && await ovb.executeJavaScript("(() => { const r = document.querySelector('.sc').getBoundingClientRect(); return { w: r.right + 6, h: r.bottom + 6, sw: document.body.scrollWidth, ww: innerWidth, wh: innerHeight }; })()");
     check(!!fit && fit.w <= fit.ww && fit.h <= fit.wh && fit.sw <= fit.ww, `两个按钮放得下，不被裁（${JSON.stringify(fit)}）`);
     const cpState = () => ovb.executeJavaScript("(() => { const b = document.querySelector('.sc-cp'); return { ok: b.classList.contains('ok'), seen: b.textContent, w: b.offsetWidth, sw: b.scrollWidth }; })()");
-    const clickCp = async () => { ovb.focus(); ovb.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: 40, y: 20 }); await ovb.executeJavaScript("document.querySelector('.sc-cp').click(); 1"); await wait(500); };
+    const clickCp = async () => { await realClick(ovb, '.sc-cp'); await wait(500); };
     copyOk = false; await clipboard.writeText('(空)'); await clickCp();
     let st = await cpState();
     check(!st.ok && st.seen === '复制' && await clipboard.readText() === '(空)', '没复制上：按钮保持「复制」');
@@ -98,7 +109,7 @@ app.whenReady().then(async () => {
     // 真点击时焦点事件和鼠标按下事件同一毫秒到（sendInputEvent 不走这个事件，所以直接发）
     ov.focus(); ov.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: 38, y: 20 }); await wait(300);
     check(ov.isFocused() && !wc.isFocused(), '用户点了小视图：焦点留在小视图（不被抢回）');
-    await ov.executeJavaScript('window.seltr.go()');
+    await realClick(ov, '.sc-go:not(.sc-cp)');
     await wait(400);
     check(wc.isFocused() && !ov.isFocused(), '点「翻译」后焦点回到账号页面');
     check(await wc.executeJavaScript('getSelection().toString()') === t2, '聊天里的选区还在');
@@ -106,8 +117,10 @@ app.whenReady().then(async () => {
 
     // 4 译文窗的「复制」：复制上了才显示「已复制」，没复制上按钮保持原样；点完焦点回到账号页面
     const label = () => ov.executeJavaScript("document.querySelector('.sc-btn') && document.querySelector('.sc-btn').textContent");
-    const clickCopy = async () => { ov.focus(); await ov.executeJavaScript("document.querySelector('.sc-btn').click()"); await wait(500); };
+    const clickCopy = async () => { await realClick(ov, '.sc-btn'); await wait(500); };
     check(await label() === '复制', '译文出来后有「复制」按钮');
+    const hgt = await ov.executeJavaScript("document.querySelector('.sc').offsetHeight");
+    check(!!selTr.bounds && hgt > 0 && selTr.bounds.height === Math.max(44, hgt) + 12, `译文窗的视图高度跟着内容（内容 ${hgt}，视图 ${selTr.bounds && selTr.bounds.height}）`);
     copyOk = false; await clipboard.writeText('(空)'); await clickCopy();
     check(await label() === '复制' && await clipboard.readText() === '(空)', '没复制上：按钮保持「复制」，不显示「已复制」');
     copyOk = true; await clickCopy();

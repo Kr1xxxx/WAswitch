@@ -68,6 +68,11 @@ app.whenReady().then(async () => {
   // 跨两条消息：中间换行
   await pageEval("(() => { const s = getSelection(); const r = document.createRange(); r.setStart(document.getElementById('m1').firstChild, 22); r.setEnd(document.getElementById('m2').firstChild, 7); s.removeAllRanges(); s.addRange(r); return 1; })()");
   check((await waPage.readSelection(wc))?.text === 'number please\nFor the', '跨两条消息：两段之间换行');
+  // WhatsApp 的 emoji 是带 alt 的 img，换行可能是 br：读出来要和 Ctrl+C 复制到的一样
+  await pageEval(`(() => { const s = document.getElementById('m1'); s.innerHTML = 'Shipped with UPS <img alt="📦" class="emoji" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:20px;height:20px"><br>Tracking: 1ZE <img alt="✈️" class="emoji" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:20px;height:20px">'; const r = document.createRange(); r.selectNodeContents(s); const g = getSelection(); g.removeAllRanges(); g.addRange(r); return 1; })()`);
+  check((await waPage.readSelection(wc))?.text === 'Shipped with UPS 📦\nTracking: 1ZE ✈️', `emoji 图和换行都读进来（${JSON.stringify((await waPage.readSelection(wc))?.text)}）`);
+  await pageEval(`(() => { const s = document.getElementById('m1'); const r = document.createRange(); r.setStart(s.firstChild, 8); r.setEnd(s.firstChild, 16); const g = getSelection(); g.removeAllRanges(); g.addRange(r); return 1; })()`);
+  check((await waPage.readSelection(wc))?.text === 'with UPS', '只选了 emoji 前面的字：不带 emoji');
   await select(win, 'compose');
   check(await waPage.readSelection(wc) === null, '选的是输入框里的字：不出按钮');
   await select(win, 'name');
