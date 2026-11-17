@@ -84,7 +84,6 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
     },
   });
   fc.deps.parallel = () => (tr.raceSet().length ? 3 : 1);
-  fc.deps.hasFree = () => false;
   const msgs = Array.from({ length: 12 }, (_, i) => ({ id: `false_111@c.us_ID111N${i}`, out: false, text: `hola ${i}` }));
   cloud.reset();
   fc.ingest('A', { title: 'Carlos', msgs }, { auto: true, dailyCap: 500 });
@@ -94,12 +93,15 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   const v = fc.viewOf('A').items;
   assert(v.slice(0, 7).every((it) => it.state === 'manual'), `更早的留着「翻译」按钮：${v.map((it) => it.state)}`);
   assert.strictEqual(cloud.calls.length, 5, '更早的消息不在后台发给来财');
-  // 自动翻译暂时失败：没有免费的路，不自动再翻，直接显示报错和「重试」
-  const fc2 = new FloatCore({ translate: async () => ({ error: '来财那边出错了，请稍后再试', kind: 'server' }) });
-  fc2.deps.hasFree = () => false;
+  // 自动翻译暂时失败（来财 502）：过一会儿走同一条路（来财）自己再翻，不用点
+  cloud.reset(); cloud.next({ status: 502, error: 'unreachable' });
+  const fc2 = new FloatCore({ retryMs: [20], translate: async (text, o = {}) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : tr.raceFree({ text, mode, target: '中文' })) });
   fc2.ingest('B', { title: 'Ana', msgs: [{ id: 'false_222@c.us_ID222N1', out: false, text: 'hola' }] }, { auto: true, dailyCap: 500 });
-  await sleep(30);
-  assert.deepStrictEqual([fc2.viewOf('B').items[0].state, fc2.viewOf('B').items[0].err], ['error', '来财那边出错了，请稍后再试']);
+  await sleep(10);
+  assert.deepStrictEqual([fc2.viewOf('B').items[0].state, fc2.viewOf('B').items[0].err], ['manual', ''], '等着重翻时显示「翻译」');
+  for (let i = 0; i < 50 && (fc2.running || fc2.queue.length || fc2.waits.length); i += 1) await sleep(10);
+  assert.deepStrictEqual([fc2.viewOf('B').items[0].state, fc2.viewOf('B').items[0].tr], ['done', 'Hola']);
+  assert.strictEqual(cloud.calls.length, 2, '第一次 + 重翻一次，都发给来财');
   // 经过真的 translate-ipc.js 接法（FloatCore → Translator → 来财）：语音转出来的文字标 purpose voice，
   // 新消息自动翻译带 queued_ms（语音从转文字前算起）；用户点的不带；纠错是 fix、不带
   {
