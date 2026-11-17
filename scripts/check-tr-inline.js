@@ -8,6 +8,7 @@
 //   3b. 更像真 WhatsApp 的结构（data-id 在外层，气泡里第一个是尾巴小图标和隐藏的发件人标签）：文字、语音的译文都放在气泡里，语音放在播放条那一层的下面
 //   3c. 点「重试」后马上又失败（文字一样）：按钮要重新能点
 //   3d. 退出团队登录：新消息显示「先登录团队才能翻译」，不发给来财；重新登录后自动补上
+//   3g. 折起来的长消息（正文结尾是「…」，旁边有「Read more」）：先翻那一段；展开后译文换成全文的，只留一块；又折回去、再展开不再调翻译
 //   3e. WhatsApp 换成深色主题（假页面里深色字、深色气泡）：译文块换成 Radix 深色色阶，对比度够；换回浅色后 3 秒内变回来，而且还是原来那个节点
 //   5. 设置换成「右侧工作台」：页面里的译文全部拿掉，翻译页重新列出消息；换回来又放上
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-tr-inline.js
@@ -50,6 +51,18 @@ const realText = (id, time, text, tail) => `<div role="row"><div tabindex="-1" d
 const realVoice = (id, time, tail) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${tail ? TAIL : ''}${LABEL}<div class="bubble"><div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:07</span></div><div class="meta">${time}</div></div></div></div></div>`;
 // 播放条直接是气泡里的一个横向排的块（没有外层容器）：译文不能插进播放按钮和波形中间
 const flatVoice = (id, time) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${LABEL}<div class="voice-row"><button aria-label="Play voice message"><span data-icon="audio-play">▶</span></button><div class="wave" role="slider"></div><span class="dur">0:09</span></div></div></div></div>`;
+// 折起来的长消息：WhatsApp 只显示前面约 770 个字，结尾一个「…」，正文 span 后面是「Read more」按钮
+const LONG_LINES = ['Guten Tag, wir sind ein Kosmetikstudio in Hamburg und suchen einen Lieferanten für Wimpern.', 'Wir brauchen 3D- und 5D-Wimpern in den Längen 12 bis 25 mm, jeweils in Schwarz und Braun.',
+  'Am Anfang wären es etwa 200 Paar im Monat, später gern 500 Paar, wenn die Qualität stimmt.', 'Bitte schicken Sie uns auch die Preise für eigene Boxen mit unserem Logo in Lila, Schwarz und Weiß.',
+  'Liefern Sie per DHL nach Deutschland, und wer bezahlt die Einfuhrumsatzsteuer?'];
+let LONG_FULL = '';
+for (let i = 0; LONG_FULL.length < 1250; i += 1) LONG_FULL += `${LONG_LINES[i % LONG_LINES.length]} `;
+LONG_FULL += 'Vielen Dank, ich freue mich auf Ihre Antwort.';
+const LONG_CUT = `${LONG_FULL.slice(0, 768).trimEnd()}…`;
+const MORE = '<div role="button" class="read-more-button">Read more</div>';
+const realLong = (id, time, text, more) => `<div role="row"><div tabindex="-1" data-id="false_4915111111111@c.us_${id}"><div class="message-in">${LABEL}<div class="bubble"><div class="copyable-text" data-pre-plain-text="[${time}, 30/10/2026] Emma Schneider: "><div><span class="selectable-text copyable-text"><span>${text}</span></span>${more ? MORE : ''}</div></div><div class="meta">${time}</div></div></div></div></div>`;
+const TR_HALF = '您好，我们是汉堡的美容工作室……';
+const TR_FULL = '您好，我们是汉堡的美容工作室，在找睫毛供应商。谢谢，期待您的回复。';
 const filler = Array.from({ length: 24 }, (_, i) => msgOut(`OLD${i}`, '09:0' + (i % 10), `Older note ${i}`)).join('');
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title>
 <style>body{margin:0;font:14px sans-serif;background:#fff;color:#111b21} .message-in{background:#fff} body.dark{background:#0b141a;color:#e9edef} body.dark .message-in{background:#202c33} #app{display:flex;height:100vh} #side{width:300px} #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -86,10 +99,18 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
 
   // 假来财：按消息里的「Nummer N」回中文，说用的是智谱 glm-4-flash；第 3 条第一次回 502（来财连不上智谱）
   const calls = [];
+  const longCalls = [];
   let fail3 = true;
   let failAll = false;
   const cloud = await startCloud({ chat: (body) => {
     const text = (body.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    // 要翻的那条（<text> 里的，不算上下文）是折起来的长消息：按有没有最后一句回半截或全文的译文
+    const own = (/<text>\n([\s\S]*?)\n<\/text>/.exec(text) || [])[1] || '';
+    if (own.includes('Wimpern')) {
+      longCalls.push(own.length);
+      calls.push('L');
+      return { status: 200, body: { ok: true, text: own.includes('freue mich auf Ihre Antwort') ? TR_FULL : TR_HALF, usage: { input_tokens: 10, output_tokens: 5 }, provider: '智谱', model: 'glm-4-flash', fallback: false } };
+    }
     // 带着上下文（前面几条）：要翻的那条在最后
     const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
     calls.push(n || '?');
@@ -400,6 +421,33 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     await pageC.evaluate(`(() => { const m = document.querySelector('[data-id$="_IN1"]'); const x = document.createElement('div'); x.setAttribute('data-wasw-tr', ''); x.textContent = 'old'; m.firstElementChild.appendChild(x); return 1; })()`);
     const one = await waitFor(() => pageC.evaluate(`document.querySelectorAll('[data-id$="_IN1"] [data-wasw-tr]').length === 1`), 6000);
     check(one >= 0 && (await trOf('IN1')) === ANSWER[1], '同一条消息里多出来的旧块被拿掉，只留一块译文');
+
+    // 3g. 折起来的长消息：先翻那一段，点「Read more」后换成全文的译文
+    await pageC.evaluate(`(() => {
+      document.querySelector('[role="application"]').insertAdjacentHTML('beforeend', ${JSON.stringify(realLong('LONG1', '10:12', LONG_CUT, true))});
+      const s = document.querySelector('.scroll'); s.scrollTop = s.scrollHeight;
+      return 1;
+    })()`);
+    const lh = await waitFor(async () => (await trOf('LONG1')) === TR_HALF, 10000);
+    check(lh >= 0 && longCalls.length === 1 && longCalls[0] === LONG_CUT.length, `折起来的长消息先翻了页面上的那一段（${LONG_CUT.length} 字）`);
+    // 点「Read more」：WhatsApp 把正文换成全文，按钮拿掉
+    const setLong = (text, more) => pageC.evaluate(`(() => {
+      const m = document.querySelector('[data-id$="_LONG1"]');
+      m.querySelector('span.selectable-text > span').textContent = ${JSON.stringify(text)};
+      const b = m.querySelector('.read-more-button');
+      if (b && !${more}) b.remove();
+      if (!b && ${more}) m.querySelector('span.selectable-text').insertAdjacentHTML('afterend', ${JSON.stringify(MORE)});
+      return 1;
+    })()`);
+    await setLong(LONG_FULL, false);
+    const lf = await waitFor(async () => (await trOf('LONG1')) === TR_FULL, 8000);
+    check(lf >= 0, `点「Read more」后译文换成全文的（${lf} 毫秒，全文 ${LONG_FULL.length} 字）`);
+    check(longCalls.length === 2 && longCalls[1] === LONG_FULL.length, `展开后按全文重翻了一次（发了 ${longCalls.join('、')} 字）`);
+    check(await pageC.evaluate(`document.querySelectorAll('[data-id$="_LONG1"] [data-wasw-tr]').length === 1`), '展开后这条消息只有一块译文');
+    await shot('inline-long');
+    // WhatsApp 又折回去、再展开：不再调翻译，译文一直是全文的
+    for (const [t, more] of [[LONG_CUT, true], [LONG_FULL, false], [LONG_CUT, true]]) { await setLong(t, more); await sleep(1500); }
+    check(longCalls.length === 2 && (await trOf('LONG1')) === TR_FULL, `又折回去、再展开不再调翻译，译文还是全文的（共发了 ${longCalls.length} 次）`);
 
     // 4. 工作台的翻译页只留回复框；关掉工作台也照样放译文
     const dock = await shellC.evaluate(`(() => {
