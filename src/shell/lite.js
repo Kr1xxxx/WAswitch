@@ -215,7 +215,7 @@ function makeLitePage(id) {
   });
   input.addEventListener('input', () => { rememberDraft(); input.style.height = ''; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
   search.addEventListener('input', drawList);
-  // 选中消息里的文字：旁边出现「翻译」小按钮，点了弹译文窗（和网页号一样，见 sel-translate.js）
+  // 选中消息里的文字：旁边出现「复制」「翻译」小按钮，点「翻译」弹译文窗（和网页号一样，见 sel-translate.js）
   msgs.addEventListener('mouseup', (e) => { if (e.button === 0) setTimeout(() => liteSelCheck(id, msgs), 0); });
   msgs.addEventListener('scroll', liteSelHide, { passive: true });
   // 编辑小窗不跟着滚动走：用户滚动聊天就收起（改的字记着）。自己补译文时把列表拉到底不算
@@ -496,7 +496,7 @@ function liteSelCheck(id, box) {
   const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
   if (!rects.length) return liteSelHide();
   if (!liteSelBox) {
-    const card = window.SelCard({ go: liteSelGo, retry: liteSelGo, copy: (t) => window.wa.panelCopy(t) });
+    const card = window.SelCard({ go: liteSelGo, retry: liteSelGo, copySel: () => (liteSel ? window.wa.panelCopy(liteSel.text) : false), copy: (t) => window.wa.panelCopy(t) });
     const wrap = h('div', { class: 'sel-pop', hidden: true }, card.root);
     document.body.append(wrap);
     liteSelBox = { wrap, card };

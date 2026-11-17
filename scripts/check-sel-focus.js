@@ -1,6 +1,7 @@
-// 自检：选中文字后的「翻译」小视图不能抢走键盘焦点，聊天里选中的字第一次 Ctrl+C 就复制得到（src/sel-translate.js）。
+// 自检：选中文字后的「复制」「翻译」小视图不能抢走键盘焦点，聊天里选中的字第一次 Ctrl+C 就复制得到（src/sel-translate.js）。
 // 1. 第一次选字（小视图新建）：焦点留在账号页面，复制到的是聊天里选中的字
 // 2. 小视图空闲关掉后再选字（重建）：同样
+// 2b. 按钮旁的「复制」：复制选中的原文，成功才显示「已复制」，焦点回到账号页面
 // 3. 用户点了小视图：焦点留在它上面；点「翻译」后焦点回到账号页面，聊天里的选区还在，复制到的是原文
 // 5. 气泡译文的编辑小窗（mode tr）：打开后焦点留在小窗里（打字进小窗）；松开鼠标读不到选区不收；按下页面收起、焦点回账号页面；
 //    收起后马上又点同一个铅笔当作收起；保存交给 trEdit 并收起
@@ -68,6 +69,27 @@ app.whenReady().then(async () => {
   check(!!selTr.shown, '小视图重建后又出现翻译按钮');
   check(wc.isFocused(), '小视图重建后，键盘焦点还在账号页面');
   check(await copyNow() === t2, '重建后第一次 Ctrl+C 也复制得到');
+
+  // 2b 按钮旁边的「复制」：复制选中的原文，复制上了才变成绿色对勾「已复制」，点完焦点回到账号页面
+  {
+    const ovb = overlay();
+    check(!!ovb && await ovb.executeJavaScript("[...document.querySelectorAll('.sc-go')].map((b) => b.textContent).join('|')") === '复制|翻译', '按钮状态是「复制」「翻译」两个');
+    const fit = ovb && await ovb.executeJavaScript("(() => { const r = document.querySelector('.sc').getBoundingClientRect(); return { w: r.right + 6, h: r.bottom + 6, sw: document.body.scrollWidth, ww: innerWidth, wh: innerHeight }; })()");
+    check(!!fit && fit.w <= fit.ww && fit.h <= fit.wh && fit.sw <= fit.ww, `两个按钮放得下，不被裁（${JSON.stringify(fit)}）`);
+    const cpState = () => ovb.executeJavaScript("(() => { const b = document.querySelector('.sc-cp'); return { ok: b.classList.contains('ok'), seen: b.textContent, w: b.offsetWidth, sw: b.scrollWidth }; })()");
+    const clickCp = async () => { ovb.focus(); ovb.emit('before-mouse-event', { preventDefault() {} }, { type: 'mouseDown', x: 40, y: 20 }); await ovb.executeJavaScript("document.querySelector('.sc-cp').click(); 1"); await wait(500); };
+    copyOk = false; await clipboard.writeText('(空)'); await clickCp();
+    let st = await cpState();
+    check(!st.ok && st.seen === '复制' && await clipboard.readText() === '(空)', '没复制上：按钮保持「复制」');
+    copyOk = true; await clickCp();
+    st = await cpState();
+    check(st.ok && st.seen === '已复制' && st.sw <= st.w && await clipboard.readText() === t2, `复制上了：显示「已复制」，剪贴板是选中的原文（${JSON.stringify(st)}）`);
+    check(wc.isFocused() && !ovb.isFocused(), '点「复制」后焦点回到账号页面');
+    check(!!selTr.shown && selTr.shown.mode === 'button', '复制后按钮还在');
+    await wait(1900);
+    st = await cpState();
+    check(!st.ok && st.seen === '复制', '过一会儿变回「复制」');
+  }
 
   // 3 用户点了小视图：焦点留在它上面；点「翻译」后焦点回到账号页面
   const ov = overlay();

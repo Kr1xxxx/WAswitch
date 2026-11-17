@@ -1,15 +1,20 @@
-/* 选中文字后的「翻译」按钮和悬浮译文窗。颜色用 Radix 变量（src/colors/radix.css）：slate 底 1、边框 7、悬停 3、字 11/12，red 11，焦点环 blue 8 */
+/* 选中文字后的「复制」「翻译」按钮和悬浮译文窗。颜色用 Radix 变量（src/colors/radix.css）：slate 底 1、边框 7、分隔线 6、悬停 3、字 11/12，已复制 green 11，red 11，焦点环 blue 8 */
 .sc { box-sizing: border-box; font-family: var(--font-ui); color: var(--slate-12); }
 .sc *, .sc *::before, .sc *::after { box-sizing: border-box; }
-.sc[data-mode="button"] { display: inline-flex; }
+/* 按钮状态：「复制」「翻译」两格并排在一个框里，中间一条细线；格子贴满框，圆角靠外框裁 */
+.sc[data-mode="button"] {
+  display: inline-flex; border: var(--hair) solid var(--slate-7); border-radius: var(--r-s); overflow: hidden;
+  background: var(--slate-1); box-shadow: 0 1px 4px var(--slate-a4);
+}
 .sc-go {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  width: 64px; height: 28px; padding: 0; border: var(--hair) solid var(--slate-7); border-radius: var(--r-s);
-  background: var(--slate-1); color: var(--slate-12); font: 500 var(--fs-m)/1 var(--font-ui); cursor: pointer;
-  box-shadow: 0 1px 4px var(--slate-a4);
+  width: 76px; height: 28px; /* 放得下「✓ 已复制」，换字时不跳 */ padding: 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--slate-12); font: 500 var(--fs-m)/1 var(--font-ui); white-space: nowrap; cursor: pointer;
 }
+.sc-go + .sc-go { border-left: var(--hair) solid var(--slate-6); }
 .sc-go:hover { background: var(--slate-3); }
 .sc-go:active { background: var(--slate-4); }
+.sc-cp.ok, .sc-cp.ok:hover { color: var(--green-11); }
 .sc-go svg { flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .sc[data-mode="card"] {
   display: flex; flex-direction: column; gap: 8px; width: 320px; max-height: 260px; padding: 10px 12px;
@@ -23,7 +28,8 @@
 /* 卡片圆角 10、内边距 10 → 里面的按钮圆角 6，和外框同心 */
 .sc-btn { height: 28px; min-width: 56px; padding: 0 10px; margin: 0 -6px -4px 0; border: 0; border-radius: var(--r-s); background: transparent; color: var(--slate-12); font: 500 var(--fs-m)/1 var(--font-ui); cursor: pointer; }
 .sc-btn:hover { background: var(--slate-3); }
-.sc-go:focus-visible, .sc-btn:focus-visible { outline: 2px solid var(--blue-8); outline-offset: 1px; }
+.sc-go:focus-visible { outline: 2px solid var(--blue-8); outline-offset: -2px; }
+.sc-btn:focus-visible { outline: 2px solid var(--blue-8); outline-offset: 1px; }
 
 /* 气泡译文的编辑小窗（trcard.js）。外框圆角 10、内边距 4 → 里面的框和按钮圆角 6，同心 */
 .tc {

@@ -3,14 +3,19 @@
 // 只用 textContent 放文字，不拼 HTML。
 (function (root) {
   const SVG = 'http://www.w3.org/2000/svg';
-  // 和 shell.js 的 translate 图标同一个
-  function trIcon() {
+  // 图标和 shell.js 的 translate / copy / check 同一套
+  const ICONS = {
+    translate: ['M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8', 'M13 21l4-9 4 9M14.5 18h5'],
+    copy: ['M6.5 8h7A2.5 2.5 0 0 1 16 10.5v7a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 17.5v-7A2.5 2.5 0 0 1 6.5 8z', 'M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2'],
+    check: ['M5 12.5l4.5 4.5L19 7.5'],
+  };
+  function icon(name) {
     const svg = document.createElementNS(SVG, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('width', '16');
     svg.setAttribute('height', '16');
     svg.setAttribute('aria-hidden', 'true');
-    for (const d of ['M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8', 'M13 21l4-9 4 9M14.5 18h5']) {
+    for (const d of ICONS[name]) {
       const p = document.createElementNS(SVG, 'path');
       p.setAttribute('d', d);
       svg.append(p);
@@ -25,7 +30,7 @@
   }
   const COPIED_MS = 1800;
 
-  // handlers：go() 点了「翻译」；copy(text) 复制译文；retry() 出错后重试
+  // handlers：go() 点了「翻译」；copySel() 复制选中的原文；copy(text) 复制译文；retry() 出错后重试
   // 返回 { root, set(state) }。state：{ mode: 'button' } 或 { mode: 'card', busy, text, error }
   function SelCard(handlers) {
     const box = el('div', 'sc');
@@ -35,12 +40,37 @@
       box.replaceChildren();
       box.dataset.mode = st && st.mode === 'card' ? 'card' : 'button';
       if (box.dataset.mode === 'button') {
+        // 「复制」「翻译」并排：复制选中的原文，翻译弹译文窗
+        box.removeAttribute('role');
+        box.removeAttribute('aria-label');
+        const keep = (b) => b.addEventListener('mousedown', (e) => e.preventDefault()); // 不把选区点没
+        const cp = el('button', 'sc-go sc-cp');
+        cp.type = 'button';
+        // 按钮宽度固定（card.css），换成「已复制」也不跳
+        const label = el('span', '', '复制');
+        cp.append(icon('copy'), label);
+        keep(cp);
+        cp.addEventListener('click', async () => {
+          let ok = false;
+          try { ok = (await handlers.copySel()) === true; } catch { ok = false; }
+          if (!ok || !cp.isConnected) return; // 没复制上：按钮保持原样
+          cp.classList.add('ok');
+          cp.firstChild.replaceWith(icon('check'));
+          label.textContent = '已复制';
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(() => {
+            if (!cp.isConnected) return;
+            cp.classList.remove('ok');
+            cp.firstChild.replaceWith(icon('copy'));
+            label.textContent = '复制';
+          }, COPIED_MS);
+        });
         const b = el('button', 'sc-go');
         b.type = 'button';
-        b.append(trIcon(), el('span', '', '翻译'));
-        b.addEventListener('mousedown', (e) => e.preventDefault()); // 不把选区点没
+        b.append(icon('translate'), el('span', '', '翻译'));
+        keep(b);
         b.addEventListener('click', () => handlers.go());
-        box.append(b);
+        box.append(cp, b);
         return;
       }
       box.setAttribute('role', 'dialog');

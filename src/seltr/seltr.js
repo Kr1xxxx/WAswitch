@@ -1,7 +1,8 @@
-// 网页号账号页面上面的小视图：「翻译」按钮，点了变成悬浮译文窗；或者气泡译文的编辑小窗（点译文末尾的小铅笔）。
+// 网页号账号页面上面的小视图：「复制」「翻译」按钮，点「翻译」变成悬浮译文窗；或者气泡译文的编辑小窗（点译文末尾的小铅笔）。
 // 状态都由主进程推过来（sel-translate.js）
 const card = window.SelCard({
   go: () => window.seltr.go(),
+  copySel: () => window.seltr.copySel(),
   copy: (text) => window.seltr.copy(text),
   retry: () => window.seltr.retry(),
 });
