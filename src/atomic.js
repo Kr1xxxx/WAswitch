@@ -73,10 +73,28 @@ function writeJsonQuiet(file, value, space) {
   }
 }
 
+// 读 JSON 文件。读不出来不能当成空的（下次保存会冲掉文件），分开返回：
+// { missing: true } 文件不存在；{ unread: 错误 } 被别的程序占着（杀毒、同步盘）等读不出来，每 50 毫秒再读、最多 10 次后还是不行；
+// { bad: 错误 } 读出来了但不是 JSON；{ value } 读成了
+function readJsonRetry(file) {
+  let text;
+  for (let i = 0; ; i++) {
+    try {
+      text = fs.readFileSync(file, 'utf8');
+      break;
+    } catch (e) {
+      if (e.code === 'ENOENT') return { missing: true };
+      if (i >= RETRY_TIMES - 1) return { unread: e };
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_WAIT_MS);
+    }
+  }
+  try { return { value: JSON.parse(text) }; } catch (e) { return { bad: e }; }
+}
+
 // 旁边有没有读坏时留下的备份（file.broken-时间）。读不了文件夹也当作有，宁可不清理
 function hasBrokenBackup(file) {
   const prefix = `${path.basename(file)}.broken-`;
   try { return fs.readdirSync(path.dirname(file)).some((n) => n.startsWith(prefix)); } catch { return true; }
 }
 
-module.exports = { writeFileAtomic, writeJsonAtomic, writeJsonQuiet, hasBrokenBackup };
+module.exports = { writeFileAtomic, writeJsonAtomic, writeJsonQuiet, hasBrokenBackup, readJsonRetry };

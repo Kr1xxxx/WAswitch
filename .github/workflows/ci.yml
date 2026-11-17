@@ -1,5 +1,6 @@
 # 每次 push 和 PR 自动跑全部自检。Windows 打包冒烟（package-win：打包后启动 10 秒，确认生成了自动更新需要的文件）2026-11-11 起关着。
 # 软件只发 Windows 和 macOS。自检放在 Ubuntu 上跑只是因为便宜、有 xvfb，不代表支持 Linux。
+# 自检分三组（checks-1/2/3）同时跑，汇总 job 仍叫 checks，三组都过才过。新加的自检放进耗时最短的一组。
 # 所有 action 按 commit 固定版本；只读权限。
 name: ci
 
@@ -12,12 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  checks:
-    # 只用 GitHub 自带的机器，写死，不读仓库变量。仓库公开后外人的 PR 也会跑这个 job，
+  checks-1:
+    # 只用 GitHub 自带的机器，写死，不读仓库变量。仓库公开后外人的 PR 也会跑这三组，
     # 换到自己的机器（self-hosted）等于让外人在那台机器上跑任意代码。要换机器先把仓库改回私有。
     runs-on: ubuntu-latest
     # 卡住的自检不占着机器
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -74,6 +75,29 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
+      # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
+      - name: 上传组件截图差异图
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-diff
+          path: visual-diff/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  checks-2:
+    # 同 checks-1：只用 GitHub 自带的机器，写死。
+    runs-on: ubuntu-latest
+    # 卡住的自检不占着机器
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
       - name: 卡片、翻译页按自己的大小排版（容器查询）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-container-layout.js
       - name: 选中文字翻译按钮（只读选区、按钮位置）
@@ -116,6 +140,22 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-login-lock.js
       - name: 扫码后侧栏几秒内变成已登录
         run: xvfb-run -a node scripts/check-qr-watch.js
+      - name: 自带通知弹窗窗口（右上角、堆叠、聊天锁、空闲关窗）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
+
+  checks-3:
+    # 同 checks-1：只用 GitHub 自带的机器，写死。
+    runs-on: ubuntu-latest
+    # 卡住的自检不占着机器
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fonts-dejavu-core fonts-dejavu-mono
       - name: 页面加载完却一直空白（开机时网络切换掐断脚本）时自动重新加载，慢的页面不刷新
         run: xvfb-run -a node scripts/check-blank-view.js
       - name: 没打开对话时点开一个对话，翻译页 1 秒内显示消息
@@ -132,8 +172,6 @@ jobs:
         run: npm run check:offline
       - name: 新消息弹窗写出是哪个客户
         run: npm run check:notify
-      - name: 自带通知弹窗窗口（右上角、堆叠、聊天锁、空闲关窗）
-        run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
       - name: 自动更新自检
         run: npm run check:updater
       - name: 发版时传到来财的脚本自检（本机假后台）
@@ -152,15 +190,22 @@ jobs:
         run: npm run check:import
       - name: 下载自检
         run: npm run check:downloads
-      # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
-      - name: 上传组件截图差异图
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: visual-diff
-          path: visual-diff/
-          if-no-files-found: ignore
-          retention-days: 7
+
+  # 汇总：名字仍叫 checks，PR 上看到的检查名不变。三组都成功才算过，有一组失败、取消或没跑都算失败。
+  checks:
+    needs: [checks-1, checks-2, checks-3]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 三组自检都通过
+        env:
+          R1: ${{ needs.checks-1.result }}
+          R2: ${{ needs.checks-2.result }}
+          R3: ${{ needs.checks-3.result }}
+        run: |
+          echo "checks-1: $R1  checks-2: $R2  checks-3: $R3"
+          [ "$R1" = success ] && [ "$R2" = success ] && [ "$R3" = success ]
 
   # 2026-11-11 起先不跑：shen 说要打包时再打开（删掉 if 这一行）。发版打包在 release.yml，不受影响。
   package-win:

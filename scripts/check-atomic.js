@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { writeFileAtomic, writeJsonAtomic, writeJsonQuiet, hasBrokenBackup } = require('../src/atomic');
+const { writeFileAtomic, writeJsonAtomic, writeJsonQuiet, hasBrokenBackup, readJsonRetry } = require('../src/atomic');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-atomic-'));
 try {
@@ -43,6 +43,31 @@ try {
   assert.strictEqual(hasBrokenBackup(file), true);
   // 文件夹读不了时宁可当作有备份（不清理）
   assert.strictEqual(hasBrokenBackup(path.join(dir, 'nope', 'accounts.json')), true);
+
+  // 读 JSON：不存在、读成、被占着（重读，一直占着才算读不出来）、内容坏了分开
+  {
+    const jf = path.join(dir, 'team.json');
+    assert.deepStrictEqual(readJsonRetry(jf), { missing: true });
+    fs.writeFileSync(jf, '{"a":1}');
+    assert.deepStrictEqual(readJsonRetry(jf), { value: { a: 1 } });
+    const realRead = fs.readFileSync;
+    let n = 0;
+    const lockFor = (times) => { n = 0; fs.readFileSync = function (f, ...rest) { if (String(f) === jf && n++ < times) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); return realRead.call(this, f, ...rest); }; };
+    try {
+      lockFor(3);
+      assert.deepStrictEqual(readJsonRetry(jf), { value: { a: 1 } }, '占着几下：重读到了');
+      lockFor(Infinity);
+      const t0 = Date.now();
+      const r = readJsonRetry(jf);
+      assert.strictEqual(r.unread && r.unread.code, 'EBUSY');
+      assert.strictEqual(n, 10, '最多读 10 次');
+      assert.ok(Date.now() - t0 < 2000, '最多卡半秒左右');
+    } finally { fs.readFileSync = realRead; }
+    fs.writeFileSync(jf, '{"a":');
+    assert.ok(readJsonRetry(jf).bad instanceof SyntaxError);
+    fs.writeFileSync(jf, '');
+    assert.ok(readJsonRetry(jf).bad, '空文件也算坏了');
+  }
 
   // 改名被锁（Windows 杀毒软件）：模拟 Windows，换掉 fs.renameSync
   const realRename = fs.renameSync;

@@ -97,10 +97,12 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   const waPort = await freePort();
   await new Promise((r) => server.listen(waPort, '127.0.0.1', r));
 
-  // 假来财：按消息里的「Nummer N」回中文，说用的是智谱 glm-4-flash；第 3 条第一次回 502（来财连不上智谱）
+  // 假来财：按消息里的「Nummer N」回中文，说用的是智谱 glm-4-flash；第 2 条第一次、第 3 条头 4 次回 502（来财连不上智谱）。
+  // 自动重翻的间隔用 WASWITCH_TEST_RETRY_MS 缩短到 0.3 秒（正式版 10、30、90 秒）
   const calls = [];
   const longCalls = [];
-  let fail3 = true;
+  let fail2 = 1;
+  let fail3 = 4; // 第一次 + 自动重翻 3 次都失败
   let failAll = false;
   const cloud = await startCloud({ chat: (body) => {
     const text = (body.messages || []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
@@ -115,7 +117,8 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     const n = ([...text.matchAll(/Nummer (\d)/g)].pop() || [])[1];
     calls.push(n || '?');
     if (failAll) return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } };
-    if (n === '3' && fail3) { fail3 = false; return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } }; }
+    if (n === '2' && fail2 > 0) { fail2 -= 1; return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } }; }
+    if (n === '3' && fail3 > 0) { fail3 -= 1; return { status: 502, body: { ok: false, error: 'unreachable', provider: '智谱' } }; }
     return { status: 200, body: { ok: true, text: ANSWER[n] || '（看不懂）', usage: { input_tokens: 10, output_tokens: 5 }, provider: '智谱', model: 'glm-4-flash', fallback: false } };
   } });
 
@@ -127,7 +130,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
   }]));
   fs.writeFileSync(path.join(dir, 'translate.json'), JSON.stringify({ termsDefaultOn: true, autoDefaultOn: true }));
   const port = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOn(dir, cloud.url) };
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOn(dir, cloud.url), WASWITCH_TEST_RETRY_MS: '300,300,300' };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   const child = spawn(electron, ['--no-sandbox', `--remote-debugging-port=${port}`, '--ignore-certificate-errors',
     `--host-resolver-rules=MAP web.whatsapp.com:443 127.0.0.1:${waPort}`, CLOUD_MAIN], { env, stdio: 'ignore' });
@@ -158,6 +161,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     // 1. 译文放在原文下面
     const t1 = await waitFor(async () => (await trOf('IN1')) === ANSWER[1] && (await trOf('IN2')) === ANSWER[2], 20000);
     check(t1 >= 0, `第 1、2 条客户消息下面出现了译文（${t1} 毫秒）`);
+    check(calls.filter((c) => c === '2').length === 2, `第 2 条第一次失败，没点「重试」就自己重翻好了（发了 ${calls.filter((c) => c === '2').length} 次）`);
     const place = await pageC.evaluate(`(() => {
       const m = document.querySelector('[data-id$="_IN1"]');
       const body = m.querySelector('.copyable-text[data-pre-plain-text]');
@@ -171,6 +175,7 @@ const ANSWER = { 1: '你好，1 号还有货吗？', 2: '太好了，2 号有自
     check((await trOf('NUM')) === null, '只有数字的消息下面没有译文');
     const t3 = await waitFor(async () => /重试/.test((await trOf('IN3')) || ''), 15000);
     check(t3 >= 0, '翻译失败的第 3 条显示原因和「重试」');
+    check(calls.filter((c) => c === '3').length === 4, `第 3 条自动重翻了 3 次才显示「重试」（发了 ${calls.filter((c) => c === '3').length} 次）`);
     const atBottom = await pageC.evaluate("(() => { const s = document.querySelector('.scroll'); return s.scrollHeight - s.clientHeight - s.scrollTop <= 2; })()");
     check(atBottom, '原来停在最下面，放好译文后还在最下面');
     if (!atBottom) console.log(await pageC.evaluate("(() => { const s = document.querySelector('.scroll'); return JSON.stringify({ sh: s.scrollHeight, ch: s.clientHeight, st: s.scrollTop, trs: [...document.querySelectorAll('[data-wasw-tr]')].map((n) => n.closest('[data-id]').getAttribute('data-id').split('_').pop() + ':' + n.textContent.slice(0, 10)) }); })()"));
