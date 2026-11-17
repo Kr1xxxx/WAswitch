@@ -109,6 +109,150 @@ async function core() {
   await textDrift();
   await autoRetry();
   await queuedWait();
+  await longFolded();
+}
+
+// 长消息：WhatsApp 折起来时页面上只有前一段加「…」，点「阅读更多」后同一条消息变成全文。
+// 译文要换成全文的（全文超过 1000 字也自动翻）；来回折起、展开不再发请求；翻的过程中展开，那次结果不要；
+// 客户改了消息跟着重翻；只差格式的照用；手动改过的不盖；每条最多自动重翻 5 次；往上翻看到的也一样（shen 2026-11-17）
+async function longFolded() {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { TrStore } = require('../src/trstore');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trstore-long-'));
+  const sent = [];
+  let delay = 0;
+  let clock = Date.parse('2026-11-17T09:00:00Z');
+  const make = () => {
+    const store = new TrStore(dir);
+    return { store, fc: new FloatCore({ store, now: () => clock, log: () => {}, translate: async (text) => { sent.push(text); if (delay) await sleep(delay); return { text: `译(${text.length}字)${text.slice(-6)}`, warn: [] }; } }) };
+  };
+  const idle = async (fc) => { for (let i = 0; i < 300 && (fc.running || fc.queue.length); i += 1) await sleep(5); };
+  const opts = { auto: true, dailyCap: 500 };
+  const LINES = ['Hello, I am interested in your mink lash strips for my salon in Lyon.', 'Could you send me the price list for 3D and 5D styles, with lengths from 12 mm to 25 mm?',
+    'We would start with 200 pairs per month and grow to 500 pairs if the quality is good.', 'Please tell me the lead time for custom boxes with our logo, in purple, black and white.',
+    'Do you ship to France by DHL, and who pays the import tax?', 'We also need lash glue, tweezers and a few display trays for the counter.'];
+  let full = '';
+  for (let i = 0; full.length < 1300; i += 1) full += `${LINES[i % LINES.length]} `;
+  full = `${full}Thank you, I look forward to your reply.`;
+  const cut = `${full.slice(0, 768).trimEnd()}…`; // 折起来时页面上的文字
+  const chat = '33612345678@c.us';
+  const m = (n, text) => ({ id: `false_${chat}_3EB0LONG${n}`, out: false, text });
+  const read = (fc, text, n = 1, o = opts) => fc.ingest('L', { title: 'Camille', bottom: true, msgs: [m(0, 'Bonjour'), m(n, text)] }, o);
+  const it = (fc, n = 1) => fc.viewOf('L').items.find((x) => x.h === msgHash('L', m(n, '').id));
+  const trFull = `译(${full.length}字)${full.slice(-6)}`;
+  let { store, fc } = make();
+  read(fc, cut);
+  await idle(fc);
+  assert.deepStrictEqual(sent, ['Bonjour', cut], '折起来时照常自动翻那一段');
+  // 点「阅读更多」：同一条消息变成全文（超过 1000 字），马上按全文重翻
+  sent.length = 0;
+  assert.strictEqual(read(fc, full), true, '文字变了要刷新');
+  assert(['queued', 'running'].includes(it(fc).state), it(fc).state);
+  await idle(fc);
+  assert.deepStrictEqual(sent, [full], '展开后按全文重翻一次');
+  assert.strictEqual(it(fc).tr, trFull, '译文换成全文的');
+  // 再读几次、WhatsApp 又折回去、再展开：都不发请求，译文和原文都留着全文的
+  for (const t of [full, cut, full, cut, cut, full]) { read(fc, t); await idle(fc); }
+  assert.deepStrictEqual(sent, [full], '来回折起、展开不重复请求');
+  assert.strictEqual(it(fc).tr, trFull);
+  assert.strictEqual(it(fc).text, full, '折回去时原文还是全文');
+  // 重启：页面上又是折起来的，直接显示全文的译文；展开也不发请求
+  store.flush();
+  ({ store, fc } = make());
+  sent.length = 0;
+  read(fc, cut);
+  await idle(fc);
+  assert.deepStrictEqual(sent, [], '重启后不重翻');
+  assert.strictEqual(it(fc).tr, trFull, '重启后折起来的也显示全文的译文');
+  read(fc, full);
+  await idle(fc);
+  assert.deepStrictEqual(sent, [], '重启后展开不发请求');
+  assert.strictEqual(it(fc).tr, trFull);
+  // 翻的过程中展开：折起来那段的结果不要，按全文再翻；翻的时候气泡里显示「翻译中…」
+  delay = 30;
+  sent.length = 0;
+  const cut2 = cut.replace('Lyon', 'Nice');
+  const full2 = full.replace('Lyon', 'Nice');
+  read(fc, cut2, 2);
+  await sleep(5);
+  assert.strictEqual(it(fc, 2).state, 'running');
+  read(fc, full2, 2);
+  assert.strictEqual(inlineEntry(it(fc, 2)).k, 'busy');
+  await idle(fc);
+  await sleep(40);
+  await idle(fc);
+  assert.deepStrictEqual(sent, [cut2, full2], '翻的过程中展开：按全文再翻一次');
+  assert.strictEqual(it(fc, 2).tr, trFull, '留下的是全文的译文');
+  assert.strictEqual(it(fc, 2).state, 'done');
+  delay = 0;
+  // 客户改了消息：跟着重翻；改回去按存的译文，不发请求
+  sent.length = 0;
+  read(fc, 'I will pay on Friday', 3);
+  await idle(fc);
+  read(fc, 'I will pay on Monday', 3);
+  await idle(fc);
+  assert.deepStrictEqual(sent, ['I will pay on Friday', 'I will pay on Monday'], '客户改了消息跟着重翻');
+  assert.strictEqual(it(fc, 3).tr, '译(20字)Monday');
+  read(fc, 'I will pay on Friday', 3);
+  await idle(fc);
+  assert.strictEqual(sent.length, 2, '改回去的用存着的译文');
+  assert.strictEqual(it(fc, 3).tr, '译(20字)Friday');
+  // 只差格式（弯引号、空格）：照用，不重翻
+  read(fc, 'I will pay on Friday ', 3);
+  read(fc, 'I will pay on Friday!', 3);
+  await idle(fc);
+  assert.strictEqual(sent.length, 2, '只差格式不重翻');
+  // 手动改过的译文：文字变了也不盖掉，不发请求
+  assert(fc.edit('L', it(fc, 3).h, '周五付款（我改的）'));
+  read(fc, 'I will pay on Saturday', 3);
+  await idle(fc);
+  assert.strictEqual(sent.length, 2, '手动改过的不自动重翻');
+  assert.strictEqual(it(fc, 3).tr, '周五付款（我改的）');
+  assert.strictEqual(it(fc, 3).text, 'I will pay on Saturday', '原文换成新的');
+  // 页面抽风，一直读到不一样的文字：每条最多自动重翻 5 次，之后留「翻译」按钮
+  sent.length = 0;
+  read(fc, 'Order 0 please', 4);
+  await idle(fc);
+  for (let k = 1; k <= 8; k += 1) { clock += 61000; read(fc, `Order ${k} please`, 4); await idle(fc); }
+  assert.strictEqual(sent.length, 6, `最多自动重翻 5 次（发了 ${sent.length} 次）`);
+  assert.strictEqual(it(fc, 4).state, 'manual');
+  assert.strictEqual(it(fc, 4).text, 'Order 8 please');
+  // 自动翻译关着：文字变了退回「翻译」按钮，不发请求
+  sent.length = 0;
+  read(fc, 'Can you send samples?', 5);
+  await idle(fc);
+  read(fc, 'Can you send samples to Paris?', 5, { auto: false, dailyCap: 500 });
+  await idle(fc);
+  assert.deepStrictEqual(sent, ['Can you send samples?']);
+  assert.strictEqual(it(fc, 5).state, 'manual');
+  assert.strictEqual(it(fc, 5).tr, '');
+  // 超过 4000 字：不自动翻，显示「太长」
+  read(fc, 'Short one', 6);
+  await idle(fc);
+  sent.length = 0;
+  read(fc, 'x '.repeat(2100), 6);
+  await idle(fc);
+  assert.deepStrictEqual(sent, []);
+  assert.strictEqual(it(fc, 6).note, 'long');
+  // 往上翻看到的旧消息（history）：点开「阅读更多」一样按全文重翻，来回折起不再请求
+  sent.length = 0;
+  const cut3 = cut.replace('Lyon', 'Metz');
+  const full3 = full.replace('Lyon', 'Metz');
+  const old = { id: `false_${chat}_3EB0LONGOLD`, out: false, text: cut3 };
+  const hOld = msgHash('L', old.id);
+  assert(fc.history('L', [old]).get(hOld).state === 'manual');
+  assert(fc.manual('L', hOld));
+  await idle(fc);
+  fc.history('L', [{ ...old, text: full3 }]);
+  await idle(fc);
+  for (const t of [cut3, full3, cut3]) { fc.history('L', [{ ...old, text: t }]); await idle(fc); }
+  assert.deepStrictEqual(sent, [cut3, full3], '往上翻看到的：展开后按全文重翻一次');
+  assert.strictEqual(fc.history('L', [old]).get(hOld).tr, trFull);
+  store.flush();
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('长消息展开后重翻自检通过');
 }
 
 // 发给来财的 purpose 和 queued_ms（只做统计）：语音转出来的文字标 voice；新消息自动翻译时带上从排队到发出等了多久
@@ -1271,7 +1415,7 @@ async function parallelAuto() {
   assert.deepStrictEqual(order.slice(-2), ['hola 9', 'hola 8']);
   assert(fc.viewOf('P').items.every((x) => x.state === 'done'));
   assert.strictEqual(fc.viewOf('P').today, 10);
-  // 刚读到时文字还没显示全，下次读到的变了：还没开始翻的用新的
+  // 刚读到时文字还没显示全，下次读到的变了：还没开始翻的用新的，已经在翻的翻完再按新的翻
   {
     const got = [];
     let release;
@@ -1281,8 +1425,10 @@ async function parallelAuto() {
     fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [] }, opts);
     fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [a, b] }, opts);
     assert(fc2.ingest('Q', { title: 'Lukas', bottom: true, msgs: [{ ...a, text: 'Hallo, wie geht es?' }, { ...b, text: 'Warten Sie bitte' }] }, opts));
-    release(); await sleep(5); release(); await sleep(5);
-    assert.deepStrictEqual(got, ['Hallo', 'Warten Sie bitte'], '已经在翻的不改，排着的用新的');
+    release(); await sleep(5); release(); await sleep(5); release(); await sleep(5);
+    // 已经在翻的那条：那次结果不要，按新文字再翻（长消息展开、客户改了消息，见 longFolded）
+    assert.deepStrictEqual(got, ['Hallo', 'Warten Sie bitte', 'Hallo, wie geht es?'], '排着的用新的，在翻的翻完按新的再翻');
+    assert.deepStrictEqual(fc2.viewOf('Q').items.map((x) => x.tr), ['译:Hallo, wie geht es?', '译:Warten Sie bitte']);
   }
   console.log('同时翻几条自检通过');
 }

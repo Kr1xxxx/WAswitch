@@ -19,6 +19,9 @@ const PER_MINUTE = 20;
 const MAX_PARALLEL = 3; // 收到的消息最多同时翻 3 条（deps.parallel 说了算，见 maxParallel）；后台补翻也算在这 3 条里
 const BUSY_RETRY = 700; // 对方说忙：700 毫秒后再来
 const AUTO_MAX_CHARS = 1000;
+// 翻好的消息文字变了（展开「阅读更多」、客户改了消息）重翻时：最多 4000 字也自动翻（是用户自己点开的），每条最多自动重翻 5 次
+const RETEXT_MAX_CHARS = 4000;
+const RETEXT_MAX = 5;
 const RECENT = 30; // 每个号记住当前对话最近 30 条（双方），给上下文用
 const CONTEXT_N = 8; // 翻译时带上前面 8 条
 const VOICE_MAX_S = 300; // 超过 5 分钟的语音不自动转（点「转文字」只转前 5 分钟，见 asr.js）
@@ -102,6 +105,19 @@ const skel = (t) => {
   const s = String(t).normalize('NFKC').replace(/\p{Pd}/gu, '-');
   return s.replace(/[^\p{L}\p{N}\p{Sc}\p{Sm}%]/gu, (c, i) => (/[-.,:/]/.test(c) && /\p{N}/u.test(s[i - 1] || '') && /\p{N}/u.test(s[i + 1] || '') ? c : '')).toLowerCase();
 };
+// WhatsApp 把长消息折起来时，页面上只有前面一段，结尾一个「…」，后面是「阅读更多」（重画列表时展开过的也可能又折回去）。
+// short 是不是 long 折起来的样子：去掉结尾的「…」后，骨架是 long 骨架的开头
+const folded = (short, long) => {
+  const s = String(short).trimEnd();
+  const m = /(?:…|\.\.\.)$/.exec(s);
+  if (!m) return false;
+  const stem = skel(s.slice(0, m.index));
+  const all = skel(long);
+  return stem.length >= 20 && all.length > stem.length && all.startsWith(stem);
+};
+// 翻好（或翻错、不用翻、正在翻）的这条，这次读到的文字真的变了（骨架不一样）：要按新文字重翻（见 retext）
+const retold = (item, text) => !!item.text && !isVoice(item) && !!text.trim() && text !== item.text && skel(text) !== skel(item.text)
+  && (!!item.tr || ['done', 'error', 'skip', 'running'].includes(item.state));
 // 两段文字非字母非数字的字符差别，只记字符编号和个数，不含内容：「多了 U+2066×1 U+2069×1，少了 U+0020×1」
 function formatDiff(from, to) {
   const count = (t) => { const m = new Map(); for (const c of String(t).normalize('NFKC')) if (!/[\p{L}\p{N}]/u.test(c)) m.set(c.codePointAt(0), (m.get(c.codePointAt(0)) || 0) + 1); return m; };
@@ -288,14 +304,15 @@ class FloatCore {
   // fresh：看着对话时新来的消息（不是打开对话、重启、打开自动翻译时补的），只有它记下排队时间
   queueAuto(accId, st, item, opts, recent = st.recent, fresh = false) {
     if (item.state !== 'manual') return;
-    if (item.text.length > AUTO_MAX_CHARS || (isVoice(item) && !item.text && item.voice > VOICE_MAX_S)) { item.note = 'long'; return; }
+    if (item.text.length > (item.grown ? RETEXT_MAX_CHARS : AUTO_MAX_CHARS) || (isVoice(item) && !item.text && item.voice > VOICE_MAX_S)) { item.note = 'long'; return; }
     if (isVoice(item) && !item.text && !this.deps.transcribe) return;
     if (isVoice(item) && !item.text && item.src && item.src.dataId && st.voiceFails >= VOICE_TRIP) return;
     if (!this.canAuto(st, opts.dailyCap)) return;
     this.takeAuto(st);
     item.state = 'queued';
     // queuedAt：新消息第一次排进自动翻译的时间（语音从转文字之前算起），发请求时带上等了多久（只做统计）
-    this.queue.push({ accId, h: item.h, context: contextFrom(recent, item.h), ...(fresh ? { queuedAt: this.now() } : {}) });
+    // 往上翻看到的旧消息（文字变了重翻时）：上下文用它在页面上前面的几条
+    this.queue.push({ accId, h: item.h, context: item.hist ? item.ctx || [] : contextFrom(recent, item.h), ...(fresh ? { queuedAt: this.now() } : {}) });
   }
 
   // 自己发的消息上一次被当成了收到的（比如刚发出去时还认不出方向）：从列表里去掉；
@@ -328,6 +345,7 @@ class FloatCore {
   // 返回 true 表示悬浮窗要刷新
   ingest(accId, read, opts) {
     const st = this.acc(accId);
+    st.opts = opts; // 往上翻看到的、翻的时候文字变了的，重翻时按这个（见 history、stale）
     const msgs = (read.msgs || []).filter((m) => m && typeof m.id === 'string');
     this.learnAlias(accId, st, msgs);
     // st.chat：这个对话的正式 hash（别名都归到它）
@@ -373,9 +391,11 @@ class FloatCore {
           filled = true; // 展开的原文跟着刷新
           continue;
         }
+        // 翻好的这条文字真的变了：WhatsApp 展开了「阅读更多」，或者客户改了消息
+        if (retold(had, String(m.text))) { if (this.retext(accId, st, had, String(m.text), opts)) filled = true; continue; }
         if (!had.text && !isVoice(had) && this.fillItem(accId, had, String(m.text), true)) filled = true; // 补回来时没有原文的旧消息又读到了：补上原文
-        // 还没开始翻的：页面上的文字变了（刚加进来时还没显示全）就用新的
-        else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued' || had.state === 'wait') && String(m.text).trim() && String(m.text) !== had.text) { had.text = String(m.text); filled = true; }
+        // 还没开始翻的：页面上的文字变了（刚加进来时还没显示全）就用新的；又折回去的（见 folded）还用展开的
+        else if (had.text && !isVoice(had) && (had.state === 'manual' || had.state === 'queued' || had.state === 'wait') && String(m.text).trim() && String(m.text) !== had.text && !folded(String(m.text), had.text)) { had.text = String(m.text); delete had.k; filled = true; }
         continue;
       }
       const item = { h, ck: this.canon(accId, chatHash(accId, m.id)), text: String(m.text), t: hhmm(m.t), state: 'manual', tr: '', err: '', warn: [], note: '' };
@@ -455,6 +475,52 @@ class FloatCore {
     if (chat) this.keepView(accId, st, chat);
     this.pump();
     return changed;
+  }
+
+  // 有结果（翻好、翻错、不用翻）或正在翻的这条，页面上的文字真的变了（见 retold）：WhatsApp 展开了「阅读更多」，或者客户改了消息。
+  // 又折回去的（见 folded）：原文、译文都留着展开时的，不重翻。
+  // 手动改过的译文不盖掉（shen 2026-10-25）：原文换成新的，按新原文也存一份，要重翻用户自己点「纠错」。
+  // 别的清掉旧结果，按新文字认（见 settle）；正在翻的那次结果不要（见 run 的 stale）。返回 true 表示要刷新
+  retext(accId, st, item, text, opts) {
+    if (folded(text, item.text)) return false;
+    const was = item.text;
+    item.text = text;
+    delete item.k; // 补回来的旧消息带着旧原文的 hash
+    if (item.edited) { if (item.tr) this.save(accId, item); return true; }
+    // 从折起来的那段展开：翻好以后按折起来的文字也存一份全文的译文，重启后还没展开时就显示全文的
+    item.short = folded(was, text) ? was : '';
+    Object.assign(item, { tr: '', err: '', errKind: '', errCode: '', warn: [], note: '', fixed: false, via: null, suggest: '', suggestVia: null, tries: 0, lastErr: null, bg: false });
+    if (item.state === 'running') return true;
+    this.settle(accId, st, item, opts);
+    return true;
+  }
+
+  // 文字变了的这条按新文字认：不用翻的、按新文字存过译文的直接用（来回变不会每次都重翻）；
+  // 别的开着自动翻译就马上排上（不受 1000 字的自动上限，照常算每分钟、每天的条数，每条最多 5 次），不然留「翻译」按钮
+  settle(accId, st, item, opts) {
+    item.state = 'manual';
+    if (noTr(item.text)) { item.state = 'skip'; return; }
+    const saved = this.deps.store && item.ck ? this.deps.store.get(accId, item.ck, item.text) : null;
+    if (saved) {
+      Object.assign(item, { state: 'done', tr: saved.edited || this.keepGist(item.text) ? saved.tr : dropGist(saved.tr), edited: !!saved.edited, fixed: !!saved.fixed, via: viaOf(saved) });
+      return;
+    }
+    item.redo = (item.redo || 0) + 1;
+    if (!opts || !opts.auto || item.redo > RETEXT_MAX) return;
+    item.grown = true;
+    this.queueAuto(accId, st, item, opts, st.recent);
+  }
+
+  // 翻的时候页面上的文字变了：这次的结果不要。手动改过的留着原来的译文；用户点的马上按新文字再翻，自动的按 settle 再排
+  stale(job, st, item) {
+    item.bg = false;
+    if (item.edited) { item.state = 'done'; return; }
+    if (job.manual && !noTr(item.text)) {
+      item.state = 'queued';
+      this.queue.unshift({ accId: job.accId, h: job.h, manual: true, context: job.context });
+      return;
+    }
+    this.settle(job.accId, st, item, st.opts);
   }
 
   // 按文字没找到译文时：翻译栏的记录里有同一条消息（消息编号一样），以前翻过，只是这次页面上读到的文字有细微差别
@@ -869,6 +935,7 @@ class FloatCore {
       return;
     }
     let r;
+    const asked = item.text;
     const t0 = this.now(); // 用时：包括同时发几家、太忙重试的等待、换备用；不包括排队等的时间
     // 等了多久只给新消息的自动翻译算：用户点的、纠错、后台补翻、重翻的都不带
     const waited = Number.isFinite(job.queuedAt) && !job.manual && !job.fix && !job.slow && !job.retry ? { queuedMs: () => this.now() - job.queuedAt } : {};
@@ -887,6 +954,7 @@ class FloatCore {
     const kept = this.queue.includes(job); // 后台补翻整体退回按钮时，排着的（包括正在翻的）都拿掉了
     done();
     if (this.accs.get(job.accId) !== st) return; // 号被删了或重建了
+    if (item.text !== asked) { this.stale(job, st, item); this.onChange(job.accId); return; } // 翻的时候文字变了（见 retext）
     const via = r && r.text ? { at: this.now(), ms: Math.max(0, Math.round(this.now() - t0)), name: r.provider || '', model: r.model || '', fix: !!job.fix } : null;
     if (r && r.text && job.fix && item.edited) { item.state = 'done'; item.suggest = r.text; item.suggestVia = via; item.err = ''; } // 手动改过的：纠错结果只当建议，让用户选
     else if (job.retry && !(r && r.text)) this.retryFailed(job, item, r);
@@ -895,6 +963,7 @@ class FloatCore {
     else if (r && r.text) {
       if (job.slow && !job.retry && job.round === this.bgRound) this.bgFails = 0; // 后台补翻这一轮翻成一条：重新计数（停下以前开始、晚回来的不算）
       item.state = 'done'; item.tr = r.text; item.warn = r.warn || []; item.err = ''; item.edited = false; item.fixed = !!job.fix; item.suggest = ''; item.suggestVia = null; item.via = via; this.save(job.accId, item);
+      if (item.short && this.deps.store && item.ck) this.deps.store.putKey(job.accId, item.ck, textKey(item.short), { tr: item.tr, text: item.text, fixed: item.fixed, via });
       item.lastErr = null; item.tries = 0;
     }
     else this.showError(item, r);
@@ -983,6 +1052,7 @@ class FloatCore {
     const out = new Map();
     const msgs = (Array.isArray(vis) ? vis : []).filter((m) => m && typeof m.id === 'string');
     const views = new Map();
+    let redo = false;
     msgs.forEach((m, i) => {
       if (m.out || !shown(m)) return;
       const h = msgHash(accId, m.id);
@@ -990,9 +1060,11 @@ class FloatCore {
       if (!item && st.hist.has(h)) {
         item = st.hist.get(h);
         st.hist.delete(h); st.hist.set(h, item); // 又看到了：挪到最后
-        // 还没翻的：页面上的文字变了（刚加进来时还没显示全）就用新的
-        if (item.state === 'manual' && item.text && !isVoice(item) && String(m.text).trim()) item.text = String(m.text);
+        // 还没翻的：页面上的文字变了（刚加进来时还没显示全）就用新的；又折回去的还用展开的
+        if (item.state === 'manual' && item.text && !isVoice(item) && String(m.text).trim() && !folded(String(m.text), item.text)) item.text = String(m.text);
       }
+      // 翻好的这条文字真的变了（往上翻时点开了「阅读更多」）：和 ingest 一样重翻
+      if (item && retold(item, String(m.text)) && this.retext(accId, st, item, String(m.text), st.opts)) redo = true;
       if (!item) {
         const context = msgs.slice(Math.max(0, i - CONTEXT_N), i).filter((x) => String(x.text || '').trim()).map((x) => ({ out: !!x.out, text: String(x.text).slice(0, 1000) }));
         item = this.histItem(accId, m, h, views, context);
@@ -1007,6 +1079,7 @@ class FloatCore {
         if (it.state !== 'queued' && it.state !== 'running') st.hist.delete(h);
       }
     }
+    if (redo) this.pump();
     return out;
   }
 
