@@ -6,7 +6,7 @@
 // 只翻译用户自己放进翻译框的文字和读到的客户消息；不自动发送，不写日志、不写硬盘（只记次数和错误类型）。
 const fs = require('fs');
 const path = require('path');
-const { writeJsonAtomic } = require('./atomic');
+const { writeJsonAtomic, readJsonRetry } = require('./atomic');
 const asr = require('./asr');
 
 const PROTOCOL = 1;
@@ -394,6 +394,7 @@ class Translator {
     this.cfg = null;
     this.busy = null; // { controller }
     this.stats = { ok: 0, fail: 0, lastError: '' }; // 只在内存里
+    this.noWrite = false; // 启动时 translate.json 读不出来：这次运行不写它（见 load）
   }
 
   load() {
@@ -416,9 +417,12 @@ class Translator {
       // 自动翻译改成默认开之后迁移过一次老设置
       autoDefaultOn: false };
     let migrated = false;
+    // 只有文件不存在才用默认设置；读不出来、内容坏了走下面的 catch
+    const got = readJsonRetry(this.file);
     try {
-      if (fs.existsSync(this.file)) {
-        const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      if (got.unread || got.bad) throw got.unread || got.bad;
+      if (!got.missing) {
+        const raw = got.value;
         if (raw && typeof raw === 'object') {
           // 1.0.6 起不存服务商和密钥：旧文件里的（连同加密后的密钥）一次删掉
           if (RETIRED_KEYS.some((k) => k in raw)) {
@@ -458,8 +462,12 @@ class Translator {
         }
       }
     } catch (e) {
-      try { fs.copyFileSync(this.file, `${this.file}.broken-${Date.now()}`); } catch {}
-      console.warn(`translate.json 无法读取（${e.message}），已备份`);
+      // 留一份备份。被占着读不出来的（下次启动多半又能读）、备份不成的：这次运行不写 translate.json，
+      // 不然角色设定、每个号和对话的语言会被默认值盖掉。这次先用默认设置
+      let saved = false;
+      try { fs.copyFileSync(this.file, `${this.file}.broken-${Date.now()}`); saved = true; } catch {}
+      this.noWrite = !!got.unread || !saved;
+      console.warn(`translate.json 无法读取（${e.code || e.message}）${saved ? '，已备份' : ''}${this.noWrite ? '，这次运行不写这个文件' : ''}`);
     }
     this.cfg = base;
     if (!base.autoDefaultOn) { base.autoDefaultOn = true; migrated = true; }
@@ -470,6 +478,7 @@ class Translator {
   }
 
   save() {
+    if (this.noWrite) return; // 启动时读不出来（见 load）
     writeJsonAtomic(this.file, this.cfg, 2);
   }
 

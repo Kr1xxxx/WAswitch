@@ -523,6 +523,36 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   assert(chats()[0].body.messages[0].content.startsWith('贴牌 = OEM'),'通道用的是本体的角色设定');
   assert(!Object.prototype.hasOwnProperty.call(page,'cfg'),'通道不自己存配置');
   fs.rmSync(dLn,{recursive:true,force:true});
+  // translate.json 读不出来（#361）：被占着一下重读就好；一直被占着用默认设置，但不写回去，下次启动还是原来的；坏了的备份后照常写
+  {
+    const dRf=fs.mkdtempSync(path.join(os.tmpdir(),'tr-rf'));
+    const fRf=path.join(dRf,'translate.json');
+    const saved={accountLang:{a1:'德语'},accountAuto:{a2:false},dailyCap:200,rolePrompt:'lash lift = 睫毛提升',termsDefaultOn:true,autoDefaultOn:true,trPlaceInlineDefault:true,trPlace:'panel'};
+    const realRead=fs.readFileSync;
+    const busy=(times)=>{let n=0;fs.readFileSync=function(f,...rest){if(String(f)===fRf&&n++<times)throw Object.assign(new Error('EBUSY: resource busy or locked'),{code:'EBUSY'});return realRead.call(this,f,...rest);};};
+    const warn=console.warn; console.warn=()=>{};
+    try {
+      fs.writeFileSync(fRf,JSON.stringify(saved));
+      busy(1); let t=mk(dRf); let c=t.load(); fs.readFileSync=realRead;
+      assert.deepEqual([c.rolePrompt,c.accountLang.a1,c.trPlace],['lash lift = 睫毛提升','德语','panel'],'占着一下：重读到了');
+      const before=realRead(fRf,'utf8');
+      busy(Infinity); t=mk(dRf); c=t.load(); fs.readFileSync=realRead;
+      assert.equal(c.rolePrompt,'','一直占着：这次用默认设置');
+      assert(t.setRolePrompt('别的').ok);
+      assert.equal(realRead(fRf,'utf8'),before,'不写回去');
+      assert(fs.readdirSync(dRf).some((f)=>f.startsWith('translate.json.broken-')),'留了备份');
+      c=mk(dRf).load();
+      assert.deepEqual([c.rolePrompt,c.accountLang.a1,c.trPlace],['lash lift = 睫毛提升','德语','panel'],'下次启动还是原来的');
+      const dBad=fs.mkdtempSync(path.join(os.tmpdir(),'tr-bad'));
+      fs.writeFileSync(path.join(dBad,'translate.json'),'{"rolePrompt":');
+      t=mk(dBad); t.load();
+      assert(fs.readdirSync(dBad).some((f)=>f.startsWith('translate.json.broken-')),'坏文件留了备份');
+      assert(t.setRolePrompt('贴牌 = OEM').ok);
+      assert.equal(JSON.parse(realRead(path.join(dBad,'translate.json'),'utf8')).rolePrompt,'贴牌 = OEM','备份后照常写');
+      fs.rmSync(dBad,{recursive:true,force:true});
+    } finally { fs.readFileSync=realRead; console.warn=warn; }
+    fs.rmSync(dRf,{recursive:true,force:true});
+  }
   fs.rmSync(dir,{recursive:true,force:true});
   console.log('翻译自检通过');
 })().catch(e=>{console.error(e);process.exit(1)});
