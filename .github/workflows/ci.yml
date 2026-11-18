@@ -77,6 +77,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-update-spin.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
+      - name: 没有顶栏的页面（待回复、翻译页、总览）顶上能拖动窗口，按钮照常点
+        run: xvfb-run -a -s "-screen 0 1920x1200x24" npx electron --no-sandbox scripts/check-drag-top.js
       # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
       - name: 上传组件截图差异图
         if: failure()
