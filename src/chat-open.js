@@ -9,8 +9,8 @@
 // 用户正在打字或编辑账号时不直接开，改在窗口顶部问，用户点“打开”才开。
 // 只打开，不发送、不标已读（用户自己看到对话时 WhatsApp 才会像平常一样标已读）。
 // 由 main.js 的 mcpHooks.openChat 调用；MCP 的代码不直接引用这个文件。
-// 客户资料页的「开聊」（用户自己粘贴号码）走 openForUser：只有网页号，用户就在这个号上，不问是不是在打字，
-// 输入框里有没发的字时照样先停下，由用户点「仍然打开」。
+// 侧栏工具「开聊」（用户自己选号、粘贴号码）走 openForUser：只有网页号，用户自己点的，不问是不是在打字，
+// 输入框里有没发的字时照样先停下（不切号），由用户点「仍然打开」。
 const { chatMatches, jidNumber } = require('./draft-place');
 
 const OPEN_ASK_MS = 60 * 1000; // 顶部横幅 1 分钟没人点就消失
@@ -136,7 +136,7 @@ function createChatOpener(deps) {
     }
   }
 
-  // 用户在客户资料页粘贴号码点「开聊」。force：输入框里有没发的字，用户点了「仍然打开」。
+  // 用户在侧栏「开聊」页选了号、粘贴号码点「开聊」。force：输入框里有没发的字，用户点了「仍然打开」。
   // 返回值和 open 一样，另外 reason 可能是 lite（轻量号不能给没聊过的号码发消息）、not_empty（输入框里有没发的字）
   async function openForUser({ accountId, phone, force = false }) {
     const cur = deps.request();

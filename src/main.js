@@ -3281,7 +3281,7 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings', 'overview', 'translate', 'unreplied'].includes(p)) return;
+  if (!['account', 'settings', 'overview', 'translate', 'unreplied', 'opennum'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
@@ -3392,7 +3392,7 @@ async function insertText(accountId, text) {
   });
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
-// 客户资料页的「开聊」：用户粘贴号码（可填名字），在当前网页号里打开和这个号码的对话（做法见 chat-open.js），
+// 侧栏工具「开聊」：用户选一个网页号、粘贴号码（可填名字），切到这个号并打开和这个号码的对话（做法见 chat-open.js），
 // 号码和名字记进客户资料（同一个号下号码相同的只留一条；填了名字就改成这个名字）。不碰 WhatsApp 的通讯录
 function rememberNumber(accountId, digits, name) {
   const d = (p) => String(p || '').replace(/\D/g, '');
@@ -3405,14 +3405,17 @@ function rememberNumber(accountId, digits, name) {
 }
 handleShell('chat:openNumber', async ({ accountId, phone, name, force } = {}) => {
   const acc = typeof accountId === 'string' ? findAcc(accountId) : null;
-  if (!acc || accountId !== activeId || page !== 'account' || locked) return { result: 'failed', reason: 'changed' };
+  if (!acc || page !== 'opennum' || loginLocked()) return { result: 'failed', reason: 'changed' };
+  if (locked) return { result: 'failed', reason: 'locked' };
   if (isLite(acc)) return { result: 'failed', reason: 'lite' };
   const digits = normalizePhone(phone);
   if (!digits) return { result: 'failed', reason: 'bad_phone' };
+  // 输入框有字时 openForUser 先停下、不切号；要打开时它把页面切到这个号（和点侧栏的号一样会离开开聊页）
   const r = await chatOpener.openForUser({ accountId, phone: digits, force: force === true });
   // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记
   if (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat') {
     try { rememberNumber(accountId, digits, name); } catch (e) { console.warn(`开聊的号码没记进客户资料：${e.code || e.message}`); }
+    if (r.result !== 'failed' && accountId === activeId && page === 'account') focusActive(); // 光标给 WhatsApp，直接能打字
   }
   return r;
 });

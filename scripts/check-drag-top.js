@@ -79,6 +79,12 @@ window.wa = new Proxy({}, { get: (_t, k) => {
 
     await push({ page: 'overview' });
     check(!(await pageGets('#content', 10)), '总览：顶上空白能拖');
+
+    await push({ page: 'opennum' });
+    check(!(await pageGets('#content', 10)), '开聊：顶上空白能拖');
+    check(!(await pageGets('.page > h1')), '开聊：标题能拖');
+    check(await pageGets('.op-form input'), '开聊：号码框照常点');
+    check(await pageGets('.op-form select'), '开聊：账号下拉框照常点'); // 放最后：点开的下拉框会吃掉下一下点击
   } catch (e) {
     console.log(`失败：${e && e.stack}`);
     failures += 1;

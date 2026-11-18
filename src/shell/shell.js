@@ -54,6 +54,7 @@ const ICONS = {
   swap: '<path d="M4 9h15l-4-4M20 15H5l4 4"/>',
   voice: '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/>',
   translate: '<path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.7 3.4-3 6.4-6.5 8"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
+  chat: '<path d="M20.5 12a8.5 8.5 0 0 1-12.6 7.4L3.5 20.5l1.1-4.2A8.5 8.5 0 1 1 20.5 12z"/><path d="M12 8.5v7M8.5 12h7"/>',
   edit: '<path d="M5 19h3.6L18.8 8.8a2.3 2.3 0 0 0-3.6-3.6L5 15.4z"/><path d="M13.6 6.8l3.6 3.6"/>',
 };
 
@@ -439,6 +440,8 @@ function renderSide() {
     h('button', { class: `row tool-row${s.page === 'translate' ? ' on' : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
       h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
     unrepliedRow(),
+    h('button', { class: `row tool-row${s.page === 'opennum' ? ' on' : ''}`, title: '开聊', 'aria-label': '开聊', 'aria-current': s.page === 'opennum' ? 'page' : null, onclick: () => window.wa.showPage('opennum') },
+      h('span', { class: 'avatar tool' }, icon('chat', 16)), s.collapsed ? null : h('span', { class: 'name' }, '开聊')),
     h('div', { class: 'grow' })));
   const upd = updateCard();
   if (upd) $side.append(upd);
@@ -920,6 +923,63 @@ function unrepliedPage() {
   return page;
 }
 
+// ---------- 开聊 ----------
+// 侧栏工具「开聊」：选一个网页号，粘贴号码（可填名字），回车就切到这个号、打开和这个号码的对话，号码和名字记进客户资料。
+// 走 WhatsApp 自己的 /send?phone= 网址，不碰 WhatsApp 的通讯录（见 chat-open.js）。轻量号不能给没聊过的号码发消息，不在可选的号里。
+// 默认选当前的号（当前是轻量号就选上次在这里选的）；每次进这一页重新对一次
+const OPEN_FAIL = {
+  bad_phone: '号码要带国家码，例如 +49 151 2345678',
+  changed: '这个号已经不在了，换一个号再试',
+  locked: '软件锁着，先解锁再开聊',
+  lite: '轻量号不能给没聊过的号码发消息',
+  not_loaded: '这个号的页面还没加载好，稍后再试',
+  problem: '这个号的页面有问题，先处理好再试',
+  no_chat: '没看到对话打开，这个号码可能没有注册 WhatsApp',
+  not_empty: '这个号的输入框里有没发的字，打开对话要刷新页面，这些字可能会丢',
+};
+const op = { acc: '', phone: '', name: '', busy: false, force: false, msg: '' };
+const webAccs = () => s.accounts.filter((a) => a.mode !== 'lite');
+function opPickDefault() {
+  const list = webAccs();
+  const cur = list.find((a) => a.id === s.activeId);
+  if (cur) op.acc = cur.id;
+  else if (!list.some((a) => a.id === op.acc)) op.acc = list.length ? list[0].id : '';
+}
+async function openNumber() {
+  if (op.busy || !op.acc) return;
+  op.busy = true; op.msg = '';
+  render(true);
+  let r;
+  try { r = await window.wa.chatOpenNumber({ accountId: op.acc, phone: op.phone, name: op.name, force: op.force }); } catch { r = null; }
+  op.busy = false;
+  const done = !!r && (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat');
+  op.force = !done && !!r && r.reason === 'not_empty';
+  if (done) { op.phone = ''; op.name = ''; }
+  op.msg = done && r.reason !== 'no_chat' ? '' : !r ? '没有打开' : r.result === 'busy' ? '正在打开另一个对话，稍后再试' : r.result === 'gone' ? OPEN_FAIL.changed : OPEN_FAIL[r.reason] || '没有打开';
+  render(true);
+}
+function openNumPage(entering) {
+  const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'));
+  const list = webAccs();
+  if (entering) opPickDefault();
+  else if (!list.some((a) => a.id === op.acc)) opPickDefault();
+  if (!list.length) { page.append(h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有网页号。'))); return page; }
+  const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
+  const acc = h('select', { 'aria-label': '账号', disabled: op.busy, onchange: (e) => { op.acc = e.target.value; op.force = false; op.msg = ''; render(true); } },
+    list.map((a) => h('option', { value: a.id }, a.name)));
+  acc.value = op.acc;
+  const phone = h('input', { value: op.phone, maxlength: '80', inputmode: 'tel', 'aria-label': '号码', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.phone = e.target.value; } });
+  const name = h('input', { value: op.name, maxlength: '60', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
+  if (entering && !op.busy) requestAnimationFrame(() => { if (phone.isConnected) phone.focus(); });
+  page.append(h('div', { class: 'box op-form' },
+    h('label', { class: 'field' }, '账号', acc),
+    h('label', { class: 'field' }, '号码', phone),
+    h('label', { class: 'field' }, '名字（可不填）', name),
+    op.msg ? h('div', { class: 'note bad', role: 'status' }, op.msg) : null,
+    h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: op.busy, onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))));
+  return page;
+}
+
 // ---------- 右侧面板：话术库和客户名单 ----------
 // 只存本机。点“复制”放进剪贴板；点“插入”等于帮你按一次 Ctrl+V 贴进当前聊天框（会覆盖剪贴板），不会自动发送
 const pn = { tab: 'replies', q: '', all: false, edit: null, msg: '', bad: false, data: { replies: [], customers: [] }, loaded: false, accountId: null, sig: '' };
@@ -997,48 +1057,6 @@ function customerForm() {
         pn.data = d; pn.edit = null; panelSay('已保存');
       } }, '保存'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
-}
-// 客户资料页的「开聊」：粘贴号码（可填名字），在当前网页号里打开和这个号码的对话，号码和名字记进客户资料。
-// 走 WhatsApp 自己的 /send?phone= 网址，不碰 WhatsApp 的通讯录（见 chat-open.js）。轻量号不显示这个入口
-const OPEN_FAIL = {
-  bad_phone: '号码要带国家码，例如 +49 151 2345678',
-  changed: '当前账号变了、已锁定或页面没打开，没有打开',
-  lite: '轻量号不能给没聊过的号码发消息',
-  not_loaded: '这个号的页面还没加载好，稍后再试',
-  problem: '这个号的页面有问题，先处理好再试',
-  no_chat: '没看到对话打开，这个号码可能没有注册 WhatsApp',
-  not_empty: '输入框里有没发的字，打开对话要刷新页面，这些字可能会丢',
-};
-async function openNumber() {
-  const f = pn.edit;
-  if (!f || !f.open || f.busy) return;
-  f.busy = true; pn.msg = ''; renderPanel(true);
-  let r;
-  try { r = await window.wa.chatOpenNumber({ accountId: pn.accountId, phone: f.phone, name: f.name, force: !!f.force }); } catch { r = null; }
-  if (pn.edit !== f) return; // 等的时候用户点了取消或换了页
-  f.busy = false;
-  if (r && (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat')) {
-    pn.edit = null;
-    if (r.reason === 'no_chat') return panelSay(OPEN_FAIL.no_chat, true);
-    pn.msg = '';
-    window.wa.panelTab('translate'); // 对话开了，回到翻译页
-    return;
-  }
-  f.force = !!r && r.reason === 'not_empty';
-  const why = !r ? '没有打开' : r.result === 'busy' ? '正在打开另一个对话，稍后再试' : r.result === 'gone' ? OPEN_FAIL.changed : OPEN_FAIL[r.reason] || '没有打开';
-  panelSay(why, true);
-}
-function openForm() {
-  const f = pn.edit;
-  const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
-  const phone = h('input', { value: f.phone || '', maxlength: '80', placeholder: '号码', 'aria-label': '号码', inputmode: 'tel', disabled: f.busy, onkeydown: enter,
-    oninput: (e) => { f.phone = e.target.value; } });
-  const name = h('input', { value: f.name || '', maxlength: '60', placeholder: '名字（可不填）', 'aria-label': '名字', disabled: f.busy, onkeydown: enter, oninput: (e) => { f.name = e.target.value; } });
-  if (!f.busy) requestAnimationFrame(() => { if (pn.edit === f && !$panel.contains(document.activeElement)) phone.focus(); });
-  return h('div', { class: 'pn-form' }, phone, name,
-    h('div', { class: 'acts', style: { display: 'flex', gap: '4px' } },
-      h('button', { class: 'pn-btn primary', disabled: f.busy, onclick: openNumber }, f.busy ? '正在打开' : f.force ? '仍然打开' : '开聊'),
-      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; pn.msg = ''; renderPanel(true); } }, '取消')));
 }
 function replyItems() {
   const q = pn.q.toLowerCase();
@@ -1285,7 +1303,6 @@ function renderPanel(force = false) {
   if (pn.tab !== tab) { pn.edit = null; pn.q = ''; pn.msg = ''; dk.info = null; }
   pn.tab = tab;
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
-  if (pn.edit && pn.edit.open && !pn.edit.busy && (!active() || active().mode === 'lite')) pn.edit = null; // 换到轻量号：开聊只有网页号能用
   $panel.classList.toggle('dock', tab === 'translate');
   $panel.setAttribute('aria-label', '工作台');
   if (tab === 'translate') {
@@ -1316,12 +1333,11 @@ function renderPanel(force = false) {
   $panel.replaceChildren(...kids(
     panelHead(),
     pn.edit ? null : h('div', { class: 'pn-tools' }, search,
-      !replies && active() && active().mode !== 'lite' ? h('button', { class: 'pn-btn', onclick: () => { pn.edit = { open: true, phone: '', name: '' }; pn.msg = ''; renderPanel(true); } }, '开聊') : null,
       h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
     !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: pn.all, onchange: (e) => { pn.all = e.target.checked; renderPanel(true); } }), '显示所有号的客户') : null,
     pn.msg ? fx('pn-msg', pn.msg, h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg)) : null,
-    pn.edit ? (replies ? replyForm() : pn.edit.open ? openForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
+    pn.edit ? (replies ? replyForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
     pn.edit ? null : h('div', { class: 'pn-foot' },
       h('button', { class: 'pn-btn', onclick: () => io('import') }, '导入'),
       h('button', { class: 'pn-btn', onclick: () => io('csv') }, '导出'))));
@@ -2294,6 +2310,10 @@ function render(forceContent = false) {
     // 只有内容变了才重画（等了几小时每 10 分钟对一次），免得滚动位置被打回顶部
     const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, Math.floor(Date.now() / 600000)]);
     if (forceContent || key !== shown || sig !== ur.sig) { ur.sig = sig; $content.replaceChildren(unrepliedPage()); }
+  } else if (s.page === 'opennum') {
+    // 开聊页：打字时不重画（状态推过来也不打断输入），换了号或点了按钮才重画
+    const typing = $content.contains(document.activeElement) && ['INPUT', 'SELECT'].includes(document.activeElement.tagName);
+    if (forceContent || key !== shown || !typing) $content.replaceChildren(openNumPage(key !== shown));
   } else if (s.page === 'translate') {
     // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
     const el = trPage(key !== shown);
