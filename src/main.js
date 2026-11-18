@@ -34,7 +34,7 @@ const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
 const { pasteToCompose } = require('./compose-insert');
-const { createChatOpener } = require('./chat-open');
+const { createChatOpener, normalizePhone } = require('./chat-open');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
@@ -3274,6 +3274,30 @@ async function insertText(accountId, text) {
   });
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
+// 客户资料页的「开聊」：用户粘贴号码（可填名字），在当前网页号里打开和这个号码的对话（做法见 chat-open.js），
+// 号码和名字记进客户资料（同一个号下号码相同的只留一条；填了名字就改成这个名字）。不碰 WhatsApp 的通讯录
+function rememberNumber(accountId, digits, name) {
+  const d = (p) => String(p || '').replace(/\D/g, '');
+  const nm = typeof name === 'string' ? name.trim().slice(0, 60) : '';
+  const old = customerStore.list().find((c) => c.accountId === accountId && d(c.phone) === digits);
+  if (old && (!nm || nm === old.name)) return;
+  if (!customerStore.upsert(old ? { ...old, name: nm } : { accountId, name: nm, phone: `+${digits}` })) return;
+  trIpc.pushFloat(); // 回复的目标语言可能跟着这个客户
+  if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('panel:changed');
+}
+handleShell('chat:openNumber', async ({ accountId, phone, name, force } = {}) => {
+  const acc = typeof accountId === 'string' ? findAcc(accountId) : null;
+  if (!acc || accountId !== activeId || page !== 'account' || locked) return { result: 'failed', reason: 'changed' };
+  if (isLite(acc)) return { result: 'failed', reason: 'lite' };
+  const digits = normalizePhone(phone);
+  if (!digits) return { result: 'failed', reason: 'bad_phone' };
+  const r = await chatOpener.openForUser({ accountId, phone: digits, force: force === true });
+  // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记
+  if (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat') {
+    try { rememberNumber(accountId, digits, name); } catch (e) { console.warn(`开聊的号码没记进客户资料：${e.code || e.message}`); }
+  }
+  return r;
+});
 // 导出导入：[文件名前缀, 保存框标题, 打开框标题]
 const STORE_LABEL = { replies: ['话术', '导出话术', '导入话术'], customers: ['客户', '导出客户名单', '导入客户名单'], tmodes: ['翻译模式', '导出翻译模式', '导入翻译模式'] };
 const storeOf = (kind) => ({ replies: replyStore, customers: customerStore, tmodes: modeStore })[kind];
