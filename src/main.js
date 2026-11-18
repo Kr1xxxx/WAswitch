@@ -2934,6 +2934,9 @@ function setupTeam() {
   for (const acc of accounts) if (acc.teamNeedsProxy && !isParked(acc)) problems.set(acc.id, { ...TEAM_PROXY_PROBLEM });
 }
 
+const SHELL_STALL_MS = 10000; // 主进程两次计时之间隔了这么久，算卡住过
+const SHELL_RETRY_MS = 10000; // 重新加载界面后等这么久，还没出来再来一次
+
 app.whenReady().then(async () => {
   appReadyAt = Date.now();
   if (!isPrimary || movingData) return;
@@ -2988,8 +2991,27 @@ app.whenReady().then(async () => {
   });
   win.contentView.addChildView(shellView);
   lockLocalPage(shellView.webContents);
-  shellView.webContents.loadFile(path.join(__dirname, 'shell', 'index.html'));
-  shellView.webContents.on('did-finish-load', pushState);
+  // 界面还没加载出来时主进程卡住十几秒以上（Mac 换了 Electron 版本的更新后，系统会弹「访问钥匙串」，
+  // 没回答之前主进程一直等着），Chromium 的网络进程会被收掉，这次加载就永远停在空白页，也不报错：
+  // 整个窗口只剩一块底色。卡过之后界面还没加载出来就重新加载，直到加载出来。没卡过的不管，慢电脑照常等。
+  const loadShell = () => shellView.webContents.loadFile(path.join(__dirname, 'shell', 'index.html')).catch(() => {});
+  let shellTick = Date.now();
+  let shellStalled = false;
+  let shellLoadAt = 0;
+  const shellWatch = setInterval(() => {
+    const now = Date.now();
+    if (now - shellTick > SHELL_STALL_MS) shellStalled = true;
+    shellTick = now;
+    if (!shellStalled || now - shellLoadAt < SHELL_RETRY_MS) return;
+    shellLoadAt = now;
+    console.warn('主进程卡住过，界面还没加载出来，重新加载');
+    loadShell();
+  }, 1000);
+  shellView.webContents.on('did-finish-load', () => { clearInterval(shellWatch); pushState(); });
+  loadShell();
+  // 自检用（只在从源码运行时）：界面刚开始加载，主进程就卡住这么久
+  const stallMs = app.isPackaged ? 0 : Number(process.env.WASWITCH_TEST_BOOT_STALL_MS) || 0;
+  if (stallMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallMs);
   // 宽窄跨过 1200 / 1000 时侧栏和工作台要跟着收起展开，界面也要重画
   win.on('resize', () => { if (syncNarrow()) refresh(); else layout(); });
   syncNarrow(); // 记下打开时的宽窄

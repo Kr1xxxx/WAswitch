@@ -146,6 +146,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-popup.js
       - name: 连不上、正在自动重试时也能点「重新连接」，点了马上重连、自动重试从头算
         run: xvfb-run -a node scripts/check-reconnect-btn.js
+      - name: 界面加载出来以前主进程卡住（Mac 更新后等钥匙串弹窗），卡完界面自己加载出来，不留空窗口
+        run: xvfb-run -a node scripts/check-shell-stall.js
 
   checks-3:
     # 同 checks-1：只用 GitHub 自带的机器，写死。
