@@ -24,7 +24,8 @@ const FAR_DAYS = 14;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 
-const esc = (t) => String(t).split('</chat>').join('</ chat>').split('<chat>').join('< chat>');
+// 对话里的 <chat>、</chat>（不分大小写、带空格的也算）拆开，关不掉也开不了标签
+const esc = (t) => String(t).replace(/<(\s*\/?\s*chat\b)/gi, '\uff1c$1');
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];

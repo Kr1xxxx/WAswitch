@@ -247,11 +247,12 @@ class Unreplied {
     return true;
   }
 
-  // 点了圆圈（办完了）：待回复那条记成忽略，待跟进那条记成办完。返回原来的（撤销时放回），什么都没有返回 null
+  // 点了圆圈（办完了）：待回复那条记成忽略，待跟进那条记成办完。返回原来的（撤销时放回），什么都没有返回 null。
+  // 待跟进只在已经列出来（到期了、行上看得到那句）时才一起办完：还没到期的（比如明天 9:00 的）照样到时间出现
   done(id, key) {
     const e = this.get(id, key);
     const t = this.getTodo(id, key);
-    const old = { reply: e && !e.dismissed ? e : null, todo: t && t.what && !t.done ? t : null };
+    const old = { reply: e && !e.dismissed ? e : null, todo: t && todoShown(t, this.now()) ? t : null };
     if (!old.reply && !old.todo) return null;
     if (old.reply) this.acc(String(id)).set(String(key), { ...e, dismissed: true });
     if (old.todo) this.todos.get(String(id)).set(todoKey(key), { ...t, done: true });
