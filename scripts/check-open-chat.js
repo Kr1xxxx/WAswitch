@@ -6,13 +6,15 @@
 //            输入框里有没发的字先问；正常时切号 + 跳到 /send?phone=号码（网址里没有文字）并确认对话出现；
 //            看不出号码时算“没确认”；等不到对话时报失败；轻量模式选中已有对话、没有时开空对话、不选群；
 //            横幅里点“打开”/“忽略”；起草草稿在等时不覆盖；页面有问题时不开；代码里没有注入、按键、发送。
+//   客户资料页的「开聊」（openForUser + normalizePhone）：用户在打字也直接开、输入框有字先停下、force 才跳、
+//            轻量号不开、号码整理认 wa.me 链接和 (0)。
 // 运行：node scripts/check-open-chat.js（npm run check:mcp 会一起跑）
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
 const path = require('path');
 const { McpController } = require('../src/mcp/server');
-const { createChatOpener, sendUrl, WEB_WAIT_MS } = require('../src/chat-open');
+const { createChatOpener, sendUrl, WEB_WAIT_MS, normalizePhone: userPhone } = require('../src/chat-open');
 const { normalizePhone, maskPhone } = require('../src/mcp/open-chat');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
@@ -200,6 +202,61 @@ async function checkOpener() {
   check(/isWhatsAppUrl\(url\)/.test(nav) && /loadURL\(url\)/.test(nav), 'main.js 只让页面跳到 WhatsApp 的网址');
 }
 
+// ---------- 客户资料页的「开聊」：chat-open.js 的 openForUser 和 normalizePhone ----------
+async function checkUserOpen() {
+  const cases = [
+    ['+49 151 2345678', '491512345678'], ['+49 (0)151 2345 6789', '4915123456789'], ['0049 151 2345678', '491512345678'],
+    ['https://wa.me/4915123456789', '4915123456789'], ['wa.me/+4915123456789', '4915123456789'],
+    ['https://api.whatsapp.com/send?phone=4915123456789&text=Hallo', '4915123456789'], ['+44\u00a07700 900123', '447700900123'],
+    ['0049 (0)151 2345678', '491512345678'], ['(+49) (0)151 2345678', '491512345678'], ['(0)151 2345678', ''],
+    ['+34 612/345/678', '34612345678'], ['  +1 (555) 123-4567 ', '15551234567'],
+    ['0151 2345678', ''], ['Emma', ''], ['+49 151', ''], ['wa.me/abc', ''],
+  ];
+  const wrong = cases.filter(([raw, want]) => userPhone(raw) !== want).map(([raw]) => raw);
+  check(!wrong.length, `开聊的号码整理（${cases.length} 种写法，错的：${wrong.join(' | ') || '无'}）`);
+
+  // 用户在打字（就在我们的面板里输入号码）也直接开，不问
+  {
+    const { st, opener } = fakeDeps({ busy: true, peerAfterNav: { title: '+49 151 23456789', chat: '' } });
+    const r = await opener.openForUser({ accountId: 'w1', phone: NUM });
+    check(r.result === 'opened' && st.navigated.length === 1 && st.navigated[0].url === sendUrl(NUM) && !st.request, '开聊：用户刚在打字也直接跳到 /send?phone=号码，不在顶部问');
+    check(st.activated[0] === 'w1', '开聊：先切到这个号');
+  }
+  // 输入框里有没发的字：停下，不跳；force 后才跳
+  {
+    const { st, opener } = fakeDeps({ compose: { box: true, empty: false }, peerAfterNav: { title: 'x', chat: `${NUM}@c.us` } });
+    const r = await opener.openForUser({ accountId: 'w1', phone: NUM });
+    check(r.result === 'failed' && r.reason === 'not_empty' && !st.navigated.length && !st.request, '开聊：输入框有字时返回 not_empty，不跳转、不弹横幅');
+    const r2 = await opener.openForUser({ accountId: 'w1', phone: NUM, force: true });
+    check(r2.result === 'opened' && st.navigated.length === 1, '开聊：用户点「仍然打开」（force）才跳转');
+  }
+  // 已经开着这个号码：不刷新
+  {
+    const { st, opener } = fakeDeps({ peer: { title: 'Lena', chat: `${NUM}@c.us` } });
+    const r = await opener.openForUser({ accountId: 'w1', phone: NUM });
+    check(r.result === 'already' && !st.navigated.length, '开聊：已经开着这个号码的对话时不刷新');
+  }
+  // 轻量号、页面有问题、号码不对、横幅在等
+  {
+    const { st, opener } = fakeDeps({ problems: new Set(['w1']), request: null });
+    const lite = await opener.openForUser({ accountId: 'l1', phone: NUM });
+    check(lite.result === 'failed' && lite.reason === 'lite' && !st.liteOpened.length && !st.activated.length, '开聊：轻量号不开（不能给没聊过的号码发消息）');
+    const pr = await opener.openForUser({ accountId: 'w1', phone: NUM });
+    check(pr.result === 'failed' && pr.reason === 'problem', '开聊：页面有问题时不开');
+    const bad = await opener.openForUser({ accountId: 'w1', phone: '+49 151' });
+    check(bad.result === 'failed' && bad.reason === 'bad_phone', '开聊：没整理过的号码不开');
+    const gone = await opener.openForUser({ accountId: 'zz', phone: NUM });
+    check(gone.result === 'gone', '开聊：账号不在了');
+    const { st: st2, opener: o2 } = fakeDeps({ request: { kind: 'draft', id: 'w1' } });
+    const busy = await o2.openForUser({ accountId: 'w1', phone: NUM });
+    check(busy.result === 'busy' && !st2.navigated.length, '开聊：AI 起草的横幅在等时不开，返回 busy');
+  }
+  // main.js：开聊只记号码和名字，不碰 WhatsApp 的通讯录
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  const block = main.slice(main.indexOf('function rememberNumber'), main.indexOf("handleShell('chat:openNumber'") + 1200);
+  check(/openForUser/.test(block) && /normalizePhone\(phone\)/.test(block) && !/executeJavaScript|sendInputEvent|insertText/.test(block), 'main.js 的开聊先整理号码再交给 openForUser，没有注入和按键');
+}
+
 // ---------- MCP 这边：open_chat 工具 ----------
 
 async function checkTool() {
@@ -301,6 +358,7 @@ async function checkTool() {
 
 (async () => {
   await checkOpener();
+  await checkUserOpen();
   await checkTool();
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);
