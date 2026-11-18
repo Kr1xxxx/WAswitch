@@ -79,7 +79,7 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "@radix-ui/colors": "3.0.0",
-    "electron": "44.9.3",
+    "electron": "44.11.4",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
     "zod": "3.25.76"
