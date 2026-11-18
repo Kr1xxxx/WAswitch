@@ -10,7 +10,7 @@
 //   勾一个都认不出时（WhatsApp 改了图标名）只信未读角标：有未读的列，没未读的去掉。
 // 轻量号：本机聊天缓存是全的（lite/session.mjs 的 chatList），每次整份替换。
 //
-// 点了「忽略」的对话，客户再发一条（今天的时间比记下的晚，或者未读变多）又会出现。
+// 点了圆圈（办完了）的对话，客户再发一条（今天的时间比记下的晚，或者未读变多）又会出现。
 // 存在本机 unreplied.json（只有号、对话名字、号码、时间，没有消息内容）。这是能重新读出来的数据，文件坏了就从空的开始。
 const THRESHOLD_MS = 30 * 60 * 1000; // 等了这么久才列出来（shen 2026-11-18 从 2 小时改成 30 分钟）
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 超过 7 天没回的不再列（多半是不用回的）
@@ -154,7 +154,7 @@ class Unreplied {
     return dirty;
   }
 
-  // 列出来的：等了 30 分钟以上、没点忽略的，等得最久的在前
+  // 列出来的：等了 30 分钟以上、没点办完的，等得最久的在前
   list(ids = null) {
     const now = this.now();
     const out = [];
@@ -172,7 +172,7 @@ class Unreplied {
 
   get(id, key) { return this.byAcc.get(String(id))?.get(String(key)) || null; }
 
-  // 点了「忽略」：返回原来的那条，撤销时放回
+  // 点了圆圈（办完了）：返回原来的那条，撤销时放回
   dismiss(id, key) {
     const e = this.get(id, key);
     if (!e || e.dismissed) return null;
