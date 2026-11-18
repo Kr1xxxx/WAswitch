@@ -1342,6 +1342,7 @@ function pushState() {
         // 从没登录成功过的号停在二维码页是正常的第一步，不算故障
         everLoggedIn: !!acc.loggedIn,
         retrying: !!(problem && problem.retrying),
+        connecting: !!(problem && problem.connecting),
         needsQr: loginStates.get(acc.id) === 'needs_qr',
         mode: acc.mode,
         primary: acc.primary,
@@ -1508,6 +1509,8 @@ async function retryNow(id) {
   if (problem && problem.config) { openEditor(id); return; }
   if (isLite(acc)) { problems.delete(id); startLite(acc); refresh(); return; }
   if (!views.has(id)) { await createView(acc); refresh(); return; }
+  // 页面重新加载期间提示还在：标上「正在连接」，点了能看出有反应；加载失败会换成新的提示，成功就收起
+  if (problem) setProblem(id, { ...problem, connecting: true });
   reconnect(id);
 }
 

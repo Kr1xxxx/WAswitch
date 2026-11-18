@@ -782,8 +782,8 @@ window.addEventListener('resize', placeUndo);
 function problemButtons(acc) {
   const btn = (text, onclick, primary) => h('button', { class: `btn${primary ? ' primary' : ''}`, onclick }, text);
   const del = () => btn('删除这个号…', () => window.wa.remove(acc.id));
-  // 正在自动重试时不给「重新连接」，免得用户不知道要不要点（顶栏的刷新按钮照样能马上重连）
-  const retry = (text = '重新连接', primary = true) => (acc.retrying && text === '重新连接' ? null : btn(text, () => window.wa.retry(acc.id), primary));
+  // 自动重试时也给「重新连接」：点了马上重连，自动重试从头算
+  const retry = (text = '重新连接', primary = true) => btn(text, () => window.wa.retry(acc.id), primary);
   switch (acc.problemKind) {
     case 'authError': return [del()];
     case 'banned': return [del(), retry('仍要重试', false)];
@@ -800,7 +800,7 @@ function problemPage(acc) {
     h('div', { class: 'warnicon' }, icon('warn', 26)),
     h('h2', null, acc.problemTitle || '代理连不上，这个账号已暂停联网'),
     h('p', null, acc.problem),
-    acc.retrying ? h('p', { class: 'hint' }, '正在自动重试…') : null,
+    acc.connecting ? h('p', { class: 'hint' }, '正在连接…') : acc.retrying ? h('p', { class: 'hint' }, '正在自动重试…') : null,
     h('div', { class: 'btns' }, ...kids(...problemButtons(acc))),
     problemDetails(acc)));
 }
