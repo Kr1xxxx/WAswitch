@@ -66,7 +66,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     check(!(await pageGets('#content', 10)), '待回复：顶上空白能拖');
     check(!(await pageGets('.page > h1')), '待回复：标题能拖');
     check(await pageGets('.ur-open'), '待回复：第一行照常点');
-    check(await pageGets('.ur-x'), '待回复：× 照常点');
+    check(await pageGets('.ur-done'), '待回复：圆圈照常点');
     await js(() => { document.querySelector('#content').scrollTop = 200; });
     await wait(300);
     check(await pageGets('#content', 10), '待回复往下滚以后：顶上露出来的行照常点');
