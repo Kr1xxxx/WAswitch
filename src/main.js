@@ -28,7 +28,7 @@ const waSound = require('./wa-sound');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
-const { Unreplied, createUnrepliedOpener } = require('./unreplied');
+const { Unreplied, createUnrepliedOpener, withTimeout } = require('./unreplied');
 const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
@@ -1044,7 +1044,9 @@ app.on('will-quit', writeUnrepliedNow);
 const UNREPLIED_SCAN_MS = 60 * 1000;
 let unrepliedSig = '';
 let unrepliedScanning = false;
-// 每分钟读一遍每个号：网页号只读左侧对话列表（隔离环境），轻量号读本机聊天缓存。锁着、出错、没登录的号跳过
+// 每分钟读一遍每个号：网页号只读左侧对话列表（隔离环境），轻量号读本机聊天缓存。锁着、出错、没登录的号跳过。
+// 每一步都有超时：主进程卡过以后页面可能停在空地址上，在里面跑脚本永远等不到回音（见 docs/testing-pitfalls.md），不能让以后的读取都卡住
+const UNREPLIED_STEP_MS = 5000;
 async function scanUnreplied() {
   if (unrepliedScanning || locked || loginLocked()) return;
   unrepliedScanning = true;
@@ -1054,15 +1056,23 @@ async function scanUnreplied() {
       if (locked || problems.has(acc.id) || loginStates.get(acc.id) !== 'logged_in') continue;
       if (isLite(acc)) {
         if (!liteHost || liteStates.get(acc.id)?.status !== 'open') continue;
-        let list = null;
-        try { list = await liteHost.chatList(acc.id); } catch { list = null; }
+        const list = await withTimeout(liteHost.chatList(acc.id), UNREPLIED_STEP_MS, null);
         if (Array.isArray(list) && findAcc(acc.id)) store.ingestLite(acc.id, list);
         continue;
       }
       const view = views.get(acc.id);
       if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) continue;
-      const r = await waPage.readChatList(view.webContents, { reply: true });
-      if (r && r.ok && findAcc(acc.id)) store.ingestWeb(acc.id, r.chats);
+      const wc = view.webContents;
+      if (!isWhatsAppUrl(wc.getURL())) continue;
+      const r = await withTimeout(waPage.readChatList(wc, { reply: true }), UNREPLIED_STEP_MS, null);
+      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered })) continue;
+      // 新记下的对话查一次号码（只读 WhatsApp 本地的联系人）：查到才列，群和查不到的不列
+      for (const { key, name } of store.needsNumber(acc.id)) {
+        if (wc.isDestroyed()) break;
+        const found = await withTimeout(waPage.lookupPeerPhone(wc, { title: name }), UNREPLIED_STEP_MS, null);
+        if (!found) break;
+        store.setNumber(acc.id, key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
+      }
     }
   } catch (e) {
     console.warn('待回复读取失败', e && e.message);
@@ -1085,7 +1095,12 @@ const unrepliedOpener = createUnrepliedOpener({
     const view = views.get(id);
     return view && !view.webContents.isDestroyed() && !pendingLoad.has(id) && !problems.has(id) ? view.webContents : null;
   },
-  waPage,
+  // 读页面都带超时：卡住的页面不能让这一行一直转着
+  waPage: {
+    readChatPeer: (wc) => withTimeout(waPage.readChatPeer(wc), UNREPLIED_STEP_MS, null),
+    lookupPeerPhone: (wc, q) => withTimeout(waPage.lookupPeerPhone(wc, q), UNREPLIED_STEP_MS, { digits: '' }),
+    composeState: (wc, probe) => withTimeout(waPage.composeState(wc, probe), UNREPLIED_STEP_MS, null),
+  },
   activate: async (id) => { notifier.showWindow(); await userActivate(id); },
   liteOpen: (id, jid) => { liteOpen.set(id, jid); syncLiteWatch(); pushState(); },
   openNumber: (id, digits) => chatOpener.openForUser({ accountId: id, phone: digits, force: true }),

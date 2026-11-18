@@ -64,6 +64,13 @@
           <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Carlos García" class="x1iyjqo2 _ao3e">Carlos García</span></div><div class="_ak8i">Monday</div></div>
           <div class="_ak8j"><div class="_ak8k"><span title="Price list attached" class="x78zum5 x1cy8zhl"><div class="x1rg5ohu"><span data-testid="last-msg-status"><span data-icon="msg-time"><svg></svg></span></span></div><span dir="ltr" class="_ao3e">Price list attached</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
         </div></div></div></div>
+      <!-- 8. 头像是照片的群（列表上认不出是群），别人最后说话，3 小时前 -->
+      <div role="row" data-testid="list-item-7" class="x10l6tqk" style="z-index: 34; transform: translateY(504px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Team Lyon" class="x1iyjqo2 _ao3e">Team Lyon</span></div><div class="_ak8i" data-k="t5">08:00</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Paul: ok, merci" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">Paul</span><span>: </span><span dir="ltr" class="_ao3e">ok, merci</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
     </div>
   </div>
 </div>
@@ -75,6 +82,19 @@
     const t = JSON.parse(decodeURIComponent(location.hash.slice(1)) || '{}');
     for (const [k, v] of Object.entries(t)) { const el = document.querySelector(`[data-k="${k}"]`); if (el) el.textContent = v; }
   } catch {}
+  // WhatsApp 自己的本地数据库（IndexedDB model-storage）：存了名字的联系人有号码，群不在联系人表里
+  window.__idb = new Promise((done) => {
+    const r = indexedDB.open('model-storage', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('contact', { keyPath: 'id' }); r.result.createObjectStore('chat', { keyPath: 'id' }); };
+    r.onsuccess = () => {
+      const db = r.result;
+      const tx = db.transaction('contact', 'readwrite');
+      tx.objectStore('contact').put({ id: '33611111111@c.us', name: 'Sophie Martin', shortName: 'Sophie' });
+      tx.objectStore('contact').put({ id: '4915199999999@c.us', name: 'Lukas Weber' });
+      tx.oncomplete = () => { db.close(); done(true); };
+    };
+    r.onerror = () => done(false);
+  });
   // 页面自己的环境：记录任何点击、滚动、DOM 变化，供自检确认读取没有动页面
   window.__events = { clicks: 0, scrolls: 0, mutations: 0, focus: 0 };
   document.addEventListener('click', () => { window.__events.clicks += 1; }, true);

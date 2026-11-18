@@ -4,22 +4,28 @@
 //   看每个对话最后一条前面有没有发送状态的勾（有就是我们发的）和列表上的时间。不点击、不滚动、不注入。
 //   列表只画出最上面十几个对话，所以记下来的对话要存住：看到它最后一条变成我们发的才去掉（回复后对话会排到最上面，一定看得到）。
 //   只看到一次「客户发的」不算，要连着两次（对方正在输入时预览会暂时换成「正在输入…」，没有勾）。
+//   列表画出来的对话已经往前排到比某个记下的对话还早，它却不在里面（存成联系人改了名字、归档、删了、换了号）：去掉。
+//   只列认得出号码的私聊：名字就是号码（没存联系人），或者在 WhatsApp 本地联系人里按名字查到号码（main.js 每个新对话查一次）。
+//   这样头像是照片的群（列表上认不出是群）不会列出来，点开也一定打得开。搜索或筛选时读到的不用。
 // 轻量号：本机聊天缓存是全的（lite/session.mjs 的 chatList），每次整份替换。
 //
-// 点了「忽略」的对话，客户再发一条（列表上的时间变了）又会出现。
-// 存在本机 unreplied.json（只有号、对话名字、时间，没有消息内容）。这是能重新读出来的数据，文件坏了就从空的开始。
+// 点了「忽略」的对话，客户再发一条（今天的时间比记下的晚，或者未读变多）又会出现。
+// 存在本机 unreplied.json（只有号、对话名字、号码、时间，没有消息内容）。这是能重新读出来的数据，文件坏了就从空的开始。
 const THRESHOLD_MS = 2 * 60 * 60 * 1000; // 等了这么久才列出来
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 超过 7 天没回的不再列（多半是不用回的）
 const MAX_PER_ACC = 300;
 const MIN_HITS = 2;
-// 一次读到这么多个私聊、却一个勾都没有：多半是 WhatsApp 改了图标，这次读到的不用（不然所有对话都会被当成没回）
+const MIN = 60000;
+// 一次读到这么多个已读的私聊、却一个勾都没有：多半是 WhatsApp 改了图标，这次读到的不用（不然所有对话都会被当成没回）。
+// 有未读的不算（早上一堆客户的未读本来就没有勾）
 const NO_TICK_ROWS = 6;
+const cleanKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().slice(0, 100);
 
 class Unreplied {
   constructor({ now = Date.now, load = () => null, save = () => {} } = {}) {
     this.now = now;
     this.save = save;
-    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, dismissed, jid? })
+    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, unread, dismissed, digits?, noNum?, jid? })
     const data = load();
     if (data && typeof data === 'object' && data.v === 1 && data.accounts && typeof data.accounts === 'object') {
       for (const [id, chats] of Object.entries(data.accounts)) {
@@ -27,7 +33,12 @@ class Unreplied {
         const m = new Map();
         for (const [key, e] of Object.entries(chats)) {
           if (!e || typeof e !== 'object' || !Number.isFinite(e.since) || typeof e.name !== 'string') continue;
-          m.set(key, { name: e.name.slice(0, 100), since: e.since, hits: Number(e.hits) || 0, sig: String(e.sig || ''), dismissed: e.dismissed === true, ...(typeof e.jid === 'string' ? { jid: e.jid } : {}) });
+          m.set(key, {
+            name: e.name.slice(0, 100), since: e.since, hits: Number(e.hits) || 0, sig: String(e.sig || ''), unread: Number(e.unread) || 0, dismissed: e.dismissed === true,
+            ...(typeof e.digits === 'string' && /^\d{7,15}$/.test(e.digits) ? { digits: e.digits } : {}),
+            ...(e.noNum === true ? { noNum: true } : {}),
+            ...(typeof e.jid === 'string' ? { jid: e.jid } : {}),
+          });
         }
         if (m.size) this.byAcc.set(String(id), m);
       }
@@ -48,38 +59,72 @@ class Unreplied {
     return m;
   }
 
-  // 网页号读到的对话列表（readChatList 的 chats，带 out 和 age）。返回 false 表示这次读到的不可信、没用
-  ingestWeb(id, chats) {
-    if (!Array.isArray(chats)) return false;
+  // 网页号读到的对话列表（readChatList 的 chats，带 out 和 age）。filtered：搜索或筛选时读到的。
+  // 返回 false 表示这次读到的不可信、没用
+  ingestWeb(id, chats, { filtered = false } = {}) {
+    if (!Array.isArray(chats) || filtered) return false;
     const solo = chats.filter((c) => c && c.name && c.is_group !== true);
-    if (solo.length >= NO_TICK_ROWS && !solo.some((c) => c.out === true)) return false;
+    const read = solo.filter((c) => !(c.unread > 0));
+    if (read.length >= NO_TICK_ROWS && !read.some((c) => c.out === true)) return false;
     const m = this.acc(String(id));
     const now = this.now();
     let dirty = false;
+    const seen = new Set();
     for (const c of solo) {
-      const key = String(c.name).replace(/\s+/g, ' ').trim().slice(0, 100);
+      const key = cleanKey(c.name);
       if (!key) continue;
+      seen.add(key);
       const e = m.get(key);
-      const incoming = c.unread > 0 || c.out === false;
-      if (!incoming) { if (e) { m.delete(key); dirty = true; } continue; }
-      if (c.muted) continue;
+      const unread = Number(c.unread) || 0;
+      const incoming = unread > 0 || c.out === false;
+      if (!incoming || c.muted) { if (e) { m.delete(key); dirty = true; } continue; }
       if (!Number.isFinite(c.age)) continue; // 认不出时间（更早的日期）：不新加，已有的照旧
-      const since = now - c.age * 60000;
+      const since = Math.floor((now - c.age * MIN) / MIN) * MIN; // 取整到分钟，不然每分钟都要写盘
       const sig = String(c.time || '');
       if (!e) {
-        m.set(key, { name: key, since, hits: 1, sig, dismissed: false });
+        const digits = digitsOfTitle(key);
+        m.set(key, { name: key, since, hits: 1, sig, unread, dismissed: false, ...(digits ? { digits } : {}) });
         dirty = true;
         continue;
       }
       // 今天的钟点是准的（客户又发了一条就用新的时间）；昨天、星期几只是下限，留着以前读到的更准的那个
       const exact = /\d[:.]\d\d/.test(sig);
-      const next = { ...e, since: exact ? since : Math.min(e.since, since), hits: Math.min(e.hits + 1, MIN_HITS), sig };
-      if (e.dismissed && sig !== e.sig) next.dismissed = false; // 客户又发了一条
+      const next = { ...e, since: exact ? since : Math.min(e.since, since), hits: Math.min(e.hits + 1, MIN_HITS), sig, unread };
+      // 客户又发了一条才不再忽略：今天的时间比记下的晚，或者未读变多。过了半夜「21:40」变成「昨天」不算
+      if (e.dismissed && ((exact && since > e.since + MIN) || unread > (e.unread || 0))) next.dismissed = false;
       if (JSON.stringify(next) !== JSON.stringify(e)) { m.set(key, next); dirty = true; }
+    }
+    // 画出来的（不置顶的）对话往前排到了多久以前：记下的对话比这还新却不在里面，说明已经不在列表上了
+    let reach = 0;
+    for (const c of chats) {
+      if (!c || c.pinned || !c.time) continue;
+      reach = Number.isFinite(c.age) ? Math.max(reach, c.age * MIN) : Infinity;
+    }
+    for (const [key, e] of m) {
+      if (seen.has(key) || e.jid) continue;
+      if (now - e.since + 2 * MIN < reach) { m.delete(key); dirty = true; }
     }
     if (this.trim(m)) dirty = true;
     if (dirty) this.changed();
     return true;
+  }
+
+  // 还没查过号码的网页号对话（main.js 去 WhatsApp 本地联系人里按名字查）
+  needsNumber(id, limit = 3) {
+    const m = this.byAcc.get(String(id));
+    if (!m) return [];
+    return [...m.entries()].filter(([, e]) => !e.jid && !e.digits && !e.noNum).slice(0, limit).map(([key, e]) => ({ key, name: e.name }));
+  }
+
+  // 查号码的结果：digits 查到了；final 为真且没查到就不再查（群、同名的、没存的）
+  setNumber(id, key, digits, final = true) {
+    const m = this.byAcc.get(String(id));
+    const e = m && m.get(key);
+    if (!e) return;
+    if (/^\d{7,15}$/.test(String(digits || ''))) m.set(key, { ...e, digits: String(digits) });
+    else if (final) m.set(key, { ...e, noNum: true });
+    else return;
+    this.changed();
   }
 
   // 轻量号：后台进程的全部对话 [{ jid, name, group, me, wait, ts }]（wait = 我们最后一条之后客户第一条的时间，秒）
@@ -119,7 +164,7 @@ class Unreplied {
     for (const [id, m] of this.byAcc) {
       if (ids && !ids.has(id)) continue;
       for (const [key, e] of m) {
-        if (e.dismissed || e.hits < MIN_HITS) continue;
+        if (e.dismissed || e.hits < MIN_HITS || (!e.jid && !e.digits)) continue;
         const wait = now - e.since;
         if (wait < THRESHOLD_MS || wait > MAX_AGE_MS) continue;
         out.push({ accountId: id, key, name: e.name, since: e.since });
@@ -185,7 +230,7 @@ function createUnrepliedOpener(deps) {
     if (!wc) { await deps.activate(accountId); return { result: 'switched' }; }
     const peer = await deps.waPage.readChatPeer(wc);
     if (peer && peer.title && normTitle(peer.title) === normTitle(e.name)) { await deps.activate(accountId); return { result: 'already' }; }
-    let digits = digitsOfTitle(e.name);
+    let digits = e.digits || digitsOfTitle(e.name);
     if (!digits) {
       const r = await deps.waPage.lookupPeerPhone(wc, { title: e.name });
       digits = (r && r.digits) || '';
@@ -203,4 +248,10 @@ function createUnrepliedOpener(deps) {
   return { open };
 }
 
-module.exports = { Unreplied, createUnrepliedOpener, digitsOfTitle, THRESHOLD_MS, MAX_AGE_MS, MIN_HITS };
+// 等 p 最多 ms 毫秒；超时或出错给 fallback（页面停在空地址上时，在里面跑脚本永远等不到回音）
+function withTimeout(p, ms, fallback) {
+  let timer;
+  return Promise.race([Promise.resolve(p).catch(() => fallback), new Promise((r) => { timer = setTimeout(() => r(fallback), ms); })]).finally(() => clearTimeout(timer));
+}
+
+module.exports = { Unreplied, createUnrepliedOpener, withTimeout, digitsOfTitle, THRESHOLD_MS, MAX_AGE_MS, MIN_HITS };

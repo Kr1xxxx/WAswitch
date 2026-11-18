@@ -38,14 +38,15 @@ app.whenReady().then(async () => {
     // ---- 1) 读对话列表 ----
     const t0 = clockAgo(180);
     const t2 = clockAgo(240);
-    const hash = encodeURIComponent(JSON.stringify({ t0: t0.text, t1: clockAgo(170).text, t2: t2.text, t3: clockAgo(300).text, t4: clockAgo(310).text }));
+    const hash = encodeURIComponent(JSON.stringify({ t0: t0.text, t1: clockAgo(170).text, t2: t2.text, t3: clockAgo(300).text, t4: clockAgo(310).text, t5: clockAgo(185).text }));
     const wa = new BrowserWindow({ show: true, width: 900, height: 700, webPreferences: { sandbox: true, contextIsolation: true } });
     await wa.loadURL(`file://${path.join(__dirname, 'fixtures', 'wa-chatlist-real.html')}#${hash}`);
+    await wa.webContents.executeJavaScript('window.__idb');
     await wait(100);
     const wc = wa.webContents;
     await wc.executeJavaScript('Object.assign(window.__events, { clicks: 0, scrolls: 0, mutations: 0, focus: 0 })');
     const plain = await waPage.readChatList(wc, { includePreview: false });
-    assert(plain.ok && plain.chats.length === 7, `读到 7 个对话 ${JSON.stringify(plain)}`);
+    assert(plain.ok && plain.chats.length === 8, `读到 8 个对话 ${JSON.stringify(plain)}`);
     assert(plain.chats.every((c) => !('out' in c) && !('age' in c)), '不带 reply 时不多给字段（MCP 的 list_chats 不变）');
     const r = await waPage.readChatList(wc, { reply: true });
     assert(r.ok, JSON.stringify(r));
@@ -68,10 +69,17 @@ app.whenReady().then(async () => {
     store.ingestWeb('w1', r.chats);
     await wait(50);
     store.ingestWeb('w1', (await waPage.readChatList(wc, { reply: true })).chats);
+    // 和 main.js 一样：新记下的对话去 WhatsApp 本地联系人里按名字查号码
+    for (const { key, name } of store.needsNumber('w1', 99)) {
+      const found = await waPage.lookupPeerPhone(wc, { title: name });
+      store.setNumber('w1', key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
+    }
+    assert.strictEqual(store.get('w1', 'Sophie Martin').digits, '33611111111', '存了名字的联系人查到号码');
+    assert.strictEqual(store.get('w1', 'Team Lyon').noNum, true, '头像是照片的群查不到号码');
     const list = store.list();
     const names = list.map((e) => e.name.replace(/[‪-‮]/g, ''));
     assert(names.includes('Sophie Martin') && names.includes('+44 7700 900123'), `没回的列出来 ${JSON.stringify(names)}`);
-    for (const n of ['Lukas Weber', 'Marie Dubois', 'Carlos García', 'Lash Supply EU']) assert(!names.includes(n), `${n} 不该列`);
+    for (const n of ['Lukas Weber', 'Marie Dubois', 'Carlos García', 'Lash Supply EU', 'Team Lyon']) assert(!names.includes(n), `${n} 不该列`);
     assert(list.every((e, k) => !k || list[k - 1].since <= e.since), '等得久的在前');
 
     // ---- 3) 点开 ----
