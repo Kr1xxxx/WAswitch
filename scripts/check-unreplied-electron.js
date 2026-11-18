@@ -51,6 +51,7 @@ app.whenReady().then(async () => {
     const r = await waPage.readChatList(wc, { reply: true });
     assert(r.ok, JSON.stringify(r));
     const by = Object.fromEntries(r.chats.map((c) => [c.name.replace(/[‪-‮]/g, ''), c]));
+    assert.strictEqual(r.atTop, true, '列表在最上面');
     assert.strictEqual(by['Sophie Martin'].out, false, '客户发的文字：没有勾');
     assert(Math.abs(by['Sophie Martin'].age - t0.age) <= 1, `过了多久按列表时间算 ${by['Sophie Martin'].age} vs ${t0.age}`);
     assert.strictEqual(by['Lukas Weber'].out, true, '老版勾 status-dblcheck 认成自己发的');
@@ -64,11 +65,18 @@ app.whenReady().then(async () => {
     assert(by['Carlos García'].age >= 0, '星期几也算得出下限');
     assert.deepStrictEqual(await wc.executeJavaScript('window.__events'), { clicks: 0, scrolls: 0, mutations: 0, focus: 0 }, '读的时候没动页面');
 
+    // 往下翻过对话列表：atTop 是 false（这时不拿画出来的行判断谁不在列表上了）
+    await wc.executeJavaScript("(() => { const p = document.getElementById('pane-side'); p.style.height = '120px'; p.style.overflow = 'auto'; p.scrollTop = 200; return p.scrollTop; })()");
+    assert.strictEqual((await waPage.readChatList(wc, { reply: true })).atTop, false, '往下翻过时 atTop 是 false');
+    await wc.executeJavaScript("(() => { const p = document.getElementById('pane-side'); p.scrollTop = 0; p.style.height = ''; p.style.overflow = ''; })()");
+    assert.strictEqual((await waPage.readChatList(wc, { reply: true })).atTop, true, '翻回最上面 atTop 是 true');
+
     // ---- 2) 列出没回的 ----
     const store = new Unreplied();
-    store.ingestWeb('w1', r.chats);
+    store.ingestWeb('w1', r.chats, { atTop: r.atTop });
     await wait(50);
-    store.ingestWeb('w1', (await waPage.readChatList(wc, { reply: true })).chats);
+    const r2 = await waPage.readChatList(wc, { reply: true });
+    store.ingestWeb('w1', r2.chats, { atTop: r2.atTop });
     // 和 main.js 一样：新记下的对话去 WhatsApp 本地联系人里按名字查号码
     for (const { key, name } of store.needsNumber('w1', 99)) {
       const found = await waPage.lookupPeerPhone(wc, { title: name });

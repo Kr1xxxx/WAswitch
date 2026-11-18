@@ -11,7 +11,7 @@ const row = (name, { out = false, age = 180, time = '12:00', unread = 0, group =
 // WhatsApp 本地联系人（按名字查号码）：查不到的是群或没存的
 const CONTACTS = { 'Sophie Martin': '33611111111', 'Hans Becker': '4917011111111', 'Emma Wilson': '447700900111' };
 const feed = (store, id, rows, opts) => {
-  const ok = store.ingestWeb(id, rows, opts);
+  const ok = store.ingestWeb(id, rows, { atTop: true, ...opts });
   for (const { key, name } of store.needsNumber(id, 99)) store.setNumber(id, key, CONTACTS[name] || '', true);
   return ok;
 };
@@ -176,6 +176,24 @@ const liteCheck = (async () => {
   now += 60000;
   feed(s2, 'g4', [row('Marie', { out: true, age: 2, time: '12:02' }), ...tick(2), row('Old Lars', { out: true, age: 300, time: '07:03' })]);
   assert.strictEqual(s2.get('g4', '+33 6 12 34 56 78'), null, '列表排到比它还早、它却不在：去掉');
+  // 用户把对话列表往下翻了：画出来的只是更早的对话，不能拿来去掉记下的（忽略也不能丢）
+  feed(s2, 'g6', [row('+33 6 12 34 56 70', { age: 180, time: '09:00' }), ...tick(2)]);
+  now += 60000;
+  feed(s2, 'g6', [row('+33 6 12 34 56 70', { age: 181, time: '09:00' }), ...tick(2)]);
+  s2.dismiss('g6', '+33 6 12 34 56 70');
+  now += 60000;
+  assert.strictEqual(feed(s2, 'g6', [row('Old A', { out: true, age: null, time: '11/10/2026' }), row('Old B', { out: true, age: null, time: '10/10/2026' })], { atTop: false }), true);
+  assert.strictEqual(s2.get('g6', '+33 6 12 34 56 70').dismissed, true, '往下翻过时不去掉，忽略也还在');
+  // 翻回最上面也一样
+  feed(s2, 'g6', [row('+33 6 12 34 56 70', { age: 183, time: '09:00' }), ...tick(2)]);
+  assert.strictEqual(s2.get('g6', '+33 6 12 34 56 70').dismissed, true);
+  // 查号码临时失败：排到后面，连着 3 次就不再查
+  s2.ingestWeb('g7', [row('Nina A', { age: 180, time: '09:00' }), row('Nina B', { age: 180, time: '09:00' }), ...tick(2)]);
+  s2.setNumber('g7', 'Nina A', '', false);
+  assert.deepStrictEqual(s2.needsNumber('g7', 1).map((x) => x.key), ['Nina B'], '查失败的排到后面');
+  s2.setNumber('g7', 'Nina A', '', false);
+  s2.setNumber('g7', 'Nina A', '', false);
+  assert.strictEqual(s2.get('g7', 'Nina A').noNum, true, '连着 3 次查不了就不查了');
   // 置顶的对话不算往前排
   feed(s2, 'g5', [row('+33 6 12 34 56 79', { age: 180, time: '09:00' }), ...tick(2)]);
   now += 60000;

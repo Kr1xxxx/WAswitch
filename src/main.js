@@ -1065,7 +1065,7 @@ async function scanUnreplied() {
       const wc = view.webContents;
       if (!isWhatsAppUrl(wc.getURL())) continue;
       const r = await withTimeout(waPage.readChatList(wc, { reply: true }), UNREPLIED_STEP_MS, null);
-      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered })) continue;
+      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true })) continue;
       // 新记下的对话查一次号码（只读 WhatsApp 本地的联系人）：查到才列，群和查不到的不列
       for (const { key, name } of store.needsNumber(acc.id)) {
         if (wc.isDestroyed()) break;

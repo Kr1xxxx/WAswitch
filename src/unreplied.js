@@ -37,6 +37,7 @@ class Unreplied {
             name: e.name.slice(0, 100), since: e.since, hits: Number(e.hits) || 0, sig: String(e.sig || ''), unread: Number(e.unread) || 0, dismissed: e.dismissed === true,
             ...(typeof e.digits === 'string' && /^\d{7,15}$/.test(e.digits) ? { digits: e.digits } : {}),
             ...(e.noNum === true ? { noNum: true } : {}),
+            ...(Number(e.tries) > 0 ? { tries: Math.min(Number(e.tries), 3) } : {}),
             ...(typeof e.jid === 'string' ? { jid: e.jid } : {}),
           });
         }
@@ -59,9 +60,10 @@ class Unreplied {
     return m;
   }
 
-  // 网页号读到的对话列表（readChatList 的 chats，带 out 和 age）。filtered：搜索或筛选时读到的。
+  // 网页号读到的对话列表（readChatList 的 chats，带 out 和 age）。filtered：搜索或筛选时读到的；
+  // atTop：列表在最上面（用户往下翻过时画出来的只是更早的对话，不能拿来判断谁不在列表上了）。
   // 返回 false 表示这次读到的不可信、没用
-  ingestWeb(id, chats, { filtered = false } = {}) {
+  ingestWeb(id, chats, { filtered = false, atTop = false } = {}) {
     if (!Array.isArray(chats) || filtered) return false;
     const solo = chats.filter((c) => c && c.name && c.is_group !== true);
     const read = solo.filter((c) => !(c.unread > 0));
@@ -96,7 +98,7 @@ class Unreplied {
     }
     // 画出来的（不置顶的）对话往前排到了多久以前：记下的对话比这还新却不在里面，说明已经不在列表上了
     let reach = 0;
-    for (const c of chats) {
+    for (const c of atTop ? chats : []) {
       if (!c || c.pinned || !c.time) continue;
       reach = Number.isFinite(c.age) ? Math.max(reach, c.age * MIN) : Infinity;
     }
@@ -113,17 +115,19 @@ class Unreplied {
   needsNumber(id, limit = 3) {
     const m = this.byAcc.get(String(id));
     if (!m) return [];
-    return [...m.entries()].filter(([, e]) => !e.jid && !e.digits && !e.noNum).slice(0, limit).map(([key, e]) => ({ key, name: e.name }));
+    return [...m.entries()].filter(([, e]) => !e.jid && !e.digits && !e.noNum)
+      .sort((a, b) => (a[1].tries || 0) - (b[1].tries || 0)).slice(0, limit).map(([key, e]) => ({ key, name: e.name }));
   }
 
-  // 查号码的结果：digits 查到了；final 为真且没查到就不再查（群、同名的、没存的）
+  // 查号码的结果：digits 查到了；final 为真且没查到就不再查（群、同名的、没存的）。
+  // 临时查不了（页面在加载、出错）下次再查，排在别的后面，连着 3 次就不查了
   setNumber(id, key, digits, final = true) {
     const m = this.byAcc.get(String(id));
     const e = m && m.get(key);
     if (!e) return;
     if (/^\d{7,15}$/.test(String(digits || ''))) m.set(key, { ...e, digits: String(digits) });
-    else if (final) m.set(key, { ...e, noNum: true });
-    else return;
+    else if (final || (e.tries || 0) + 1 >= 3) m.set(key, { ...e, noNum: true });
+    else m.set(key, { ...e, tries: (e.tries || 0) + 1 });
     this.changed();
   }
 

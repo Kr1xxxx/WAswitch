@@ -181,7 +181,10 @@ const LIST_CODE = (opts) => `((S, opts) => {
   const searching = !!(search && ((search.value || search.textContent || '').trim()));
   const tabs = [...document.querySelectorAll(S.filterTab)];
   const selected = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true' || t.getAttribute('aria-pressed') === 'true');
-  return { ok: true, chats, filtered: searching || selected > 0, unrecognized, total: rows.length };
+  const out = { ok: true, chats, filtered: searching || selected > 0, unrecognized, total: rows.length };
+  // 待回复用：列表是不是在最上面（往下翻过时画出来的只是更早的对话）
+  if (opts.reply) out.atTop = (pane.scrollTop || 0) <= 4;
+  return out;
 })(${JSON.stringify(SELECTORS)}, ${JSON.stringify(opts)})`;
 
 // reply：每个对话多带 out（最后一条是自己发的）和 age（最后一条至少过了几分钟，认不出是 null），给「待回复」用
