@@ -8,6 +8,7 @@
 //   4. 勿扰：都不响
 //   5. 这个号在 WAswitch 里不弹通知：都不响
 //   6. 正在听语音时切走：语音放完才静音，之后来消息只响 WAswitch 的
+//   8. 开了允许通话的直连号：从不静音（来电铃声、通话中停顿后的声音）
 // 运行：xvfb-run -a npx electron --no-sandbox scripts/check-wa-sound.js
 const { app, BrowserWindow } = require('electron');
 const { Notifier } = require('../src/notify');
@@ -27,6 +28,7 @@ check(W({ looking: true, sound: true, dnd: true, muted: true }) === false, '正�
 check(W({ looking: false, sound: false }) === false, '弹窗提示音关了：不静音');
 check(W({ looking: false, sound: false, dnd: true }) === true, '勿扰：静音');
 check(W({ looking: false, sound: false, muted: true }) === true, '号不弹通知：静音');
+check(W({ looking: false, sound: true, dnd: true, muted: true, calls: true }) === false, '开了允许通话的直连号：从不静音（来电铃声、通话声音）');
 
 // 像 WhatsApp 一样放提示音：new Audio(...).play()，不挂在页面上；kind=webaudio 时用 Web Audio
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>WhatsApp</title></head><body>
@@ -60,7 +62,7 @@ app.whenReady().then(async () => {
   await wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PAGE)}`);
 
   // 状态：主窗口在不在前台、正开着哪个号、设置、号是不是关了提醒
-  const state = { focused: false, activeId: 'a1', settings: { popupSound: true, popupDnd: false, popupSeconds: 6 }, muted: false };
+  const state = { focused: false, activeId: 'a1', settings: { popupSound: true, popupDnd: false, popupSeconds: 6 }, muted: false, calls: false };
   const fakeWin = { isVisible: () => true, isFocused: () => state.focused, isDestroyed: () => false };
   const acc = { id: 'a1', name: '销售 DE' };
   const popup = new PopupWindow({ getWindow: () => fakeWin, account: () => ({ name: acc.name, color: 'blue' }), locked: () => false, settings: () => state.settings, onOpen() {}, onLater() {}, idleSeconds: () => 0 });
@@ -78,7 +80,7 @@ app.whenReady().then(async () => {
   notifier.refresh = () => {};
   // 和 main.js 的 syncWaSound 一样
   const isActive = () => state.activeId === acc.id;
-  const sync = () => waSound.apply(wc, waSound.wantMute({ looking: notifier.looking(isActive()), sound: state.settings.popupSound, dnd: state.settings.popupDnd, muted: state.muted }));
+  const sync = () => waSound.apply(wc, waSound.wantMute({ looking: notifier.looking(isActive()), sound: state.settings.popupSound, dnd: state.settings.popupDnd, muted: state.muted, calls: state.calls }));
   wc.on('audio-state-changed', sync);
   wc.on('page-title-updated', (_e, title) => {
     const m = title.match(/^\((\d+)\)/);
@@ -143,6 +145,16 @@ app.whenReady().then(async () => {
   // 7. 回来看这个号：马上不静音（不等）
   state.focused = true; sync();
   check(!wc.isAudioMuted(), '7. 回到这个号：页面马上不静音');
+
+  // 8. 开了允许通话的直连号：没看着也不静音，通话中对方停 3 秒不说话也不会被静音
+  state.calls = true; state.focused = false; sync();
+  check(!wc.isAudioMuted(), '8. 允许通话的号没看着：不静音（来电铃声能听到）');
+  await wc.executeJavaScript(`(() => { const ctx = new AudioContext(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g).connect(ctx.destination); o.start();
+    const t = ctx.currentTime; g.gain.setValueAtTime(1, t); g.gain.setValueAtTime(0, t + 0.5); g.gain.setValueAtTime(1, t + 3.5); o.stop(t + 4.5); return true; })()`);
+  await sleep(4000);
+  check(!wc.isAudioMuted() && wc.isCurrentlyAudible(), '8. 通话中对方停 3 秒再说话：页面没被静音');
+  await sleep(1000);
+  state.calls = false;
 
   console.error(failures ? `wa-sound 自检失败 ${failures} 项` : 'wa-sound 自检全部通过');
   app.exit(failures ? 1 : 0);

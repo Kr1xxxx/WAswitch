@@ -1203,6 +1203,7 @@ function syncWaSound() {
       sound: settings.popupSound,
       dnd: settings.popupDnd,
       muted: isMuted(acc),
+      calls: callsOn(acc),
     }));
   }
 }
@@ -1485,8 +1486,10 @@ function createTeamSeat(seat) {
   return acc;
 }
 
+// 直连号开了「允许通话」才打得了电话
+const callsOn = (acc) => !acc.proxy && !!acc.allowCalls;
 function webrtcPolicy(acc) {
-  return !acc.proxy && acc.allowCalls ? 'default_public_interface_only' : 'disable_non_proxied_udp';
+  return callsOn(acc) ? 'default_public_interface_only' : 'disable_non_proxied_udp';
 }
 
 function setProblem(id, problem) {

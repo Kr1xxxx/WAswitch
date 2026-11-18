@@ -7,9 +7,11 @@
 //   勿扰开着、这个号在 WAswitch 里关了提醒，也静音（WAswitch 不响，WhatsApp 也别响）；
 //   这些都没有时（弹窗提示音关了）才让 WhatsApp 自己响
 // - 切走的时候页面正在出声（语音还没放完）先不静音，等声音停了再静音（页面的 audio-state-changed 会再同步一次）
+// - 开了「允许通话」的直连号从不静音：没看着时来电铃声要响（WAswitch 不提醒来电），
+//   通话中切走、对方停几秒不说话时也不能被静音掐掉。这些号新消息仍可能响两遍。没开的号打不了电话
 
-function wantMute({ looking, sound, dnd, muted }) {
-  return !looking && (sound !== false || !!dnd || !!muted);
+function wantMute({ looking, sound, dnd, muted, calls }) {
+  return !calls && !looking && (sound !== false || !!dnd || !!muted);
 }
 
 // 把一个页面设成该有的样子
