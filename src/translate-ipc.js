@@ -505,6 +505,8 @@ function setupTranslateIpc(ctx) {
         inlineRead = { accId: target.acc.id, wc: target.lite ? null : target.wc, lite: !!target.lite, msgs: r.msgs || [], vis: r.vis || [] };
         const was = floatReadable;
         floatReadable = 'ok';
+        // 「待回复」的待跟进：我们说完话的对话交给 followup.js（不多读页面）
+        try { if (ctx.followupSeen) ctx.followupSeen(target.acc.id, target.lite ? liteChat(target.acc.id).jid : null, r); } catch (e) { console.warn('待跟进', e && e.message); }
         const cfg = ctx.translator.load();
         let changed = floatCore.ingest(target.acc.id, r, { auto: floatAuto(target.acc.id), dailyCap: cfg.dailyCap });
         if (changed) changed = rememberDetected(target.acc.id) || changed;

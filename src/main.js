@@ -28,7 +28,8 @@ const waSound = require('./wa-sound');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
-const { Unreplied, createUnrepliedOpener, withTimeout } = require('./unreplied');
+const { Unreplied, createUnrepliedOpener, withTimeout, todoKey } = require('./unreplied');
+const { Followup, chatOf } = require('./followup');
 const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
@@ -1089,11 +1090,49 @@ async function scanUnreplied() {
   } finally {
     unrepliedScanning = false;
   }
-  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key]));
+  unrepliedPushIfChanged();
+}
+function unrepliedPushIfChanged() {
+  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key, e.kind, e.what || '']));
   if (sig !== unrepliedSig) { unrepliedSig = sig; pushState(); }
 }
 function unrepliedList() {
   return unrepliedStore().list(new Set(visibleAccounts().map((a) => a.id)));
+}
+// ---- 待跟进：AI 看打开的对话，我们还欠客户什么（见 followup.js）。来财的 ai/status 说支持（todo: true）才发请求 ----
+const TODO_STATUS_MS = 30 * 60 * 1000;
+let todoStatus = { at: 0, ok: false };
+async function todoSupported() {
+  if (locked || loginLocked() || !translator || !translator.cloud()) return false;
+  const now = Date.now();
+  if (now - todoStatus.at < TODO_STATUS_MS) return todoStatus.ok;
+  let r = null;
+  try { r = await translator.cloudStatus(); } catch { r = null; }
+  // 问不到（断网、超时）：5 分钟后再问；问到了 30 分钟后再问
+  todoStatus = r && !r.error ? { at: Date.now(), ok: r.todo === true } : { at: Date.now() - TODO_STATUS_MS + 5 * 60 * 1000, ok: false };
+  return todoStatus.ok;
+}
+const followup = new Followup({
+  analyzed: (id, key) => unrepliedStore().analyzed(id, key),
+  supported: todoSupported,
+  // 排在翻译后面：用户点的翻译、收到消息的自动翻译（正在翻的和排着的）都没有时才问。后台补翻不算，不然可能一直等
+  idle: () => {
+    if (!translator || translator.busy) return false;
+    const fc = trIpc.floatCore;
+    return !fc || (fc.active - fc.slowRun.size <= 0 && !fc.queue.some((q) => !q.slow));
+  },
+  send: (messages) => translator.todo(messages),
+  onResult: (id, key, info, result, meta) => {
+    if (!findAcc(id)) return;
+    unrepliedStore().setTodo(id, key, info, result, meta);
+    unrepliedPushIfChanged();
+  },
+});
+// 翻译读到了当前打开的对话（translate-ipc.js 的 floatTick）：jid = 轻量号正在看的对话，网页号是 null。只看私聊（见 followup.js 的 chatOf）
+function followupSeen(accId, jid, r) {
+  if (locked || !findAcc(accId)) return;
+  const c = chatOf(r, jid, todoKey);
+  if (c) followup.observe(accId, c.key, c.info, r.msgs);
 }
 // 点了「待回复」里的一个对话：切到那个号并打开这个对话（做法见 unreplied.js 的 createUnrepliedOpener）
 const unrepliedOpener = createUnrepliedOpener({
@@ -2593,6 +2632,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   liteUnreadChats.delete(id);
   liteOpen.delete(id);
   unrepliedStore().drop(id);
+  followup.forget(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
@@ -3208,6 +3248,7 @@ app.whenReady().then(async () => {
   setInterval(recheckUnread, RECHECK_MS);
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setInterval(scanUnreplied, UNREPLIED_SCAN_MS);
+  setInterval(() => { if (!locked && !loginLocked()) followup.tick().catch((e) => console.warn('待跟进分析失败', e && e.message)); }, 15 * 1000);
   setTimeout(scanUnreplied, 20 * 1000);
   setTimeout(checkLogins, 60 * 1000);
   setInterval(watchExits, EXIT_WATCH_MS);
@@ -3312,10 +3353,10 @@ handleShell('unreplied:open', (data) => {
 handleShell('unreplied:dismiss', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
   const store = unrepliedStore();
-  const old = store.dismiss(data.accountId, data.key);
+  const old = store.done(data.accountId, data.key);
   if (!old) return false;
-  pushState();
-  offerUndo({ kind: 'state', where: 'body', text: `已完成「${shortName(old.name)}」` }, () => { store.undismiss(data.accountId, data.key); pushState(); });
+  unrepliedPushIfChanged();
+  offerUndo({ kind: 'state', where: 'body', text: `已完成「${shortName(old.name)}」` }, () => { store.undone(data.accountId, data.key, old); unrepliedPushIfChanged(); });
   return true;
 });
 // ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----
@@ -3491,6 +3532,7 @@ const ctx = {
   get liteGuardHits() { return liteGuardHits; },
   get liteHost() { return liteHost; },
   offerUndo,
+  followupSeen,
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
   // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
   liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),

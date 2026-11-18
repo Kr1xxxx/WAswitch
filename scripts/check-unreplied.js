@@ -95,8 +95,8 @@ assert.strictEqual(y.get('b1', 'Emma Wilson'), null, '7 天以上的去掉');
 const again = make(JSON.parse(JSON.stringify(u.toJSON())));
 assert(saved && saved.v === 1, '改了会存');
 assert.deepStrictEqual(again.toJSON(), u.toJSON(), '读回来和存的一样');
-assert.deepStrictEqual(make({ v: 1, accounts: { a: { x: { name: 1 } } } }).toJSON(), { v: 1, accounts: {} }, '坏数据丢掉');
-assert.deepStrictEqual(make('garbage').toJSON(), { v: 1, accounts: {} });
+assert.deepStrictEqual(make({ v: 1, accounts: { a: { x: { name: 1 } } } }).toJSON(), { v: 1, accounts: {}, todos: {} }, '坏数据丢掉');
+assert.deepStrictEqual(make('garbage').toJSON(), { v: 1, accounts: {}, todos: {} });
 again.drop('a1');
 assert.deepStrictEqual(again.list(), []);
 
