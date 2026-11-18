@@ -3304,7 +3304,7 @@ handleShell('notif:clear', () => {
   }
   return true;
 });
-// 待回复：点一个对话打开它；「忽略」直接去掉，给几秒撤销
+// 待回复：点一个对话打开它；点圆圈（办完了）直接去掉，给几秒撤销
 handleShell('unreplied:open', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return { result: 'gone' };
   return unrepliedOpener.open(data.accountId, data.key, data.force === true);
@@ -3315,7 +3315,7 @@ handleShell('unreplied:dismiss', (data) => {
   const old = store.dismiss(data.accountId, data.key);
   if (!old) return false;
   pushState();
-  offerUndo({ kind: 'state', where: 'body', text: `已忽略「${shortName(old.name)}」` }, () => { store.undismiss(data.accountId, data.key); pushState(); });
+  offerUndo({ kind: 'state', where: 'body', text: `已完成「${shortName(old.name)}」` }, () => { store.undismiss(data.accountId, data.key); pushState(); });
   return true;
 });
 // ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----

@@ -4,7 +4,7 @@
 //   2) 读两次后 unreplied.js 列出客户最后说话、超过 30 分钟的私聊（存了名字、没查号码的也列），不列自己回过的和群（照片头像的群看预览前的发送人）
 //   3) 点开：createUnrepliedOpener + 真的 chat-open.js 让页面跳到 web.whatsapp.com/send?phone=号码（这里换成打开了这个对话的假页面），
 //      确认打开的就是这个号码的对话
-//   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面列出对话，点一行带回号和对话，输入框有字时问一次，× 忽略；
+//   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面列出对话，点一行带回号和对话，输入框有字时问一次，点左边的圆圈算办完；
 //      900×600 和 1200×760 下文字不被裁。SHOT_DIR 设了就存截图
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/run-check-electron.js scripts/check-unreplied-electron.js
 const path = require('path');
@@ -217,12 +217,14 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       w.setSize(wd, ht);
       await push({ page: 'unreplied' });
       await wait(300);
-      const rows = await js(() => [...document.querySelectorAll('.ur-row')].map((r) => ({ text: r.textContent, x: !!r.querySelector('.ur-x') })));
+      const rows = await js(() => [...document.querySelectorAll('.ur-row')].map((r) => ({ text: r.textContent, x: !!r.querySelector('.ur-done .ur-circle'), first: r.firstElementChild.className })));
       assert.strictEqual(rows.length, 4, `页面列出 4 个对话 ${JSON.stringify(rows)}`);
       assert(rows[0].text.includes('Emma Wilson') && rows[0].text.includes('Sales FR') && rows[0].text.includes('1 天'), `第一行：名字、号、等了多久 ${rows[0].text}`);
       assert(rows[1].text.includes('4 小时'), rows[1].text);
       assert(rows[3].text.includes('45 分钟'), `不到 1 小时写分钟 ${rows[3].text}`);
-      assert(rows.every((x) => x.x), '每行有忽略');
+      assert(rows.every((x) => x.x && x.first === 'ur-done'), '每行最左边是圆圈');
+      const circle = await js(() => { const b = document.querySelector('.ur-circle').getBoundingClientRect(); const o = document.querySelector('.ur-open').getBoundingClientRect(); return { w: b.width, h: b.height, left: b.right <= o.left, mid: Math.abs((b.top + b.bottom) / 2 - (o.top + o.bottom) / 2) }; });
+      assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 0.5, `圆圈 18px、在行左边、上下居中 ${JSON.stringify(circle)}`);
       const c = await clipped();
       assert.deepStrictEqual(c.bad, [], `${label}：文字没被裁 ${JSON.stringify(c.bad)}`);
       assert(c.rows.every((hh) => hh <= 40), `${label}：每行一行高 ${JSON.stringify(c.rows)}`);
@@ -251,10 +253,11 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await wait(100);
     assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['open', 'a1', 'Sophie Martin', true], '仍然打开带 force');
     assert.strictEqual(await js(() => !!document.querySelector('.ur-ask')), false, '打开后提问收起');
-    // × 忽略
-    await js(() => document.querySelectorAll('.ur-x')[0].click());
+    // 点圆圈：办完
+    assert.strictEqual(await js(() => document.querySelectorAll('.ur-done')[0].getAttribute('aria-label')), '完成「Emma Wilson」');
+    await js(() => document.querySelectorAll('.ur-done')[0].click());
     await wait(100);
-    assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['dismiss', 'a2', 'Emma Wilson'], '× 忽略这一个');
+    assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['dismiss', 'a2', 'Emma Wilson'], '点圆圈办完这一个');
     // 空的时候
     await push({ page: 'unreplied', unreplied: { count: 0, list: [] } });
     await wait(150);

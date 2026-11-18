@@ -722,7 +722,10 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .ur-row .ur-open { flex: 1; min-width: 0; }
 .ur-row .ur-open:disabled { opacity: .6; }
 .ur-wait { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ur-x { flex: none; color: var(--slate-11); }
+/* 左边的圆圈：点了算办完。悬停时圆里出现勾 */
+.ur-done { flex: none; width: 30px; height: 30px; padding: 0; border: none; border-radius: var(--r-m); background: transparent; color: transparent; display: flex; align-items: center; justify-content: center; }
+.ur-circle { width: 18px; height: 18px; border: var(--hair) solid var(--slate-8); border-radius: var(--r-full); display: flex; align-items: center; justify-content: center; transition: background var(--fx) var(--fx-ease), color var(--fx) var(--fx-ease); }
+.ur-done:hover .ur-circle, .ur-done:focus-visible .ur-circle { background: var(--slate-4); color: var(--slate-11); }
 .col.ur-item { flex: none; gap: 4px; }
 .ur-ask { padding: 0 10px 8px; font-size: var(--fs-s); }
 .ur-ask .bad { color: var(--danger); }
