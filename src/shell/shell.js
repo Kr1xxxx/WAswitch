@@ -997,6 +997,48 @@ function customerForm() {
       } }, '保存'),
       h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; renderPanel(true); } }, '取消')));
 }
+// 客户资料页的「开聊」：粘贴号码（可填名字），在当前网页号里打开和这个号码的对话，号码和名字记进客户资料。
+// 走 WhatsApp 自己的 /send?phone= 网址，不碰 WhatsApp 的通讯录（见 chat-open.js）。轻量号不显示这个入口
+const OPEN_FAIL = {
+  bad_phone: '号码要带国家码，例如 +49 151 2345678',
+  changed: '当前账号变了、已锁定或页面没打开，没有打开',
+  lite: '轻量号不能给没聊过的号码发消息',
+  not_loaded: '这个号的页面还没加载好，稍后再试',
+  problem: '这个号的页面有问题，先处理好再试',
+  no_chat: '没看到对话打开，这个号码可能没有注册 WhatsApp',
+  not_empty: '输入框里有没发的字，打开对话要刷新页面，这些字可能会丢',
+};
+async function openNumber() {
+  const f = pn.edit;
+  if (!f || !f.open || f.busy) return;
+  f.busy = true; pn.msg = ''; renderPanel(true);
+  let r;
+  try { r = await window.wa.chatOpenNumber({ accountId: pn.accountId, phone: f.phone, name: f.name, force: !!f.force }); } catch { r = null; }
+  if (pn.edit !== f) return; // 等的时候用户点了取消或换了页
+  f.busy = false;
+  if (r && (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat')) {
+    pn.edit = null;
+    if (r.reason === 'no_chat') return panelSay(OPEN_FAIL.no_chat, true);
+    pn.msg = '';
+    window.wa.panelTab('translate'); // 对话开了，回到翻译页
+    return;
+  }
+  f.force = !!r && r.reason === 'not_empty';
+  const why = !r ? '没有打开' : r.result === 'busy' ? '正在打开另一个对话，稍后再试' : r.result === 'gone' ? OPEN_FAIL.changed : OPEN_FAIL[r.reason] || '没有打开';
+  panelSay(why, true);
+}
+function openForm() {
+  const f = pn.edit;
+  const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
+  const phone = h('input', { value: f.phone || '', maxlength: '80', placeholder: '号码', 'aria-label': '号码', inputmode: 'tel', disabled: f.busy, onkeydown: enter,
+    oninput: (e) => { f.phone = e.target.value; } });
+  const name = h('input', { value: f.name || '', maxlength: '60', placeholder: '名字（可不填）', 'aria-label': '名字', disabled: f.busy, onkeydown: enter, oninput: (e) => { f.name = e.target.value; } });
+  if (!f.busy) requestAnimationFrame(() => { if (pn.edit === f && !$panel.contains(document.activeElement)) phone.focus(); });
+  return h('div', { class: 'pn-form' }, phone, name,
+    h('div', { class: 'acts', style: { display: 'flex', gap: '4px' } },
+      h('button', { class: 'pn-btn primary', disabled: f.busy, onclick: openNumber }, f.busy ? '正在打开' : f.force ? '仍然打开' : '开聊'),
+      h('button', { class: 'pn-btn', onclick: () => { pn.edit = null; pn.msg = ''; renderPanel(true); } }, '取消')));
+}
 function replyItems() {
   const q = pn.q.toLowerCase();
   const list = pn.data.replies.filter((r) => !q || `${r.title}\n${r.text}`.toLowerCase().includes(q)).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1242,6 +1284,7 @@ function renderPanel(force = false) {
   if (pn.tab !== tab) { pn.edit = null; pn.q = ''; pn.msg = ''; dk.info = null; }
   pn.tab = tab;
   pn.accountId = s.activeId; // 面板画出来时记下目标账号，插入时要对得上
+  if (pn.edit && pn.edit.open && !pn.edit.busy && (!active() || active().mode === 'lite')) pn.edit = null; // 换到轻量号：开聊只有网页号能用
   $panel.classList.toggle('dock', tab === 'translate');
   $panel.setAttribute('aria-label', '工作台');
   if (tab === 'translate') {
@@ -1272,11 +1315,12 @@ function renderPanel(force = false) {
   $panel.replaceChildren(...kids(
     panelHead(),
     pn.edit ? null : h('div', { class: 'pn-tools' }, search,
+      !replies && active() && active().mode !== 'lite' ? h('button', { class: 'pn-btn', onclick: () => { pn.edit = { open: true, phone: '', name: '' }; pn.msg = ''; renderPanel(true); } }, '开聊') : null,
       h('button', { class: 'pn-btn primary', onclick: () => { pn.edit = replies ? { title: '', text: '' } : { accountId: pn.accountId, tags: [] }; pn.msg = ''; renderPanel(true); } }, '新建')),
     !replies && !pn.edit ? h('label', { class: 'hint', style: { padding: '0 12px 6px', display: 'flex', gap: '6px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: pn.all, onchange: (e) => { pn.all = e.target.checked; renderPanel(true); } }), '显示所有号的客户') : null,
     pn.msg ? fx('pn-msg', pn.msg, h('div', { class: `pn-msg${pn.bad ? ' bad' : ''}` }, pn.msg)) : null,
-    pn.edit ? (replies ? replyForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
+    pn.edit ? (replies ? replyForm() : pn.edit.open ? openForm() : customerForm()) : h('div', { class: 'pn-list' }, replies ? replyItems() : customerItems()),
     pn.edit ? null : h('div', { class: 'pn-foot' },
       h('button', { class: 'pn-btn', onclick: () => io('import') }, '导入'),
       h('button', { class: 'pn-btn', onclick: () => io('csv') }, '导出'))));

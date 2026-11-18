@@ -9,6 +9,8 @@
 // 用户正在打字或编辑账号时不直接开，改在窗口顶部问，用户点“打开”才开。
 // 只打开，不发送、不标已读（用户自己看到对话时 WhatsApp 才会像平常一样标已读）。
 // 由 main.js 的 mcpHooks.openChat 调用；MCP 的代码不直接引用这个文件。
+// 客户资料页的「开聊」（用户自己粘贴号码）走 openForUser：只有网页号，用户就在这个号上，不问是不是在打字，
+// 输入框里有没发的字时照样先停下，由用户点「仍然打开」。
 const { chatMatches, jidNumber } = require('./draft-place');
 
 const OPEN_ASK_MS = 60 * 1000; // 顶部横幅 1 分钟没人点就消失
@@ -17,6 +19,22 @@ const WEB_STEP_MS = 500;
 const LITE_WAIT_MS = 1500; // 轻量模式切过去后等对话列表推过来
 
 const sendUrl = (digits) => `https://web.whatsapp.com/send?phone=${digits}`;
+
+// 用户粘贴来的号码整理成只有数字的国际号码（不带 +），认不出返回 ''。
+// 和 src/mcp/open-chat.js 的 normalizePhone 规则一样，另外认 wa.me 链接、「+49 (0)151」里的 (0)、不换行空格和斜杠。
+// 单个 0 开头（本国拨号，不知道国家码）不认
+function normalizePhone(raw) {
+  let s = String(raw || '').replace(/[\u00a0\u2000-\u200f\u202f\u2060\ufeff]/g, ' ').trim();
+  const link = s.match(/^(?:https?:\/\/)?(?:wa\.me\/|(?:api|web)\.whatsapp\.com\/send\/?\?(?:.*&)?phone=)\+?(\d+)/i);
+  if (link) s = `+${link[1]}`;
+  if (!/^[+\d\s()./-]+$/.test(s)) return '';
+  if (s.startsWith('+')) s = s.replace(/\(\s*0\s*\)/, '');
+  let d = s.replace(/\D/g, '');
+  if (s.startsWith('+')) d = d.replace(/^0+/, '');
+  else if (d.startsWith('00')) d = d.slice(2);
+  else if (d.startsWith('0')) return '';
+  return d.length >= 7 && d.length <= 15 ? d : '';
+}
 
 // 给 AI 的说明：为什么没直接打开
 const WHY = {
@@ -118,6 +136,25 @@ function createChatOpener(deps) {
     }
   }
 
+  // 用户在客户资料页粘贴号码点「开聊」。force：输入框里有没发的字，用户点了「仍然打开」。
+  // 返回值和 open 一样，另外 reason 可能是 lite（轻量号不能给没聊过的号码发消息）、not_empty（输入框里有没发的字）
+  async function openForUser({ accountId, phone, force = false }) {
+    const cur = deps.request();
+    if (inFlight || (cur && (cur.kind === 'open' || cur.kind === 'draft'))) return { result: 'busy' };
+    const acc = deps.findAcc(accountId);
+    if (!acc) return { result: 'gone' };
+    if (deps.isLite(acc)) return { result: 'failed', reason: 'lite' };
+    if (!/^\d{7,15}$/.test(String(phone))) return { result: 'failed', reason: 'bad_phone' };
+    if (deps.problem(accountId)) return { result: 'failed', reason: 'problem' };
+    inFlight = true;
+    try {
+      const r = await openWeb(acc, phone, { checkCompose: !force, activate: () => deps.activate(accountId) });
+      return r.result === 'ask' ? { result: 'failed', reason: 'not_empty' } : r;
+    } finally {
+      inFlight = false;
+    }
+  }
+
   // 用户在横幅里点了“忽略”（yes=false）或“打开”（yes=true）
   async function answer(yes) {
     const req = deps.request();
@@ -141,7 +178,7 @@ function createChatOpener(deps) {
     }
   }
 
-  return { open, answer };
+  return { open, answer, openForUser };
 }
 
-module.exports = { createChatOpener, sendUrl, OPEN_ASK_MS, WEB_WAIT_MS };
+module.exports = { createChatOpener, normalizePhone, sendUrl, OPEN_ASK_MS, WEB_WAIT_MS };
