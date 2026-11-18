@@ -178,6 +178,8 @@ jobs:
         run: npm run check:offline
       - name: 新消息弹窗写出是哪个客户
         run: npm run check:notify
+      - name: 待回复：列出客户最后说话、2 小时没回的对话，点一下打开
+        run: npm run check:unreplied && xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/run-check-electron.js scripts/check-unreplied-electron.js
       - name: 一条新消息只响一次提示音（WAswitch 弹窗和 WhatsApp 自己的不一起响）
         run: xvfb-run -a npx electron --no-sandbox scripts/check-wa-sound.js && xvfb-run -a node scripts/check-wa-sound-app.js
       - name: 自动更新自检

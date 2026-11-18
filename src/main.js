@@ -28,6 +28,7 @@ const waSound = require('./wa-sound');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
+const { Unreplied, createUnrepliedOpener, withTimeout } = require('./unreplied');
 const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
@@ -584,7 +585,7 @@ async function comparePrimary() {
 const loginStates = new Map();
 const LOGIN_CHECK_MS = 3 * 60 * 1000;
 let activeId = null;
-let page = 'account'; // account | editor | settings | overview | translate | welcome | login
+let page = 'account'; // account | editor | settings | overview | translate | unreplied | welcome | login
 let editorId = null;
 let editorNonce = 0;
 let editorColor = null;
@@ -1017,6 +1018,94 @@ const chatOpener = createChatOpener({
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 
+// ---- 待回复：客户说了话、我们 2 小时以上没回的对话（见 unreplied.js） ----
+const unrepliedFile = () => path.join(app.getPath('userData'), 'unreplied.json');
+let unrepliedPending = null;
+let unrepliedTimer = null;
+function writeUnrepliedNow() {
+  clearTimeout(unrepliedTimer);
+  unrepliedTimer = null;
+  if (!unrepliedPending) return;
+  const data = unrepliedPending;
+  unrepliedPending = null;
+  try { writeJsonAtomic(unrepliedFile(), data); } catch (e) { console.warn('待回复记录保存失败', e.message); }
+}
+let unreplied = null;
+function unrepliedStore() {
+  if (unreplied) return unreplied;
+  unreplied = new Unreplied({
+    // 能重新读出来的数据：文件没有或坏了就从空的开始
+    load: () => { try { return JSON.parse(fs.readFileSync(unrepliedFile(), 'utf8')); } catch { return null; } },
+    save: (data) => { unrepliedPending = data; if (!unrepliedTimer) unrepliedTimer = setTimeout(writeUnrepliedNow, 5000); },
+  });
+  return unreplied;
+}
+app.on('will-quit', writeUnrepliedNow);
+const UNREPLIED_SCAN_MS = 60 * 1000;
+let unrepliedSig = '';
+let unrepliedScanning = false;
+// 每分钟读一遍每个号：网页号只读左侧对话列表（隔离环境），轻量号读本机聊天缓存。锁着、出错、没登录的号跳过。
+// 每一步都有超时：主进程卡过以后页面可能停在空地址上，在里面跑脚本永远等不到回音（见 docs/testing-pitfalls.md），不能让以后的读取都卡住
+const UNREPLIED_STEP_MS = 5000;
+async function scanUnreplied() {
+  if (unrepliedScanning || locked || loginLocked()) return;
+  unrepliedScanning = true;
+  const store = unrepliedStore();
+  try {
+    for (const acc of visibleAccounts()) {
+      if (locked || problems.has(acc.id) || loginStates.get(acc.id) !== 'logged_in') continue;
+      if (isLite(acc)) {
+        if (!liteHost || liteStates.get(acc.id)?.status !== 'open') continue;
+        const list = await withTimeout(liteHost.chatList(acc.id), UNREPLIED_STEP_MS, null);
+        if (Array.isArray(list) && findAcc(acc.id)) store.ingestLite(acc.id, list);
+        continue;
+      }
+      const view = views.get(acc.id);
+      if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) continue;
+      const wc = view.webContents;
+      if (!isWhatsAppUrl(wc.getURL())) continue;
+      const r = await withTimeout(waPage.readChatList(wc, { reply: true }), UNREPLIED_STEP_MS, null);
+      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true })) continue;
+      // 新记下的对话查一次号码（只读 WhatsApp 本地的联系人）：查到才列，群和查不到的不列
+      for (const { key, name } of store.needsNumber(acc.id)) {
+        if (wc.isDestroyed()) break;
+        const found = await withTimeout(waPage.lookupPeerPhone(wc, { title: name }), UNREPLIED_STEP_MS, null);
+        if (!found) break;
+        store.setNumber(acc.id, key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
+      }
+    }
+  } catch (e) {
+    console.warn('待回复读取失败', e && e.message);
+  } finally {
+    unrepliedScanning = false;
+  }
+  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key]));
+  if (sig !== unrepliedSig) { unrepliedSig = sig; pushState(); }
+}
+function unrepliedList() {
+  return unrepliedStore().list(new Set(visibleAccounts().map((a) => a.id)));
+}
+// 点了「待回复」里的一个对话：切到那个号并打开这个对话（做法见 unreplied.js 的 createUnrepliedOpener）
+const unrepliedOpener = createUnrepliedOpener({
+  store: () => unrepliedStore(),
+  findAcc: (id) => findAcc(id),
+  isLite,
+  locked: () => locked,
+  webContents: (id) => {
+    const view = views.get(id);
+    return view && !view.webContents.isDestroyed() && !pendingLoad.has(id) && !problems.has(id) ? view.webContents : null;
+  },
+  // 读页面都带超时：卡住的页面不能让这一行一直转着
+  waPage: {
+    readChatPeer: (wc) => withTimeout(waPage.readChatPeer(wc), UNREPLIED_STEP_MS, null),
+    lookupPeerPhone: (wc, q) => withTimeout(waPage.lookupPeerPhone(wc, q), UNREPLIED_STEP_MS, { digits: '' }),
+    composeState: (wc, probe) => withTimeout(waPage.composeState(wc, probe), UNREPLIED_STEP_MS, null),
+  },
+  activate: async (id) => { notifier.showWindow(); await userActivate(id); },
+  liteOpen: (id, jid) => { liteOpen.set(id, jid); syncLiteWatch(); pushState(); },
+  openNumber: (id, digits) => chatOpener.openForUser({ accountId: id, phone: digits, force: true }),
+});
+
 const regionName = (() => {
   let names = null;
   try { names = new Intl.DisplayNames(['zh-CN'], { type: 'region' }); } catch { /* 没有 ICU 时直接显示代码 */ }
@@ -1374,6 +1463,8 @@ function pushState() {
         crmWaitPhone: !!(acc.teamId && acc.teamCrm && acc.teamRejoin && !isParked(acc)),
       };
     }),
+    // 待回复：锁着时只给个数，不给名字
+    unreplied: (() => { const list = unrepliedList(); return { count: list.length, list: locked ? [] : list }; })(),
     lite: liteStateForShell(),
     totalMB: memoryManager.totalMB(),
     settings,
@@ -2491,6 +2582,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   liteViews.delete(id);
   liteUnreadChats.delete(id);
   liteOpen.delete(id);
+  unrepliedStore().drop(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
@@ -3105,6 +3197,8 @@ app.whenReady().then(async () => {
   setInterval(checkOffline, OFFLINE_TICK_MS);
   setInterval(recheckUnread, RECHECK_MS);
   setInterval(checkLogins, LOGIN_CHECK_MS);
+  setInterval(scanUnreplied, UNREPLIED_SCAN_MS);
+  setTimeout(scanUnreplied, 20 * 1000);
   setTimeout(checkLogins, 60 * 1000);
   setInterval(watchExits, EXIT_WATCH_MS);
   setTimeout(watchExits, 3 * 60 * 1000);
@@ -3177,7 +3271,7 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings', 'overview', 'translate'].includes(p)) return;
+  if (!['account', 'settings', 'overview', 'translate', 'unreplied'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
@@ -3198,6 +3292,20 @@ handleShell('notif:clear', () => {
       saveNotifLogSoon();
     });
   }
+  return true;
+});
+// 待回复：点一个对话打开它；「忽略」直接去掉，给几秒撤销
+handleShell('unreplied:open', (data) => {
+  if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return { result: 'gone' };
+  return unrepliedOpener.open(data.accountId, data.key, data.force === true);
+});
+handleShell('unreplied:dismiss', (data) => {
+  if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
+  const store = unrepliedStore();
+  const old = store.dismiss(data.accountId, data.key);
+  if (!old) return false;
+  pushState();
+  offerUndo({ kind: 'state', where: 'body', text: `已忽略「${shortName(old.name)}」` }, () => { store.undismiss(data.accountId, data.key); pushState(); });
   return true;
 });
 // ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----

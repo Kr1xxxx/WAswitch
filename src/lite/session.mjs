@@ -364,8 +364,9 @@ export class Session {
   chatList() {
     if (!this.store) return null;
     return this.store.summary(2000).map((c) => ({
-      name: c.name, number: phoneOf(c.jid), unread: c.unread, ts: c.ts, group: c.group,
+      jid: c.jid, name: c.name, number: phoneOf(c.jid), unread: c.unread, ts: c.ts, group: c.group,
       preview: String(c.preview || '').slice(0, 160),
+      ...replyState(this.store.messages(c.jid, 500)),
     }));
   }
 
@@ -481,4 +482,12 @@ export class Session {
     this.store = null;
     fs.rmSync(this.cfg.dir, { recursive: true, force: true });
   }
+}
+
+// 待回复用：最后一条是不是自己发的（me），我们最后一条之后客户第一条的时间（wait，秒；没有是 0）
+export function replyState(msgs) {
+  if (!Array.isArray(msgs) || !msgs.length) return { me: null, wait: 0 };
+  let wait = 0;
+  for (let i = msgs.length - 1; i >= 0 && !msgs[i].me; i -= 1) wait = msgs[i].ts;
+  return { me: !!msgs[msgs.length - 1].me, wait };
 }

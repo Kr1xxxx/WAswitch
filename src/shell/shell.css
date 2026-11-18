@@ -711,6 +711,17 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 /* ---------- 左侧栏「翻译」入口 ---------- */
 #side .side-tools { margin-top: 10px; }
 .avatar.tool { background: var(--slate-12); color: var(--white); }
+.tool-row .name { flex: 1; min-width: 0; }
+
+/* ---------- 待回复 ---------- */
+.ur-row { display: flex; align-items: center; gap: 4px; }
+.ur-row .ur-open { flex: 1; min-width: 0; }
+.ur-row .ur-open:disabled { opacity: .6; }
+.ur-wait { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ur-x { flex: none; color: var(--slate-11); }
+.col.ur-item { flex: none; gap: 4px; }
+.ur-ask { padding: 0 10px 8px; font-size: var(--fs-s); }
+.ur-ask .bad { color: var(--danger); }
 
 /* ---------- 翻译页（shen 2026-10-28 方案 A）----------
    按 shen 的设计规范：Radix Slate 灰阶、细线用 --hair、字号只用 12/14/16、嵌套圆角同心（外 14 − 内边距 8 = 按钮 6）、
