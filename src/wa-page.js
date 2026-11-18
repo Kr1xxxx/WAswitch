@@ -120,6 +120,31 @@ const LIST_CODE = (opts) => `((S, opts) => {
     .map((el) => (el.textContent || '').trim())
     .filter(Boolean);
   const TIME = /^(\\d{1,2}[:.]\\d{2}(\\s?[ap]\\.?m\\.?)?|[ap]m\\s?\\d{1,2}[:.]\\d{2}|(上午|下午|晚上|凌晨)\\s?\\d{1,2}[:.]\\d{2}|\\d{1,4}[\\/.-]\\d{1,2}[\\/.-]\\d{1,4}|\\d{1,2}月\\d{1,2}日|昨天|前天|今天|yesterday|today|(星期|周)[一二三四五六日天]|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i;
+  // 对话列表里自己发的最后一条前面的勾：单勾、双勾、发送中的钟（老版 status-*，新版 msg-*）
+  const TICK = /^(status|msg)-(dbl)?check(-light)?$|^(status|msg)-time$/i;
+  // 列表上的时间 → 这条消息至少过了多少分钟（按页面自己的时区算）。只认今天的钟点、昨天、前天、星期几；更早的日期返回 null
+  const WEEK = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, '日': 0, '天': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6 };
+  const ageOf = (t) => {
+    const now = new Date();
+    const sinceMidnight = now.getHours() * 60 + now.getMinutes();
+    const v = String(t || '').trim().toLowerCase();
+    let m = /^(上午|下午|晚上|凌晨)?\\s*(\\d{1,2})[:.](\\d{2})\\s*([ap])?\\.?m?\\.?$/.exec(v) || /^([ap])m\\s?(\\d{1,2})[:.](\\d{2})$/.exec(v);
+    if (m) {
+      let h; let mi; let pm; let am;
+      if (m.length === 4) { h = Number(m[2]); mi = Number(m[3]); pm = m[1] === 'p'; am = m[1] === 'a'; } else { h = Number(m[2]); mi = Number(m[3]); pm = m[4] === 'p' || /下午|晚上/.test(m[1] || ''); am = m[4] === 'a' || /上午|凌晨/.test(m[1] || ''); }
+      if (pm && h < 12) h += 12;
+      if (am && h === 12) h = 0;
+      if (h > 23 || mi > 59) return null;
+      return Math.max(0, sinceMidnight - (h * 60 + mi));
+    }
+    if (v === 'yesterday' || v === '昨天') return sinceMidnight;
+    if (v === '前天') return sinceMidnight + 1440;
+    m = /^(?:星期|周)([一二三四五六日天])$/.exec(v);
+    const dow = m ? WEEK[m[1]] : WEEK[v];
+    if (dow === undefined) return null;
+    const back = (now.getDay() - dow + 7) % 7 || 7;
+    return sinceMidnight + (back - 1) * 1440;
+  };
   const chats = [];
   let unrecognized = 0;
   for (const row of rows) {
@@ -140,6 +165,11 @@ const LIST_CODE = (opts) => `((S, opts) => {
       muted: !!row.querySelector(S.muted),
       is_group: isGroup,
     };
+    if (opts.reply) {
+      // 待回复用：最后一条是不是自己发的（预览前面有发送状态的勾），和这条消息过了多少分钟（只算下限）
+      chat.out = [...row.querySelectorAll('[data-icon]')].some((el) => TICK.test(el.getAttribute('data-icon') || ''));
+      chat.age = ageOf(time);
+    }
     if (opts.includePreview) {
       const preview = titled.slice(1).find((t) => t !== name) || '';
       chat.preview = preview.length > 100 ? preview.slice(0, 100) + '…' : preview;
@@ -154,10 +184,11 @@ const LIST_CODE = (opts) => `((S, opts) => {
   return { ok: true, chats, filtered: searching || selected > 0, unrecognized, total: rows.length };
 })(${JSON.stringify(SELECTORS)}, ${JSON.stringify(opts)})`;
 
-async function readChatList(wc, { includePreview = false } = {}) {
+// reply：每个对话多带 out（最后一条是自己发的）和 age（最后一条至少过了几分钟，认不出是 null），给「待回复」用
+async function readChatList(wc, { includePreview = false, reply = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, reason: 'loading' };
   try {
-    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: LIST_CODE({ includePreview: !!includePreview }) }]);
+    const r = await wc.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code: LIST_CODE({ includePreview: !!includePreview, reply: !!reply }) }]);
     return r && typeof r === 'object' ? r : { ok: false, reason: 'unrecognized' };
   } catch {
     return { ok: false, reason: 'unrecognized' };

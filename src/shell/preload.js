@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('wa', {
   tmodeDelete: (id) => ipcRenderer.invoke('tmode:delete', id),
   notifLog: () => ipcRenderer.invoke('notif:log'),
   notifClear: () => ipcRenderer.invoke('notif:clear'),
+  unrepliedOpen: (accountId, key, force) => ipcRenderer.invoke('unreplied:open', { accountId, key, force: force === true }),
+  unrepliedDismiss: (accountId, key) => ipcRenderer.invoke('unreplied:dismiss', { accountId, key }),
   // 删除、清空、解散分组以后的“撤销”
   onUndoOffer: (cb) => ipcRenderer.on('undo:offer', (_e, o) => cb(o)),
   undo: (token) => ipcRenderer.invoke('undo:run', token),

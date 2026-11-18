@@ -1,0 +1,86 @@
+<!doctype html>
+<!-- 照新版 WhatsApp Web（2026-10 起）左侧对话列表的结构做的测试页，给 scripts/check-unreplied-electron.js 用：
+     #pane-side 里 role=grid 的虚拟列表，每行 role=row（data-testid=list-item-N），名字在 cell-frame-title 里带 title 的 span，
+     最后一条是自己发的时预览前面有 last-msg-status 里的勾（老版 status-dblcheck，新版 msg-dblcheck），收到的语音是 status-ptt，
+     未读是带 aria-label 的数字。class 都是乱码。时间由测试从网址的 # 后面传进来（按测试机的钟算出几小时前的钟点）。 -->
+<html><head><meta charset="utf-8"><title>WhatsApp</title></head>
+<body>
+<div id="app"><div class="two">
+<div id="side">
+  <div class="xsearch"><div contenteditable="true" role="textbox" aria-label="Search input textbox" data-tab="3"></div></div>
+  <div role="tablist" aria-label="chat-list-filters">
+    <button role="tab" aria-selected="true" id="all-filter">All</button>
+    <button role="tab" aria-selected="false" id="unread-filter">Unread</button>
+    <button role="tab" aria-selected="false" id="group-filter">Groups</button>
+  </div>
+  <div id="pane-side" class="x1n2onr6">
+    <div role="grid" aria-label="Chat list" aria-rowcount="42" aria-colcount="1" class="x1y332i5">
+      <!-- 1. 客户发的文字，3 小时前，已读没回 -->
+      <div role="row" data-testid="list-item-0" class="x10l6tqk" style="z-index: 41; transform: translateY(0px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" draggable="false" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Sophie Martin" class="x1iyjqo2 _ao3e">Sophie Martin</span></div><div class="_ak8i" data-k="t0">10:42</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Do you ship to Lyon? And what is the price for 20 trays?" class="x78zum5 x1cy8zhl"><span dir="ltr" class="_ao3e">Do you ship to Lyon? And what is the price for 20 trays?</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
+      <!-- 2. 自己发的（老版勾 status-dblcheck） -->
+      <div role="row" data-testid="list-item-1" class="x10l6tqk" style="z-index: 40; transform: translateY(72px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Lukas Weber" class="x1iyjqo2 _ao3e">Lukas Weber</span></div><div class="_ak8i" data-k="t1">10:30</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Sure, I will send the catalog" class="x78zum5 x1cy8zhl"><div class="x1rg5ohu"><span data-testid="last-msg-status" aria-label=" Read "><span data-icon="status-dblcheck" class=""><svg viewBox="0 0 18 18" height="18" width="18" preserveAspectRatio="xMidYMid meet"><title>status-dblcheck</title><path fill="currentColor" d="M17.394 5.035l-.57-.444"></path></svg></span></span></div><span dir="ltr" class="_ao3e">Sure, I will send the catalog</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
+      <!-- 3. 客户发的语音（没存联系人，名字是号码），4 小时前，还有 2 条未读 -->
+      <div role="row" data-testid="list-item-2" class="x10l6tqk" style="z-index: 39; transform: translateY(144px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><span data-icon="default-contact-refreshed"><svg viewBox="0 0 48 48" height="48" width="48"></svg></span></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="‪+44 7700 900123‬" class="x1iyjqo2 _ao3e">‪+44 7700 900123‬</span></div><div class="_ak8i x1jchvi3" data-k="t2">09:12</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="0:23" class="x78zum5 x1cy8zhl"><div class="x1rg5ohu"><span data-icon="status-ptt" class="x1v8p93f"><svg viewBox="0 0 12 20" height="20" width="12"></svg></span></div><span dir="ltr" class="_ao3e">0:23</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span><div class="_ahlk"><span class="x140p0ai x1gqmxyu" aria-label="2 unread messages">2</span></div></span></div></div>
+        </div></div></div></div>
+      <!-- 4. 自己发的图片（新版勾 msg-dblcheck + 图片图标） -->
+      <div role="row" data-testid="list-item-3" class="x10l6tqk" style="z-index: 38; transform: translateY(216px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Marie Dubois" class="x1iyjqo2 _ao3e">Marie Dubois</span></div><div class="_ak8i" data-k="t3">08:05</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Photo" class="x78zum5 x1cy8zhl"><div class="x1rg5ohu"><span data-icon="msg-dblcheck"><svg viewBox="0 0 16 11" height="11" width="16"></svg></span></div><div class="x1rg5ohu"><span data-icon="status-image"><svg viewBox="0 0 16 20" height="20" width="16"></svg></span></div><span dir="ltr" class="_ao3e">Photo</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
+      <!-- 5. 群：别人最后说话 -->
+      <div role="row" data-testid="list-item-4" class="x10l6tqk" style="z-index: 37; transform: translateY(288px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><span data-icon="default-group-refreshed"><svg viewBox="0 0 48 48" height="48" width="48"></svg></span></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Lash Supply EU" class="x1iyjqo2 _ao3e">Lash Supply EU</span></div><div class="_ak8i" data-k="t4">07:50</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Anna: see you in Paris" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">Anna</span><span>: </span><span dir="ltr" class="_ao3e">see you in Paris</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span><span data-icon="muted"><svg></svg></span></span></div></div>
+        </div></div></div></div>
+      <!-- 6. 客户发的，昨天 -->
+      <div role="row" data-testid="list-item-5" class="x10l6tqk" style="z-index: 36; transform: translateY(360px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Emma Wilson" class="x1iyjqo2 _ao3e">Emma Wilson</span></div><div class="_ak8i">Yesterday</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Thanks, talk tomorrow" class="x78zum5 x1cy8zhl"><span dir="ltr" class="_ao3e">Thanks, talk tomorrow</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
+      <!-- 7. 自己发的，发送中（钟） -->
+      <div role="row" data-testid="list-item-6" class="x10l6tqk" style="z-index: 35; transform: translateY(432px);"><div tabindex="-1" aria-selected="false"><div data-testid="cell-frame-container" class="_ak72 false">
+        <div class="_ak8n"><div class="x1n2onr6"><img src="data:," alt="" class="x1n2onr6"></div></div>
+        <div class="_ak8l">
+          <div role="gridcell" aria-colindex="2" class="_ak8o"><div class="_ak8q" data-testid="cell-frame-title"><span dir="auto" title="Carlos García" class="x1iyjqo2 _ao3e">Carlos García</span></div><div class="_ak8i">Monday</div></div>
+          <div class="_ak8j"><div class="_ak8k"><span title="Price list attached" class="x78zum5 x1cy8zhl"><div class="x1rg5ohu"><span data-testid="last-msg-status"><span data-icon="msg-time"><svg></svg></span></span></div><span dir="ltr" class="_ao3e">Price list attached</span></span></div><div role="gridcell" aria-colindex="1" class="_ak8i"><span></span></div></div>
+        </div></div></div></div>
+    </div>
+  </div>
+</div>
+<div class="xempty" data-testid="intro-md-beta-logo-dark"></div>
+</div></div>
+<script>
+  // 测试从 # 后面传各行的时间（几小时前的钟点）
+  try {
+    const t = JSON.parse(decodeURIComponent(location.hash.slice(1)) || '{}');
+    for (const [k, v] of Object.entries(t)) { const el = document.querySelector(`[data-k="${k}"]`); if (el) el.textContent = v; }
+  } catch {}
+  // 页面自己的环境：记录任何点击、滚动、DOM 变化，供自检确认读取没有动页面
+  window.__events = { clicks: 0, scrolls: 0, mutations: 0, focus: 0 };
+  document.addEventListener('click', () => { window.__events.clicks += 1; }, true);
+  document.addEventListener('scroll', () => { window.__events.scrolls += 1; }, true);
+  document.addEventListener('focusin', () => { window.__events.focus += 1; }, true);
+  new MutationObserver((m) => { window.__events.mutations += m.length; })
+    .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+</script>
+</body></html>

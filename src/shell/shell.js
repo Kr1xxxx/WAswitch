@@ -438,6 +438,7 @@ function renderSide() {
     s.collapsed ? null : h('div', { class: 'label side-tools' }, '工具'),
     h('button', { class: `row tool-row${s.page === 'translate' ? ' on' : ''}`, title: '翻译', 'aria-label': '翻译', 'aria-current': s.page === 'translate' ? 'page' : null, onclick: () => window.wa.showPage('translate') },
       h('span', { class: 'avatar tool' }, icon('translate', 16)), s.collapsed ? null : h('span', { class: 'name' }, '翻译')),
+    unrepliedRow(),
     h('div', { class: 'grow' })));
   const upd = updateCard();
   if (upd) $side.append(upd);
@@ -862,6 +863,59 @@ function overviewPage() {
           h('span', { class: 'hint' }, ...segs(`${e.count} 个未读`, e.popped ? null : '没弹')));
       }))
       : h('div', { class: 'box' }, h('span', { class: 'hint' }, '还没有记录。'))));
+  return page;
+}
+
+// ---------- 待回复 ----------
+// 所有号里客户说了话、我们 2 小时以上没回的对话（主进程每分钟读一遍，见 unreplied.js），等得最久的在前。
+// 点一行切到那个号并打开这个对话；× 忽略（客户再发一条又会出现），给几秒撤销
+const urCount = () => (s.unreplied && s.unreplied.count) || 0;
+function unrepliedRow() {
+  const on = s.page === 'unreplied';
+  const n = urCount();
+  const avatar = h('span', { class: 'avatar tool' }, icon('clock', 16));
+  if (s.collapsed && n) avatar.append(h('span', { class: 'dot' }, n > 9 ? '9+' : n));
+  return h('button', { class: `row tool-row${on ? ' on' : ''}`, title: n ? `待回复：${n} 个对话` : '待回复', 'aria-label': '待回复', 'aria-current': on ? 'page' : null, onclick: () => window.wa.showPage('unreplied') },
+    avatar, s.collapsed ? null : h('span', { class: 'name' }, '待回复'), n ? h('span', { class: 'pill' }, n) : null);
+}
+const waitText = (since) => {
+  const m = Math.max(0, Date.now() - since) / 60000;
+  return m < 24 * 60 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
+};
+const ur = { ask: '', busy: '', sig: '' };
+const urId = (e) => `${e.accountId}\n${e.key}`;
+async function urOpen(e, force = false) {
+  ur.busy = urId(e);
+  ur.ask = '';
+  render(true);
+  let r = null;
+  try { r = await window.wa.unrepliedOpen(e.accountId, e.key, force); } catch { r = null; }
+  ur.busy = '';
+  if (r && r.result === 'not_empty') ur.ask = urId(e);
+  render(true);
+}
+function unrepliedPage() {
+  const page = h('div', { class: 'page narrow' });
+  const byId = new Map(s.accounts.map((a) => [a.id, a]));
+  const list = ((s.unreplied && s.unreplied.list) || []).filter((e) => byId.has(e.accountId));
+  page.append(
+    h('h1', null, '待回复'),
+    list.length ? h('div', { class: 'box ov-list ur-list' }, list.map((e) => {
+      const a = byId.get(e.accountId);
+      const id = urId(e);
+      const row = h('div', { class: 'ur-row' },
+        h('button', { class: 'ov-row ur-open', disabled: ur.busy === id, onclick: () => urOpen(e) },
+          mini(a),
+          h('span', { class: 'ov-name' }, ...segs(e.name, h('span', { class: 'hint' }, a.name))),
+          h('span', { class: 'hint ur-wait' }, waitText(e.since))),
+        h('button', { class: 'icon-btn ur-x', title: '忽略', 'aria-label': `忽略「${e.name}」`, onclick: () => window.wa.unrepliedDismiss(e.accountId, e.key) }, icon('x', 14)));
+      if (ur.ask !== id) return row;
+      return h('div', { class: 'col ur-item' }, row,
+        h('div', { class: 'hstack ur-ask' },
+          h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
+          h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
+          h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开')));
+    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有超过 2 小时没回的对话。')));
   return page;
 }
 
@@ -2191,6 +2245,10 @@ function render(forceContent = false) {
     // 有新的未读时顺便刷新记录
     else if (s.accounts.reduce((n, a) => n + (a.unread || 0), 0) !== overviewTotal) loadNotifLog();
     overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
+  } else if (s.page === 'unreplied') {
+    // 只有内容变了才重画（等了几小时每 10 分钟对一次），免得滚动位置被打回顶部
+    const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, Math.floor(Date.now() / 600000)]);
+    if (forceContent || key !== shown || sig !== ur.sig) { ur.sig = sig; $content.replaceChildren(unrepliedPage()); }
   } else if (s.page === 'translate') {
     // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
     const el = trPage(key !== shown);
