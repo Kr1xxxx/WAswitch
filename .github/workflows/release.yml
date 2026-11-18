@@ -35,11 +35,11 @@ permissions:
   contents: read
 
 # 打不打 Windows 安装包。2026-11-11 起暂停过（shen：「暂时 windows 不打包」），2026-11-12 shen：「windows 也发」，又打开。
-# 要只打 Mac 时改成 'false'。2026-11-18 shen：「仅发布 mac 版本我找人测试下」，1.0.17 只打 Mac。
+# 要只打 Mac 时改成 'false'。2026-11-18 shen：「仅发布 mac 版本我找人测试下」，1.0.17 只打 Mac，发完改回 'true'。
 # 关着时只打 Mac：草稿里不要求 exe 和 latest.yml，来财只换 latest-mac.yml（upload-cloud-release.mjs --mac-only），
 # 线上的 latest.yml 和它列的 Windows 安装包原样留着，Windows 用户停在上一个 Windows 版本。
 env:
-  WINDOWS: 'false'
+  WINDOWS: 'true'
 
 jobs:
   mcp-module:
