@@ -42,22 +42,34 @@ function credentialsFor(authInfo, accounts) {
   return choices.size === 1 ? [...choices.values()][0] : null;
 }
 
+// 断开这个会话的旧连接，等 Chromium 回话。回了算断开了，CLOSE_WAIT_MS 里没回算没断。
+// 主进程卡了十几秒以上（Mac 上等钥匙串弹窗）之后，Chromium 的网络进程会被收掉重开；正好发给旧进程的这一句永远不回。
+const CLOSE_WAIT_MS = 3000;
+function closeConnections(ses) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), CLOSE_WAIT_MS);
+    ses.closeAllConnections().then(() => { clearTimeout(timer); resolve(true); }, () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
 // 把代理应用到账号的会话。返回 { ok } 或 { error }，出错时会话被设成黑洞，不会直连。
 async function apply(ses, raw) {
   const p = parse(raw);
   try {
-    if (!p) {
-      // 直连号跟随系统代理：Clash 只开“系统代理”（没开 TUN）时也能连上 WhatsApp
-      await ses.setProxy({ mode: 'system' });
-    } else if (p.error) {
+    if (p && p.error) {
       await ses.setProxy({ mode: 'fixed_servers', proxyRules: BLACKHOLE });
       return { error: p.error };
-    } else {
-      // 规则里不写 DIRECT，代理不通时不会回落直连
-      await ses.setProxy({ mode: 'fixed_servers', proxyRules: p.rules, proxyBypassRules: '<local>' });
     }
-    await ses.closeAllConnections();
-    return { ok: true };
+    // 断开旧连接没回话（见 closeConnections）：代理再设一遍、再断一次，这次是发给重开后的网络进程。
+    // 还不回就当出错，不在没确认断开的情况下往下走
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      // 直连号跟随系统代理：Clash 只开“系统代理”（没开 TUN）时也能连上 WhatsApp。
+      // 代理号的规则里不写 DIRECT，代理不通时不会回落直连
+      if (!p) await ses.setProxy({ mode: 'system' });
+      else await ses.setProxy({ mode: 'fixed_servers', proxyRules: p.rules, proxyBypassRules: '<local>' });
+      if (await closeConnections(ses)) return { ok: true };
+    }
+    throw new Error('断开旧连接没有回应');
   } catch (e) {
     await ses.setProxy({ mode: 'fixed_servers', proxyRules: BLACKHOLE }).catch(() => {});
     return { error: e.message };
