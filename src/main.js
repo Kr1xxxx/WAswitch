@@ -24,6 +24,7 @@ const ports = require('./ports');
 const { regionLabel } = require('./regions');
 const { Notifier } = require('./notify');
 const { PopupWindow } = require('./popup');
+const waSound = require('./wa-sound');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
@@ -1189,6 +1190,22 @@ function layout() {
   trIpc.layoutFloat();
   selTr.sync();
   syncLiteWatch();
+  syncWaSound();
+}
+
+// 新消息只响一种提示音：没看着的网页号页面静音，只响 WAswitch 弹窗的（见 wa-sound.js）
+function syncWaSound() {
+  for (const [id, view] of views) {
+    const acc = findAcc(id);
+    if (!acc) continue;
+    waSound.apply(view.webContents, waSound.wantMute({
+      looking: notifier.looking(id === activeId && page === 'account'),
+      sound: settings.popupSound,
+      dnd: settings.popupDnd,
+      muted: isMuted(acc),
+      calls: callsOn(acc),
+    }));
+  }
 }
 
 // ---------- 连接记录（延迟和掉线） ----------
@@ -1274,6 +1291,7 @@ function pushState() {
   else if (page === 'login' && !loginPageWanted()) page = visibleAccounts().length ? 'account' : 'welcome';
   team?.noteChange();
   crmReconcile();
+  syncWaSound(); // 号或分组的「不弹通知」变了
   trackNet();
   checkOffline();
   if (!shellView || shellView.webContents.isDestroyed()) return;
@@ -1468,8 +1486,10 @@ function createTeamSeat(seat) {
   return acc;
 }
 
+// 直连号开了「允许通话」才打得了电话
+const callsOn = (acc) => !acc.proxy && !!acc.allowCalls;
 function webrtcPolicy(acc) {
-  return !acc.proxy && acc.allowCalls ? 'default_public_interface_only' : 'disable_non_proxied_udp';
+  return callsOn(acc) ? 'default_public_interface_only' : 'disable_non_proxied_udp';
 }
 
 function setProblem(id, problem) {
@@ -1938,6 +1958,10 @@ async function createView(acc, loadDelay = 0) {
   win.contentView.addChildView(view);
   views.set(acc.id, view);
   watchBlank(acc, view, ses);
+  // 切走时正在放的语音放完了再静音；点进页面、开始放语音时也按当下看没看着重新对一遍
+  wc.on('audio-state-changed', syncWaSound);
+  wc.on('focus', syncWaSound);
+  syncWaSound();
 
   // 从页面标题里读未读数，例如 "(3) WhatsApp"
   // 页面刚开始加载时标题会从 0 涨回刷新前的数：涨回原数不弹、不记，超过原数（真有新消息）照常弹。
@@ -2935,7 +2959,7 @@ function setupTeam() {
 }
 
 const SHELL_STALL_MS = 10000; // 主进程两次计时之间隔了这么久，算卡住过
-const SHELL_RETRY_MS = 10000; // 重新加载界面后等这么久，还没出来再来一次，之后每次翻倍
+const SHELL_RETRY_MS = 2000; // 重新加载界面后等这么久，还没出来再来一次，之后每次翻倍（卡完马上那一次偶尔赶上网络进程还没重开，不成）
 
 app.whenReady().then(async () => {
   appReadyAt = Date.now();
@@ -2964,8 +2988,9 @@ app.whenReady().then(async () => {
   win.on('show', () => { layout(); armQrWatch(); });
   win.on('restore', armQrWatch); // 窗口回来时，等扫码的号重新开始快检查
   // 回到窗口时，如果正开着某个轻量账号的对话，把它标成已读
-  win.on('blur', () => { unfocusedSince = Date.now(); });
+  win.on('blur', () => { unfocusedSince = Date.now(); syncWaSound(); });
   win.on('focus', () => {
+    syncWaSound();
     // 锁着时切回窗口：焦点放回锁屏卡片，也不把轻量号的消息标成已读
     if (locked) { if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.focus(); return; }
     const jid = liteOpen.get(activeId);

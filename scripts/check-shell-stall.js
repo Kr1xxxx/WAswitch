@@ -107,7 +107,8 @@ async function waitFor(fn, ms) {
   try {
     await sleep(STALL_MS - 2000);
     check(!(await shellPainted(a.port)), '主进程卡着的时候界面还没出来');
-    check(await waitFor(() => shellPainted(a.port), 2000 + 8000), `卡 ${STALL_MS / 1000} 秒后界面自己加载出来了（启动后 ${a.secs()} 秒）`);
+    // 卡完第一次重新加载偶尔不成（6 次里见过 1 次），之后隔 2、4、8 秒还会再来：留够等后面几次的时间
+    check(await waitFor(() => shellPainted(a.port), 2000 + 25000), `卡 ${STALL_MS / 1000} 秒后界面自己加载出来了（启动后 ${a.secs()} 秒）`);
     check(a.log.includes(RELOADED), '日志里记了重新加载');
     check(await waitFor(() => waShown(a.port), 20000), `卡完账号页面也打开了（启动后 ${a.secs()} 秒）`);
     check(st.connects >= 1, `账号页面是从代理走的（代理放行 ${st.connects} 次）`);
