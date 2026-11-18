@@ -870,7 +870,8 @@ function overviewPage() {
 }
 
 // ---------- 待回复 ----------
-// 所有号里客户说了话、我们 30 分钟以上没回的对话（主进程每分钟读一遍，见 unreplied.js），等得最久的在前。
+// 所有号里客户说了话、我们 30 分钟以上没回的对话（主进程每分钟读一遍，见 unreplied.js），
+// 加上 AI 认出我们还欠客户一件事的对话（待跟进，第二行是那件事，见 followup.js），等得最久的在前。
 // 点一行切到那个号并打开这个对话；点左边的圆圈算办完了（客户再发一条又会出现），给几秒撤销
 const urCount = () => (s.unreplied && s.unreplied.count) || 0;
 function unrepliedRow() {
@@ -910,9 +911,11 @@ function unrepliedPage() {
       const row = h('div', { class: 'ur-row' },
         h('button', { class: 'ur-done', title: '完成', 'aria-label': `完成「${e.name}」`, onclick: () => window.wa.unrepliedDismiss(e.accountId, e.key) },
           h('span', { class: 'ur-circle' }, icon('check', 12))),
-        h('button', { class: 'ov-row ur-open', disabled: ur.busy === id, onclick: () => urOpen(e) },
+        h('button', { class: `ov-row ur-open${e.what ? ' two' : ''}`, disabled: ur.busy === id, onclick: () => urOpen(e) },
           mini(a),
-          h('span', { class: 'ov-name' }, ...segs(e.name, h('span', { class: 'hint' }, a.name))),
+          h('span', { class: 'ur-main' },
+            h('span', { class: 'ov-name' }, ...segs(e.name, h('span', { class: 'hint' }, a.name))),
+            e.what ? h('span', { class: 'ur-what' }, e.what) : null),
           h('span', { class: 'hint ur-wait' }, waitText(e.since))));
       if (ur.ask !== id) return row;
       return h('div', { class: 'col ur-item' }, row,
@@ -920,7 +923,7 @@ function unrepliedPage() {
           h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
           h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
           h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开')));
-    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有超过 30 分钟没回的对话。')));
+    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有要回复或跟进的对话。')));
   return page;
 }
 

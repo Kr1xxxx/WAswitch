@@ -3,7 +3,7 @@
 //      不带 reply 时输出和以前一样（MCP 的 list_chats 不变）
 //   2) 读两次后 unreplied.js 列出客户最后说话、超过 30 分钟的私聊（存了名字、没查号码的也列），不列自己回过的和群（照片头像的群看预览前的发送人）
 //   3) 点开：createUnrepliedOpener + 真的 chat-open.js 让页面跳到 web.whatsapp.com/send?phone=号码（这里换成打开了这个对话的假页面），
-//      确认打开的就是这个号码的对话
+//      确认打开的就是这个号码的对话；在打开的对话里我们说完话，交给 followup.js（假的 AI 回答），待跟进和列表上的同一行合起来
 //   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面列出对话，点一行带回号和对话，输入框有字时问一次，点左边的圆圈算办完；
 //      900×600 和 1200×760 下文字不被裁。SHOT_DIR 设了就存截图
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/run-check-electron.js scripts/check-unreplied-electron.js
@@ -12,7 +12,8 @@ const fs = require('fs');
 const assert = require('assert');
 const { app, BrowserWindow } = require('electron');
 const waPage = require('../src/wa-page');
-const { Unreplied, createUnrepliedOpener } = require('../src/unreplied');
+const { Unreplied, createUnrepliedOpener, todoKey } = require('../src/unreplied');
+const { Followup, chatOf } = require('../src/followup');
 const { createChatOpener } = require('../src/chat-open');
 
 app.disableHardwareAcceleration();
@@ -159,6 +160,45 @@ app.whenReady().then(async () => {
     // 再点一次：已经开着，不再刷新
     assert.deepStrictEqual(await opener.open(target.accountId, target.key), { result: 'already' });
     assert.strictEqual(navigated.length, 1, '已经开着不再跳转');
+
+    // ---- 3b) 待跟进：我们在打开的对话里说完话 → 读出来交给 followup.js → AI 说还欠一件事 → 和列表上同一个对话合成一行 ----
+    const sentAgo = clockAgo(60); // 我们一小时前说的（过了半夜就是 00:00）
+    const today = new Date();
+    const pre = `[${sentAgo.text}, ${today.getDate()}/${today.getMonth() + 1}/${today.getFullYear()}] Me: `;
+    await wc.executeJavaScript(`(() => {
+      const src = document.querySelector('#main [role=row]');
+      const row = src.cloneNode(true);
+      const d = row.querySelector('[data-id]');
+      d.setAttribute('data-id', 'true_447700900123@c.us_3EB0B2');
+      row.querySelector('[data-pre-plain-text]').setAttribute('data-pre-plain-text', ${JSON.stringify(pre)});
+      row.querySelector('.selectable-text span').textContent = 'Sure, I will send the catalogue later today.';
+      src.parentNode.appendChild(row);
+    })()`);
+    const oc = await waPage.readOpenChat(wc);
+    assert(oc.ok && oc.msgs.length === 2 && oc.msgs[1].out === true && oc.msgs[0].out === false, `打开的对话读得出谁说的 ${JSON.stringify(oc.msgs)}`);
+    const seen = chatOf(oc, null, todoKey);
+    assert(seen && seen.info.digits === '447700900123', `网页号：号码从对话编号认出来 ${JSON.stringify(seen)}`);
+    assert.strictEqual(chatOf({ ...oc, group: true }, null, todoKey), null, '群不看');
+    assert.strictEqual(chatOf({ ...oc, bottom: false }, null, todoKey), null, '往上翻着看旧消息时不看');
+    let fnow = Date.now();
+    const asked = [];
+    const fu = new Followup({
+      now: () => fnow,
+      analyzed: (id, key) => store.analyzed(id, key),
+      supported: () => true,
+      send: async (m) => { asked.push(m); return '{"todo": true, "what": "发产品目录", "when": "soon"}'; },
+      onResult: (id, key, info, res, meta) => store.setTodo(id, key, info, res, meta),
+    });
+    fu.observe('w1', seen.key, seen.info, oc.msgs);
+    fnow += 46000;
+    assert.strictEqual(await fu.tick(), true);
+    assert(asked[0][1].content.includes('我：Sure, I will send the catalogue later today.'), asked[0][1].content);
+    assert.strictEqual(store.getTodo('w1', target.key).what, '发产品目录', '列表上的名字和对话顶上的标题对得上');
+    if (sentAgo.age >= 31) { // 刚过半夜跑时还没到期，只看上面那条
+      const merged = store.list().filter((e) => e.name.includes('7700'));
+      assert.strictEqual(merged.length, 1, `和列表上同一个对话只列一行 ${JSON.stringify(merged)}`);
+      assert.strictEqual(merged[0].what, '发产品目录');
+    }
     wa.destroy();
 
     // ---- 4) 界面 ----
@@ -172,8 +212,8 @@ app.whenReady().then(async () => {
     const items = [
       { accountId: 'a2', key: 'Emma Wilson', name: 'Emma Wilson', since: now - 26 * 3600e3 },
       { accountId: 'a1', key: '‪+44 7700 900123‬', name: '‪+44 7700 900123‬', since: now - 4 * 3600e3 - 60e3 },
-      { accountId: 'a3', key: '14155550134@s.whatsapp.net', name: 'Olivia Johnson', since: now - 3 * 3600e3 },
-      { accountId: 'a1', key: 'Sophie Martin', name: 'Sophie Martin-Lefèvre (Lyon Beauty Supplies)', since: now - 45 * 60e3 - 20e3 },
+      { accountId: 'a3', key: '14155550134@s.whatsapp.net', kind: 'todo', name: 'Olivia Johnson', since: now - 3 * 3600e3, what: '发样品照片和批发价目表' },
+      { accountId: 'a1', key: 'Sophie Martin', kind: 'reply', name: 'Sophie Martin-Lefèvre (Lyon Beauty Supplies)', since: now - 45 * 60e3 - 20e3, what: '确认交期后回复客户并发送新的价目表和合同' },
     ];
     const preload = path.join(app.getPath('temp'), `ur-fake-preload-${process.pid}.js`);
     fs.writeFileSync(preload, `window.__cbs = {}; window.__calls = []; window.__next = null;
@@ -210,8 +250,10 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       for (const el of document.querySelectorAll('.ur-wait, #side .tool-row .name, .ur-list .hint, .ur-ask .btn, h1')) {
         if (el.scrollWidth > el.clientWidth + 1 && !el.closest('.ov-name')) bad.push(el.className + ':' + el.textContent);
       }
-      const rows = [...document.querySelectorAll('.ur-open')].map((b) => b.getBoundingClientRect().height);
-      return { bad, rows };
+      const rows = [...document.querySelectorAll('.ur-open')].map((b) => ({ h: b.getBoundingClientRect().height, two: !!b.querySelector('.ur-what') }));
+      // 待跟进的那句：一行，放不下截掉（省略号），不换行
+      const what = [...document.querySelectorAll('.ur-what')].map((el) => ({ text: el.textContent, h: el.getBoundingClientRect().height, ellipsis: getComputedStyle(el).textOverflow, size: getComputedStyle(el).fontSize }));
+      return { bad, rows, what };
     });
     for (const [wd, ht, label] of [[1200, 760, 'wide'], [900, 600, 'min']]) {
       w.setSize(wd, ht);
@@ -227,7 +269,10 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 0.5, `圆圈 18px、在行左边、上下居中 ${JSON.stringify(circle)}`);
       const c = await clipped();
       assert.deepStrictEqual(c.bad, [], `${label}：文字没被裁 ${JSON.stringify(c.bad)}`);
-      assert(c.rows.every((hh) => hh <= 40), `${label}：每行一行高 ${JSON.stringify(c.rows)}`);
+      assert(c.rows.every((r) => (r.two ? r.h <= 56 : r.h <= 40)), `${label}：每行一行高，待跟进两行高 ${JSON.stringify(c.rows)}`);
+      assert.deepStrictEqual(c.rows.map((r) => r.two), [false, false, true, true], '有 what 的行多一行');
+      assert(c.what.length === 2 && c.what.every((x) => x.h <= 18 && x.ellipsis === 'ellipsis' && x.size === '12px'), `${label}：第二行一行、12px、放不下截掉 ${JSON.stringify(c.what)}`);
+      assert.strictEqual(c.what[0].text, '发样品照片和批发价目表');
       await shot(`unreplied-${label}`);
     }
     // 收起侧栏：图标上带个数
@@ -262,7 +307,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await push({ page: 'unreplied', unreplied: { count: 0, list: [] } });
     await wait(150);
     assert.strictEqual(await js(() => document.querySelector('#side [aria-label="待回复"] .pill')), null, '没有时不显示个数');
-    assert(/没有超过 30 分钟没回的对话/.test(await js(() => document.querySelector('#content').textContent)), '空的时候写一句');
+    assert(/没有要回复或跟进的对话/.test(await js(() => document.querySelector('#content').textContent)), '空的时候写一句');
     await shot('unreplied-empty');
     assert.deepStrictEqual(errs, [], `页面没有报错 ${JSON.stringify(errs)}`);
     fs.rmSync(preload, { force: true });
