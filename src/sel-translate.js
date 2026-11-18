@@ -1,4 +1,4 @@
-// 聊天里选中文字后，在选区下方显示一个小「翻译」按钮；点了按钮原地变成悬浮译文窗（shen 2026-10-28）。
+// 聊天里选中文字后，在选区下方显示「复制」「翻译」两个小按钮（shen 2026-11-17 加了复制）；点「翻译」原地变成悬浮译文窗（shen 2026-10-28）。
 // 外文翻成中文，中文翻成客户的语言（translate-ipc.js 的 selTranslate）。右键菜单的「翻译」直接弹译文窗。
 //
 // 不往 WhatsApp 页面里加任何东西：
@@ -13,7 +13,7 @@ const RADIX = require('./colors/radix');
 const { WebContentsView, ipcMain } = require('electron');
 
 const PAD = 6; // 视图四周留给阴影的透明边
-const BTN = { width: 64 + PAD * 2, height: 28 + PAD * 2 };
+const BTN = { width: 76 * 2 + 2 + PAD * 2, height: 28 + 2 + PAD * 2 }; // card.css：两格各 76 宽 28 高，外加上下左右的细边框
 const CARD_W = 320 + PAD * 2;
 const CARD_MIN_H = 44 + PAD * 2;
 const CARD_MAX_H = 260 + PAD * 2;
@@ -283,6 +283,12 @@ function createSelTranslate(deps) {
   // 点了按钮（翻译、重试、复制）后焦点还给聊天页：聊天里的选区还在，Ctrl+C 照常复制，打字回到 WhatsApp
   const giveBack = () => { if (alive() && view.webContents.isFocused()) deps.focus(); };
   ipcMain.on('seltr:go', (e) => { if (fromView(e) && shown && shown.mode === 'button') { giveBack(); translate(); } });
+  // 「复制」：复制的是主进程读到的那段选区（只有消息正文），不用小视图传来的字
+  ipcMain.handle('seltr:copy-sel', async (e) => {
+    if (!fromView(e) || !shown || shown.mode !== 'button' || !shown.text) return false;
+    giveBack();
+    return (await deps.copy(shown.text)) === true;
+  });
   ipcMain.on('seltr:retry', (e) => { if (fromView(e) && shown && shown.mode === 'card' && shown.st && shown.st.error) { giveBack(); translate(); } });
   // 返回有没有真的复制上：译文窗只在成功时显示「已复制」
   ipcMain.handle('seltr:copy', async (e, text) => {

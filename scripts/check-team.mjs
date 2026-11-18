@@ -805,4 +805,65 @@ await test('记下删掉的号时写不进 team.json：不抛错，照样不建�
   assert.equal(F.team.isRemoved({ team_id: '11111111-2222-4333-8444-777777777777' }), true);
   assert.equal(F.team.isRemoved({ team_id: '11111111-2222-4333-8444-888888888888', local_id: '501' }), true);
 });
+await test('team.json 读不出来：只有不存在才算没登录；被占着先重读，还不行就备份、这次不写；坏了的备份后照常写', async () => {
+  const dev = '11111111-1111-4111-8111-111111111111';
+  const gone = '22222222-2222-4222-8222-222222222222';
+  const body = JSON.stringify({ server: SERVER, policy: 'required', deviceId: dev, token: fakeSafe.encryptString('tok').toString('base64'), email: 'emma@example.com', devices: { 'emma@example.com': dev }, removed: [gone], cursor: 42, lastOkAt: clock.t });
+  const make = (dir) => new TeamSync({ dir, safeStorage: fakeSafe, hooks: { accounts: () => [], save() {}, refresh() {} }, server: SERVER, fetchImpl, now: () => clock.t });
+  const realRead = fs.readFileSync;
+  const busy = (file, times) => { let n = 0; fs.readFileSync = function (f, ...rest) { if (String(f) === file && n++ < times) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); return realRead.call(this, f, ...rest); }; return () => n; };
+  const warn = console.warn;
+  const warns = [];
+  console.warn = (m) => warns.push(String(m));
+  try {
+    // 杀毒软件占着一下（读第一次报占用中）：重读就读到了，照常登录着
+    let dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-busy1-'));
+    let file = path.join(dir, 'team.json');
+    fs.writeFileSync(file, body);
+    let tries = busy(file, 1);
+    let T = make(dir);
+    fs.readFileSync = realRead;
+    assert.ok(tries() >= 2, '读失败后重读了');
+    assert.equal(T.loginState(), 'ok');
+    assert.equal(T.locked(), false);
+    assert.equal(T.state.deviceId, dev);
+    // 一直被占着：这次当没登录，但不写 team.json，设备编号、删过的号、同步位置都还在，下次启动照常
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-busy-'));
+    file = path.join(dir, 'team.json');
+    fs.writeFileSync(file, body);
+    busy(file, Infinity);
+    T = make(dir);
+    fs.readFileSync = realRead;
+    assert.equal(T.loginState(), 'none');
+    assert.equal(T.noWrite, true);
+    T.persist();
+    assert.equal(realRead(file, 'utf8'), body, 'team.json 原样留着');
+    assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('team.json.broken-')), '留了备份');
+    assert.ok(warns.some((w) => w.includes('EBUSY') && w.includes('这次运行不写')), warns.join('\n'));
+    T = make(dir);
+    assert.deepEqual([T.loginState(), T.state.deviceId, T.state.removed, T.state.cursor], ['ok', dev, [gone], 42], '下次启动读到的还是原来的');
+    // 内容坏了：备份后当没登录，之后照常写（不然再也存不了登录）
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-bad-'));
+    file = path.join(dir, 'team.json');
+    fs.writeFileSync(file, body.slice(0, 40));
+    T = make(dir);
+    assert.equal(T.loginState(), 'none');
+    assert.equal(T.noWrite, false);
+    const backups = fs.readdirSync(dir).filter((f) => f.startsWith('team.json.broken-'));
+    assert.equal(backups.length, 1);
+    assert.equal(realRead(path.join(dir, backups[0]), 'utf8'), body.slice(0, 40), '备份是坏文件原样');
+    T.persist();
+    assert.equal(JSON.parse(realRead(file, 'utf8')).server, SERVER, '备份后照常写');
+    // 不存在：没登录，照常写，不留备份
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'team-none-'));
+    T = make(dir);
+    assert.deepEqual([T.loginState(), T.noWrite], ['none', false]);
+    T.persist();
+    assert.ok(fs.existsSync(path.join(dir, 'team.json')));
+    assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('broken')), []);
+  } finally {
+    fs.readFileSync = realRead;
+    console.warn = warn;
+  }
+});
 console.log(`全部通过（${passed} 项）`);

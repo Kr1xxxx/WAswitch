@@ -17,7 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { canEncrypt } = require('../secure-storage');
-const { writeJsonAtomic } = require('../atomic');
+const { writeJsonAtomic, readJsonRetry } = require('../atomic');
 const errtext = require('../errtext');
 const RADIX = require('../colors/radix');
 
@@ -109,6 +109,7 @@ class TeamSync {
     this.failures = 0;
     this.lastSig = '';
     this.foreign = false;
+    this.noWrite = false; // 启动时 team.json 读不出来：这次运行不写它（见 load）
     this.state = this.load();
     // 以前登录的是别的后台（旧版连的 wa.laicrm.com）：那边给的团队号在来财不认，当作还没加入的号，登录后重新自动加入。
     // 本机队列留着，等重新加入、来财同意同步后接着传（teamKeepQueue）。已经被收回（隐藏）的号不动
@@ -135,8 +136,13 @@ class TeamSync {
   file() { return path.join(this.dir, FILE); }
   load() {
     const empty = { server: this.server, policy: DEFAULT_POLICY, deviceId: '', token: '', userName: '', email: '', devices: {}, joinSent: [], removed: [], cursor: 0, allowPrivate: true, revoked: false, held: [], events: [], lastOkAt: 0, lastError: '', lastUpload: null };
+    // 只有文件不存在才是没登录过；读不出来、内容坏了走下面的 catch
+    const got = readJsonRetry(this.file());
+    if (got.missing) return empty;
     try {
-      const s = JSON.parse(fs.readFileSync(this.file(), 'utf8'));
+      if (got.unread || got.bad) throw got.unread || got.bad;
+      const s = got.value;
+      if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error('不是 JSON 对象');
       // 以前填过别的后台地址（旧版的登记表单）：那边的登录和坐席都不认
       if (s.server && (cleanServer(s.server) || s.server) !== this.server) { this.foreign = true; return empty; }
       const deviceId = UUID_RE.test(s.deviceId) ? s.deviceId : '';
@@ -166,11 +172,19 @@ class TeamSync {
         lastError: typeof s.lastError === 'string' ? s.lastError : '',
         lastUpload: s.lastUpload && typeof s.lastUpload === 'object' ? s.lastUpload : null,
       };
-    } catch {
+    } catch (e) {
+      // 留一份备份。被占着读不出来的（下次启动多半又能读）、备份不成的：这次运行不写 team.json，
+      // 不然会把设备编号、删过的号的记录、同步位置冲成空的。这次只能先重新登录
+      const backup = `${this.file()}.broken-${Date.now()}`;
+      let saved = false;
+      try { fs.copyFileSync(this.file(), backup); saved = true; } catch {}
+      this.noWrite = !!got.unread || !saved;
+      console.warn(`team.json 无法读取（${e.code || e.message}）${saved ? `，已备份到 ${backup}` : ''}${this.noWrite ? '，这次运行不写这个文件' : ''}`);
       return empty;
     }
   }
   persist() {
+    if (this.noWrite) return;
     const file = this.file();
     writeJsonAtomic(file, this.state, 2, { mode: 0o600 });
   }

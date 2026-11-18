@@ -1027,17 +1027,25 @@ const SELECTION_CODE = `(() => {
   if (inTr(r.startContainer) && inTr(r.endContainer)) return null;
   let rootNode = r.commonAncestorContainer;
   if (rootNode.nodeType !== 1) rootNode = rootNode.parentElement;
-  const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+  // WhatsApp 的 emoji 是带 alt 的 img，有的换行是 br：都要算进去，和 Ctrl+C 复制到的一样
+  const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
   const parts = [];
   let lastBody = null;
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.nodeType === 1 && n.tagName !== 'IMG' && n.tagName !== 'BR') continue;
     if (!r.intersectsNode(n)) continue;
-    const body = n.parentElement && n.parentElement.closest(S.body);
+    const el = n.nodeType === 1 ? n : n.parentElement;
+    const body = el && el.closest(S.body);
     if (!body) continue;
-    let t = n.data;
-    const from = n === r.startContainer ? r.startOffset : 0;
-    const to = n === r.endContainer ? r.endOffset : t.length;
-    t = t.slice(from, to);
+    let t;
+    if (n.tagName === 'IMG') t = n.getAttribute('alt') || '';
+    else if (n.tagName === 'BR') t = '\\n';
+    else {
+      t = n.data;
+      const from = n === r.startContainer ? r.startOffset : 0;
+      const to = n === r.endContainer ? r.endOffset : t.length;
+      t = t.slice(from, to);
+    }
     if (lastBody && body !== lastBody) parts.push('\\n');
     parts.push(t);
     lastBody = body;

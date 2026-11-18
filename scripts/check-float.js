@@ -11,7 +11,7 @@ const msg = (n, out = false, chat = '111@c.us', text = `hola ${n}`) => ({ id: `$
 async function core() {
   let now = Date.parse('2026-10-24T10:00:00Z');
   const sent = [];
-  // 没有免费的路（deps.hasFree 说没有）：更早的消息不在后台补翻
+  // 没有免费的路（slow 回 nofree）：更早的消息不在后台补翻
   const fc = new FloatCore({ now: () => now, translate: async (text, o = {}) => { if (o.slow) return { error: '没有免费的翻译服务', kind: 'nofree' }; sent.push(text); return { text: `译:${text}`, warn: [] }; } });
   // 第一次看到一个对话：12 条收到的，只自动翻最后 5 条
   const first = Array.from({ length: 12 }, (_, i) => msg(i));
@@ -370,7 +370,7 @@ async function queuedWait() {
     open(fc, 'R', 'Mia');
     fc.ingest('R', { title: 'Mia', bottom: true, msgs: [own, m(1)] }, opts);
     await settle(fc);
-    assert.deepStrictEqual(calls.map((c) => [c.slow, c.queued]), [[false, 1234], [true, undefined]]);
+    assert.deepStrictEqual(calls.map((c) => [c.slow, c.queued]), [[false, 1234], [false, undefined]]);
   }
   // 用户自己在翻（busy）、等一下再发：起点不变，发出去那次带的是一共等了多久
   {
@@ -583,7 +583,7 @@ async function textDrift() {
   console.log('同一条消息显示格式变了不重翻自检通过');
 }
 
-// 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）走 slow 那条路再翻，
+// 自动翻译暂时失败（网络、超时、服务器、太忙）：不用点，过一会儿（10、30、90 秒，测试里缩短）走和第一次一样的路再翻（不是 slow），
 // 每条最多再翻 3 次；等着的时候显示「翻译」；用户点了马上翻、定时到了不再翻；
 // 登录、内容、额度、没有免费的路的不重翻；后台补翻失败先停再接着补；网络换了马上再试；删号不再翻（shen 2026-10-30）
 async function autoRetry() {
@@ -602,7 +602,7 @@ async function autoRetry() {
     return { fc, calls };
   };
   const st = (fc, acc, h) => fc.accs.get(acc).items.get(h);
-  // 1. 服务器出错一次：不点任何东西，过一会儿自己有译文；重翻走的是免费那条路（slow），额度只算第一次
+  // 1. 服务器出错一次：不点任何东西，过一会儿自己有译文；重翻走和第一次一样的路（不是 slow），额度只算第一次
   {
     const { fc, calls } = mk((text, n) => (n === 0 ? { error: '来财那边出错了', kind: 'server' } : null));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(1)] }, opts);
@@ -612,7 +612,7 @@ async function autoRetry() {
     assert.strictEqual(fc.viewOf('R').items[0].state, 'manual', '等着重翻时显示「翻译」，不显示报错');
     assert.strictEqual(fc.viewOf('R').items[0].err, '');
     await settle(fc);
-    assert.deepStrictEqual(calls, [{ text: 'Hallo 1', slow: false }, { text: 'Hallo 1', slow: true }], '重翻只走 slow 那条路');
+    assert.deepStrictEqual(calls, [{ text: 'Hallo 1', slow: false }, { text: 'Hallo 1', slow: false }], '重翻走和第一次一样的路');
     assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].tr], ['done', '译:Hallo 1']);
     assert.strictEqual(fc.viewOf('R').today, 1, '重翻不算额度');
   }
@@ -622,7 +622,7 @@ async function autoRetry() {
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(2)] }, opts);
     await settle(fc, 800);
     assert.strictEqual(calls.length, 4, `第一次 + 再翻 3 次：${calls.length}`);
-    assert.deepStrictEqual(calls.map((c) => c.slow), [false, true, true, true]);
+    assert.deepStrictEqual(calls.map((c) => c.slow), [false, false, false, false]);
     const v = fc.viewOf('R').items[0];
     assert.deepStrictEqual([v.state, v.err], ['error', '网络不通']);
     await sleep(150);
@@ -642,23 +642,25 @@ async function autoRetry() {
     assert.strictEqual(calls.length, 1, `${kind} 不重翻`);
     assert.strictEqual(fc.viewOf('R').items[0].state, 'error', kind);
   }
-  // 4. 重翻时没有免费的路：显示原来那次的报错
+  // 4. 重翻时碰到再翻也一样的（额度用完）：显示这次的报错，不再等
   {
-    const { fc, calls } = mk((text, n, o) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : { error: '来财那边出错了，请稍后再试', kind: 'server' }));
+    const { fc, calls } = mk((text, n) => (n === 0 ? { error: '来财那边出错了，请稍后再试', kind: 'server' } : { error: '今天的额度用完了', kind: 'quota' }));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(4)] }, opts);
     await settle(fc);
     assert.strictEqual(calls.length, 2);
-    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', '来财那边出错了，请稍后再试']);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', '今天的额度用完了']);
+    assert.strictEqual(fc.waits.length, 0);
   }
-  // 4b. deps.hasFree 说没有免费的路（现在总是这样）：不等，直接显示报错
+  // 4b. 按 translate-ipc.js 的接法（后台补翻那条 slow 没有，回 nofree）：自动翻译失败一次，过一会儿自己翻好，不用点
   {
-    const { fc, calls } = mk(() => ({ error: '来财那边出错了，请稍后再试', kind: 'server' }));
-    fc.deps.hasFree = () => false;
+    const { fc, calls } = mk((text, n, o) => (o.slow ? { error: '没有免费的翻译服务', kind: 'nofree' } : n === 0 ? { error: '来财那边出错了，请稍后再试', kind: 'server' } : null));
     fc.ingest('R', { title: 'Lukas', bottom: true, msgs: [m(8)] }, opts);
     await sleep(10);
-    assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['error', '来财那边出错了，请稍后再试']);
-    assert.strictEqual(fc.waits.length, 0);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].err], ['manual', ''], '等着重翻时显示「翻译」');
+    assert.strictEqual(fc.waits.length, 1);
+    await settle(fc);
+    assert.strictEqual(calls.length, 2);
+    assert.deepStrictEqual([fc.viewOf('R').items[0].state, fc.viewOf('R').items[0].tr], ['done', '译:Hallo 8']);
   }
   // 5. 等着重翻时用户点「翻译」：马上翻，定时到了不再翻
   {
@@ -712,7 +714,7 @@ async function autoRetry() {
       translate: async (text, o = {}) => { calls.push(!!o.slow); return calls.length === 1 ? { error: '网络不通', kind: 'network' } : { text: `译:${text}` }; } });
     fc.ingest('V', { title: 'Lucía', bottom: true, msgs: [{ id: 'false_34612345678@c.us_3RV1', out: false, text: '', voice: 4, src: { jid: 'x', id: 'y' } }] }, opts);
     await settle(fc);
-    assert.deepStrictEqual([heard, calls], [1, [false, true]]);
+    assert.deepStrictEqual([heard, calls], [1, [false, false]]);
     assert.strictEqual(fc.viewOf('V').items[0].tr, '译:Hola, ¿tienen pelucas?');
   }
   // 10. 后台补翻：一条失败，整排先停，过一会儿接着补（失败的那条先），最后都补上；中间翻成一条就重新计数
