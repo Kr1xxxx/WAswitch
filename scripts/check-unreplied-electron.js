@@ -1,7 +1,7 @@
 // 「待回复」端到端自检：真实结构的 WhatsApp 对话列表 → 读出没回的对话 → 列在「待回复」页 → 点一下打开那个对话。
 //   1) wa-page.js 的 readChatList（reply）在 scripts/fixtures/wa-chatlist-real.html 上认出谁最后说话、过了多久，只读不动页面；
 //      不带 reply 时输出和以前一样（MCP 的 list_chats 不变）
-//   2) 读两次后 unreplied.js 列出客户最后说话、超过 2 小时的私聊，不列自己回过的和群
+//   2) 读两次后 unreplied.js 列出客户最后说话、超过 30 分钟的私聊（存了名字、没查号码的也列），不列自己回过的和群（照片头像的群看预览前的发送人）
 //   3) 点开：createUnrepliedOpener + 真的 chat-open.js 让页面跳到 web.whatsapp.com/send?phone=号码（这里换成打开了这个对话的假页面），
 //      确认打开的就是这个号码的对话
 //   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面列出对话，点一行带回号和对话，输入框有字时问一次，× 忽略；
@@ -81,13 +81,35 @@ app.whenReady().then(async () => {
     await wait(50);
     const r2 = await waPage.readChatList(wc, { reply: true });
     store.ingestWeb('w1', r2.chats, { atTop: r2.atTop });
-    // 和 main.js 一样：新记下的对话去 WhatsApp 本地联系人里按名字查号码
-    for (const { key, name } of store.needsNumber('w1', 99)) {
-      const found = await waPage.lookupPeerPhone(wc, { title: name });
-      store.setNumber('w1', key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
-    }
-    assert.strictEqual(store.get('w1', 'Sophie Martin').digits, '33611111111', '存了名字的联系人查到号码');
-    assert.strictEqual(store.get('w1', 'Team Lyon').noNum, true, '头像是照片的群查不到号码');
+    assert.strictEqual(by['Team Lyon'].sender, true, '头像是照片的群：预览前面有发送人');
+    // 中文界面（fingerprint.js 让 WhatsApp 用 zh-CN）：发送人后面可能是全角「：」，冒号单独一段或者跟着名字
+    const zh = await wc.executeJavaScript(`(() => { try {
+      const src = [...document.querySelectorAll('#pane-side [role=row]')].find((r) => r.querySelector('[title="Team Lyon"]'));
+      const add = (name, html) => {
+        const c = src.cloneNode(true);
+        const t = c.querySelector('[title="Team Lyon"]');
+        t.setAttribute('title', name);
+        t.textContent = name;
+        c.querySelector('[title^="Paul"]').outerHTML = html;
+        src.parentNode.appendChild(c);
+      };
+      add('里昂团队', '<span title="安娜：好的" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">安娜</span><span>： </span><span dir="ltr" class="_ao3e">好的</span></span>');
+      add('巴黎团队', '<span title="安娜：好" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">安娜：</span><span dir="ltr" class="_ao3e">好</span></span>');
+      add('Nina Koch', '<span title="Preis：20 EUR" class="x78zum5 x1cy8zhl"><span dir="ltr" class="_ao3e">Preis：20 EUR</span></span>');
+      return true;
+    } catch (e) { return String(e); } })()`);
+    assert.strictEqual(zh, true);
+    const rz = await waPage.readChatList(wc, { reply: true });
+    const bz = Object.fromEntries(rz.chats.map((c) => [c.name, c]));
+    assert.strictEqual(bz['里昂团队'].sender, true, '全角「：」单独一段认出是群');
+    assert.strictEqual(bz['巴黎团队'].sender, true, '全角「：」跟着名字也认出是群');
+    assert.strictEqual(bz['Nina Koch'].sender, false, '私聊消息里带全角冒号不算');
+    await wc.executeJavaScript("[...document.querySelectorAll('#pane-side [role=row]')].slice(-3).forEach((r) => r.remove())");
+    assert.strictEqual(by['Sophie Martin'].sender, false, '私聊没有发送人');
+    assert.strictEqual(by['+44 7700 900123'].sender, false, '语音时长 0:23 不当成发送人');
+    assert(Array.isArray(r.icons) && r.icons.includes('status-dblcheck') && r.icons.includes('msg-dblcheck'), `图标名带出来写日志 ${JSON.stringify(r.icons)}`);
+    assert.strictEqual(store.get('w1', 'Team Lyon'), null, '头像是照片的群不记');
+    assert.strictEqual(store.get('w1', 'Sophie Martin').digits, undefined, '存了名字的不先查号码');
     const list = store.list();
     const names = list.map((e) => e.name.replace(/[‪-‮]/g, ''));
     assert(names.includes('Sophie Martin') && names.includes('+44 7700 900123'), `没回的列出来 ${JSON.stringify(names)}`);
@@ -151,7 +173,7 @@ app.whenReady().then(async () => {
       { accountId: 'a2', key: 'Emma Wilson', name: 'Emma Wilson', since: now - 26 * 3600e3 },
       { accountId: 'a1', key: '‪+44 7700 900123‬', name: '‪+44 7700 900123‬', since: now - 4 * 3600e3 - 60e3 },
       { accountId: 'a3', key: '14155550134@s.whatsapp.net', name: 'Olivia Johnson', since: now - 3 * 3600e3 },
-      { accountId: 'a1', key: 'Sophie Martin', name: 'Sophie Martin-Lefèvre (Lyon Beauty Supplies)', since: now - 2 * 3600e3 - 120e3 },
+      { accountId: 'a1', key: 'Sophie Martin', name: 'Sophie Martin-Lefèvre (Lyon Beauty Supplies)', since: now - 45 * 60e3 - 20e3 },
     ];
     const preload = path.join(app.getPath('temp'), `ur-fake-preload-${process.pid}.js`);
     fs.writeFileSync(preload, `window.__cbs = {}; window.__calls = []; window.__next = null;
@@ -199,6 +221,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       assert.strictEqual(rows.length, 4, `页面列出 4 个对话 ${JSON.stringify(rows)}`);
       assert(rows[0].text.includes('Emma Wilson') && rows[0].text.includes('Sales FR') && rows[0].text.includes('1 天'), `第一行：名字、号、等了多久 ${rows[0].text}`);
       assert(rows[1].text.includes('4 小时'), rows[1].text);
+      assert(rows[3].text.includes('45 分钟'), `不到 1 小时写分钟 ${rows[3].text}`);
       assert(rows.every((x) => x.x), '每行有忽略');
       const c = await clipped();
       assert.deepStrictEqual(c.bad, [], `${label}：文字没被裁 ${JSON.stringify(c.bad)}`);
@@ -236,7 +259,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await push({ page: 'unreplied', unreplied: { count: 0, list: [] } });
     await wait(150);
     assert.strictEqual(await js(() => document.querySelector('#side [aria-label="待回复"] .pill')), null, '没有时不显示个数');
-    assert(/没有超过 2 小时没回的对话/.test(await js(() => document.querySelector('#content').textContent)), '空的时候写一句');
+    assert(/没有超过 30 分钟没回的对话/.test(await js(() => document.querySelector('#content').textContent)), '空的时候写一句');
     await shot('unreplied-empty');
     assert.deepStrictEqual(errs, [], `页面没有报错 ${JSON.stringify(errs)}`);
     fs.rmSync(preload, { force: true });

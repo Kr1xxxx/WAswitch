@@ -147,6 +147,7 @@ const LIST_CODE = (opts) => `((S, opts) => {
   };
   const chats = [];
   let unrecognized = 0;
+  const iconNames = new Set();
   for (const row of rows) {
     const titled = [...row.querySelectorAll(S.titled)].map((el) => el.getAttribute('title') || '').filter(Boolean);
     const name = titled[0];
@@ -167,8 +168,13 @@ const LIST_CODE = (opts) => `((S, opts) => {
     };
     if (opts.reply) {
       // 待回复用：最后一条是不是自己发的（预览前面有发送状态的勾），和这条消息过了多少分钟（只算下限）
-      chat.out = [...row.querySelectorAll('[data-icon]')].some((el) => TICK.test(el.getAttribute('data-icon') || ''));
+      const icons = [...row.querySelectorAll('[data-icon]')].map((el) => el.getAttribute('data-icon') || '');
+      for (const n of icons) if (n && iconNames.size < 30) iconNames.add(n.slice(0, 40));
+      chat.out = icons.some((n) => TICK.test(n));
       chat.age = ageOf(time);
+      // 群里别人发的最后一条，预览前面有「发送人: 」（发送人和冒号是单独的一段；中文界面可能是全角「：」）。头像是照片的群只能这样认出来
+      const prev = titled.slice(1).find((t) => t !== name) || '';
+      chat.sender = texts.some((t) => t === ':' || t === '：' || (t.length > 1 && t.length <= 60 && /[:：]$/.test(t) && t !== name && prev.startsWith(t) && prev.length > t.length));
     }
     if (opts.includePreview) {
       const preview = titled.slice(1).find((t) => t !== name) || '';
@@ -187,11 +193,14 @@ const LIST_CODE = (opts) => `((S, opts) => {
   if (opts.reply) {
     const nums = rows.map((r) => /^list-item-(\\d+)$/.exec(r.getAttribute('data-testid') || '')).filter(Boolean);
     out.atTop = (pane.scrollTop || 0) <= 4 && (!nums.length || nums.some((m) => m[1] === '0'));
+    // 行里出现过的图标名（只有 WhatsApp 自己的图标名，没有聊天内容），写进日志，勾认不出时看得出 WhatsApp 改成了什么
+    out.icons = [...iconNames];
   }
   return out;
 })(${JSON.stringify(SELECTORS)}, ${JSON.stringify(opts)})`;
 
-// reply：每个对话多带 out（最后一条是自己发的）和 age（最后一条至少过了几分钟，认不出是 null），给「待回复」用
+// reply：每个对话多带 out（最后一条是自己发的）、age（最后一条至少过了几分钟，认不出是 null）和 sender（预览前面有群里的发送人），
+// 结果多带 atTop 和 icons，给「待回复」用
 async function readChatList(wc, { includePreview = false, reply = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, reason: 'loading' };
   try {

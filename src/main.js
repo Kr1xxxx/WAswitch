@@ -1018,7 +1018,7 @@ const chatOpener = createChatOpener({
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 
-// ---- 待回复：客户说了话、我们 2 小时以上没回的对话（见 unreplied.js） ----
+// ---- 待回复：客户说了话、我们 30 分钟以上没回的对话（见 unreplied.js） ----
 const unrepliedFile = () => path.join(app.getPath('userData'), 'unreplied.json');
 let unrepliedPending = null;
 let unrepliedTimer = null;
@@ -1047,32 +1047,42 @@ let unrepliedScanning = false;
 // 每分钟读一遍每个号：网页号只读左侧对话列表（隔离环境），轻量号读本机聊天缓存。锁着、出错、没登录的号跳过。
 // 每一步都有超时：主进程卡过以后页面可能停在空地址上，在里面跑脚本永远等不到回音（见 docs/testing-pitfalls.md），不能让以后的读取都卡住
 const UNREPLIED_STEP_MS = 5000;
+// 每个号读到了什么，变了才往日志写一行：只有计数和 WhatsApp 的图标名，没有名字、号码和聊天内容
+const unrepliedLogged = new Map();
+function logUnreplied(id, line) {
+  if (unrepliedLogged.get(id) === line) return;
+  unrepliedLogged.set(id, line);
+  console.log(`待回复 ${id}: ${line}`);
+}
 async function scanUnreplied() {
   if (unrepliedScanning || locked || loginLocked()) return;
   unrepliedScanning = true;
   const store = unrepliedStore();
   try {
     for (const acc of visibleAccounts()) {
-      if (locked || problems.has(acc.id) || loginStates.get(acc.id) !== 'logged_in') continue;
+      if (locked) break;
+      if (problems.has(acc.id)) { logUnreplied(acc.id, '跳过 problem'); continue; }
+      if (loginStates.get(acc.id) !== 'logged_in') { logUnreplied(acc.id, `跳过 login=${loginStates.get(acc.id) || 'none'}`); continue; }
       if (isLite(acc)) {
-        if (!liteHost || liteStates.get(acc.id)?.status !== 'open') continue;
+        if (!liteHost || liteStates.get(acc.id)?.status !== 'open') { logUnreplied(acc.id, '跳过 lite 没连上'); continue; }
         const list = await withTimeout(liteHost.chatList(acc.id), UNREPLIED_STEP_MS, null);
-        if (Array.isArray(list) && findAcc(acc.id)) store.ingestLite(acc.id, list);
+        if (!Array.isArray(list)) { logUnreplied(acc.id, 'lite 读取失败'); continue; }
+        if (findAcc(acc.id)) store.ingestLite(acc.id, list);
+        logUnreplied(acc.id, `lite 对话 ${list.length} 客户最后说话 ${list.filter((c) => c && !c.group && c.me === false && c.wait > 0).length}`);
         continue;
       }
       const view = views.get(acc.id);
-      if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) continue;
+      if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) { logUnreplied(acc.id, '跳过 没有页面'); continue; }
       const wc = view.webContents;
-      if (!isWhatsAppUrl(wc.getURL())) continue;
+      if (!isWhatsAppUrl(wc.getURL())) { logUnreplied(acc.id, '跳过 不在 WhatsApp 页面'); continue; }
       const r = await withTimeout(waPage.readChatList(wc, { reply: true }), UNREPLIED_STEP_MS, null);
-      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true })) continue;
-      // 新记下的对话查一次号码（只读 WhatsApp 本地的联系人）：查到才列，群和查不到的不列
-      for (const { key, name } of store.needsNumber(acc.id)) {
-        if (wc.isDestroyed()) break;
-        const found = await withTimeout(waPage.lookupPeerPhone(wc, { title: name }), UNREPLIED_STEP_MS, null);
-        if (!found) break;
-        store.setNumber(acc.id, key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
-      }
+      if (!r || !r.ok) { logUnreplied(acc.id, `读列表失败 ${(r && r.reason) || 'timeout'}`); continue; }
+      if (!findAcc(acc.id)) continue;
+      const st = store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true });
+      const icons = Array.isArray(r.icons) ? r.icons.filter((n) => typeof n === 'string' && /^[\w-]{1,40}$/.test(n)).join(',') : '';
+      logUnreplied(acc.id, st.ok
+        ? `行 ${st.rows} 群 ${st.groups} 私聊 ${st.solo} 有勾 ${st.out} 未读 ${st.unread} 认出时间 ${st.aged}${st.noTick ? ' 勾认不出' : ''} 顶上 ${r.atTop === true} 记下 ${store.byAcc.get(acc.id)?.size || 0} 图标 ${icons}`
+        : `不用 ${r.filtered ? 'filtered' : 'bad'}`);
     }
   } catch (e) {
     console.warn('待回复读取失败', e && e.message);
