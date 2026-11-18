@@ -21,14 +21,14 @@ const LITE_WAIT_MS = 1500; // 轻量模式切过去后等对话列表推过来
 const sendUrl = (digits) => `https://web.whatsapp.com/send?phone=${digits}`;
 
 // 用户粘贴来的号码整理成只有数字的国际号码（不带 +），认不出返回 ''。
-// 和 src/mcp/open-chat.js 的 normalizePhone 规则一样，另外认 wa.me 链接、「+49 (0)151」里的 (0)、不换行空格和斜杠。
+// 和 src/mcp/open-chat.js 的 normalizePhone 规则一样，另外认 wa.me 链接、国家码后面的 (0)、不换行空格和斜杠。
 // 单个 0 开头（本国拨号，不知道国家码）不认
 function normalizePhone(raw) {
   let s = String(raw || '').replace(/[\u00a0\u2000-\u200f\u202f\u2060\ufeff]/g, ' ').trim();
   const link = s.match(/^(?:https?:\/\/)?(?:wa\.me\/|(?:api|web)\.whatsapp\.com\/send\/?\?(?:.*&)?phone=)\+?(\d+)/i);
   if (link) s = `+${link[1]}`;
   if (!/^[+\d\s()./-]+$/.test(s)) return '';
-  if (s.startsWith('+')) s = s.replace(/\(\s*0\s*\)/, '');
+  s = s.replace(/(?!^)\(\s*0\s*\)/g, ''); // 「+49 (0)151」「0049 (0)151」「(+49) (0)151」里的 (0) 不拨；单独 (0) 开头是本国写法，下面不认
   let d = s.replace(/\D/g, '');
   if (s.startsWith('+')) d = d.replace(/^0+/, '');
   else if (d.startsWith('00')) d = d.slice(2);
