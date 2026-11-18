@@ -2212,6 +2212,9 @@ function render(forceContent = false) {
   const fxKey = s.page === 'settings' ? `${key}|${settingsTab}` : s.page === 'account' ? `${key}|${s.activeId}|${acc && acc.problem ? 'p' : acc && acc.mode === 'lite' ? 'l' : ''}` : key;
   if (fxChanged('content', fxKey) && $content.firstElementChild) fxPlay($content.firstElementChild);
   liteForget(s.accounts.map((a) => a.id));
+  // 侧栏、设置页每来一次状态就整块重画（下载时每涨 1% 一次），新画出来的转圈会从 0 度重转，看着一抽一抽的。
+  // 这次新建的转圈（还没画过，startTime 为空）都对到页面时钟的 0 点，重画后接着原来的角度转。
+  for (const a of document.getAnimations()) if (a.animationName === 'spin' && a.startTime === null) a.startTime = 0;
   shown = key;
 }
 

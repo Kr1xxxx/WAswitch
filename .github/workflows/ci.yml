@@ -73,6 +73,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-page-menu.js
       - name: 更新卡片和关于页文案（立即更新）自检
         run: xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
+      - name: 下载更新时转圈不抽（侧栏检查更新按钮、关于页，重画后接着转）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-update-spin.js
       - name: 顶栏放不下时整块藏起、不出省略号
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
