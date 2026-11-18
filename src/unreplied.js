@@ -1,22 +1,23 @@
-// 「待回复」：所有号里客户说了话、我们超过 2 小时还没回的对话（shen 2026-11-18 选的第 2 项）。
+// 「待回复」：所有号里客户说了话、我们超过 30 分钟还没回的对话（shen 2026-11-18 选的第 2 项）。
 //
 // 网页号：每分钟在隔离环境里只读一次左侧对话列表（wa-page.js 的 readChatList，reply 选项），
 //   看每个对话最后一条前面有没有发送状态的勾（有就是我们发的）和列表上的时间。不点击、不滚动、不注入。
 //   列表只画出最上面十几个对话，所以记下来的对话要存住：看到它最后一条变成我们发的才去掉（回复后对话会排到最上面，一定看得到）。
 //   只看到一次「客户发的」不算，要连着两次（对方正在输入时预览会暂时换成「正在输入…」，没有勾）。
 //   列表画出来的对话已经往前排到比某个记下的对话还早，它却不在里面（存成联系人改了名字、归档、删了、换了号）：去掉。
-//   只列认得出号码的私聊：名字就是号码（没存联系人），或者在 WhatsApp 本地联系人里按名字查到号码（main.js 每个新对话查一次）。
-//   这样头像是照片的群（列表上认不出是群）不会列出来，点开也一定打得开。搜索或筛选时读到的不用。
+//   只列私聊。群：默认群头像，或者预览前面有「发送人: 」（头像是照片的群只能这样认）。搜索或筛选时读到的不用。
+//   以前只列查得到号码的，真号上存了名字的客户多半查不到，一个都列不出来（1.0.17）；现在查不到号码也列，点开时再查。
+//   勾一个都认不出时（WhatsApp 改了图标名）只信未读角标：有未读的列，没未读的去掉。
 // 轻量号：本机聊天缓存是全的（lite/session.mjs 的 chatList），每次整份替换。
 //
 // 点了「忽略」的对话，客户再发一条（今天的时间比记下的晚，或者未读变多）又会出现。
 // 存在本机 unreplied.json（只有号、对话名字、号码、时间，没有消息内容）。这是能重新读出来的数据，文件坏了就从空的开始。
-const THRESHOLD_MS = 2 * 60 * 60 * 1000; // 等了这么久才列出来
+const THRESHOLD_MS = 30 * 60 * 1000; // 等了这么久才列出来（shen 2026-11-18 从 2 小时改成 30 分钟）
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 超过 7 天没回的不再列（多半是不用回的）
 const MAX_PER_ACC = 300;
 const MIN_HITS = 2;
 const MIN = 60000;
-// 一次读到这么多个已读的私聊、却一个勾都没有：多半是 WhatsApp 改了图标，这次读到的不用（不然所有对话都会被当成没回）。
+// 一次读到这么多个已读的私聊、却一个勾都没有：多半是 WhatsApp 改了图标，这次只信未读角标（不然所有对话都会被当成没回）。
 // 有未读的不算（早上一堆客户的未读本来就没有勾）
 const NO_TICK_ROWS = 6;
 const cleanKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().slice(0, 100);
@@ -25,7 +26,7 @@ class Unreplied {
   constructor({ now = Date.now, load = () => null, save = () => {} } = {}) {
     this.now = now;
     this.save = save;
-    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, unread, dismissed, digits?, noNum?, jid? })
+    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, unread, dismissed, digits?, jid? })
     const data = load();
     if (data && typeof data === 'object' && data.v === 1 && data.accounts && typeof data.accounts === 'object') {
       for (const [id, chats] of Object.entries(data.accounts)) {
@@ -36,8 +37,6 @@ class Unreplied {
           m.set(key, {
             name: e.name.slice(0, 100), since: e.since, hits: Number(e.hits) || 0, sig: String(e.sig || ''), unread: Number(e.unread) || 0, dismissed: e.dismissed === true,
             ...(typeof e.digits === 'string' && /^\d{7,15}$/.test(e.digits) ? { digits: e.digits } : {}),
-            ...(e.noNum === true ? { noNum: true } : {}),
-            ...(Number(e.tries) > 0 ? { tries: Math.min(Number(e.tries), 3) } : {}),
             ...(typeof e.jid === 'string' ? { jid: e.jid } : {}),
           });
         }
@@ -60,25 +59,39 @@ class Unreplied {
     return m;
   }
 
-  // 网页号读到的对话列表（readChatList 的 chats，带 out 和 age）。filtered：搜索或筛选时读到的；
+  // 网页号读到的对话列表（readChatList 的 chats，带 out、age、sender）。filtered：搜索或筛选时读到的；
   // atTop：列表在最上面（用户往下翻过时画出来的只是更早的对话，不能拿来判断谁不在列表上了）。
-  // 返回 false 表示这次读到的不可信、没用
+  // 返回这次读到的计数（只有数字，main.js 写日志用）；ok 为假表示这次读到的没用
   ingestWeb(id, chats, { filtered = false, atTop = false } = {}) {
-    if (!Array.isArray(chats) || filtered) return false;
-    const solo = chats.filter((c) => c && c.name && c.is_group !== true);
+    const st = { ok: false, rows: Array.isArray(chats) ? chats.length : 0, groups: 0, solo: 0, out: 0, unread: 0, aged: 0, noTick: false };
+    if (!Array.isArray(chats) || filtered) return st;
+    const isGroup = (c) => c.is_group === true || c.sender === true;
+    const solo = chats.filter((c) => c && c.name && !isGroup(c));
     const read = solo.filter((c) => !(c.unread > 0));
-    if (read.length >= NO_TICK_ROWS && !read.some((c) => c.out === true)) return false;
+    st.ok = true;
+    st.groups = chats.length - solo.length;
+    st.solo = solo.length;
+    st.out = solo.filter((c) => c.out === true).length;
+    st.unread = solo.length - read.length;
+    st.aged = solo.filter((c) => Number.isFinite(c.age)).length;
+    st.noTick = read.length >= NO_TICK_ROWS && st.out === 0;
     const m = this.acc(String(id));
     const now = this.now();
     let dirty = false;
     const seen = new Set();
+    // 认出是群的：以前当成私聊记下的去掉
+    for (const c of chats) {
+      if (!c || !c.name || !isGroup(c)) continue;
+      const key = cleanKey(c.name);
+      if (m.has(key) && !m.get(key).jid) { m.delete(key); dirty = true; }
+    }
     for (const c of solo) {
       const key = cleanKey(c.name);
       if (!key) continue;
       seen.add(key);
       const e = m.get(key);
       const unread = Number(c.unread) || 0;
-      const incoming = unread > 0 || c.out === false;
+      const incoming = unread > 0 || (!st.noTick && c.out === false);
       if (!incoming || c.muted) { if (e) { m.delete(key); dirty = true; } continue; }
       if (!Number.isFinite(c.age)) continue; // 认不出时间（更早的日期）：不新加，已有的照旧
       const since = Math.floor((now - c.age * MIN) / MIN) * MIN; // 取整到分钟，不然每分钟都要写盘
@@ -108,27 +121,7 @@ class Unreplied {
     }
     if (this.trim(m)) dirty = true;
     if (dirty) this.changed();
-    return true;
-  }
-
-  // 还没查过号码的网页号对话（main.js 去 WhatsApp 本地联系人里按名字查）
-  needsNumber(id, limit = 3) {
-    const m = this.byAcc.get(String(id));
-    if (!m) return [];
-    return [...m.entries()].filter(([, e]) => !e.jid && !e.digits && !e.noNum)
-      .sort((a, b) => (a[1].tries || 0) - (b[1].tries || 0)).slice(0, limit).map(([key, e]) => ({ key, name: e.name }));
-  }
-
-  // 查号码的结果：digits 查到了；final 为真且没查到就不再查（群、同名的、没存的）。
-  // 临时查不了（页面在加载、出错）下次再查，排在别的后面，连着 3 次就不查了
-  setNumber(id, key, digits, final = true) {
-    const m = this.byAcc.get(String(id));
-    const e = m && m.get(key);
-    if (!e) return;
-    if (/^\d{7,15}$/.test(String(digits || ''))) m.set(key, { ...e, digits: String(digits) });
-    else if (final || (e.tries || 0) + 1 >= 3) m.set(key, { ...e, noNum: true });
-    else m.set(key, { ...e, tries: (e.tries || 0) + 1 });
-    this.changed();
+    return st;
   }
 
   // 轻量号：后台进程的全部对话 [{ jid, name, group, me, wait, ts }]（wait = 我们最后一条之后客户第一条的时间，秒）
@@ -161,14 +154,14 @@ class Unreplied {
     return dirty;
   }
 
-  // 列出来的：等了 2 小时以上、没点忽略的，等得最久的在前
+  // 列出来的：等了 30 分钟以上、没点忽略的，等得最久的在前
   list(ids = null) {
     const now = this.now();
     const out = [];
     for (const [id, m] of this.byAcc) {
       if (ids && !ids.has(id)) continue;
       for (const [key, e] of m) {
-        if (e.dismissed || e.hits < MIN_HITS || (!e.jid && !e.digits)) continue;
+        if (e.dismissed || e.hits < MIN_HITS) continue;
         const wait = now - e.since;
         if (wait < THRESHOLD_MS || wait > MAX_AGE_MS) continue;
         out.push({ accountId: id, key, name: e.name, since: e.since });

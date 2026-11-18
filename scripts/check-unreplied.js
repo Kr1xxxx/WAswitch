@@ -7,33 +7,29 @@ let now = Date.UTC(2026, 10, 18, 15, 0);
 let saved = null;
 const make = (load = null) => new Unreplied({ now: () => now, load: () => load, save: (d) => { saved = d; } });
 // 对话列表上一行（readChatList 的 reply 结果）
-const row = (name, { out = false, age = 180, time = '12:00', unread = 0, group = false, muted = false } = {}) => ({ name, out, age, time, unread, is_group: group, muted, pinned: false });
-// WhatsApp 本地联系人（按名字查号码）：查不到的是群或没存的
-const CONTACTS = { 'Sophie Martin': '33611111111', 'Hans Becker': '4917011111111', 'Emma Wilson': '447700900111' };
-const feed = (store, id, rows, opts) => {
-  const ok = store.ingestWeb(id, rows, { atTop: true, ...opts });
-  for (const { key, name } of store.needsNumber(id, 99)) store.setNumber(id, key, CONTACTS[name] || '', true);
-  return ok;
-};
+const row = (name, { out = false, age = 180, time = '12:00', unread = 0, group = false, muted = false, sender = false } = {}) => ({ name, out, age, time, unread, is_group: group, muted, pinned: false, sender });
+const feed = (store, id, rows, opts) => store.ingestWeb(id, rows, { atTop: true, ...opts });
 const tick = (n) => Array.from({ length: n }, (_, i) => row(`Replied ${i}`, { out: true, age: 5, time: '14:55' }));
 
 let u = make();
 // 列表往前排到比它早时，这个号码的对话也要在列表里（真的列表是按时间排的）
 const p49 = () => row('+49 151 2345678', { age: Math.round((now - u.get('a1', '+49 151 2345678').since) / 60000), time: '14:30' });
-// 1) 客户发了 3 小时、我们没回：连着两次读到才列出来
-assert(feed(u, 'a1', [row('Sophie Martin'), row('+49 151 2345678', { age: 30, time: '14:30' }), ...tick(2)]));
+// 1) 客户发了 3 小时、我们没回：连着两次读到才列出来（存了名字的客户也列，不用先查到号码）
+assert(feed(u, 'a1', [row('Sophie Martin'), row('+49 151 2345678', { age: 20, time: '14:40' }), ...tick(2)]).ok);
 assert.deepStrictEqual(u.list(), [], '只读到一次不列（可能是正在输入）');
 now += 60000;
-feed(u, 'a1', [row('Sophie Martin', { age: 181 }), row('+49 151 2345678', { age: 31, time: '14:30' }), ...tick(2)]);
+feed(u, 'a1', [row('Sophie Martin', { age: 181 }), row('+49 151 2345678', { age: 21, time: '14:40' }), ...tick(2)]);
 let l = u.list();
-assert.deepStrictEqual(l.map((e) => e.name), ['Sophie Martin'], `等了 3 小时的列出来，30 分钟的不列：${JSON.stringify(l)}`);
+assert.deepStrictEqual(l.map((e) => e.name), ['Sophie Martin'], `等了 3 小时的列出来，20 分钟的不列：${JSON.stringify(l)}`);
 assert(Math.abs(now - l[0].since - 181 * 60000) < 1000, '等的时间按列表上的时间算');
 assert.strictEqual(l[0].accountId, 'a1');
 
-// 2) 过了 2 小时，30 分钟那个也列出来，等得久的在前
-now += 2 * H;
-l = u.list();
-assert.deepStrictEqual(l.map((e) => e.name), ['Sophie Martin', '+49 151 2345678'], '超过 2 小时就列，久的在前');
+assert.strictEqual(u.get('a1', 'Sophie Martin').digits, undefined, '存了名字的没有号码也列');
+assert.strictEqual(u.get('a1', '+49 151 2345678').digits, '491512345678', '名字就是号码的记下号码');
+// 2) 过了 30 分钟，20 分钟那个也列出来，等得久的在前
+now += 10 * 60000;
+assert.deepStrictEqual(u.list().map((e) => e.name), ['Sophie Martin', '+49 151 2345678'], '超过 30 分钟就列，久的在前');
+now += 2 * H - 10 * 60000;
 
 // 3) 回复了（最后一条有勾）就去掉；群、静音的不列；未读角标算客户发的
 now += 60000;
@@ -48,10 +44,21 @@ now += 60000;
 feed(u, 'a1', tick(3));
 assert.strictEqual(u.list().length, 2, '列表上没画出来的不去掉');
 
-// 5) 读到很多私聊却一个勾都没有：当成认不出，不用
-const before = JSON.stringify(u.toJSON());
-assert.strictEqual(feed(u, 'a1', Array.from({ length: 8 }, (_, i) => row(`X${i}`))), false, '一个勾都没有的不可信');
-assert.strictEqual(JSON.stringify(u.toJSON()), before, '不可信的那次不改记录');
+// 5) 读到很多已读私聊却一个勾都没有（WhatsApp 改了图标名）：只信未读角标，有未读的列，没未读的去掉
+{
+  const t5 = make();
+  const noTicks = (extra) => [...Array.from({ length: 8 }, (_, i) => row(`X${i}`, { age: 5, time: '17:05' })), ...extra];
+  feed(t5, 'n1', [row('Ana Ruiz', { age: 4, time: '17:06' }), ...tick(2)]);
+  const st5 = feed(t5, 'n1', noTicks([row('Nora Weber', { unread: 1, age: 40, time: '16:30' }), row('Ana Ruiz', { age: 4, time: '17:06' })]));
+  assert(st5.ok && st5.noTick, '认出是勾认不出');
+  now += 60000;
+  feed(t5, 'n1', noTicks([row('Nora Weber', { unread: 1, age: 41, time: '16:30' })]));
+  assert.deepStrictEqual(t5.list().map((e) => e.name), ['Nora Weber'], `只列有未读的：${JSON.stringify(t5.list())}`);
+  assert.strictEqual(t5.get('n1', 'X0'), null, '没未读的不记');
+  assert.strictEqual(t5.get('n1', 'Ana Ruiz'), null, '记下的读过了（没未读）去掉');
+  assert.strictEqual(st5.unread, 1);
+  assert.strictEqual(st5.out, 0);
+}
 
 // 6) 忽略、撤销；客户再发一条（时间变了）又出现
 assert(u.dismiss('a1', 'Hans Becker'));
@@ -143,11 +150,19 @@ const liteCheck = (async () => {
 // 9c) 审计提的几种情况
 {
   const s2 = make();
-  // 头像是照片的群：列表上认不出是群（is_group null），也查不到号码，不列
-  feed(s2, 'g1', [row('Team Lyon', { group: null }), ...tick(2)]);
+  // 头像是照片的群：列表上认不出是群（is_group null），预览前面有发送人，不列
+  feed(s2, 'g1', [row('Team Lyon', { group: null, sender: true }), ...tick(2)]);
   now += 60000;
-  feed(s2, 'g1', [row('Team Lyon', { group: null }), ...tick(2)]);
-  assert.deepStrictEqual(s2.list(), [], '认不出号码的（头像是照片的群）不列');
+  const st1 = feed(s2, 'g1', [row('Team Lyon', { group: null, sender: true }), ...tick(2)]);
+  assert.deepStrictEqual(s2.list(), [], '预览前面有发送人的（头像是照片的群）不列');
+  assert.strictEqual(st1.groups, 1);
+  // 以前当成私聊记下的（最后一条是系统消息，没有发送人），后来认出是群：去掉
+  feed(s2, 'g1', [row('Team Nice', { group: null }), ...tick(2)]);
+  now += 60000;
+  feed(s2, 'g1', [row('Team Nice', { group: null }), ...tick(2)]);
+  assert.strictEqual(s2.list(new Set(['g1'])).length, 1);
+  feed(s2, 'g1', [row('Team Nice', { group: null, sender: true }), ...tick(2)]);
+  assert.strictEqual(s2.get('g1', 'Team Nice'), null, '认出是群就去掉');
   // 忽略以后过了半夜：「21:40」变成「昨天」，没有新消息，还是忽略着
   feed(s2, 'g2', [row('Sophie Martin', { age: 200, time: '21:40' }), ...tick(2)]);
   now += 60000;
@@ -158,11 +173,12 @@ const liteCheck = (async () => {
   assert.strictEqual(s2.get('g2', 'Sophie Martin').dismissed, true, '过了半夜变成「昨天」不算新消息');
   // 搜索、筛选时读到的不用
   const snap = JSON.stringify(s2.toJSON());
-  assert.strictEqual(feed(s2, 'g2', [row('Sophie Martin', { out: true, age: 0, time: '00:10' }), ...tick(2)], { filtered: true }), false);
+  assert.strictEqual(feed(s2, 'g2', [row('Sophie Martin', { out: true, age: 0, time: '00:10' }), ...tick(2)], { filtered: true }).ok, false);
   assert.strictEqual(JSON.stringify(s2.toJSON()), snap, '搜索时读到的不改记录');
   // 早上一堆客户的未读（都没有勾）：照样用
   const morning = Array.from({ length: 8 }, (_, i) => row(`+49 151 00000${10 + i}`, { unread: 1, age: 300, time: '07:00' }));
-  assert.strictEqual(feed(s2, 'g3', morning), true, '有未读的不算进「一个勾都没有」');
+  const st3 = feed(s2, 'g3', morning);
+  assert(st3.ok && !st3.noTick, '有未读的不算进「一个勾都没有」');
   // 不在列表上了：画出来的对话已经排到比它还早，它却不在里面（存成联系人改了名字、归档、删了）
   feed(s2, 'g4', [row('+33 6 12 34 56 78', { age: 180, time: '09:00' }), ...tick(2)]);
   now += 60000;
@@ -182,18 +198,15 @@ const liteCheck = (async () => {
   feed(s2, 'g6', [row('+33 6 12 34 56 70', { age: 181, time: '09:00' }), ...tick(2)]);
   s2.dismiss('g6', '+33 6 12 34 56 70');
   now += 60000;
-  assert.strictEqual(feed(s2, 'g6', [row('Old A', { out: true, age: null, time: '11/10/2026' }), row('Old B', { out: true, age: null, time: '10/10/2026' })], { atTop: false }), true);
+  assert.strictEqual(feed(s2, 'g6', [row('Old A', { out: true, age: null, time: '11/10/2026' }), row('Old B', { out: true, age: null, time: '10/10/2026' })], { atTop: false }).ok, true);
   assert.strictEqual(s2.get('g6', '+33 6 12 34 56 70').dismissed, true, '往下翻过时不去掉，忽略也还在');
   // 翻回最上面也一样
   feed(s2, 'g6', [row('+33 6 12 34 56 70', { age: 183, time: '09:00' }), ...tick(2)]);
   assert.strictEqual(s2.get('g6', '+33 6 12 34 56 70').dismissed, true);
-  // 查号码临时失败：排到后面，连着 3 次就不再查
-  s2.ingestWeb('g7', [row('Nina A', { age: 180, time: '09:00' }), row('Nina B', { age: 180, time: '09:00' }), ...tick(2)]);
-  s2.setNumber('g7', 'Nina A', '', false);
-  assert.deepStrictEqual(s2.needsNumber('g7', 1).map((x) => x.key), ['Nina B'], '查失败的排到后面');
-  s2.setNumber('g7', 'Nina A', '', false);
-  s2.setNumber('g7', 'Nina A', '', false);
-  assert.strictEqual(s2.get('g7', 'Nina A').noNum, true, '连着 3 次查不了就不查了');
+  // 以前的版本存的 noNum、tries 读回来时丢掉，照样列
+  const old = make({ v: 1, accounts: { g8: { 'Nina A': { name: 'Nina A', since: now - H, hits: 2, sig: '09:00', unread: 0, dismissed: false, noNum: true, tries: 2 } } } });
+  assert.deepStrictEqual(old.list().map((e) => e.name), ['Nina A'], '旧记录里查不到号码的也列');
+  assert.strictEqual(old.get('g8', 'Nina A').noNum, undefined);
   // 置顶的对话不算往前排
   feed(s2, 'g5', [row('+33 6 12 34 56 79', { age: 180, time: '09:00' }), ...tick(2)]);
   now += 60000;
@@ -243,10 +256,10 @@ assert.strictEqual(digitsOfTitle('12345'), '');
   // 没存联系人的号：名字就是号码
   assert.deepStrictEqual(await opener.open('w1', '+33 6 12 34 56 78'), { result: 'opened' });
   assert.deepStrictEqual(calls.splice(0), [['activate', 'w1'], ['openNumber', 'w1', '33612345678']]);
-  // 存了名字的：用读的时候查到的号码
+  // 存了名字的：点的时候查 WhatsApp 本地联系人
+  st.lookup = '33611111111';
   assert.deepStrictEqual(await opener.open('w1', 'Sophie Martin'), { result: 'opened' });
-  assert.deepStrictEqual(calls.splice(0), [['activate', 'w1'], ['openNumber', 'w1', '33611111111']]);
-  // 记录里没有号码（旧记录）：当场查 WhatsApp 本地联系人
+  assert.deepStrictEqual(calls.splice(0), [['lookup', 'Sophie Martin'], ['activate', 'w1'], ['openNumber', 'w1', '33611111111']]);
   store.acc('w1').set('Paul Klein', { name: 'Paul Klein', since: now - 3 * H, hits: 2, sig: '12:00', unread: 0, dismissed: false });
   st.lookup = '33698765432';
   assert.deepStrictEqual(await opener.open('w1', 'Paul Klein'), { result: 'opened' });
@@ -275,7 +288,7 @@ assert.strictEqual(digitsOfTitle('12345'), '');
   assert.deepStrictEqual(calls.splice(0), [['activate', 'l1'], ['liteOpen', 'l1', '4915112345678@s.whatsapp.net']]);
   // 不在名单里的
   assert.deepStrictEqual(await opener.open('w1', 'Nobody'), { result: 'gone' });
-  assert(THRESHOLD_MS === 2 * H);
+  assert(THRESHOLD_MS === 30 * 60000, '等 30 分钟');
   // 页面卡住（脚本永远不回）：读取按时放弃，下一分钟还能再读
   assert.strictEqual(await withTimeout(new Promise(() => {}), 50, 'gave-up'), 'gave-up', '卡住的读取超时放弃');
   assert.strictEqual(await withTimeout(Promise.reject(new Error('x')), 50, null), null, '出错给默认值');

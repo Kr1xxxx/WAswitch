@@ -867,7 +867,7 @@ function overviewPage() {
 }
 
 // ---------- 待回复 ----------
-// 所有号里客户说了话、我们 2 小时以上没回的对话（主进程每分钟读一遍，见 unreplied.js），等得最久的在前。
+// 所有号里客户说了话、我们 30 分钟以上没回的对话（主进程每分钟读一遍，见 unreplied.js），等得最久的在前。
 // 点一行切到那个号并打开这个对话；× 忽略（客户再发一条又会出现），给几秒撤销
 const urCount = () => (s.unreplied && s.unreplied.count) || 0;
 function unrepliedRow() {
@@ -880,6 +880,7 @@ function unrepliedRow() {
 }
 const waitText = (since) => {
   const m = Math.max(0, Date.now() - since) / 60000;
+  if (m < 60) return `${Math.max(1, Math.floor(m))} 分钟`;
   return m < 24 * 60 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
 };
 const ur = { ask: '', busy: '', sig: '' };
@@ -915,7 +916,7 @@ function unrepliedPage() {
           h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
           h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
           h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开')));
-    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有超过 2 小时没回的对话。')));
+    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有超过 30 分钟没回的对话。')));
   return page;
 }
 
