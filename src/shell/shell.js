@@ -961,7 +961,7 @@ async function openNumber() {
 function openNumPage(entering) {
   const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'));
   const list = webAccs();
-  if (entering) opPickDefault();
+  if (entering) { opPickDefault(); if (!op.busy) { op.msg = ''; op.force = false; } } // 上次的提示（多半是在账号页上没看到的）不留到这次
   else if (!list.some((a) => a.id === op.acc)) opPickDefault();
   if (!list.length) { page.append(h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有网页号。'))); return page; }
   const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
