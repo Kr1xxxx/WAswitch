@@ -183,7 +183,11 @@ const LIST_CODE = (opts) => `((S, opts) => {
   const selected = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true' || t.getAttribute('aria-pressed') === 'true');
   const out = { ok: true, chats, filtered: searching || selected > 0, unrecognized, total: rows.length };
   // 待回复用：列表是不是在最上面（往下翻过时画出来的只是更早的对话）
-  if (opts.reply) out.atTop = (pane.scrollTop || 0) <= 4;
+  // 再看画出来的行里有没有第一行（list-item-0）：万一滚动的不是 #pane-side 本身，也认得出往下翻过
+  if (opts.reply) {
+    const nums = rows.map((r) => /^list-item-(\\d+)$/.exec(r.getAttribute('data-testid') || '')).filter(Boolean);
+    out.atTop = (pane.scrollTop || 0) <= 4 && (!nums.length || nums.some((m) => m[1] === '0'));
+  }
   return out;
 })(${JSON.stringify(SELECTORS)}, ${JSON.stringify(opts)})`;
 

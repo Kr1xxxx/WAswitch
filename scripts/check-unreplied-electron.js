@@ -70,6 +70,10 @@ app.whenReady().then(async () => {
     assert.strictEqual((await waPage.readChatList(wc, { reply: true })).atTop, false, '往下翻过时 atTop 是 false');
     await wc.executeJavaScript("(() => { const p = document.getElementById('pane-side'); p.scrollTop = 0; p.style.height = ''; p.style.overflow = ''; })()");
     assert.strictEqual((await waPage.readChatList(wc, { reply: true })).atTop, true, '翻回最上面 atTop 是 true');
+    // 滚动的是里面别的元素时：画出来的行里没有第一行（list-item-0）也算往下翻过
+    await wc.executeJavaScript("document.querySelector('[data-testid=list-item-0]').setAttribute('data-testid', 'list-item-12')");
+    assert.strictEqual((await waPage.readChatList(wc, { reply: true })).atTop, false, '没有第一行时 atTop 是 false');
+    await wc.executeJavaScript("document.querySelector('[data-testid=list-item-12]').setAttribute('data-testid', 'list-item-0')");
 
     // ---- 2) 列出没回的 ----
     const store = new Unreplied();
