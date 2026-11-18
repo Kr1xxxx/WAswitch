@@ -29,6 +29,7 @@
     "check:offline": "node scripts/check-offline.js",
     "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js",
     "check:popup": "electron scripts/check-popup.js",
+    "check:wa-sound": "electron scripts/check-wa-sound.js && node scripts/check-wa-sound-app.js",
     "dist": "electron-builder",
     "check:updater": "node scripts/check-updater.js",
     "check:upload-release": "node scripts/check-upload-cloud-release.js",
