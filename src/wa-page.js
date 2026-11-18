@@ -172,9 +172,9 @@ const LIST_CODE = (opts) => `((S, opts) => {
       for (const n of icons) if (n && iconNames.size < 30) iconNames.add(n.slice(0, 40));
       chat.out = icons.some((n) => TICK.test(n));
       chat.age = ageOf(time);
-      // 群里别人发的最后一条，预览前面有「发送人: 」（发送人和冒号是单独的一段）。头像是照片的群只能这样认出来
+      // 群里别人发的最后一条，预览前面有「发送人: 」（发送人和冒号是单独的一段；中文界面可能是全角「：」）。头像是照片的群只能这样认出来
       const prev = titled.slice(1).find((t) => t !== name) || '';
-      chat.sender = texts.some((t) => t === ':' || (t.length > 1 && t.length <= 60 && t.endsWith(':') && t !== name && prev.startsWith(t) && prev.length > t.length + 1));
+      chat.sender = texts.some((t) => t === ':' || t === '：' || (t.length > 1 && t.length <= 60 && /[:：]$/.test(t) && t !== name && prev.startsWith(t) && prev.length > t.length));
     }
     if (opts.includePreview) {
       const preview = titled.slice(1).find((t) => t !== name) || '';

@@ -82,6 +82,29 @@ app.whenReady().then(async () => {
     const r2 = await waPage.readChatList(wc, { reply: true });
     store.ingestWeb('w1', r2.chats, { atTop: r2.atTop });
     assert.strictEqual(by['Team Lyon'].sender, true, '头像是照片的群：预览前面有发送人');
+    // 中文界面（fingerprint.js 让 WhatsApp 用 zh-CN）：发送人后面可能是全角「：」，冒号单独一段或者跟着名字
+    const zh = await wc.executeJavaScript(`(() => { try {
+      const src = [...document.querySelectorAll('#pane-side [role=row]')].find((r) => r.querySelector('[title="Team Lyon"]'));
+      const add = (name, html) => {
+        const c = src.cloneNode(true);
+        const t = c.querySelector('[title="Team Lyon"]');
+        t.setAttribute('title', name);
+        t.textContent = name;
+        c.querySelector('[title^="Paul"]').outerHTML = html;
+        src.parentNode.appendChild(c);
+      };
+      add('里昂团队', '<span title="安娜：好的" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">安娜</span><span>： </span><span dir="ltr" class="_ao3e">好的</span></span>');
+      add('巴黎团队', '<span title="安娜：好" class="x78zum5 x1cy8zhl"><span dir="auto" class="_ao3e">安娜：</span><span dir="ltr" class="_ao3e">好</span></span>');
+      add('Nina Koch', '<span title="Preis：20 EUR" class="x78zum5 x1cy8zhl"><span dir="ltr" class="_ao3e">Preis：20 EUR</span></span>');
+      return true;
+    } catch (e) { return String(e); } })()`);
+    assert.strictEqual(zh, true);
+    const rz = await waPage.readChatList(wc, { reply: true });
+    const bz = Object.fromEntries(rz.chats.map((c) => [c.name, c]));
+    assert.strictEqual(bz['里昂团队'].sender, true, '全角「：」单独一段认出是群');
+    assert.strictEqual(bz['巴黎团队'].sender, true, '全角「：」跟着名字也认出是群');
+    assert.strictEqual(bz['Nina Koch'].sender, false, '私聊消息里带全角冒号不算');
+    await wc.executeJavaScript("[...document.querySelectorAll('#pane-side [role=row]')].slice(-3).forEach((r) => r.remove())");
     assert.strictEqual(by['Sophie Martin'].sender, false, '私聊没有发送人');
     assert.strictEqual(by['+44 7700 900123'].sender, false, '语音时长 0:23 不当成发送人');
     assert(Array.isArray(r.icons) && r.icons.includes('status-dblcheck') && r.icons.includes('msg-dblcheck'), `图标名带出来写日志 ${JSON.stringify(r.icons)}`);
