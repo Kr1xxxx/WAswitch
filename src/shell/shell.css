@@ -908,7 +908,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 @container op (max-width: 260px) { .op-see-time { display: none; } }
 .oh { container: oh / inline-size; display: flex; flex-direction: column; margin-top: 12px; }
 .oh-t { margin: 0 0 4px; padding: 0 16px; font-size: var(--fs-s); font-weight: 400; color: var(--slate-11); }
-.oh-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 16px; height: 48px; padding: 0 16px; border: 0; border-top: var(--hair) solid var(--slate-5); border-radius: 0; background: transparent; font-family: inherit; text-align: left; }
+.oh-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 80px; align-items: center; gap: 16px; height: 48px; padding: 0 16px; border: 0; border-top: var(--hair) solid var(--slate-5); border-radius: 0; background: transparent; font-family: inherit; text-align: left; }
 .oh-t + .oh-row { border-top-color: transparent; }
 .oh-row:hover:not(:disabled) { background: var(--slate-3); border-radius: var(--r-m); border-top-color: transparent; }
 .oh-row:hover:not(:disabled) + .oh-row { border-top-color: transparent; }
@@ -918,7 +918,7 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .oh-num { font-size: var(--fs-s); color: var(--slate-11); font-variant-numeric: tabular-nums; }
 .oh-acc { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; }
 .oh-acc .sw { width: 10px; height: 10px; border-radius: var(--r-full); flex: none; }
-.oh-at { font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.oh-at { font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 /* 窄的时候先藏账号名（留图标），再藏名字旁边的号码 */
-@container oh (max-width: 520px) { .oh-acc-name { display: none; } .oh-row { grid-template-columns: minmax(0, 1fr) auto auto; } }
+@container oh (max-width: 520px) { .oh-acc-name { display: none; } .oh-row { grid-template-columns: minmax(0, 1fr) auto 80px; } }
 @container oh (max-width: 380px) { .oh-num { display: none; } }

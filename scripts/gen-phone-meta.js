@@ -108,14 +108,23 @@ for (const id of FORMAT_REGIONS) {
   if (list.length) FMT[id] = list;
 }
 
+// 这些国家的手机号码规则（nationalNumberPattern）：没写 + 和 0 的号码先看是不是本国手机号，
+// 免得德国手机「151 23456789」被当成漏了 + 的美国号（+1 512…）
+const MOB = {};
+for (const id of FORMAT_REGIONS) {
+  const p = pattern(territories.find((x) => x.id === id).body, 'mobile');
+  if (p && p !== 'NA') MOB[id] = p;
+}
+
 const out = `// 号码数据（侧栏「开聊」认号码用，见 phone-parse.js）。由 scripts/gen-phone-meta.js 生成，不要手改。
 // 数据来自 libphonenumber resources/PhoneNumberMetadata.xml，Copyright (C) 2009 The Libphonenumber Authors，Apache License 2.0。
 // CC：国家码 -> [主国家, [别的国家, 号码开头（正则）]...]
 // LEN：国家 -> [固话和手机的位数, 手机的位数]（不含国家码）
 // NP0：本国写法开头拨 0 的国家（补国家码时去掉 0）
 // FMT：欧美常见国家的分组写法 [pattern, 号码开头, 写法]
+// MOB：欧美常见国家的手机号码（正则，不含国家码）
 module.exports = {
-${['CC', 'LEN', 'NP0', 'FMT'].map((k) => `  ${k}: ${JSON.stringify({ CC, LEN, NP0, FMT }[k]).replace(/\],"/g, '],\n    "').replace(/^\{/, '{\n    ').replace(/\}$/, ',\n  }')},`).join('\n')}
+${['CC', 'LEN', 'NP0', 'FMT', 'MOB'].map((k) => `  ${k}: ${JSON.stringify({ CC, LEN, NP0, FMT, MOB }[k]).replace(/\],"/g, '],\n    "').replace(/","/g, k === 'MOB' ? '",\n    "' : '","').replace(/^\{/, '{\n    ').replace(/\}$/, ',\n  }')},`).join('\n')}
 };
 `;
 fs.writeFileSync(path.join(__dirname, '..', 'src', 'phone-meta.js'), out);

@@ -6,6 +6,7 @@
 //   2. 单个 0 开头：本国写法，去掉 0（意大利这类 0 是号码一部分的不去），补所选账号的国家码。
 //   3. 不带 + 也不带 0：
 //      所选账号是 +1 且正好 10 位：补 1；
+//      整段是所选账号本国的手机号（欧美常见国家，见 phone-meta.js 的 MOB）：补本国区号；
 //      开头能对上某个国家码、后面的位数也对：当成漏了 + 的完整号码；
 //      否则补所选账号的国家码。
 //   4. 所选账号自己没有号码（没登录过）：不补，要用户带上国家码。
@@ -79,7 +80,8 @@ function ccOf(phone) {
   const s = clean(phone);
   if (!s) return '';
   const d = s.replace(/\D/g, '');
-  const intl = s.startsWith('+') ? d.replace(/^0+/, '') : d.startsWith('00') ? d.slice(2) : '';
+  // 手填的号码可能没写 +（「4915123456789」）：7 到 15 位、不是 0 开头的纯数字也当国际号码
+  const intl = s.startsWith('+') ? d.replace(/^0+/, '') : d.startsWith('00') ? d.slice(2) : d.startsWith('0') ? '' : d;
   const p = intl.length >= 7 && intl.length <= 15 ? splitCc(intl) : null;
   return p ? p.cc : '';
 }
@@ -104,6 +106,9 @@ function parsePhone(raw, defaultCc = '') {
     added = true;
   } else if (own === '1' && d.length === 10) {
     digits = `1${d}`;
+    added = true;
+  } else if (own && own !== '1' && META.MOB[META.CC[own][0]] && re(META.MOB[META.CC[own][0]], true).test(d)) {
+    digits = own + d; // 本国手机号没写 0（德国「151 23456789」）：补本国区号，不当成漏了 + 的美国号
     added = true;
   } else if (d.length >= 7 && fits(splitCc(d))) {
     digits = d;
