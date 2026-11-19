@@ -3362,7 +3362,8 @@ handleShell('unreplied:dismiss', (data) => {
 });
 handleShell('unreplied:restore', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
-  if (!unrepliedStore().restore(data.accountId, data.key)) return false;
+  const kind = data.kind === 'reply' || data.kind === 'todo' ? data.kind : null;
+  if (!unrepliedStore().restore(data.accountId, data.key, kind)) return false;
   unrepliedPushIfChanged();
   return true;
 });

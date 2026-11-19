@@ -43,7 +43,7 @@ class Unreplied {
   constructor({ now = Date.now, load = () => null, save = () => {} } = {}) {
     this.now = now;
     this.save = save;
-    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, unread, dismissed, digits?, jid?, last?, doneAt?, how?, back?, keep? })
+    this.byAcc = new Map(); // 账号 id -> Map(对话 key -> { name, since, hits, sig, unread, dismissed, digits?, jid?, last?, doneAt?, how?, back?, keep?, outAt? })
     this.todos = new Map(); // 账号 id -> Map(对话 key -> { name, sig, at, what?, due?, done?, doneAt?, how?, keep?, digits?, jid? })
     const data = load();
     if (data && typeof data === 'object' && data.v === 1 && data.accounts && typeof data.accounts === 'object') {
@@ -60,6 +60,7 @@ class Unreplied {
             ...(e.dismissed === true && Number.isFinite(e.doneAt) ? { doneAt: e.doneAt, how: e.how === 'replied' ? 'replied' : 'tick' } : {}),
             ...(e.back > 0 ? { back: 1 } : {}),
             ...(e.keep === true ? { keep: true } : {}),
+            ...(Number.isFinite(e.outAt) ? { outAt: e.outAt } : {}),
           });
         }
         if (m.size) this.byAcc.set(String(id), m);
@@ -136,10 +137,17 @@ class Unreplied {
       if (c.muted) { if (e) { m.delete(key); dirty = true; } continue; }
       if (!incoming) {
         if (!e) continue;
+        // 我们最后发的那条的时间（今天的钟点才准）：之后看到比它新的时间才算客户又发了，「正在输入…」时列表上还是这个时间
+        const outAt = c.out === true && /\d[:.]\d\d/.test(String(c.time || '')) && Number.isFinite(c.age) ? Math.floor((now - c.age * MIN) / MIN) * MIN : 0;
         // 已完成的留着（打字时的「正在输入…」算一次的那个也清掉）；放回去的照旧列着
-        if (e.doneAt || e.keep) { if (e.back) { const { back, ...rest } = e; m.set(key, rest); dirty = true; } continue; }
+        if (e.doneAt || e.keep) {
+          const next = { ...e, ...(outAt > (e.outAt || 0) ? { outAt } : {}) };
+          delete next.back;
+          if (JSON.stringify(next) !== JSON.stringify(e)) { m.set(key, next); dirty = true; }
+          continue;
+        }
         // 列出来以后我们回了：挪到已完成。认不出勾的号、还没列出来的、旧版本点了圆圈的：照旧去掉
-        if (c.out === true && !e.dismissed && listed(e, now)) m.set(key, { ...e, dismissed: true, unread: 0, doneAt: Math.floor(now / MIN) * MIN, how: 'replied' });
+        if (c.out === true && !e.dismissed && listed(e, now)) m.set(key, { ...e, dismissed: true, unread: 0, doneAt: Math.floor(now / MIN) * MIN, how: 'replied', ...(outAt ? { outAt } : {}) });
         else m.delete(key);
         dirty = true;
         continue;
@@ -160,13 +168,17 @@ class Unreplied {
       if (e.dismissed) {
         // 办完的，客户又发了一条才回到待回复：未读变多，或者今天的时间比记下的晚。过了半夜「21:40」变成「昨天」不算。
         // 只看时间时要连着两次（我们回过以后，对方正在输入也会让预览暂时没有勾）
-        const newer = exact && since > e.since + MIN;
+        const newer = exact && since > Math.max(e.since, e.outAt || 0) + MIN;
         if (unread > (e.unread || 0) || (newer && e.back)) next = { ...active(e), since, hits: MIN_HITS, sig, unread, ...(last ? { last } : {}) };
         else next = { ...e, unread, ...(newer ? { back: 1 } : {}) };
-        if (next.dismissed === false) { delete next.back; delete next.keep; if (!last) delete next.last; }
+        if (next.dismissed === false) { delete next.back; delete next.keep; delete next.outAt; if (!last) delete next.last; }
         if (!newer && next.back) delete next.back;
       } else {
-        next = { ...e, since: exact ? since : Math.min(e.since, since), hits: Math.min(e.hits + 1, MIN_HITS), sig, unread, ...(last ? { last } : {}) };
+        // 放回去的回过的对话：列表时间还是我们发的那条（对方正在输入）时不挪等待时间；客户真的又发了一条就不再留着（下次回了照常进已完成）
+        const fresh = exact && since > Math.max(e.since, e.outAt || 0) + MIN;
+        const hold = e.keep && exact && !fresh && e.outAt && since <= e.outAt + MIN;
+        next = { ...e, since: hold ? e.since : exact ? since : Math.min(e.since, since), hits: Math.min(e.hits + 1, MIN_HITS), sig, unread, ...(last ? { last } : {}) };
+        if (e.keep && (fresh || unread > (e.unread || 0))) { delete next.keep; delete next.outAt; }
       }
       if (JSON.stringify(next) !== JSON.stringify(e)) { m.set(key, next); dirty = true; }
     }
@@ -330,15 +342,16 @@ class Unreplied {
     return { ...old, name: (old.reply || old.todo).name };
   }
 
-  // 已完成那行点了绿勾：放回原来那一段。回过的（how: 'replied'）记 keep，不然下一次读列表又会自己挪回已完成
-  restore(id, key) {
+  // 已完成那行点了绿勾：放回原来那一段（kind 是那一行写的 reply / todo，不给就两种都放回）。
+  // 回过的（how: 'replied'）记 keep，不然下一次读列表又会自己挪回已完成
+  restore(id, key, kind = null) {
     let dirty = false;
-    const e = this.get(id, key);
+    const e = kind === 'todo' ? null : this.get(id, key);
     if (e && e.dismissed && e.doneAt) {
       this.acc(String(id)).set(String(key), { ...active(e), ...(e.how === 'replied' ? { keep: true } : {}) });
       dirty = true;
     }
-    const t = this.getTodo(id, key);
+    const t = kind === 'reply' ? null : this.getTodo(id, key);
     if (t && t.done && t.doneAt) {
       const { done, doneAt, how, ...rest } = t;
       this.todos.get(String(id)).set(todoKey(key), { ...rest, ...(how === 'replied' ? { keep: true } : {}) });

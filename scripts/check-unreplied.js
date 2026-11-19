@@ -279,6 +279,44 @@ const liteCheck = (async () => {
   assert(d.list().some((e) => e.name === 'Lukas Müller'), '放回的回过的对话留在待回复');
   d.done('d1', 'Lukas Müller');
   assert.strictEqual(d.get('d1', 'Lukas Müller').keep, undefined, '再点圆圈清掉 keep');
+  // 回过以后对方「正在输入」好几次没发（列表时间还是我们那条）：一直留在已完成（审计 a）
+  {
+    now = Date.UTC(2026, 10, 18, 10, 0);
+    const g = make();
+    const at = (h, mi) => Date.UTC(2026, 10, 18, h, mi);
+    const age = (t) => Math.round((now - t) / MIN);
+    const r = (o) => ({ ...row('Clara Rossi', { time: '10:00', age: age(at(10, 0)), ...o }), last: 'Ciao' });
+    g.ingestWeb('g1', [r()], { atTop: false });
+    now = at(11, 0);
+    g.ingestWeb('g1', [r()], { atTop: false });
+    now = at(11, 5);
+    g.ingestWeb('g1', [r({ out: true, time: '11:05', age: 0 })], { atTop: false });
+    assert.strictEqual(g.doneList().length, 1, '回了进已完成');
+    for (let k = 0; k < 4; k++) { now += MIN; g.ingestWeb('g1', [r({ time: '11:05', age: age(at(11, 5)) })], { atTop: false }); }
+    now += MIN;
+    g.ingestWeb('g1', [r({ out: true, time: '11:05', age: age(at(11, 5)) })], { atTop: false });
+    assert.deepStrictEqual([g.list().length, g.doneList().length], [0, 1], '正在输入几次都不把已完成那行弄丢');
+    // 放回这个回过的对话，客户真的又发了一条：不再留着，我们再回就照常进已完成（审计 b）
+    g.restore('g1', 'Clara Rossi');
+    assert(g.get('g1', 'Clara Rossi').keep);
+    now = at(11, 20);
+    g.ingestWeb('g1', [r({ time: '11:05', age: age(at(11, 5)) })], { atTop: false });
+    assert.strictEqual(g.get('g1', 'Clara Rossi').since, at(10, 0), '正在输入时等待时间不挪');
+    g.ingestWeb('g1', [r({ time: '11:19', age: 1 })], { atTop: false });
+    assert.strictEqual(g.get('g1', 'Clara Rossi').keep, undefined, '客户又发了一条：清掉 keep');
+    now = at(11, 55);
+    g.ingestWeb('g1', [r({ time: '11:19', age: age(at(11, 19)) })], { atTop: false });
+    g.ingestWeb('g1', [r({ out: true, time: '11:55', age: 0 })], { atTop: false });
+    assert.strictEqual(g.get('g1', 'Clara Rossi').how, 'replied', '再回就进已完成');
+    // 已完成那行写「放回待回复」：只放回待回复那条（审计 c）
+    g.setTodo('g1', 'Clara Rossi', { name: 'Clara Rossi' }, { todo: true, what: '发样品', when: 'soon' }, { sig: 's1', lastAt: at(11, 0) });
+    g.todos.get('g1').set('Clara Rossi', { ...g.getTodo('g1', 'Clara Rossi'), done: true, doneAt: at(11, 30), how: 'tick' });
+    assert.deepStrictEqual(g.doneList().map((e) => e.kind), ['reply'], '同一个对话一行');
+    g.restore('g1', 'Clara Rossi', 'reply');
+    assert.strictEqual(g.getTodo('g1', 'Clara Rossi').done, true, '待跟进那条不跟着放回');
+    assert.deepStrictEqual(g.list().map((e) => [e.kind, e.what]), [['reply', undefined]]);
+  }
+  now = Date.UTC(2026, 10, 18, 16, 0);
   // 存盘再读回来：已完成还在
   const back = make(JSON.parse(JSON.stringify(d.toJSON())));
   assert.deepStrictEqual(back.doneList(), d.doneList(), '重启后已完成还在');

@@ -229,7 +229,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   if (k === 'showPage') return (p) => { window.__calls.push(['showPage', p]); };
   if (k === 'unrepliedOpen') return async (a, key, force) => { window.__calls.push(['open', a, key, force]); const r = window.__next || { result: 'opened' }; window.__next = null; return r; };
   if (k === 'unrepliedDismiss') return async (a, key) => { window.__calls.push(['dismiss', a, key]); return true; };
-  if (k === 'unrepliedRestore') return async (a, key) => { window.__calls.push(['restore', a, key]); return true; };
+  if (k === 'unrepliedRestore') return async (a, key, kind) => { window.__calls.push(['restore', a, key, kind]); return true; };
   if (k === 'panelData') return async () => ({ replies: [], customers: [] });
   if (k === 'notifLog') return async () => [];
   return async () => null;
@@ -310,7 +310,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await wait(100);
     await js(() => document.querySelector('.ur-row.done .ur-done').click());
     await wait(100);
-    assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['restore', 'a2', 'James Wilson'], '点绿勾放回');
+    assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['restore', 'a2', 'James Wilson', 'reply'], '点绿勾放回');
     // 状态推过来（主进程每分钟一次）不把展开的已完成收起来
     await push({ page: 'unreplied', unreplied: { count: items.length, list: items, done: doneItems.slice(1) } });
     await wait(100);

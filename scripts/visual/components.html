@@ -288,5 +288,20 @@
     </div>
     </div>
   </section>
+  <section data-shot="opennum">
+    <h2>开聊</h2>
+    <!-- 账号用一排按钮选：选中、悬停、没有 emoji 的号、名字太长的号 -->
+    <div class="box op-form" style="width: 520px">
+      <div class="field"><span class="op-label">账号</span><div class="op-accs" role="radiogroup" aria-label="账号">
+        <button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales DE</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales FR</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="20" height="20" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button>
+      </div></div>
+      <label class="field">号码<input inputmode="tel" placeholder="+49 151 2345678" aria-label="号码"></label>
+      <label class="field">名字<input value="Lena Fischer" placeholder="可不填" aria-label="名字"></label>
+      <div class="btns"><button type="button" class="btn primary">开聊</button></div>
+    </div>
+  </section>
 </body>
 </html>
