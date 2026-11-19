@@ -568,7 +568,7 @@ function clockParts(tz) {
   const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
   const hour = Number(parts.hour);
   const night = hour >= 22 || hour < 8;
-  return { text: `${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
+  return { text: `${parts.hour}:${parts.minute}`, hour, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
 // 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
 let peer = null;
@@ -994,36 +994,71 @@ async function opLookup() {
   else if ((!c || !c.name) && op.autoName && op.name === op.autoName) { op.name = ''; op.autoName = ''; }
   opPaint();
 }
-// 号码框下面那一行：国家、整理好的号码、区号是按哪个号补的、谁的客户、当地时间；位数不对换成琥珀色提醒
+// 框下沿的结果条：整理好的号码、区号是按哪个号补的或者是谁的客户、当地时间（9 点到 21 点绿点，其余琥珀色：对方多半不在线）；
+// 位数不对、要带区号时整条换成琥珀色的提醒。没认出号码时没有这一条
 function opSee() {
   const i = op.info;
   if (!i || !op.phone.trim()) return null;
   if (i.err === 'need_cc') return h('div', { class: 'op-see warn', role: 'status' }, h('span', null, '请带上区号，例如 +49'));
   if (i.err || !i.formatted) return null;
   if (!i.lenOk && i.expect && i.expect.length) {
-    return h('div', { class: 'op-see warn', role: 'status' }, i.country ? h('b', null, i.country) : null,
-      h('span', null, `号码一般 ${i.expect.join(' 或 ')} 位，现在 ${i.got} 位`));
+    return h('div', { class: 'op-see warn', role: 'status' }, h('span', null, `${i.country}号码一般 ${i.expect.join(' 或 ')} 位，现在 ${i.got} 位`));
   }
   const acc = s.accounts.find((a) => a.id === op.acc);
   const c = i.zone ? clockParts(i.zone.tz) : null;
+  const late = !!c && (c.hour < 9 || c.hour >= 21);
   return h('div', { class: 'op-see', role: 'status' },
-    i.country ? h('b', null, i.country) : null,
-    h('span', { class: 'op-see-num' }, i.formatted),
+    h('b', null, i.formatted),
     i.added && acc ? h('span', { class: 'op-see-opt' }, `区号按 ${acc.name} 补的`) : null,
     i.customer && i.customer.owner ? h('span', { class: 'op-see-opt' }, `${i.customer.owner} 的客户`) : null,
-    c ? h('span', { class: `op-see-time${c.night ? ' night' : ''}`, title: c.night ? `客户那边现在是${c.when}` : null }, `当地${i.zone.approx ? '约' : ''} ${c.text}`) : null);
+    c ? h('span', { class: `op-see-time${late ? ' late' : ''}`, title: late ? '客户那边现在多半不在线' : null }, h('i', { class: 'op-dot' }), `当地${i.zone.approx ? '约' : ''} ${c.text}`) : null);
 }
+// 认出国家后号码前面的国家小标签
+const opCc = () => (op.info && op.info.country && op.phone.trim() && op.info.err !== 'need_cc' ? h('span', { class: 'op-cc' }, op.info.country) : null);
 function opPaint() {
-  const card = $content.querySelector('.op-card');
-  if (!card) return;
-  const old = card.querySelector('.op-see');
+  const wrap = $content.querySelector('.op');
+  if (!wrap) return;
+  wrap.querySelector('.op-see')?.remove();
   const see = opSee();
-  if (old) old.remove();
-  if (see) card.insertBefore(see, card.querySelector('.op-foot'));
-  const name = card.querySelector('.op-name');
+  if (see) wrap.append(see);
+  const line = wrap.querySelector('.op-line');
+  line.querySelector('.op-cc')?.remove();
+  const cc = opCc();
+  if (cc) line.prepend(cc);
+  const name = wrap.querySelector('.op-name');
   if (name && name.value !== op.name) name.value = op.name;
-  const go = card.querySelector('.op-foot .btn');
+  const go = wrap.querySelector('.op-bar .btn');
   if (go) go.disabled = op.busy || !op.phone.trim();
+}
+// 开聊历史一行：今天、昨天带钟点，更早的写日期
+function opWhen(at) {
+  const d = new Date(at);
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return diff === 0 ? `今天 ${hm}` : diff === 1 ? `昨天 ${hm}` : `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+// 点一行：号码、名字、账号填回上面的框，光标停在号码框，用户看一眼再点「开聊」（不直接开：开聊会刷新那个号的页面）
+function opRefill(e) {
+  if (op.busy) return;
+  op.acc = e.accountId; op.phone = e.phone; op.name = e.name || ''; op.autoName = op.name;
+  op.force = false; op.msg = ''; op.info = null;
+  render(true);
+  const num = $content.querySelector('.op-num');
+  if (num) { num.focus(); num.setSelectionRange(num.value.length, num.value.length); }
+  opLookup();
+}
+function opHistory() {
+  const list = (s.openHistory || []).filter((e) => webAccs().some((a) => a.id === e.accountId));
+  if (!list.length) return null;
+  return h('div', { class: 'oh' }, h('h2', { class: 'oh-t' }, '开聊历史'),
+    list.map((e) => {
+      const a = s.accounts.find((x) => x.id === e.accountId);
+      return h('button', { type: 'button', class: 'oh-row', disabled: op.busy, onclick: () => opRefill(e) },
+        h('span', { class: 'oh-who' }, e.name ? [h('span', { class: 'oh-name' }, e.name), h('span', { class: 'oh-num' }, e.phone)] : h('span', { class: 'oh-name' }, e.phone)),
+        h('span', { class: 'oh-acc', title: a.name }, emojiImg(a, 16) || mini(a), h('span', { class: 'oh-acc-name' }, a.name)),
+        h('span', { class: 'oh-at' }, opWhen(e.at)));
+    }));
 }
 function openNumPage(entering) {
   const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'),
@@ -1038,7 +1073,7 @@ function openNumPage(entering) {
     list.map((a) => {
       const on = a.id === op.acc;
       return h('button', { type: 'button', class: `op-acc${on ? ' on' : ''}`, role: 'radio', 'aria-checked': on ? 'true' : 'false', tabindex: on ? '0' : '-1', 'data-id': a.id, disabled: op.busy, title: a.name, onclick: () => opPick(a.id) },
-        emojiImg(a, 20) || mini(a), h('span', { class: 'op-acc-name' }, a.name));
+        emojiImg(a, 18) || mini(a), h('span', { class: 'op-acc-name' }, a.name));
     }));
   const phone = h('input', {
     class: 'op-num', value: op.phone, maxlength: '80', inputmode: 'tel', placeholder: '+49 151 2345678', 'aria-label': '号码', disabled: op.busy, onkeydown: enter,
@@ -1046,11 +1081,15 @@ function openNumPage(entering) {
   });
   const name = h('input', { class: 'op-name', value: op.name, maxlength: '60', placeholder: '名字，可不填', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
   if (entering && !op.busy) requestAnimationFrame(() => { if (phone.isConnected) phone.focus(); });
-  page.append(acc,
-    h('div', { class: 'op-card' }, phone, opSee(),
-      h('div', { class: 'op-foot' }, name,
-        h('button', { class: 'btn primary', disabled: op.busy || !op.phone.trim(), onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))));
+  // 一个框：号码、名字、用哪个号和「开聊」都在里面，认出来的结果贴在框的下沿
+  page.append(h('div', { class: 'op' },
+    h('div', { class: 'op-box' }, h('div', { class: 'op-line' }, opCc(), phone), name,
+      h('div', { class: 'op-bar' }, acc,
+        h('button', { class: 'btn primary', disabled: op.busy || !op.phone.trim(), onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))),
+    opSee()));
   if (op.msg) page.append(h('div', { class: 'note bad', role: 'status' }, op.msg));
+  const hist = opHistory();
+  if (hist) page.append(hist);
   return page;
 }
 

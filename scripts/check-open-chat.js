@@ -17,6 +17,7 @@ const { McpController } = require('../src/mcp/server');
 const { createChatOpener, sendUrl, WEB_WAIT_MS, normalizePhone: userPhone } = require('../src/chat-open');
 const { normalizePhone, maskPhone } = require('../src/mcp/open-chat');
 const { parsePhone, ccOf } = require('../src/phone-parse');
+const { createOpenHistory, shownOpens, KEEP: OPEN_KEEP } = require('../src/open-history');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 // 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
@@ -237,6 +238,24 @@ async function checkUserOpen() {
     check(short.digits === '336123456' && !short.lenOk && short.expect.join() === '9', '开聊：法国号码少了两位，提醒一般 9 位，号码照样认');
     check(P('+33 6 12 34 56 78', '').lenOk && P('+49 1512 3456789', '').lenOk, '开聊：位数对的不提醒');
     check(ccOf('+49 151 2345678') === '49' && ccOf('+1 (212) 555-0147') === '1' && ccOf('0151 2345678') === '' && ccOf('') === '', '账号自己号码的国家码');
+  }
+  // 开聊历史（open-history.js）：重复的挪到最上、最多 50 条、文件坏了从空的开始、删掉的号不显示
+  {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'waswitch-oh-'));
+    const file = path.join(dir, 'open-history.json');
+    const h1 = createOpenHistory(file);
+    h1.add('a', '4915123456789', 1); h1.add('b', '4915123456789', 2); h1.add('a', '33612345678', 3); h1.add('a', '4915123456789', 4);
+    const order = h1.list().map((e) => `${e.accountId}:${e.digits}`).join(',');
+    check(order === 'a:4915123456789,a:33612345678,b:4915123456789', `开聊历史：同一个号下的同一个号码挪到最上，别的号下的另算（${order}）`);
+    check(createOpenHistory(file).list().length === 3, '开聊历史：存进文件，重开还在');
+    for (let i = 0; i < 60; i++) h1.add('a', String(4915100000000 + i), 10 + i);
+    check(createOpenHistory(file).list().length === OPEN_KEEP, `开聊历史：最多留 ${OPEN_KEEP} 条`);
+    fs.writeFileSync(file, '{oops');
+    check(createOpenHistory(file).list().length === 0, '开聊历史：文件坏了从空的开始');
+    const shown = shownOpens([{ accountId: 'gone' }, ...Array.from({ length: 10 }, (_, i) => ({ accountId: i % 2 ? 'a' : 'lite' }))], (id) => id === 'a');
+    check(shown.length === 5 && shown.every((e) => e.accountId === 'a'), '开聊历史：删掉的号、轻量号下的不显示，最多显示 8 条');
+    check(shownOpens(Array.from({ length: 20 }, () => ({ accountId: 'a' })), () => true).length === 8, '开聊历史：页面上最多 8 条');
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   // 用户在打字（就在我们的面板里输入号码）也直接开，不问
   {

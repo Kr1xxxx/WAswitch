@@ -38,6 +38,7 @@ const { createDraftPlacer } = require('./draft-place');
 const { pasteToCompose } = require('./compose-insert');
 const { createChatOpener } = require('./chat-open');
 const { parsePhone, ccOf } = require('./phone-parse');
+const { createOpenHistory, shownOpens } = require('./open-history');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
@@ -1516,6 +1517,7 @@ function pushState() {
     }),
     // 待回复：锁着时只给个数，不给名字
     unreplied: (() => { const list = unrepliedList(); return { count: list.length, list: locked ? [] : list }; })(),
+    openHistory: page === 'opennum' && !locked ? recentOpens() : [], // 开聊页下面的开聊历史，只在这一页上算
     lite: liteStateForShell(),
     totalMB: memoryManager.totalMB(),
     settings,
@@ -3438,10 +3440,30 @@ handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, 
 // 侧栏工具「开聊」：用户选一个网页号、粘贴号码（可填名字），切到这个号并打开和这个号码的对话（做法见 chat-open.js），
 // 号码和名字记进客户资料（同一个号下号码相同的只留一条；填了名字就改成这个名字）。不碰 WhatsApp 的通讯录
 // 客户资料里的号码按它所在的号的国家码整理成国际号码（客户编辑里可能填的是本国写法）
+// 同一个号码、同一个国家码算过的记一会儿（开聊页边打边查、状态推送时都要对一遍整个客户资料）
+const digitsMemo = new Map();
 const customerDigits = (c) => {
   const acc = c.accountId ? findAcc(c.accountId) : null;
-  return parsePhone(c.phone, acc ? ccOf(acc.phone) : '').digits;
+  const cc = acc ? ccOf(acc.phone) : '';
+  const key = `${cc}|${c.phone}`;
+  if (!digitsMemo.has(key)) {
+    if (digitsMemo.size > 3000) digitsMemo.clear();
+    digitsMemo.set(key, parsePhone(c.phone, cc).digits);
+  }
+  return digitsMemo.get(key);
 };
+// 开聊历史（见 open-history.js）。开聊页上显示最近 8 条：只算还在的网页号下的，名字去这个号的客户资料里查
+let openHistoryStore = null;
+const openHistory = () => openHistoryStore || (openHistoryStore = createOpenHistory(path.join(app.getPath('userData'), 'open-history.json')));
+function recentOpens() {
+  const shown = shownOpens(openHistory().list(), (id) => { const a = findAcc(id); return !!a && !isLite(a) && !isParked(a); });
+  if (!shown.length) return [];
+  const custs = customerStore.list();
+  return shown.map((e) => {
+    const c = custs.find((x) => x.accountId === e.accountId && x.name && customerDigits(x) === e.digits);
+    return { accountId: e.accountId, digits: e.digits, phone: parsePhone(`+${e.digits}`).formatted || `+${e.digits}`, name: c ? c.name : '', at: e.at };
+  });
+}
 function rememberNumber(accountId, digits, name) {
   const nm = typeof name === 'string' ? name.trim().slice(0, 60) : '';
   const old = customerStore.list().find((c) => c.accountId === accountId && customerDigits(c) === digits);
@@ -3483,6 +3505,8 @@ handleShell('chat:openNumber', async ({ accountId, phone, name, force } = {}) =>
   // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记。记的是补好国家码的完整号码
   if (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat') {
     try { rememberNumber(accountId, digits, name); } catch (e) { console.warn(`开聊的号码没记进客户资料：${e.code || e.message}`); }
+    openHistory().add(accountId, digits);
+    pushState(); // 开聊历史多了一条
     if (r.result !== 'failed' && accountId === activeId && page === 'account') focusActive(); // 光标给 WhatsApp，直接能打字
   }
   return r;

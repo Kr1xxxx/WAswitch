@@ -283,17 +283,35 @@
   </section>
   <section data-shot="opennum">
     <h2>开聊</h2>
-    <!-- 账号用一排按钮选：选中、悬停、没有 emoji 的号、名字太长的号 -->
-    <div class="box op-form" style="width: 520px">
-      <div class="field"><span class="op-label">账号</span><div class="op-accs" role="radiogroup" aria-label="账号">
-        <button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales DE</span></button>
-        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales FR</span></button>
-        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button>
-        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="20" height="20" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button>
-      </div></div>
-      <label class="field">号码<input inputmode="tel" placeholder="+49 151 2345678" aria-label="号码"></label>
-      <label class="field">名字<input value="Lena Fischer" placeholder="可不填" aria-label="名字"></label>
-      <div class="btns"><button type="button" class="btn primary">开聊</button></div>
+    <!-- 一个框：认出国家的小标签、号码、名字、一排账号（选中、悬停、没有 emoji、名字太长）、绿色的「开聊」；框下沿的结果条 -->
+    <div class="op" style="width: 560px">
+      <div class="op-box"><div class="op-line"><span class="op-cc">德国</span><input class="op-num" inputmode="tel" value="0151 2345 6789" placeholder="+49 151 2345678" aria-label="号码"></div><input class="op-name" value="" placeholder="名字，可不填" aria-label="名字">
+        <div class="op-bar"><div class="op-accs" role="radiogroup" aria-label="账号"><button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales DE</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales FR</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="18" height="18" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button></div><button type="button" class="btn primary">开聊</button></div></div><div class="op-see" role="status"><b>+49 1512 3456789</b><span class="op-see-opt">区号按 Sales DE 补的</span><span class="op-see-time"><i class="op-dot"></i>当地 14:20</span></div>
+    </div>
+    <!-- 空着：按钮不可点，没有结果条 -->
+    <div class="op" style="width: 560px">
+      <div class="op-box"><div class="op-line"><input class="op-num" inputmode="tel" value="" placeholder="+49 151 2345678" aria-label="号码"></div><input class="op-name" value="" placeholder="名字，可不填" aria-label="名字">
+        <div class="op-bar"><div class="op-accs" role="radiogroup" aria-label="账号"><button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales DE</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales FR</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="18" height="18" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button></div><button type="button" class="btn primary" disabled>开聊</button></div></div>
+    </div>
+    <!-- 老客户：名字带出来，别的号的客户；对方那边不在 9 点到 21 点：琥珀色的点和字 -->
+    <div class="op" style="width: 560px">
+      <div class="op-box"><div class="op-line"><span class="op-cc">美国</span><input class="op-num" inputmode="tel" value="+1 (212) 555-0147" placeholder="+49 151 2345678" aria-label="号码"></div><input class="op-name" value="Emma Johnson" placeholder="名字，可不填" aria-label="名字">
+        <div class="op-bar"><div class="op-accs" role="radiogroup" aria-label="账号"><button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales DE</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales FR</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="18" height="18" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button></div><button type="button" class="btn primary">开聊</button></div></div><div class="op-see" role="status"><b>+1 212-555-0147</b><span class="op-see-opt">Sales UK 的客户</span><span class="op-see-time late"><i class="op-dot"></i>当地 06:20</span></div>
+    </div>
+  </section>
+  <section data-shot="opennum-more">
+    <h2>开聊：提醒和历史</h2>
+    <!-- 位数不对：整条琥珀色提醒 -->
+    <div class="op" style="width: 560px">
+      <div class="op-box"><div class="op-line"><span class="op-cc">法国</span><input class="op-num" inputmode="tel" value="+33 6 12 34 56" placeholder="+49 151 2345678" aria-label="号码"></div><input class="op-name" value="" placeholder="名字，可不填" aria-label="名字">
+        <div class="op-bar"><div class="op-accs" role="radiogroup" aria-label="账号"><button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales DE</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="18" height="18" alt=""><span class="op-acc-name">Sales FR</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button><button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="18" height="18" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button></div><button type="button" class="btn primary">开聊</button></div></div><div class="op-see warn" role="status"><span>法国号码一般 9 位，现在 7 位</span></div>
+    </div>
+    <!-- 开聊历史：有名字的、只有号码的、悬停的一行、没有 emoji 的号 -->
+    <div class="oh" style="width: 560px"><h2 class="oh-t">开聊历史</h2>
+      <button type="button" class="oh-row"><span class="oh-who"><span class="oh-name">Lena Fischer</span><span class="oh-num">+49 1512 3456789</span></span><span class="oh-acc" title="Sales DE"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="16" height="16" alt=""><span class="oh-acc-name">Sales DE</span></span><span class="oh-at">今天 14:20</span></button>
+      <button type="button" class="oh-row" data-force="hover"><span class="oh-who"><span class="oh-name">+33 6 12 34 56 78</span></span><span class="oh-acc" title="Sales FR"><img class="emo" src="../../src/emoji/svg/bee.svg" width="16" height="16" alt=""><span class="oh-acc-name">Sales FR</span></span><span class="oh-at">今天 10:05</span></button>
+      <button type="button" class="oh-row"><span class="oh-who"><span class="oh-name">Emma Johnson</span><span class="oh-num">+1 212-555-0147</span></span><span class="oh-acc" title="Sales UK"><span class="sw" style="background: var(--orange-9)"></span><span class="oh-acc-name">Sales UK</span></span><span class="oh-at">昨天 17:42</span></button>
+      <button type="button" class="oh-row"><span class="oh-who"><span class="oh-name">Sofia Rossi</span><span class="oh-num">+39 347 123 4567</span></span><span class="oh-acc" title="Sales DE"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="16" height="16" alt=""><span class="oh-acc-name">Sales DE</span></span><span class="oh-at">11月17日</span></button>
     </div>
   </section>
 </body>
