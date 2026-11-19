@@ -856,4 +856,20 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .op-acc:disabled { opacity: .5; cursor: default; }
 .op-acc .sw { width: 10px; height: 10px; border-radius: var(--r-full); flex: none; }
 .op-acc-name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.op-form input::placeholder { color: var(--slate-10); opacity: 1; }
+/* 号码卡片：上面大号的号码，中间认出来的结果（有才出现），下面名字和「开聊」。焦点环画在整张卡片上 */
+.op-card { container: op-card / inline-size; display: flex; flex-direction: column; border: var(--hair) solid var(--slate-7); border-radius: var(--r-l); background: var(--white); overflow: hidden; }
+.op-card:focus-within { outline: 2px solid var(--focus); outline-offset: -1px; }
+.op-card input { border: 0; outline: 0; border-radius: 0; background: transparent; box-shadow: none; font-family: inherit; color: var(--slate-12); min-width: 0; }
+.op-card input:focus-visible { outline: 0; }
+.op-card input::placeholder { color: var(--slate-9); opacity: 1; }
+.op-num { height: 64px; padding: 0 18px; font-size: var(--fs-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.op-see { display: flex; gap: 16px; align-items: baseline; padding: 10px 18px; background: var(--slate-2); font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; }
+.op-see b { font-weight: 600; color: var(--slate-12); }
+.op-see-time { margin-left: auto; }
+.op-see-time.night { color: var(--amber-11); }
+.op-see.warn { background: var(--amber-3); color: var(--amber-11); }
+.op-see.warn b { color: inherit; }
+@container op-card (max-width: 480px) { .op-see-opt { display: none; } }
+.op-foot { display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 18px; border-top: var(--hair) solid var(--slate-6); }
+.op-name { flex: 1; height: 36px; padding: 0; font-size: var(--fs-m); }
+.op-foot .btn { border-radius: var(--r-s); white-space: nowrap; }

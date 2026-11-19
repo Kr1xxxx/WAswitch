@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('wa', {
   panelCopy: (text) => ipcRenderer.invoke('panel:copy', text),
   panelInsert: (accountId, text) => ipcRenderer.invoke('panel:insert', { accountId, text }),
   chatOpenNumber: (data) => ipcRenderer.invoke('chat:openNumber', data),
+  chatNumberInfo: (data) => ipcRenderer.invoke('chat:numberInfo', data),
   panelExport: (kind, format) => ipcRenderer.invoke('panel:export', { kind, format }),
   panelImport: (kind) => ipcRenderer.invoke('panel:import', { kind }),
   trDailyCap: (n) => ipcRenderer.invoke('tr:dailycap', n),
