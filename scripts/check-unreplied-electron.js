@@ -4,7 +4,8 @@
 //   2) 读两次后 unreplied.js 列出客户最后说话、超过 30 分钟的私聊（存了名字、没查号码的也列），不列自己回过的和群（照片头像的群看预览前的发送人）
 //   3) 点开：createUnrepliedOpener + 真的 chat-open.js 让页面跳到 web.whatsapp.com/send?phone=号码（这里换成打开了这个对话的假页面），
 //      确认打开的就是这个号码的对话；在打开的对话里我们说完话，交给 followup.js（假的 AI 回答），待跟进和列表上的同一行合起来
-//   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面列出对话，点一行带回号和对话，输入框有字时问一次，点左边的圆圈算办完；
+//   4) 真的 shell 页面 + 假的主进程：侧栏「待回复」带个数，页面分待回复、待跟进、已完成三段（已完成默认收起，每次进来都收起），
+//      点一行带回号和对话，输入框有字时问一次，点左边的圆圈算办完，已完成里点绿勾放回；
 //      900×600 和 1200×760 下文字不被裁。SHOT_DIR 设了就存截图
 // 用法：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/run-check-electron.js scripts/check-unreplied-electron.js
 const path = require('path');
@@ -54,6 +55,7 @@ app.whenReady().then(async () => {
     const by = Object.fromEntries(r.chats.map((c) => [c.name.replace(/[‪-‮]/g, ''), c]));
     assert.strictEqual(r.atTop, true, '列表在最上面');
     assert.strictEqual(by['Sophie Martin'].out, false, '客户发的文字：没有勾');
+    assert.strictEqual(by['Sophie Martin'].last, 'Do you ship to Lyon? And what is the price for 20 trays?', '预览文字（客户最后一句）读得出');
     assert(Math.abs(by['Sophie Martin'].age - t0.age) <= 1, `过了多久按列表时间算 ${by['Sophie Martin'].age} vs ${t0.age}`);
     assert.strictEqual(by['Lukas Weber'].out, true, '老版勾 status-dblcheck 认成自己发的');
     assert.strictEqual(by['Marie Dubois'].out, true, '新版勾 msg-dblcheck 认成自己发的');
@@ -210,10 +212,14 @@ app.whenReady().then(async () => {
       { id: 'a3', name: 'Lite US', color: '#ea580c', proxyLabel: '直连', mode: 'lite' },
     ];
     const items = [
-      { accountId: 'a2', key: 'Emma Wilson', name: 'Emma Wilson', since: now - 26 * 3600e3 },
+      { accountId: 'a2', key: 'Emma Wilson', name: 'Emma Wilson', since: now - 26 * 3600e3, last: 'Hi, do you have the 0.07 C curl trays in stock? We need about 500 boxes before the end of the month for our salons in Manchester.' },
       { accountId: 'a1', key: '‪+44 7700 900123‬', name: '‪+44 7700 900123‬', since: now - 4 * 3600e3 - 60e3 },
       { accountId: 'a3', key: '14155550134@s.whatsapp.net', kind: 'todo', name: 'Olivia Johnson', since: now - 3 * 3600e3, what: '发样品照片和批发价目表' },
       { accountId: 'a1', key: 'Sophie Martin', kind: 'reply', name: 'Sophie Martin-Lefèvre (Lyon Beauty Supplies)', since: now - 45 * 60e3 - 20e3, what: '确认交期后回复客户并发送新的价目表和合同' },
+    ];
+    const doneItems = [
+      { accountId: 'a2', key: 'James Wilson', kind: 'reply', name: 'James Wilson', doneAt: now - 5 * 60e3 },
+      { accountId: 'a1', key: '‪+34 612 345 678‬', kind: 'reply', name: '‪+34 612 345 678‬', doneAt: now - 26 * 3600e3 },
     ];
     const preload = path.join(app.getPath('temp'), `ur-fake-preload-${process.pid}.js`);
     fs.writeFileSync(preload, `window.__cbs = {}; window.__calls = []; window.__next = null;
@@ -223,6 +229,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
   if (k === 'showPage') return (p) => { window.__calls.push(['showPage', p]); };
   if (k === 'unrepliedOpen') return async (a, key, force) => { window.__calls.push(['open', a, key, force]); const r = window.__next || { result: 'opened' }; window.__next = null; return r; };
   if (k === 'unrepliedDismiss') return async (a, key) => { window.__calls.push(['dismiss', a, key]); return true; };
+  if (k === 'unrepliedRestore') return async (a, key, kind) => { window.__calls.push(['restore', a, key, kind]); return true; };
   if (k === 'panelData') return async () => ({ replies: [], customers: [] });
   if (k === 'notifLog') return async () => [];
   return async () => null;
@@ -232,7 +239,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await w.loadFile(path.join(__dirname, '..', 'src', 'shell', 'index.html'));
     const js = (f, ...a) => w.webContents.executeJavaScript(`(${f})(${a.map((x) => JSON.stringify(x)).join(',')})`);
     const shot = async (name) => { if (process.env.SHOT_DIR) fs.writeFileSync(path.join(process.env.SHOT_DIR, `${name}.png`), (await w.webContents.capturePage()).toPNG()); };
-    const base = { accounts, groups: [], activeId: 'a1', platform: 'linux', collapsed: false, settings: {}, page: 'account', unreplied: { count: items.length, list: items } };
+    const base = { accounts, groups: [], activeId: 'a1', platform: 'linux', collapsed: false, settings: {}, page: 'account', unreplied: { count: items.length, list: items, done: doneItems } };
     const push = (extra) => js((st) => window.__cbs.state(st), { ...base, ...extra });
     await push({});
     await wait(200);
@@ -244,37 +251,76 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await js(() => document.querySelector('#side [aria-label="待回复"]').click());
     assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['showPage', 'unreplied'], '点侧栏打开待回复页');
 
-    // 看文字有没有被裁：nowrap 的行要么放得下，要么是允许省略号的名字
+    // 看文字有没有被裁：nowrap 的行要么放得下，要么是允许省略号的名字和第二行
     const clipped = () => js(() => {
       const bad = [];
-      for (const el of document.querySelectorAll('.ur-wait, #side .tool-row .name, .ur-list .hint, .ur-ask .btn, h1')) {
-        if (el.scrollWidth > el.clientWidth + 1 && !el.closest('.ov-name')) bad.push(el.className + ':' + el.textContent);
+      for (const el of document.querySelectorAll('.ur-wait, .ur-acc, .ur-sh, #side .tool-row .name, .ur-ask .btn, .ur-ask span, h1')) {
+        if (el.scrollWidth > el.clientWidth + 1) bad.push(el.className + ':' + el.textContent);
       }
-      const rows = [...document.querySelectorAll('.ur-open')].map((b) => ({ h: b.getBoundingClientRect().height, two: !!b.querySelector('.ur-what') }));
-      // 待跟进的那句：一行，放不下截掉（省略号），不换行
-      const what = [...document.querySelectorAll('.ur-what')].map((el) => ({ text: el.textContent, h: el.getBoundingClientRect().height, ellipsis: getComputedStyle(el).textOverflow, size: getComputedStyle(el).fontSize }));
-      return { bad, rows, what };
+      const rows = [...document.querySelectorAll('.ur-row')].map((r) => ({ h: r.getBoundingClientRect().height, two: r.querySelector('.ur-bub') ? 'said' : r.querySelector('.ur-what') ? 'owe' : '', done: r.classList.contains('done') }));
+      // 第二行（客户的话在气泡里，我们欠的不加气泡）：一行，14px，放不下截掉（省略号），不换行
+      const what = [...document.querySelectorAll('.ur-bub, .ur-what')].map((el) => ({ text: el.textContent, h: el.getBoundingClientRect().height, ellipsis: getComputedStyle(el).textOverflow, size: getComputedStyle(el).fontSize, bg: getComputedStyle(el).backgroundColor, right: el.getBoundingClientRect().right <= el.closest('.ur-open').getBoundingClientRect().right }));
+      const waits = [...document.querySelectorAll('.ur-row:not(.done) .ur-wait')].map((el) => ({ late: el.classList.contains('late'), color: getComputedStyle(el).color, sameLine: ((r, l) => Math.abs((r.top + r.bottom) / 2 - (l.top + l.bottom) / 2) <= 1)(el.getBoundingClientRect(), el.closest('.ur-l1').getBoundingClientRect()) }));
+      return { bad, rows, what, waits };
     });
+    const heads = () => js(() => [...document.querySelectorAll('.ur-sh')].map((x) => x.textContent));
     for (const [wd, ht, label] of [[1200, 760, 'wide'], [900, 600, 'min']]) {
       w.setSize(wd, ht);
       await push({ page: 'unreplied' });
       await wait(300);
+      assert.deepStrictEqual(await heads(), ['待回复3', '待跟进1', '已完成2'], '三段标题带个数');
+      assert.strictEqual(await js(() => document.querySelectorAll('.ur-row.done').length), 0, '已完成默认收起');
       const rows = await js(() => [...document.querySelectorAll('.ur-row')].map((r) => ({ text: r.textContent, x: !!r.querySelector('.ur-done .ur-circle'), first: r.firstElementChild.className })));
       assert.strictEqual(rows.length, 4, `页面列出 4 个对话 ${JSON.stringify(rows)}`);
-      assert(rows[0].text.includes('Emma Wilson') && rows[0].text.includes('Sales FR') && rows[0].text.includes('1 天'), `第一行：名字、号、等了多久 ${rows[0].text}`);
+      assert(rows[0].text.includes('Emma Wilson') && rows[0].text.includes('Sales FR') && rows[0].text.includes('1 天') && rows[0].text.includes('curl trays'), `第一行：名字、号、客户最后一句、等了多久 ${rows[0].text}`);
       assert(rows[1].text.includes('4 小时'), rows[1].text);
-      assert(rows[3].text.includes('45 分钟'), `不到 1 小时写分钟 ${rows[3].text}`);
+      assert(rows[2].text.includes('45 分钟'), `不到 1 小时写分钟 ${rows[2].text}`);
+      assert(rows[3].text.includes('Olivia Johnson'), `待跟进在第二段 ${rows[3].text}`);
       assert(rows.every((x) => x.x && x.first === 'ur-done'), '每行最左边是圆圈');
-      const circle = await js(() => { const b = document.querySelector('.ur-circle').getBoundingClientRect(); const o = document.querySelector('.ur-open').getBoundingClientRect(); return { w: b.width, h: b.height, left: b.right <= o.left, mid: Math.abs((b.top + b.bottom) / 2 - (o.top + o.bottom) / 2) }; });
-      assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 0.5, `圆圈 18px、在行左边、上下居中 ${JSON.stringify(circle)}`);
-      const c = await clipped();
+      const circle = await js(() => { const b = document.querySelector('.ur-circle').getBoundingClientRect(); const o = document.querySelector('.ur-open').getBoundingClientRect(); const l = document.querySelector('.ur-l1').getBoundingClientRect(); return { w: b.width, h: b.height, left: b.right <= o.left, mid: Math.abs((b.top + b.bottom) / 2 - (l.top + l.bottom) / 2) }; });
+      assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 1, `圆圈 18px、在行左边、和第一行对齐 ${JSON.stringify(circle)}`);
+      let c = await clipped();
       assert.deepStrictEqual(c.bad, [], `${label}：文字没被裁 ${JSON.stringify(c.bad)}`);
-      assert(c.rows.every((r) => (r.two ? r.h <= 56 : r.h <= 40)), `${label}：每行一行高，待跟进两行高 ${JSON.stringify(c.rows)}`);
-      assert.deepStrictEqual(c.rows.map((r) => r.two), [false, false, true, true], '有 what 的行多一行');
-      assert(c.what.length === 2 && c.what.every((x) => x.h <= 18 && x.ellipsis === 'ellipsis' && x.size === '12px'), `${label}：第二行一行、12px、放不下截掉 ${JSON.stringify(c.what)}`);
-      assert.strictEqual(c.what[0].text, '发样品照片和批发价目表');
+      assert.deepStrictEqual(c.rows.map((r) => r.two), ['said', '', 'owe', 'owe'], '客户最后一句放气泡，我们欠的不放');
+      const hs = { said: 82, owe: 70, '': 44 };
+      assert(c.rows.every((r) => Math.abs(r.h - hs[r.two]) <= 1), `${label}：同一种行一样高 ${JSON.stringify(c.rows)}`);
+      assert(c.what.length === 3 && c.what.every((x) => x.ellipsis === 'ellipsis' && x.size === '14px' && x.right), `${label}：第二行一行、14px、放不下截掉 ${JSON.stringify(c.what)}`);
+      assert(c.what[0].bg === 'rgb(240, 240, 243)' && c.what[1].bg === 'rgba(0, 0, 0, 0)', `气泡是 slate 3，我们欠的没有底色 ${JSON.stringify(c.what.map((x) => x.bg))}`);
+      assert.strictEqual(c.what[1].text, '确认交期后回复客户并发送新的价目表和合同', '待回复里没有客户最后一句时写 what');
+      assert.strictEqual(c.what[2].text, '发样品照片和批发价目表');
+      assert.deepStrictEqual(c.waits.map((x) => x.late), [true, false, false, false], '只有等了一天以上的变色');
+      assert(c.waits.every((x) => x.sameLine), '时间和名字在同一行');
+      assert.strictEqual(c.waits[0].color, 'rgb(171, 100, 0)', `一天以上是琥珀色 ${c.waits[0].color}`);
       await shot(`unreplied-${label}`);
+      // 点「已完成」展开：矮一些、一行、绿勾、钟点
+      await js(() => document.querySelector('.ur-fold').click());
+      await wait(300);
+      const done = await js(() => [...document.querySelectorAll('.ur-row.done')].map((r) => ({ text: r.textContent, label: r.querySelector('.ur-done').getAttribute('aria-label'), bg: getComputedStyle(r.querySelector('.ur-circle')).backgroundColor })));
+      assert.strictEqual(done.length, 2, `展开后两行 ${JSON.stringify(done)}`);
+      assert.strictEqual(await js(() => document.querySelector('.ur-fold').getAttribute('aria-expanded')), 'true');
+      assert(done[0].text.includes('James Wilson') && /\d\d:\d\d/.test(done[0].text) && done[1].text.includes('昨天'), `今天写钟点，昨天写「昨天」 ${JSON.stringify(done)}`);
+      assert.strictEqual(done[0].label, '放回待回复「James Wilson」');
+      assert.strictEqual(done[0].bg, 'rgb(48, 164, 108)', `绿勾 ${done[0].bg}`);
+      c = await clipped();
+      assert.deepStrictEqual(c.bad, [], `${label}：展开后文字没被裁 ${JSON.stringify(c.bad)}`);
+      assert(c.rows.filter((r) => r.done).every((r) => r.h <= 40 && !r.two), `${label}：已完成一行、矮一些 ${JSON.stringify(c.rows)}`);
+      await shot(`unreplied-${label}-done`);
+      // 换一页再回来：又是收起的
+      await push({ page: 'account' });
+      await wait(100);
     }
+    await push({ page: 'unreplied' });
+    await wait(150);
+    assert.strictEqual(await js(() => document.querySelector('.ur-fold').getAttribute('aria-expanded')), 'false', '再进来已完成是收起的');
+    await js(() => document.querySelector('.ur-fold').click());
+    await wait(100);
+    await js(() => document.querySelector('.ur-row.done .ur-done').click());
+    await wait(100);
+    assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['restore', 'a2', 'James Wilson', 'reply'], '点绿勾放回');
+    // 状态推过来（主进程每分钟一次）不把展开的已完成收起来
+    await push({ page: 'unreplied', unreplied: { count: items.length, list: items, done: doneItems.slice(1) } });
+    await wait(100);
+    assert.strictEqual(await js(() => document.querySelectorAll('.ur-row.done').length), 1, '推过来新的状态，已完成还开着');
     // 收起侧栏：图标上带个数
     await push({ page: 'unreplied', collapsed: true });
     await wait(150);
@@ -288,7 +334,7 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await wait(100);
     assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['open', 'a1', '‪+44 7700 900123‬', false], '点一行打开这个对话');
     // 输入框有字：问一次，点「仍然打开」带 force
-    await js(() => { window.__next = { result: 'not_empty' }; document.querySelectorAll('.ur-open')[3].click(); });
+    await js(() => { window.__next = { result: 'not_empty' }; document.querySelectorAll('.ur-open')[2].click(); });
     await wait(200);
     const ask = await js(() => document.querySelector('.ur-ask')?.textContent || '');
     assert(ask.includes('输入框里有没发的字') && ask.includes('仍然打开'), `输入框有字时问一次 ${ask}`);
@@ -303,10 +349,16 @@ window.wa = new Proxy({}, { get: (_t, k) => {
     await js(() => document.querySelectorAll('.ur-done')[0].click());
     await wait(100);
     assert.deepStrictEqual((await js(() => window.__calls)).pop(), ['dismiss', 'a2', 'Emma Wilson'], '点圆圈办完这一个');
-    // 空的时候
-    await push({ page: 'unreplied', unreplied: { count: 0, list: [] } });
+    // 只有已完成：写一句，下面是已完成
+    await push({ page: 'unreplied', unreplied: { count: 0, list: [], done: doneItems } });
     await wait(150);
-    assert.strictEqual(await js(() => document.querySelector('#side [aria-label="待回复"] .pill')), null, '没有时不显示个数');
+    assert.strictEqual(await js(() => document.querySelector('#side [aria-label="待回复"] .pill')), null, '侧栏个数不算已完成');
+    assert(/没有要回复或跟进的对话/.test(await js(() => document.querySelector('#content').textContent)), '上面两段空的时候写一句');
+    assert.deepStrictEqual(await heads(), ['已完成2'], '空的段不显示');
+    // 都空
+    await push({ page: 'unreplied', unreplied: { count: 0, list: [], done: [] } });
+    await wait(150);
+    assert.deepStrictEqual(await heads(), [], '三段都空没有标题');
     assert(/没有要回复或跟进的对话/.test(await js(() => document.querySelector('#content').textContent)), '空的时候写一句');
     await shot('unreplied-empty');
     assert.deepStrictEqual(errs, [], `页面没有报错 ${JSON.stringify(errs)}`);
