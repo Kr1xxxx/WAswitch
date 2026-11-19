@@ -257,10 +257,11 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       for (const el of document.querySelectorAll('.ur-wait, .ur-acc, .ur-sh, #side .tool-row .name, .ur-ask .btn, .ur-ask span, h1')) {
         if (el.scrollWidth > el.clientWidth + 1) bad.push(el.className + ':' + el.textContent);
       }
-      const rows = [...document.querySelectorAll('.ur-row')].map((r) => ({ h: r.getBoundingClientRect().height, two: !!r.querySelector('.ur-what'), done: r.classList.contains('done') }));
-      // 第二行：一行，放不下截掉（省略号），不换行
-      const what = [...document.querySelectorAll('.ur-what')].map((el) => ({ text: el.textContent, h: el.getBoundingClientRect().height, ellipsis: getComputedStyle(el).textOverflow, size: getComputedStyle(el).fontSize }));
-      return { bad, rows, what };
+      const rows = [...document.querySelectorAll('.ur-row')].map((r) => ({ h: r.getBoundingClientRect().height, two: r.querySelector('.ur-bub') ? 'said' : r.querySelector('.ur-what') ? 'owe' : '', done: r.classList.contains('done') }));
+      // 第二行（客户的话在气泡里，我们欠的不加气泡）：一行，14px，放不下截掉（省略号），不换行
+      const what = [...document.querySelectorAll('.ur-bub, .ur-what')].map((el) => ({ text: el.textContent, h: el.getBoundingClientRect().height, ellipsis: getComputedStyle(el).textOverflow, size: getComputedStyle(el).fontSize, bg: getComputedStyle(el).backgroundColor, right: el.getBoundingClientRect().right <= el.closest('.ur-open').getBoundingClientRect().right }));
+      const waits = [...document.querySelectorAll('.ur-row:not(.done) .ur-wait')].map((el) => ({ late: el.classList.contains('late'), color: getComputedStyle(el).color, sameLine: ((r, l) => Math.abs((r.top + r.bottom) / 2 - (l.top + l.bottom) / 2) <= 1)(el.getBoundingClientRect(), el.closest('.ur-l1').getBoundingClientRect()) }));
+      return { bad, rows, what, waits };
     });
     const heads = () => js(() => [...document.querySelectorAll('.ur-sh')].map((x) => x.textContent));
     for (const [wd, ht, label] of [[1200, 760, 'wide'], [900, 600, 'min']]) {
@@ -276,15 +277,20 @@ window.wa = new Proxy({}, { get: (_t, k) => {
       assert(rows[2].text.includes('45 分钟'), `不到 1 小时写分钟 ${rows[2].text}`);
       assert(rows[3].text.includes('Olivia Johnson'), `待跟进在第二段 ${rows[3].text}`);
       assert(rows.every((x) => x.x && x.first === 'ur-done'), '每行最左边是圆圈');
-      const circle = await js(() => { const b = document.querySelector('.ur-circle').getBoundingClientRect(); const o = document.querySelector('.ur-open').getBoundingClientRect(); return { w: b.width, h: b.height, left: b.right <= o.left, mid: Math.abs((b.top + b.bottom) / 2 - (o.top + o.bottom) / 2) }; });
-      assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 0.5, `圆圈 18px、在行左边、上下居中 ${JSON.stringify(circle)}`);
+      const circle = await js(() => { const b = document.querySelector('.ur-circle').getBoundingClientRect(); const o = document.querySelector('.ur-open').getBoundingClientRect(); const l = document.querySelector('.ur-l1').getBoundingClientRect(); return { w: b.width, h: b.height, left: b.right <= o.left, mid: Math.abs((b.top + b.bottom) / 2 - (l.top + l.bottom) / 2) }; });
+      assert(circle.w === 18 && circle.h === 18 && circle.left && circle.mid <= 1, `圆圈 18px、在行左边、和第一行对齐 ${JSON.stringify(circle)}`);
       let c = await clipped();
       assert.deepStrictEqual(c.bad, [], `${label}：文字没被裁 ${JSON.stringify(c.bad)}`);
-      assert(c.rows.every((r) => r.h >= 52 && r.h <= 56), `${label}：每行一样高 ${JSON.stringify(c.rows)}`);
-      assert.deepStrictEqual(c.rows.map((r) => r.two), [true, false, true, true], '有客户最后一句或 what 的行多一行');
-      assert(c.what.length === 3 && c.what.every((x) => x.h <= 18 && x.ellipsis === 'ellipsis' && x.size === '12px'), `${label}：第二行一行、12px、放不下截掉 ${JSON.stringify(c.what)}`);
+      assert.deepStrictEqual(c.rows.map((r) => r.two), ['said', '', 'owe', 'owe'], '客户最后一句放气泡，我们欠的不放');
+      const hs = { said: 82, owe: 70, '': 44 };
+      assert(c.rows.every((r) => Math.abs(r.h - hs[r.two]) <= 1), `${label}：同一种行一样高 ${JSON.stringify(c.rows)}`);
+      assert(c.what.length === 3 && c.what.every((x) => x.ellipsis === 'ellipsis' && x.size === '14px' && x.right), `${label}：第二行一行、14px、放不下截掉 ${JSON.stringify(c.what)}`);
+      assert(c.what[0].bg === 'rgb(240, 240, 243)' && c.what[1].bg === 'rgba(0, 0, 0, 0)', `气泡是 slate 3，我们欠的没有底色 ${JSON.stringify(c.what.map((x) => x.bg))}`);
       assert.strictEqual(c.what[1].text, '确认交期后回复客户并发送新的价目表和合同', '待回复里没有客户最后一句时写 what');
       assert.strictEqual(c.what[2].text, '发样品照片和批发价目表');
+      assert.deepStrictEqual(c.waits.map((x) => x.late), [true, false, false, false], '只有等了一天以上的变色');
+      assert(c.waits.every((x) => x.sameLine), '时间和名字在同一行');
+      assert.strictEqual(c.waits[0].color, 'rgb(171, 100, 0)', `一天以上是琥珀色 ${c.waits[0].color}`);
       await shot(`unreplied-${label}`);
       // 点「已完成」展开：矮一些、一行、绿勾、钟点
       await js(() => document.querySelector('.ur-fold').click());
