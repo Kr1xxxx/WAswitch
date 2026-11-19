@@ -12,6 +12,7 @@
 // 侧栏工具「开聊」（用户自己选号、粘贴号码）走 openForUser：只有网页号，用户自己点的，不问是不是在打字，
 // 输入框里有没发的字时照样先停下（不切号），由用户点「仍然打开」。
 const { chatMatches, jidNumber } = require('./draft-place');
+const { parsePhone } = require('./phone-parse');
 
 const OPEN_ASK_MS = 60 * 1000; // 顶部横幅 1 分钟没人点就消失
 const WEB_WAIT_MS = 40 * 1000; // 网页版跳转后最多等 40 秒对话出现
@@ -20,20 +21,11 @@ const LITE_WAIT_MS = 1500; // 轻量模式切过去后等对话列表推过来
 
 const sendUrl = (digits) => `https://web.whatsapp.com/send?phone=${digits}`;
 
-// 用户粘贴来的号码整理成只有数字的国际号码（不带 +），认不出返回 ''。
-// 和 src/mcp/open-chat.js 的 normalizePhone 规则一样，另外认 wa.me 链接、国家码后面的 (0)、不换行空格和斜杠。
-// 单个 0 开头（本国拨号，不知道国家码）不认
-function normalizePhone(raw) {
-  let s = String(raw || '').replace(/[\u00a0\u2000-\u200f\u202f\u2060\ufeff]/g, ' ').trim();
-  const link = s.match(/^(?:https?:\/\/)?(?:wa\.me\/|(?:api|web)\.whatsapp\.com\/send\/?\?(?:.*&)?phone=)\+?(\d+)/i);
-  if (link) s = `+${link[1]}`;
-  if (!/^[+\d\s()./-]+$/.test(s)) return '';
-  s = s.replace(/(?!^)\(\s*0\s*\)/g, ''); // 「+49 (0)151」「0049 (0)151」「(+49) (0)151」里的 (0) 不拨；单独 (0) 开头是本国写法，下面不认
-  let d = s.replace(/\D/g, '');
-  if (s.startsWith('+')) d = d.replace(/^0+/, '');
-  else if (d.startsWith('00')) d = d.slice(2);
-  else if (d.startsWith('0')) return '';
-  return d.length >= 7 && d.length <= 15 ? d : '';
+// 用户粘贴来的号码整理成只有数字的国际号码（不带 +），认不出返回 ''。规则在 phone-parse.js：
+// 认 wa.me 链接、国家码后面的 (0)、不换行空格和斜杠；defaultCc（所选账号自己的国家码）给了就给没写国家码的号码补上，
+// 没给时单个 0 开头（本国拨号）不认。MCP 的 open_chat 用自己的 normalizePhone（src/mcp/open-chat.js），不补国家码
+function normalizePhone(raw, defaultCc = '') {
+  return parsePhone(raw, defaultCc).digits;
 }
 
 // 给 AI 的说明：为什么没直接打开

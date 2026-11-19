@@ -63,7 +63,8 @@ function compare(actual, expected) {
 app.whenReady().then(async () => {
   const { nativeImage } = require('electron');
   let bad = 0;
-  const w = new BrowserWindow({ show: true, width: 752, height: 900, useContentSize: true, frame: false, backgroundColor: '#ffffff', webPreferences: { sandbox: true, contextIsolation: true } });
+  // 放在屏幕左上角：xvfb 的鼠标停在屏幕正中，窗口居中时会落在某一行上，把它画成悬停
+  const w = new BrowserWindow({ show: true, x: 0, y: 0, width: 752, height: 900, useContentSize: true, frame: false, backgroundColor: '#ffffff', webPreferences: { sandbox: true, contextIsolation: true } });
   try {
     // xvfb-run 默认屏幕只有 640x480，窗口会被压小，截出来的图就不对
     const [cw, ch] = w.getContentSize();

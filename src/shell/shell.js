@@ -568,7 +568,7 @@ function clockParts(tz) {
   const parts = Object.fromEntries(clockFormats.get(key).formatToParts(new Date()).map((p) => [p.type, p.value]));
   const hour = Number(parts.hour);
   const night = hour >= 22 || hour < 8;
-  return { text: `${parts.hour}:${parts.minute}`, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
+  return { text: `${parts.hour}:${parts.minute}`, hour, night, when: night ? (hour >= 5 && hour < 8 ? '清晨' : '深夜') : '' };
 }
 // 当前对话的客户在哪个时区（主进程按客户号码算好推过来，不带号码）：{ accountId, zone: { tz, place, approx } | null }
 let peer = null;
@@ -870,9 +870,10 @@ function overviewPage() {
 }
 
 // ---------- 待回复 ----------
-// 所有号里客户说了话、我们 30 分钟以上没回的对话（主进程每分钟读一遍，见 unreplied.js），
-// 加上 AI 认出我们还欠客户一件事的对话（待跟进，第二行是那件事，见 followup.js），等得最久的在前。
-// 点一行切到那个号并打开这个对话；点左边的圆圈算办完了（客户再发一条又会出现），给几秒撤销
+// 一页三段：待回复（客户说了话、我们 30 分钟以上没回，第二行是客户最后一句，主进程每分钟读一遍，见 unreplied.js）、
+// 待跟进（AI 认出我们还欠客户一件事，第二行是那件事，见 followup.js）、已完成（点了圆圈的和回过的，默认收起）。
+// 前两段等得最久的在前，已完成最近的在前；没有内容的段不显示。
+// 点一行切到那个号并打开这个对话；点左边的圆圈挪到已完成，在已完成里点绿勾放回原来那一段
 const urCount = () => (s.unreplied && s.unreplied.count) || 0;
 function unrepliedRow() {
   const on = s.page === 'unreplied';
@@ -887,7 +888,16 @@ const waitText = (since) => {
   if (m < 60) return `${Math.max(1, Math.floor(m))} 分钟`;
   return m < 24 * 60 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
 };
-const ur = { ask: '', busy: '', sig: '' };
+// 已完成那一行的时间：今天写钟点，昨天写「昨天」，更早写几月几日
+const doneText = (at) => {
+  const d = new Date(at);
+  const today = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(today) - day(d)) / 86400000);
+  if (diff <= 0) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return diff === 1 ? '昨天' : `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+const ur = { ask: '', busy: '', sig: '', openDone: false };
 const urId = (e) => `${e.accountId}\n${e.key}`;
 async function urOpen(e, force = false) {
   ur.busy = urId(e);
@@ -899,31 +909,53 @@ async function urOpen(e, force = false) {
   if (r && r.result === 'not_empty') ur.ask = urId(e);
   render(true);
 }
+// 一行：圆圈（已完成里是绿勾）、客户名、号、时间，第二行是客户最后一句（放在「收到的消息」气泡里）
+// 或者我们欠的那件事（不加气泡）。等了一天以上的时间用琥珀色。输入框有字时下面多一行问要不要仍然打开
+const UR_LATE = 24 * 60 * 60 * 1000;
+function urRows(e, a, done) {
+  const id = urId(e);
+  const said = !done && e.kind !== 'todo' && e.last ? e.last : '';
+  const owe = !done && !said ? e.what || '' : '';
+  const late = !done && Date.now() - e.since >= UR_LATE;
+  const back = e.kind === 'todo' ? '放回待跟进' : '放回待回复';
+  const row = h('div', { class: `ur-row${done ? ' done' : ''}` },
+    h('button', {
+      class: 'ur-done',
+      title: done ? back : '完成',
+      'aria-label': done ? `${back}「${e.name}」` : `完成「${e.name}」`,
+      onclick: () => (done ? window.wa.unrepliedRestore(e.accountId, e.key, e.kind === 'todo' ? 'todo' : 'reply') : window.wa.unrepliedDismiss(e.accountId, e.key)),
+    }, h('span', { class: 'ur-circle' }, icon('check', 12))),
+    h('button', { class: 'ur-open', disabled: ur.busy === id, onclick: () => urOpen(e) },
+      h('span', { class: 'ur-main' },
+        h('span', { class: 'ur-l1' }, h('span', { class: 'ur-name' }, e.name), h('span', { class: 'ur-acc' }, mini(a), a.name),
+          h('span', { class: `ur-wait${late ? ' late' : ''}` }, done ? doneText(e.doneAt) : waitText(e.since))),
+        said ? h('span', { class: 'ur-bub' }, said) : null,
+        owe ? h('span', { class: 'ur-what' }, owe) : null)));
+  if (ur.ask !== id) return [row];
+  return [row, h('div', { class: 'hstack ur-ask' },
+    h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
+    h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
+    h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开'))];
+}
 function unrepliedPage() {
-  const page = h('div', { class: 'page narrow' });
+  const page = h('div', { class: 'page narrow ur-page' });
   const byId = new Map(s.accounts.map((a) => [a.id, a]));
-  const list = ((s.unreplied && s.unreplied.list) || []).filter((e) => byId.has(e.accountId));
-  page.append(
-    h('h1', null, '待回复'),
-    list.length ? h('div', { class: 'box ov-list ur-list' }, list.map((e) => {
-      const a = byId.get(e.accountId);
-      const id = urId(e);
-      const row = h('div', { class: 'ur-row' },
-        h('button', { class: 'ur-done', title: '完成', 'aria-label': `完成「${e.name}」`, onclick: () => window.wa.unrepliedDismiss(e.accountId, e.key) },
-          h('span', { class: 'ur-circle' }, icon('check', 12))),
-        h('button', { class: `ov-row ur-open${e.what ? ' two' : ''}`, disabled: ur.busy === id, onclick: () => urOpen(e) },
-          mini(a),
-          h('span', { class: 'ur-main' },
-            h('span', { class: 'ov-name' }, ...segs(e.name, h('span', { class: 'hint' }, a.name))),
-            e.what ? h('span', { class: 'ur-what' }, e.what) : null),
-          h('span', { class: 'hint ur-wait' }, waitText(e.since))));
-      if (ur.ask !== id) return row;
-      return h('div', { class: 'col ur-item' }, row,
-        h('div', { class: 'hstack ur-ask' },
-          h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
-          h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
-          h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开')));
-    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有要回复或跟进的对话。')));
+  const mine = (e) => byId.has(e.accountId);
+  const list = ((s.unreplied && s.unreplied.list) || []).filter(mine);
+  const done = ((s.unreplied && s.unreplied.done) || []).filter(mine);
+  const sec = (title, rows) => (rows.length
+    ? h('section', { class: 'ur-sec' }, h('div', { class: 'ur-sh' }, title, h('span', { class: 'ur-n' }, rows.length)), rows.flatMap((e) => urRows(e, byId.get(e.accountId), false)))
+    : null);
+  page.append(h('h1', null, '待回复'));
+  if (!list.length) page.append(h('p', { class: 'hint ur-empty' }, '没有要回复或跟进的对话。'));
+  page.append(...[
+    sec('待回复', list.filter((e) => e.kind !== 'todo')),
+    sec('待跟进', list.filter((e) => e.kind === 'todo')),
+    done.length ? h('section', { class: 'ur-sec' },
+      h('button', { class: 'ur-sh ur-fold', 'aria-expanded': String(ur.openDone), onclick: () => { ur.openDone = !ur.openDone; render(true); } },
+        '已完成', h('span', { class: 'ur-n' }, done.length), h('span', { class: 'ur-chev' }, icon('right', 14))),
+      ur.openDone ? done.flatMap((e) => urRows(e, byId.get(e.accountId), true)) : null) : null,
+  ].filter(Boolean));
   return page;
 }
 
@@ -932,7 +964,8 @@ function unrepliedPage() {
 // 走 WhatsApp 自己的 /send?phone= 网址，不碰 WhatsApp 的通讯录（见 chat-open.js）。轻量号不能给没聊过的号码发消息，不在可选的号里。
 // 默认选当前的号（当前是轻量号就选上次在这里选的）；每次进这一页重新对一次
 const OPEN_FAIL = {
-  bad_phone: '号码要带国家码，例如 +49 151 2345678',
+  bad_phone: '号码不对，请检查一下',
+  need_cc: '请带上区号，例如 +49 151 2345678',
   changed: '这个号已经不在了，换一个号再试',
   locked: '软件锁着，先解锁再开聊',
   lite: '轻量号不能给没聊过的号码发消息',
@@ -941,7 +974,8 @@ const OPEN_FAIL = {
   no_chat: '没看到对话打开，这个号码可能没有注册 WhatsApp',
   not_empty: '这个号的输入框里有没发的字，打开对话要刷新页面，这些字可能会丢',
 };
-const op = { acc: '', phone: '', name: '', busy: false, force: false, msg: '' };
+// info：号码框下面那一行（主进程按所选的号算好的预览，见 main.js 的 chat:numberInfo）；autoName：从客户资料带出来的名字
+const op = { acc: '', phone: '', name: '', busy: false, force: false, msg: '', info: null, autoName: '', seq: 0 };
 const webAccs = () => s.accounts.filter((a) => a.mode !== 'lite');
 function opPickDefault() {
   const list = webAccs();
@@ -950,7 +984,7 @@ function opPickDefault() {
   else if (!list.some((a) => a.id === op.acc)) op.acc = list.length ? list[0].id : '';
 }
 async function openNumber() {
-  if (op.busy || !op.acc) return;
+  if (op.busy || !op.acc || !op.phone.trim()) return;
   op.busy = true; op.msg = '';
   render(true);
   let r;
@@ -958,29 +992,136 @@ async function openNumber() {
   op.busy = false;
   const done = !!r && (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat');
   op.force = !done && !!r && r.reason === 'not_empty';
-  if (done) { op.phone = ''; op.name = ''; }
+  if (done) { op.phone = ''; op.name = ''; op.autoName = ''; op.info = null; op.seq += 1; }
   op.msg = done && r.reason !== 'no_chat' ? '' : !r ? '没有打开' : r.result === 'busy' ? '正在打开另一个对话，稍后再试' : r.result === 'gone' ? OPEN_FAIL.changed : OPEN_FAIL[r.reason] || '没有打开';
   render(true);
 }
+// 账号用一排按钮选（不用系统下拉框：Mac 上弹出来是深色的系统菜单），方向键在里面换，和单选一样。
+// 换了号，没写区号的号码按新的号补，下面那一行跟着重算
+function opPick(id) {
+  if (op.busy || id === op.acc) return;
+  op.acc = id; op.force = false; op.msg = '';
+  render(true);
+  opLookup();
+}
+function opAccKey(e) {
+  const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const list = webAccs();
+  const i = list.findIndex((a) => a.id === op.acc);
+  if (list.length) opPick(list[(i + d + list.length) % list.length].id);
+}
+// 边打边问主进程这个号码是哪国的；只认最后一次的结果，回来后原地改那一行（不整页重画，打字不丢焦点）
+async function opLookup() {
+  const seq = ++op.seq;
+  const phone = op.phone.trim();
+  let info = null;
+  if (phone && op.acc) { try { info = await window.wa.chatNumberInfo({ accountId: op.acc, phone }); } catch { info = null; } }
+  if (seq !== op.seq) return;
+  op.info = info;
+  // 客户资料里已有这个号码：名字框空着才带出名字；换成别的号码时，带出来的名字（用户没改过）跟着清掉
+  const c = info && info.customer;
+  if (c && c.name && !op.name.trim()) { op.name = c.name; op.autoName = c.name; }
+  else if ((!c || !c.name) && op.autoName && op.name === op.autoName) { op.name = ''; op.autoName = ''; }
+  opPaint();
+}
+// 框下沿的结果条：整理好的号码、区号是按哪个号补的或者是谁的客户、当地时间（9 点到 21 点绿点，其余琥珀色：对方多半不在线）；
+// 位数不对、要带区号时整条换成琥珀色的提醒。没认出号码时没有这一条
+function opSee() {
+  const i = op.info;
+  if (!i || !op.phone.trim()) return null;
+  if (i.err === 'need_cc') return h('div', { class: 'op-see warn', role: 'status' }, h('span', null, '请带上区号，例如 +49'));
+  if (i.err || !i.formatted) return null;
+  if (!i.lenOk && i.expect && i.expect.length) {
+    return h('div', { class: 'op-see warn', role: 'status' }, h('span', null, `${i.country}号码一般 ${i.expect.join(' 或 ')} 位，现在 ${i.got} 位`));
+  }
+  const acc = s.accounts.find((a) => a.id === op.acc);
+  const c = i.zone ? clockParts(i.zone.tz) : null;
+  const late = !!c && (c.hour < 9 || c.hour >= 21);
+  return h('div', { class: 'op-see', role: 'status' },
+    h('b', null, i.formatted),
+    i.added && acc ? h('span', { class: 'op-see-opt' }, `区号按 ${acc.name} 补的`) : null,
+    i.customer && i.customer.owner ? h('span', { class: 'op-see-opt' }, `${i.customer.owner} 的客户`) : null,
+    c ? h('span', { class: `op-see-time${late ? ' late' : ''}`, title: late ? '客户那边现在多半不在线' : null }, h('i', { class: 'op-dot' }), `当地${i.zone.approx ? '约' : ''} ${c.text}`) : null);
+}
+// 认出国家后号码前面的国家小标签
+const opCc = () => (op.info && op.info.country && op.phone.trim() && op.info.err !== 'need_cc' ? h('span', { class: 'op-cc' }, op.info.country) : null);
+function opPaint() {
+  const wrap = $content.querySelector('.op');
+  if (!wrap) return;
+  wrap.querySelector('.op-see')?.remove();
+  const see = opSee();
+  if (see) wrap.append(see);
+  const line = wrap.querySelector('.op-line');
+  line.querySelector('.op-cc')?.remove();
+  const cc = opCc();
+  if (cc) line.prepend(cc);
+  const name = wrap.querySelector('.op-name');
+  if (name && name.value !== op.name) name.value = op.name;
+  const go = wrap.querySelector('.op-bar .btn');
+  if (go) go.disabled = op.busy || !op.phone.trim();
+}
+// 开聊历史一行：今天、昨天带钟点，更早的写日期
+function opWhen(at) {
+  const d = new Date(at);
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return diff === 0 ? `今天 ${hm}` : diff === 1 ? `昨天 ${hm}` : `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+// 点一行：号码、名字、账号填回上面的框，光标停在号码框，用户看一眼再点「开聊」（不直接开：开聊会刷新那个号的页面）
+function opRefill(e) {
+  if (op.busy) return;
+  op.acc = e.accountId; op.phone = e.phone; op.name = e.name || ''; op.autoName = op.name;
+  op.force = false; op.msg = ''; op.info = null;
+  render(true);
+  const num = $content.querySelector('.op-num');
+  if (num) { num.focus(); num.setSelectionRange(num.value.length, num.value.length); }
+  opLookup();
+}
+function opHistory() {
+  const list = (s.openHistory || []).filter((e) => webAccs().some((a) => a.id === e.accountId));
+  if (!list.length) return null;
+  return h('div', { class: 'oh' }, h('h2', { class: 'oh-t' }, '开聊历史'),
+    list.map((e) => {
+      const a = s.accounts.find((x) => x.id === e.accountId);
+      return h('button', { type: 'button', class: 'oh-row', disabled: op.busy, onclick: () => opRefill(e) },
+        h('span', { class: 'oh-who' }, e.name ? [h('span', { class: 'oh-name' }, e.name), h('span', { class: 'oh-num' }, e.phone)] : h('span', { class: 'oh-name' }, e.phone)),
+        h('span', { class: 'oh-acc', title: a.name }, emojiImg(a, 16) || mini(a), h('span', { class: 'oh-acc-name' }, a.name)),
+        h('span', { class: 'oh-at' }, opWhen(e.at)));
+    }));
+}
 function openNumPage(entering) {
-  const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'));
+  const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'),
+    h('p', { class: 'lead' }, '不用先存进通讯录，填上客户的号码就能直接打开对话。号码和名字会记进客户资料。'));
   const list = webAccs();
   if (entering) { opPickDefault(); if (!op.busy) { op.msg = ''; op.force = false; } } // 上次的提示（多半是在账号页上没看到的）不留到这次
   else if (!list.some((a) => a.id === op.acc)) opPickDefault();
   if (!list.length) { page.append(h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有网页号。'))); return page; }
+  if (entering && op.phone.trim()) opLookup(); // 号码还在（上次没开成）：按现在的号再算一遍
   const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
-  const acc = h('select', { 'aria-label': '账号', disabled: op.busy, onchange: (e) => { op.acc = e.target.value; op.force = false; op.msg = ''; render(true); } },
-    list.map((a) => h('option', { value: a.id }, a.name)));
-  acc.value = op.acc;
-  const phone = h('input', { value: op.phone, maxlength: '80', inputmode: 'tel', 'aria-label': '号码', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.phone = e.target.value; } });
-  const name = h('input', { value: op.name, maxlength: '60', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
+  const acc = h('div', { class: 'op-accs', role: 'radiogroup', 'aria-label': '账号', onkeydown: opAccKey },
+    list.map((a) => {
+      const on = a.id === op.acc;
+      return h('button', { type: 'button', class: `op-acc${on ? ' on' : ''}`, role: 'radio', 'aria-checked': on ? 'true' : 'false', tabindex: on ? '0' : '-1', 'data-id': a.id, disabled: op.busy, title: a.name, onclick: () => opPick(a.id) },
+        emojiImg(a, 18) || mini(a), h('span', { class: 'op-acc-name' }, a.name));
+    }));
+  const phone = h('input', {
+    class: 'op-num', value: op.phone, maxlength: '80', inputmode: 'tel', placeholder: '+49 151 2345678', 'aria-label': '号码', disabled: op.busy, onkeydown: enter,
+    oninput: (e) => { op.phone = e.target.value; op.force = false; opPaint(); opLookup(); },
+  });
+  const name = h('input', { class: 'op-name', value: op.name, maxlength: '60', placeholder: '名字，可不填', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
   if (entering && !op.busy) requestAnimationFrame(() => { if (phone.isConnected) phone.focus(); });
-  page.append(h('div', { class: 'box op-form' },
-    h('label', { class: 'field' }, '账号', acc),
-    h('label', { class: 'field' }, '号码', phone),
-    h('label', { class: 'field' }, '名字（可不填）', name),
-    op.msg ? h('div', { class: 'note bad', role: 'status' }, op.msg) : null,
-    h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: op.busy, onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))));
+  // 一个框：号码、名字、用哪个号和「开聊」都在里面，认出来的结果贴在框的下沿
+  page.append(h('div', { class: 'op' },
+    h('div', { class: 'op-box' }, h('div', { class: 'op-line' }, opCc(), phone), name,
+      h('div', { class: 'op-bar' }, acc,
+        h('button', { class: 'btn primary', disabled: op.busy || !op.phone.trim(), onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))),
+    opSee()));
+  if (op.msg) page.append(h('div', { class: 'note bad', role: 'status' }, op.msg));
+  const hist = opHistory();
+  if (hist) page.append(hist);
   return page;
 }
 
@@ -2312,12 +2453,17 @@ function render(forceContent = false) {
     overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
   } else if (s.page === 'unreplied') {
     // 只有内容变了才重画（等了几小时每 10 分钟对一次），免得滚动位置被打回顶部
-    const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, Math.floor(Date.now() / 600000)]);
+    // 每次进这一页「已完成」都是收起的
+    if (key !== shown) ur.openDone = false;
+    const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], (s.unreplied && s.unreplied.done) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, ur.openDone, Math.floor(Date.now() / 600000)]);
     if (forceContent || key !== shown || sig !== ur.sig) { ur.sig = sig; $content.replaceChildren(unrepliedPage()); }
   } else if (s.page === 'opennum') {
     // 开聊页：打字时不重画（状态推过来也不打断输入），换了号或点了按钮才重画
-    const typing = $content.contains(document.activeElement) && ['INPUT', 'SELECT'].includes(document.activeElement.tagName);
+    const typing = $content.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+    const onAcc = $content.contains(document.activeElement) && document.activeElement.classList.contains('op-acc');
     if (forceContent || key !== shown || !typing) $content.replaceChildren(openNumPage(key !== shown));
+    // 用键盘在账号里换：重画以后焦点留在选中的那个号上
+    if (onAcc && key === shown) $content.querySelector('.op-acc.on')?.focus();
   } else if (s.page === 'translate') {
     // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
     const el = trPage(key !== shown);

@@ -235,11 +235,17 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     assert.strictEqual(l.length, 1, '两种都有只列一行');
     assert.strictEqual(l[0].kind, 'reply');
     assert.strictEqual(l[0].what, '发报价单');
-    // 列表上看到我们后来又发了（比如手机上回的）：去掉
+    // 列表上看到我们后来又发了（比如手机上回的）：已经列出来的挪到已完成
     store.ingestWeb('w1', [row('Sophie Martin', true, '13:50', 80)], { atTop: false });
-    assert(store.getTodo('w1', 'Sophie Martin'), '列表上还是记下的那条（同一分钟）：不去掉');
+    assert(!store.getTodo('w1', 'Sophie Martin').done, '列表上还是记下的那条（同一分钟）：不动');
     store.ingestWeb('w1', [row('Sophie Martin', true, '15:09', 1)], { atTop: false });
-    assert.strictEqual(store.getTodo('w1', 'Sophie Martin'), null, '我们后来又发了：去掉');
+    assert.strictEqual(store.getTodo('w1', 'Sophie Martin').how, 'replied', '我们后来又发了：待跟进挪到已完成');
+    assert(!store.list().some((e) => e.key === 'Sophie Martin'), '不再列');
+    assert.deepStrictEqual(store.doneList().filter((e) => e.key === 'Sophie Martin').map((e) => [e.kind, e.doneAt]), [['reply', at(15, 10)]], '已完成里一行（待回复那条也回过了）');
+    // 还没到期的待跟进，我们后来又发了：直接去掉
+    store.setTodo('w1', 'Lena Vogel', { name: 'Lena Vogel' }, { todo: true, what: '明天发样品', when: 'tomorrow' }, meta('v1', at(15, 0)));
+    store.ingestWeb('w1', [row('Lena Vogel', true, '15:09', 1)], { atTop: false });
+    assert.strictEqual(store.getTodo('w1', 'Lena Vogel'), null, '没到期的去掉，不进已完成');
     // 昨天、星期几这种不准的时间不算
     store.setTodo('w1', 'Marie Dubois', { name: 'Marie Dubois' }, { todo: true, what: '发目录', when: 'soon' }, meta('c1', at(13, 0)));
     store.ingestWeb('w1', [row('Marie Dubois', true, 'Yesterday', 900)], { atTop: false });
@@ -248,7 +254,7 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     store.setTodo('w1', '+44 7700 900123', { name: '+44 7700 900123', digits: '447700900123' }, { todo: true, what: '发样品照片', when: 'soon' }, meta('d1', at(13, 0)));
     assert(store.getTodo('w1', '‪+44 7700 900123‬'), '带方向符号的名字对得上');
     store.ingestWeb('w1', [row('‪+44 7700 900123‬', true, '15:05', 5)], { atTop: false });
-    assert.strictEqual(store.getTodo('w1', '+44 7700 900123'), null, '列表上的名字带方向符号也能去掉');
+    assert.strictEqual(store.getTodo('w1', '+44 7700 900123').done, true, '列表上的名字带方向符号也认得出');
     // AI 重新看：没事了就去掉（记下新的结尾），有事换成新的
     store.setTodo('w1', 'Marie Dubois', { name: 'Marie Dubois' }, { todo: false }, meta('c2', at(15, 0)));
     assert.strictEqual(store.getTodo('w1', 'Marie Dubois').what, undefined);
@@ -256,7 +262,7 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     assert(!store.list().some((e) => e.key === 'Marie Dubois'));
     store.setTodo('w1', 'Marie Dubois', { name: 'Marie Dubois' }, null, meta('c3', at(15, 0)));
     assert.strictEqual(store.analyzed('w1', 'Marie Dubois'), 'c3', '读不出的回答也记下看过');
-    // 办完和撤销
+    // 办完和放回
     store.setTodo('w1', 'Carlos García', { name: 'Carlos García' }, { todo: true, what: '确认交期', when: 'soon' }, meta('e1', at(14, 0)));
     now = at(15, 30);
     assert(store.list().some((e) => e.key === 'Carlos García'));
@@ -265,9 +271,11 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     assert(!store.list().some((e) => e.key === 'Carlos García'), '办完了不列');
     assert.strictEqual(store.analyzed('w1', 'Carlos García'), 'e1', '办完了还记着看过这个结尾（不会再出现）');
     assert.strictEqual(store.done('w1', 'Carlos García'), null, '办完两次没有东西');
-    assert.strictEqual(store.undone('w1', 'Carlos García', old), true);
-    assert(store.list().some((e) => e.key === 'Carlos García'), '撤销放回');
-    // 两种都有：办完一起去掉，撤销一起放回
+    assert.deepStrictEqual(store.doneList().filter((e) => e.key === 'Carlos García').map((e) => e.kind), ['todo'], '进已完成');
+    assert.strictEqual(store.restore('w1', 'Carlos García'), true);
+    assert(store.list().some((e) => e.key === 'Carlos García'), '放回');
+    assert(!store.doneList().some((e) => e.key === 'Carlos García'), '已完成里没有了');
+    // 两种都有：办完一起去掉，放回一起放回
     store.ingestWeb('w1', [row('Carlos García', false, '14:30', 60)], { atTop: false });
     store.ingestWeb('w1', [row('Carlos García', false, '14:30', 60)], { atTop: false });
     const both = store.list().find((e) => e.key === 'Carlos García');
@@ -275,12 +283,13 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     const o2 = store.done('w1', 'Carlos García');
     assert(o2.reply && o2.todo);
     assert(!store.list().some((e) => e.key === 'Carlos García'));
-    store.undone('w1', 'Carlos García', o2);
-    assert.strictEqual(store.list().find((e) => e.key === 'Carlos García').what, '确认交期', '撤销两种一起放回');
-    // 撤销时 AI 已经换了新的：不动新的
-    const o3 = store.done('w1', 'Carlos García');
+    assert.strictEqual(store.doneList().filter((e) => e.key === 'Carlos García').length, 1, '已完成里只有一行');
+    store.restore('w1', 'Carlos García');
+    assert.strictEqual(store.list().find((e) => e.key === 'Carlos García').what, '确认交期', '两种一起放回');
+    // 办完以后 AI 换了新的：新的照样列
+    store.done('w1', 'Carlos García');
     store.setTodo('w1', 'Carlos García', { name: 'Carlos García' }, { todo: true, what: '发合同', when: 'soon' }, meta('e2', at(15, 0)));
-    store.undone('w1', 'Carlos García', o3);
+    store.restore('w1', 'Carlos García');
     assert.strictEqual(store.getTodo('w1', 'Carlos García').what, '发合同');
     // 还没到期的待跟进（明天 9:00 的）不跟着普通待回复一起办完：客户回了「ok thanks」，用户点掉这行待回复，第二天 9:00 待跟进照样出现
     now = at(16, 0);
@@ -295,14 +304,15 @@ const msg = (id, out, text, when = T0 - 5 * MIN) => ({ id, out, text, t: { at: w
     now = at(9, 0, 19);
     assert.strictEqual((store.list().find((e) => e.key === 'Nina Koch') || {}).what, '明天给报价', '第二天 9:00 待跟进照样出现');
     now = at(15, 30);
-    // 轻量号：我们后来又发了就去掉
+    // 轻量号：我们后来又发了就挪到已完成
     store.setTodo('l1', '14155550134@s.whatsapp.net', { name: 'Olivia Johnson', jid: '14155550134@s.whatsapp.net' }, { todo: true, what: '发目录', when: 'soon' }, meta('f1', at(14, 0)));
     store.ingestLite('l1', [{ jid: '14155550134@s.whatsapp.net', name: 'Olivia Johnson', me: false, wait: at(14, 10) / 1000, ts: at(14, 10) / 1000 }]);
     assert(store.getTodo('l1', '14155550134@s.whatsapp.net'), '轻量号客户回了话还留着');
     store.ingestLite('l1', [{ jid: '14155550134@s.whatsapp.net', name: 'Olivia Johnson', me: true, ts: at(14, 0) / 1000 }]);
     assert(store.getTodo('l1', '14155550134@s.whatsapp.net'), '轻量号还是那一条：留着');
     store.ingestLite('l1', [{ jid: '14155550134@s.whatsapp.net', name: 'Olivia Johnson', me: true, ts: at(15, 20) / 1000 }]);
-    assert.strictEqual(store.getTodo('l1', '14155550134@s.whatsapp.net'), null, '轻量号我们后来又发了：去掉');
+    assert.strictEqual(store.getTodo('l1', '14155550134@s.whatsapp.net').how, 'replied', '轻量号我们后来又发了：挪到已完成');
+    assert(store.doneList().some((e) => e.accountId === 'l1'), '轻量号的进已完成');
     // 到期 7 天以后不再列，也不再存
     store.setTodo('w1', 'Old Client', { name: 'Old Client' }, { todo: true, what: '发目录', when: 'soon' }, meta('g1', at(15, 0)));
     now = at(15, 0) + 30 * MIN + 7 * DAY + MIN;

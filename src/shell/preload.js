@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('wa', {
   panelCopy: (text) => ipcRenderer.invoke('panel:copy', text),
   panelInsert: (accountId, text) => ipcRenderer.invoke('panel:insert', { accountId, text }),
   chatOpenNumber: (data) => ipcRenderer.invoke('chat:openNumber', data),
+  chatNumberInfo: (data) => ipcRenderer.invoke('chat:numberInfo', data),
   panelExport: (kind, format) => ipcRenderer.invoke('panel:export', { kind, format }),
   panelImport: (kind) => ipcRenderer.invoke('panel:import', { kind }),
   trDailyCap: (n) => ipcRenderer.invoke('tr:dailycap', n),
@@ -80,6 +81,7 @@ contextBridge.exposeInMainWorld('wa', {
   notifClear: () => ipcRenderer.invoke('notif:clear'),
   unrepliedOpen: (accountId, key, force) => ipcRenderer.invoke('unreplied:open', { accountId, key, force: force === true }),
   unrepliedDismiss: (accountId, key) => ipcRenderer.invoke('unreplied:dismiss', { accountId, key }),
+  unrepliedRestore: (accountId, key, kind) => ipcRenderer.invoke('unreplied:restore', { accountId, key, kind }),
   // 删除、清空、解散分组以后的“撤销”
   onUndoOffer: (cb) => ipcRenderer.on('undo:offer', (_e, o) => cb(o)),
   undo: (token) => ipcRenderer.invoke('undo:run', token),
