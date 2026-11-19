@@ -718,19 +718,36 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .tool-row .name { flex: 1; min-width: 0; }
 
 /* ---------- 待回复 ---------- */
-.ur-row { display: flex; align-items: center; gap: 4px; }
-.ur-row .ur-open { flex: 1; min-width: 0; }
-.ur-row .ur-open:disabled { opacity: .6; }
-.ur-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ur-open.two { padding-top: 6px; padding-bottom: 6px; }
-.ur-what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-s); color: var(--slate-11); }
-.ur-wait { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* 左边的圆圈：点了算办完。悬停时圆里出现勾 */
-.ur-done { flex: none; width: 30px; height: 30px; padding: 0; border: none; border-radius: var(--r-m); background: transparent; color: transparent; display: flex; align-items: center; justify-content: center; }
+.ur-sec { display: flex; flex-direction: column; }
+.ur-sh { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; font-size: var(--fs-s); font-weight: 500; color: var(--slate-11); white-space: nowrap; }
+.ur-n { font-weight: 400; font-variant-numeric: tabular-nums; }
+.ur-fold { align-self: flex-start; border: none; border-radius: var(--r-s); background: transparent; font-family: inherit; }
+.ur-fold:hover { color: var(--slate-12); }
+.ur-chev { display: flex; margin-left: -2px; transition: transform var(--fx) var(--fx-ease); }
+.ur-fold[aria-expanded="true"] .ur-chev { transform: rotate(90deg); }
+.ur-empty { margin: 0; padding: 0 10px; }
+.ur-row { position: relative; display: flex; align-items: stretch; min-height: 52px; border-radius: var(--r-m); transition: background var(--fx) var(--fx-ease); }
+.ur-row:hover { background: var(--slate-3); }
+.ur-row + .ur-row::before { content: ''; position: absolute; left: 10px; right: 10px; top: 0; height: var(--hair); background: var(--slate-5); pointer-events: none; }
+.ur-row:hover::before, .ur-row:hover + .ur-row::before { visibility: hidden; }
+.ur-done { flex: none; padding: 0 10px; border: none; border-radius: var(--r-m) 0 0 var(--r-m); background: transparent; display: flex; align-items: center; color: transparent; }
 .ur-circle { width: 18px; height: 18px; border: var(--hair) solid var(--slate-8); border-radius: var(--r-full); display: flex; align-items: center; justify-content: center; transition: background var(--fx) var(--fx-ease), color var(--fx) var(--fx-ease); }
 .ur-done:hover .ur-circle, .ur-done:focus-visible .ur-circle { background: var(--slate-4); color: var(--slate-11); }
-.col.ur-item { flex: none; gap: 4px; }
-.ur-ask { padding: 0 10px 8px; font-size: var(--fs-s); }
+.ur-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 10px 7px 0; border: none; border-radius: 0 var(--r-m) var(--r-m) 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+.ur-open:disabled { opacity: .6; }
+.ur-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ur-l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ur-name { min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ur-acc { flex: none; display: flex; align-items: center; gap: 4px; font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; }
+.ur-acc .sw { width: 8px; height: 8px; border-radius: var(--r-full); flex: none; }
+.ur-what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-s); color: var(--slate-11); }
+.ur-wait { flex: none; font-size: var(--fs-s); color: var(--slate-11); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ur-row.done { min-height: 36px; }
+.ur-row.done .ur-open { padding-top: 0; padding-bottom: 0; }
+.ur-row.done .ur-name { font-weight: 400; color: var(--slate-11); }
+.ur-row.done .ur-circle { border-color: var(--green-9); background: var(--green-9); color: var(--white); }
+.ur-row.done .ur-done:hover .ur-circle, .ur-row.done .ur-done:focus-visible .ur-circle { border-color: var(--green-10); background: var(--green-10); color: var(--white); }
+.ur-ask { padding: 0 10px 8px 38px; font-size: var(--fs-s); }
 .ur-ask .bad { color: var(--danger); }
 
 /* ---------- 翻译页（shen 2026-10-28 方案 A）----------

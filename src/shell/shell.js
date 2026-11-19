@@ -870,9 +870,10 @@ function overviewPage() {
 }
 
 // ---------- 待回复 ----------
-// 所有号里客户说了话、我们 30 分钟以上没回的对话（主进程每分钟读一遍，见 unreplied.js），
-// 加上 AI 认出我们还欠客户一件事的对话（待跟进，第二行是那件事，见 followup.js），等得最久的在前。
-// 点一行切到那个号并打开这个对话；点左边的圆圈算办完了（客户再发一条又会出现），给几秒撤销
+// 一页三段：待回复（客户说了话、我们 30 分钟以上没回，第二行是客户最后一句，主进程每分钟读一遍，见 unreplied.js）、
+// 待跟进（AI 认出我们还欠客户一件事，第二行是那件事，见 followup.js）、已完成（点了圆圈的和回过的，默认收起）。
+// 前两段等得最久的在前，已完成最近的在前；没有内容的段不显示。
+// 点一行切到那个号并打开这个对话；点左边的圆圈挪到已完成，在已完成里点绿勾放回原来那一段
 const urCount = () => (s.unreplied && s.unreplied.count) || 0;
 function unrepliedRow() {
   const on = s.page === 'unreplied';
@@ -887,7 +888,16 @@ const waitText = (since) => {
   if (m < 60) return `${Math.max(1, Math.floor(m))} 分钟`;
   return m < 24 * 60 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
 };
-const ur = { ask: '', busy: '', sig: '' };
+// 已完成那一行的时间：今天写钟点，昨天写「昨天」，更早写几月几日
+const doneText = (at) => {
+  const d = new Date(at);
+  const today = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(today) - day(d)) / 86400000);
+  if (diff <= 0) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return diff === 1 ? '昨天' : `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+const ur = { ask: '', busy: '', sig: '', openDone: false };
 const urId = (e) => `${e.accountId}\n${e.key}`;
 async function urOpen(e, force = false) {
   ur.busy = urId(e);
@@ -899,31 +909,48 @@ async function urOpen(e, force = false) {
   if (r && r.result === 'not_empty') ur.ask = urId(e);
   render(true);
 }
+// 一行：圆圈（已完成里是绿勾）、客户名、号、第二行、时间。输入框有字时下面多一行问要不要仍然打开
+function urRows(e, a, done) {
+  const id = urId(e);
+  const line2 = done ? '' : e.kind === 'todo' ? e.what : (e.last || e.what || '');
+  const back = e.kind === 'todo' ? '放回待跟进' : '放回待回复';
+  const row = h('div', { class: `ur-row${done ? ' done' : ''}` },
+    h('button', {
+      class: 'ur-done',
+      title: done ? back : '完成',
+      'aria-label': done ? `${back}「${e.name}」` : `完成「${e.name}」`,
+      onclick: () => (done ? window.wa.unrepliedRestore(e.accountId, e.key) : window.wa.unrepliedDismiss(e.accountId, e.key)),
+    }, h('span', { class: 'ur-circle' }, icon('check', 12))),
+    h('button', { class: 'ur-open', disabled: ur.busy === id, onclick: () => urOpen(e) },
+      h('span', { class: 'ur-main' },
+        h('span', { class: 'ur-l1' }, h('span', { class: 'ur-name' }, e.name), h('span', { class: 'ur-acc' }, mini(a), a.name)),
+        line2 ? h('span', { class: 'ur-what' }, line2) : null),
+      h('span', { class: 'ur-wait' }, done ? doneText(e.doneAt) : waitText(e.since))));
+  if (ur.ask !== id) return [row];
+  return [row, h('div', { class: 'hstack ur-ask' },
+    h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
+    h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
+    h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开'))];
+}
 function unrepliedPage() {
-  const page = h('div', { class: 'page narrow' });
+  const page = h('div', { class: 'page narrow ur-page' });
   const byId = new Map(s.accounts.map((a) => [a.id, a]));
-  const list = ((s.unreplied && s.unreplied.list) || []).filter((e) => byId.has(e.accountId));
-  page.append(
-    h('h1', null, '待回复'),
-    list.length ? h('div', { class: 'box ov-list ur-list' }, list.map((e) => {
-      const a = byId.get(e.accountId);
-      const id = urId(e);
-      const row = h('div', { class: 'ur-row' },
-        h('button', { class: 'ur-done', title: '完成', 'aria-label': `完成「${e.name}」`, onclick: () => window.wa.unrepliedDismiss(e.accountId, e.key) },
-          h('span', { class: 'ur-circle' }, icon('check', 12))),
-        h('button', { class: `ov-row ur-open${e.what ? ' two' : ''}`, disabled: ur.busy === id, onclick: () => urOpen(e) },
-          mini(a),
-          h('span', { class: 'ur-main' },
-            h('span', { class: 'ov-name' }, ...segs(e.name, h('span', { class: 'hint' }, a.name))),
-            e.what ? h('span', { class: 'ur-what' }, e.what) : null),
-          h('span', { class: 'hint ur-wait' }, waitText(e.since))));
-      if (ur.ask !== id) return row;
-      return h('div', { class: 'col ur-item' }, row,
-        h('div', { class: 'hstack ur-ask' },
-          h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
-          h('button', { class: 'btn', onclick: () => { ur.ask = ''; render(true); } }, '取消'),
-          h('button', { class: 'btn primary', onclick: () => urOpen(e, true) }, '仍然打开')));
-    })) : h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有要回复或跟进的对话。')));
+  const mine = (e) => byId.has(e.accountId);
+  const list = ((s.unreplied && s.unreplied.list) || []).filter(mine);
+  const done = ((s.unreplied && s.unreplied.done) || []).filter(mine);
+  const sec = (title, rows) => (rows.length
+    ? h('section', { class: 'ur-sec' }, h('div', { class: 'ur-sh' }, title, h('span', { class: 'ur-n' }, rows.length)), rows.flatMap((e) => urRows(e, byId.get(e.accountId), false)))
+    : null);
+  page.append(h('h1', null, '待回复'));
+  if (!list.length) page.append(h('p', { class: 'hint ur-empty' }, '没有要回复或跟进的对话。'));
+  page.append(...[
+    sec('待回复', list.filter((e) => e.kind !== 'todo')),
+    sec('待跟进', list.filter((e) => e.kind === 'todo')),
+    done.length ? h('section', { class: 'ur-sec' },
+      h('button', { class: 'ur-sh ur-fold', 'aria-expanded': String(ur.openDone), onclick: () => { ur.openDone = !ur.openDone; render(true); } },
+        '已完成', h('span', { class: 'ur-n' }, done.length), h('span', { class: 'ur-chev' }, icon('right', 14))),
+      ur.openDone ? done.flatMap((e) => urRows(e, byId.get(e.accountId), true)) : null) : null,
+  ].filter(Boolean));
   return page;
 }
 
@@ -2312,7 +2339,9 @@ function render(forceContent = false) {
     overviewTotal = s.accounts.reduce((n, a) => n + (a.unread || 0), 0);
   } else if (s.page === 'unreplied') {
     // 只有内容变了才重画（等了几小时每 10 分钟对一次），免得滚动位置被打回顶部
-    const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, Math.floor(Date.now() / 600000)]);
+    // 每次进这一页「已完成」都是收起的
+    if (key !== shown) ur.openDone = false;
+    const sig = JSON.stringify([(s.unreplied && s.unreplied.list) || [], (s.unreplied && s.unreplied.done) || [], s.accounts.map((a) => [a.id, a.name, a.color, a.emoji]), ur.ask, ur.busy, ur.openDone, Math.floor(Date.now() / 600000)]);
     if (forceContent || key !== shown || sig !== ur.sig) { ur.sig = sig; $content.replaceChildren(unrepliedPage()); }
   } else if (s.page === 'opennum') {
     // 开聊页：打字时不重画（状态推过来也不打断输入），换了号或点了按钮才重画

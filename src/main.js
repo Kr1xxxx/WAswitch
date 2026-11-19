@@ -1093,11 +1093,14 @@ async function scanUnreplied() {
   unrepliedPushIfChanged();
 }
 function unrepliedPushIfChanged() {
-  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key, e.kind, e.what || '']));
+  const sig = JSON.stringify([unrepliedList().map((e) => [e.accountId, e.key, e.kind, e.what || '', e.last || '']), unrepliedDone().map((e) => [e.accountId, e.key, e.doneAt])]);
   if (sig !== unrepliedSig) { unrepliedSig = sig; pushState(); }
 }
 function unrepliedList() {
   return unrepliedStore().list(new Set(visibleAccounts().map((a) => a.id)));
+}
+function unrepliedDone() {
+  return unrepliedStore().doneList(new Set(visibleAccounts().map((a) => a.id)));
 }
 // ---- 待跟进：AI 看打开的对话，我们还欠客户什么（见 followup.js）。来财的 ai/status 说支持（todo: true）才发请求 ----
 const TODO_STATUS_MS = 30 * 60 * 1000;
@@ -1513,7 +1516,7 @@ function pushState() {
       };
     }),
     // 待回复：锁着时只给个数，不给名字
-    unreplied: (() => { const list = unrepliedList(); return { count: list.length, list: locked ? [] : list }; })(),
+    unreplied: (() => { const list = unrepliedList(); return { count: list.length, list: locked ? [] : list, done: locked ? [] : unrepliedDone() }; })(),
     lite: liteStateForShell(),
     totalMB: memoryManager.totalMB(),
     settings,
@@ -3345,7 +3348,7 @@ handleShell('notif:clear', () => {
   }
   return true;
 });
-// 待回复：点一个对话打开它；点圆圈（办完了）直接去掉，给几秒撤销
+// 待回复：点一个对话打开它；点圆圈（办完了）挪到「已完成」，那里点绿勾放回去（不再弹撤销）
 handleShell('unreplied:open', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return { result: 'gone' };
   return unrepliedOpener.open(data.accountId, data.key, data.force === true);
@@ -3353,10 +3356,14 @@ handleShell('unreplied:open', (data) => {
 handleShell('unreplied:dismiss', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
   const store = unrepliedStore();
-  const old = store.done(data.accountId, data.key);
-  if (!old) return false;
+  if (!store.done(data.accountId, data.key)) return false;
   unrepliedPushIfChanged();
-  offerUndo({ kind: 'state', where: 'body', text: `已完成「${shortName(old.name)}」` }, () => { store.undone(data.accountId, data.key, old); unrepliedPushIfChanged(); });
+  return true;
+});
+handleShell('unreplied:restore', (data) => {
+  if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
+  if (!unrepliedStore().restore(data.accountId, data.key)) return false;
+  unrepliedPushIfChanged();
   return true;
 });
 // ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----
