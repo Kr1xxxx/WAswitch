@@ -909,10 +909,14 @@ async function urOpen(e, force = false) {
   if (r && r.result === 'not_empty') ur.ask = urId(e);
   render(true);
 }
-// 一行：圆圈（已完成里是绿勾）、客户名、号、第二行、时间。输入框有字时下面多一行问要不要仍然打开
+// 一行：圆圈（已完成里是绿勾）、客户名、号、时间，第二行是客户最后一句（放在「收到的消息」气泡里）
+// 或者我们欠的那件事（不加气泡）。等了一天以上的时间用琥珀色。输入框有字时下面多一行问要不要仍然打开
+const UR_LATE = 24 * 60 * 60 * 1000;
 function urRows(e, a, done) {
   const id = urId(e);
-  const line2 = done ? '' : e.kind === 'todo' ? e.what : (e.last || e.what || '');
+  const said = !done && e.kind !== 'todo' && e.last ? e.last : '';
+  const owe = !done && !said ? e.what || '' : '';
+  const late = !done && Date.now() - e.since >= UR_LATE;
   const back = e.kind === 'todo' ? '放回待跟进' : '放回待回复';
   const row = h('div', { class: `ur-row${done ? ' done' : ''}` },
     h('button', {
@@ -923,9 +927,10 @@ function urRows(e, a, done) {
     }, h('span', { class: 'ur-circle' }, icon('check', 12))),
     h('button', { class: 'ur-open', disabled: ur.busy === id, onclick: () => urOpen(e) },
       h('span', { class: 'ur-main' },
-        h('span', { class: 'ur-l1' }, h('span', { class: 'ur-name' }, e.name), h('span', { class: 'ur-acc' }, mini(a), a.name)),
-        line2 ? h('span', { class: 'ur-what' }, line2) : null),
-      h('span', { class: 'ur-wait' }, done ? doneText(e.doneAt) : waitText(e.since))));
+        h('span', { class: 'ur-l1' }, h('span', { class: 'ur-name' }, e.name), h('span', { class: 'ur-acc' }, mini(a), a.name),
+          h('span', { class: `ur-wait${late ? ' late' : ''}` }, done ? doneText(e.doneAt) : waitText(e.since))),
+        said ? h('span', { class: 'ur-bub' }, said) : null,
+        owe ? h('span', { class: 'ur-what' }, owe) : null)));
   if (ur.ask !== id) return [row];
   return [row, h('div', { class: 'hstack ur-ask' },
     h('span', { class: 'grow bad' }, `「${a.name}」的输入框里有没发的字，打开要刷新页面，字可能会丢`),
