@@ -8,9 +8,13 @@
 //      切到英国号、只有英国号的页面跳到 /send?phone=4915123456789（网址里只有号码）、对话出现、客户资料里这条记在英国号下
 //   3. 输入框里有没发的字：不跳也不切号，提示会丢字，按钮变「仍然打开」，点了才跳
 //   4. 已经开着这个号码：不刷新页面，切到这个号
-//   5. 没有国家码的号码：提示，不跳
+//   5. 没写区号、所选的号自己也没有号码：提示带上区号，不跳
 //   6. 同一个号码再开一次不填名字：客户资料不多一条；填了新名字就改名
 //   7. 工作台的客户资料页不再有「开聊」
+//   8. 号码框下面那一行：没写区号按所选的号补（换号重算）、认出国家和当地时间、位数不对提醒但能点、老客户带出名字、别的号的客户写明是谁的；
+//      按补好的号码打开，客户资料里存完整号码
+//   9. 开聊历史：最近的在最上、重复的挪到最上、名字跟着客户资料、点一行填回框里不直接开
+//      （删了账号不显示：删除要点系统确认框，这里测不了，在 check-open-chat.js 里查 shownOpens）
 // 截图：设了 WASWITCH_SHOT_DIR 就把页面截下来（整个屏幕，ImageMagick 的 import）。
 // 运行：xvfb-run -a -s "-screen 0 1920x1200x24" node scripts/check-open-number.js
 const { spawn, execFileSync } = require('child_process');
@@ -80,7 +84,7 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
   const fp = (seed, region) => ({ version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region, seed });
   const deadPort = await freePort();
   fs.writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify([
-    { id: '1', name: '德国号', color: '#16A34A', proxy: '', mode: 'web', primary: true, fingerprint: fp(1, 'DE') },
+    { id: '1', name: '德国号', color: '#16A34A', proxy: '', mode: 'web', primary: true, fingerprint: fp(1, 'DE'), phone: '+49 151 1111111', phoneManual: true },
     { id: '2', name: '轻量号', color: '#2563EB', proxy: `socks5://127.0.0.1:${deadPort}`, mode: 'lite', primary: false, fingerprint: fp(2, 'FR') },
     { id: '3', name: '英国号', color: '#D97706', proxy: '', mode: 'web', primary: false, fingerprint: fp(3, 'GB') },
   ]));
@@ -95,7 +99,7 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
   const check = (ok, text) => { console.log(`${ok ? '通过' : '失败'}：${text}`); if (!ok) failures += 1; };
   const waitFor = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return Date.now() - t0; await sleep(150); } return -1; };
   const shotDir = process.env.WASWITCH_SHOT_DIR;
-  const shot = (name) => { if (!shotDir) return; fs.mkdirSync(shotDir, { recursive: true }); try { execFileSync('import', ['-window', 'root', path.join(shotDir, name)]); } catch (e) { console.log(`截图失败：${e.message}`); } };
+  const shot = (name) => { if (!shotDir) return; execFileSync('sleep', ['0.4']); /* 按钮从不可点变可点有 250ms 的淡入 */ fs.mkdirSync(shotDir, { recursive: true }); try { execFileSync('import', ['-window', 'root', path.join(shotDir, name)]); } catch (e) { console.log(`截图失败：${e.message}`); } };
   const customers = () => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'customers.json'), 'utf8')).filter((c) => !c.deleted); } catch { return []; } };
   try {
     const list = async () => (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
@@ -124,8 +128,12 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
     const st = (expr) => shell.evaluate(`(() => { try { return ${expr}; } catch { return null; } })()`);
     const btn = (label) => shell.evaluate(`!![...document.querySelectorAll('#content .btn')].find((x) => x.textContent === ${JSON.stringify(label)})`);
     const click = (label) => shell.evaluate(`(() => { const b = [...document.querySelectorAll('#content .btn')].find((x) => x.textContent === ${JSON.stringify(label)}); if (b) b.click(); return !!b; })()`);
-    const msg = () => shell.evaluate("document.querySelector('#content .op-form .note')?.textContent || ''");
-    const input = (i) => `document.querySelectorAll('#content .op-form input')[${i}]`;
+    const msg = () => shell.evaluate("document.querySelector('#content .note.bad')?.textContent || ''");
+    const see = () => shell.evaluate("(() => { const el = document.querySelector('#content .op .op-see'); return el ? (el.classList.contains('warn') ? 'warn:' : '') + [...el.children].filter((c) => getComputedStyle(c).display !== 'none').map((c) => c.textContent).join('|') : ''; })()");
+    const cc = () => shell.evaluate("document.querySelector('#content .op-line .op-cc')?.textContent || ''");
+    const goOff = () => shell.evaluate("document.querySelector('#content .op-bar .btn').disabled");
+    const input = (i) => `document.querySelectorAll('#content .op-box input')[${i}]`;
+    const clear = (i) => shell.evaluate(`(() => { const el = ${input(i)}; el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
     const toPage = async () => {
       await shell.evaluate("[...document.querySelectorAll('#side .tool-row')].find((b) => b.getAttribute('aria-label') === '开聊')?.click()");
       await waitFor(async () => (await st("s.page")) === 'opennum' && !!(await shell.evaluate(`!!${input(0)}`)), 4000);
@@ -203,11 +211,13 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
     await click('开聊');
     check(await onAccount('3') >= 0 && sends.length === 2, '已经开着这个号码：不刷新页面，切到这个号');
 
-    // 5. 没有国家码
-    await fill('', '0151 2345678', '');
+    // 5. 没写区号，所选的号（英国号）自己也没有号码：下面那一行要区号，点了也不跳
+    await fill('3', '0151 2345678', '');
+    await waitFor(async () => (await see()).includes('区号'), 3000);
+    check((await see()) === 'warn:请带上区号，例如 +49', `账号没有自己的号码：提示带上区号（${await see()}）`);
     await click('开聊');
-    await waitFor(async () => (await msg()).includes('国家码'), 4000);
-    check((await msg()).includes('国家码') && sends.length === 2 && await st('s.page') === 'opennum', `没有国家码的号码：提示，不跳（${await msg()}）`);
+    await waitFor(async () => (await msg()).includes('区号'), 4000);
+    check((await msg()).includes('区号') && sends.length === 2 && await st('s.page') === 'opennum', `没有区号的号码：提示，不跳（${await msg()}）`);
 
     // 6. 同一个号码再开：不多一条；填了新名字改名
     await shell.evaluate(`(() => { const el = ${input(0)}; el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
@@ -218,11 +228,90 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
     await onAccount('1');
     await waitFor(async () => customers().length === 3, 8000);
     check(customers().length === 3 && customers().find((c) => c.phone === '+4915123456789' && c.accountId === '3')?.name === 'Lena Fischer', '同一个号码在另一个号开：各记各的，名字不被清掉');
-    await fill('1', '+49 151 23456789', 'Lena Fischer');
+    await fill('1', '+49 151 23456789', '');
+    await waitFor(async () => (await shell.evaluate(`${input(1)}.value`)) === 'Lena Fischer', 3000); // 英国号下记过名字，带出来
     await click('开聊');
     await onAccount('1');
     await sleep(500);
-    check(customers().length === 3 && customers().find((c) => c.phone === '+4915123456789' && c.accountId === '1')?.name === 'Lena Fischer', '同一个号码填了名字：不多一条，改成这个名字');
+    check(customers().length === 3 && customers().find((c) => c.phone === '+4915123456789' && c.accountId === '1')?.name === 'Lena Fischer', '同一个号码带出了名字：不多一条，改成这个名字');
+
+    // 8. 号码框下面那一行：边打边认，换号重算，位数提醒，老客户带出名字
+    await toPage();
+    check(await goOff(), '号码框空着时「开聊」不能点');
+    check((await see()) === '', '号码框空着时没有那一行');
+    await pick('1');
+    await type(0, '0151 2345 6789');
+    await waitFor(async () => (await see()).startsWith('+49'), 3000);
+    const s1 = await see();
+    check(/^\+49 1512 3456789\|区号按 德国号 补的\|当地 \d\d:\d\d$/.test(s1) && await cc() === '德国', `没写区号：按德国号补，认出德国，有当地时间（${await cc()} ${s1}）`);
+    check(await shell.evaluate(`document.activeElement === ${input(0)}`) && !(await goOff()), '边打边认：焦点还在号码框里，「开聊」能点');
+    shot('see-added.png');
+    await pick('3');
+    await waitFor(async () => (await see()).startsWith('warn:'), 3000);
+    check((await see()) === 'warn:请带上区号，例如 +49', `换成没有自己号码的英国号：那一行跟着重算（${await see()}）`);
+    await pick('1');
+    await waitFor(async () => (await see()).startsWith('+49'), 3000);
+    check((await see()).startsWith('+49 1512 3456789|区号按 德国号'), '换回德国号：又按德国号补');
+    await clear(0);
+    await type(0, '+33 6 12 34 56');
+    await waitFor(async () => (await see()).startsWith('warn:'), 3000);
+    check((await see()) === 'warn:法国号码一般 9 位，现在 7 位' && await cc() === '法国' && !(await goOff()), `位数不对：琥珀色提醒，「开聊」照样能点（${await see()}）`);
+    shot('see-warn.png');
+    await clear(0);
+    await type(0, '+44 7911 123456');
+    await waitFor(async () => (await see()).startsWith('+44'), 3000);
+    const s4 = await see();
+    check(/^\+44 7911 123456\|当地 \d\d:\d\d$/.test(s4) && await cc() === '英国', `带区号的号码：认出英国，不写「补的」（${s4}）`);
+    // 老客户：Lena 记在英国号和德国号下；从德国号开，名字框空着就带出来
+    await clear(0);
+    await type(0, '0049 151 23456789');
+    await waitFor(async () => (await shell.evaluate(`${input(1)}.value`)) === 'Lena Fischer', 3000);
+    check(await shell.evaluate(`${input(1)}.value`) === 'Lena Fischer', '客户资料里已有这个号码：名字自动带出');
+    await type(0, '0');
+    await waitFor(async () => (await shell.evaluate(`${input(1)}.value`)) === '', 3000);
+    check(await shell.evaluate(`${input(1)}.value`) === '', '号码改成别的：带出来的名字跟着清掉');
+    await clear(0);
+    await type(1, 'Paul Weber');
+    await type(0, '+49 151 23456789');
+    await sleep(600);
+    check(await shell.evaluate(`${input(1)}.value`) === 'Paul Weber', '用户自己填了名字：不被客户资料里的名字换掉');
+    await clear(1);
+    await clear(0);
+    await pick('3');
+    await type(0, '+33 6 12 34 56 78');
+    await waitFor(async () => (await see()).startsWith('+33'), 3000);
+    check((await see()).includes('德国号 的客户'), `别的号下的客户：写明是谁的（${await see()}）`);
+    // 按补好的号码打开，客户资料里存完整号码
+    await pick('1');
+    await clear(0);
+    await type(0, '0170 1234567');
+    await waitFor(async () => (await see()).includes('补的'), 3000);
+    const before = sends.length;
+    await click('开聊');
+    await waitFor(async () => sends.length === before + 1, 8000);
+    check(sends[before] === '/send?phone=491701234567', `没写区号的号码按德国号补好再打开（${sends[before]}）`);
+    await onAccount('1');
+    await waitFor(async () => customers().some((c) => c.phone === '+491701234567'), 8000);
+    check(customers().some((c) => c.phone === '+491701234567' && c.accountId === '1'), '客户资料里存的是补好区号的完整号码');
+
+    // 9. 开聊历史：开成功的都记，同一个号下的同一个号码挪到最上面，点一行填回框里（不直接开），删了账号就不显示
+    await toPage();
+    const rows = () => shell.evaluate("[...document.querySelectorAll('#content .oh-row')].map((r) => r.querySelector('.oh-acc').title + '|' + r.querySelector('.oh-who').textContent.replace(/[^0-9]/g, '') + '|' + (r.querySelector('.oh-who .oh-num') ? r.querySelector('.oh-name').textContent : ''))");
+    await waitFor(async () => (await rows()).length === 4, 3000);
+    const r1 = await rows();
+    check(JSON.stringify(r1) === JSON.stringify(['德国号|491701234567|', '德国号|4915123456789|Lena Fischer', '英国号|4915123456789|Lena Fischer', '德国号|33612345678|']), `开聊历史：最近的在最上，重复开的不多一条，名字跟着客户资料（${r1.join(' ; ')}）`);
+    check(await shell.evaluate("[...document.querySelectorAll('#content .oh-at')].every((x) => /^今天 \\d\\d:\\d\\d$/.test(x.textContent))"), '开聊历史：今天开的写「今天」和钟点');
+    check(await shell.evaluate("document.querySelector('#content .oh .oh-t')?.textContent") === '开聊历史', '开聊历史有标题');
+    shot('history.png');
+    const sent = sends.length;
+    await shell.evaluate("document.querySelectorAll('#content .oh-row')[2].click()");
+    await sleep(300);
+    await waitFor(async () => (await see()).startsWith('+49'), 3000);
+    const num = await shell.evaluate(`${input(0)}.value`);
+    check(num === '+49 1512 3456789' && await shell.evaluate(`${input(1)}.value`) === 'Lena Fischer' && await picked() === '3', `点一行：号码、名字、账号填回框里（${num}）`);
+    check(await shell.evaluate(`document.activeElement === ${input(0)}`) && sends.length === sent && await st('s.page') === 'opennum', '点一行不直接开，光标停在号码框');
+    const hist = JSON.parse(fs.readFileSync(path.join(profile, 'open-history.json'), 'utf8'));
+    check(Array.isArray(hist) && hist.length === 4 && hist.every((e) => Object.keys(e).join() === 'accountId,digits,at'), '开聊历史存在本机，每条只有账号、号码和时间');
 
     // 7. 工作台客户资料页没有「开聊」
     await shell.evaluate("window.wa.panelTab('customers')");

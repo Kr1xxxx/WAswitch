@@ -36,7 +36,9 @@ const memory = require('./memory');
 const waPage = require('./wa-page');
 const { createDraftPlacer } = require('./draft-place');
 const { pasteToCompose } = require('./compose-insert');
-const { createChatOpener, normalizePhone } = require('./chat-open');
+const { createChatOpener } = require('./chat-open');
+const { parsePhone, ccOf } = require('./phone-parse');
+const { createOpenHistory, shownOpens } = require('./open-history');
 const { createMessageReader } = require('./read-messages');
 const { McpModule, loadExpected } = require('./mcp-module');
 const { LiteHost } = require('./lite/host');
@@ -58,6 +60,7 @@ const { createDirectTz } = require('./direct-tz');
 const { setupTranslateIpc } = require('./translate-ipc');
 const { createSelTranslate } = require('./sel-translate');
 const { setupPeerClock, webPeerNumber } = require('./peer-clock');
+const { zoneOfNumber } = require('./customer-time');
 const { OfflineWatch, LITE_OFFLINE, WEB_OFFLINE, offlineMessage } = require('./offline-watch');
 
 // 页面缩放的几档（和 Chrome 一样），网页版号默认 90%
@@ -1517,6 +1520,7 @@ function pushState() {
     }),
     // 待回复：锁着时只给个数，不给名字
     unreplied: (() => { const list = unrepliedList(); return { count: list.length, list: locked ? [] : list, done: locked ? [] : unrepliedDone() }; })(),
+    openHistory: page === 'opennum' && !locked ? recentOpens() : [], // 开聊页下面的开聊历史，只在这一页上算
     lite: liteStateForShell(),
     totalMB: memoryManager.totalMB(),
     settings,
@@ -3443,27 +3447,74 @@ async function insertText(accountId, text) {
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
 // 侧栏工具「开聊」：用户选一个网页号、粘贴号码（可填名字），切到这个号并打开和这个号码的对话（做法见 chat-open.js），
 // 号码和名字记进客户资料（同一个号下号码相同的只留一条；填了名字就改成这个名字）。不碰 WhatsApp 的通讯录
+// 客户资料里的号码按它所在的号的国家码整理成国际号码（客户编辑里可能填的是本国写法）
+// 同一个号码、同一个国家码算过的记一会儿（开聊页边打边查、状态推送时都要对一遍整个客户资料）
+const digitsMemo = new Map();
+const customerDigits = (c) => {
+  const acc = c.accountId ? findAcc(c.accountId) : null;
+  const cc = acc ? ccOf(acc.phone) : '';
+  const key = `${cc}|${c.phone}`;
+  if (!digitsMemo.has(key)) {
+    if (digitsMemo.size > 3000) digitsMemo.clear();
+    digitsMemo.set(key, parsePhone(c.phone, cc).digits);
+  }
+  return digitsMemo.get(key);
+};
+// 开聊历史（见 open-history.js）。开聊页上显示最近 8 条：只算还在的网页号下的，名字去这个号的客户资料里查
+let openHistoryStore = null;
+const openHistory = () => openHistoryStore || (openHistoryStore = createOpenHistory(path.join(app.getPath('userData'), 'open-history.json')));
+function recentOpens() {
+  const shown = shownOpens(openHistory().list(), (id) => { const a = findAcc(id); return !!a && !isLite(a) && !isParked(a); });
+  if (!shown.length) return [];
+  const custs = customerStore.list();
+  return shown.map((e) => {
+    const c = custs.find((x) => x.accountId === e.accountId && x.name && customerDigits(x) === e.digits);
+    return { accountId: e.accountId, digits: e.digits, phone: parsePhone(`+${e.digits}`).formatted || `+${e.digits}`, name: c ? c.name : '', at: e.at };
+  });
+}
 function rememberNumber(accountId, digits, name) {
-  const d = (p) => String(p || '').replace(/\D/g, '');
   const nm = typeof name === 'string' ? name.trim().slice(0, 60) : '';
-  const old = customerStore.list().find((c) => c.accountId === accountId && d(c.phone) === digits);
+  const old = customerStore.list().find((c) => c.accountId === accountId && customerDigits(c) === digits);
   if (old && (!nm || nm === old.name)) return;
   if (!customerStore.upsert(old ? { ...old, name: nm } : { accountId, name: nm, phone: `+${digits}` })) return;
   trIpc.pushFloat(); // 回复的目标语言可能跟着这个客户
   if (shellView && !shellView.webContents.isDestroyed()) shellView.webContents.send('panel:changed');
 }
+// 开聊页号码框下面那一行（边打边看）：认出的国家、整理好的号码、国家码是不是按所选的号补的、位数对不对、
+// 客户当地时区、客户资料里已有的客户（所选的号下的优先；停着的号下的不算）。打开时主进程再按同一套规则算一遍
+handleShell('chat:numberInfo', ({ accountId, phone } = {}) => {
+  const acc = typeof accountId === 'string' ? findAcc(accountId) : null;
+  if (!acc || isLite(acc) || page !== 'opennum' || locked || loginLocked() || typeof phone !== 'string') return null;
+  const p = parsePhone(phone.slice(0, 80), ccOf(acc.phone));
+  const out = { err: p.err, country: p.country, formatted: p.formatted, added: p.added, lenOk: p.lenOk, expect: p.expect, got: p.national.length, zone: null, customer: null };
+  if (!p.digits) return out;
+  const z = zoneOfNumber(p.digits);
+  if (z) out.zone = { tz: z.tz, approx: z.approx };
+  const shown = new Map(visibleAccounts().map((a) => [a.id, a.name]));
+  const hits = customerStore.list().filter((c) => (!c.accountId || shown.has(c.accountId)) && customerDigits(c) === p.digits);
+  if (hits.length) {
+    const mine = hits.find((c) => c.accountId === accountId || !c.accountId);
+    const named = hits.find((c) => c.name);
+    out.customer = { name: (mine && mine.name) || (named && named.name) || '', owner: mine ? '' : shown.get(hits[0].accountId) };
+  }
+  return out;
+});
 handleShell('chat:openNumber', async ({ accountId, phone, name, force } = {}) => {
   const acc = typeof accountId === 'string' ? findAcc(accountId) : null;
   if (!acc || page !== 'opennum' || loginLocked()) return { result: 'failed', reason: 'changed' };
   if (locked) return { result: 'failed', reason: 'locked' };
   if (isLite(acc)) return { result: 'failed', reason: 'lite' };
-  const digits = normalizePhone(phone);
-  if (!digits) return { result: 'failed', reason: 'bad_phone' };
+  // 没写国家码的按这个号自己号码的国家码补（规则见 phone-parse.js），和号码框下面那一行显示的一样
+  const p = parsePhone(phone, ccOf(acc.phone));
+  if (!p.digits) return { result: 'failed', reason: p.err === 'need_cc' ? 'need_cc' : 'bad_phone' };
+  const digits = p.digits;
   // 输入框有字时 openForUser 先停下、不切号；要打开时它把页面切到这个号（和点侧栏的号一样会离开开聊页）
   const r = await chatOpener.openForUser({ accountId, phone: digits, force: force === true });
-  // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记
+  // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记。记的是补好国家码的完整号码
   if (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat') {
     try { rememberNumber(accountId, digits, name); } catch (e) { console.warn(`开聊的号码没记进客户资料：${e.code || e.message}`); }
+    openHistory().add(accountId, digits);
+    pushState(); // 开聊历史多了一条
     if (r.result !== 'failed' && accountId === activeId && page === 'account') focusActive(); // 光标给 WhatsApp，直接能打字
   }
   return r;

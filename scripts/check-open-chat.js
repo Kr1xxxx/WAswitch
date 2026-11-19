@@ -16,6 +16,8 @@ const path = require('path');
 const { McpController } = require('../src/mcp/server');
 const { createChatOpener, sendUrl, WEB_WAIT_MS, normalizePhone: userPhone } = require('../src/chat-open');
 const { normalizePhone, maskPhone } = require('../src/mcp/open-chat');
+const { parsePhone, ccOf } = require('../src/phone-parse');
+const { createOpenHistory, shownOpens, KEEP: OPEN_KEEP } = require('../src/open-history');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 // 端口让系统挑：自己随机挑会撞上前面几项自检刚断开的本机连接（还在 TIME_WAIT 的端口监听不了，EADDRINUSE）
@@ -215,6 +217,48 @@ async function checkUserOpen() {
   const wrong = cases.filter(([raw, want]) => userPhone(raw) !== want).map(([raw]) => raw);
   check(!wrong.length, `开聊的号码整理（${cases.length} 种写法，错的：${wrong.join(' | ') || '无'}）`);
 
+  // 没写国家码：按所选账号自己号码的国家码补（phone-parse.js 的规则）；认出国家、整理写法、位数提醒
+  {
+    const P = (raw, cc) => parsePhone(raw, cc);
+    const fill = [
+      ['0151 2345 6789', '49', '4915123456789', true], ['07911 123456', '44', '447911123456', true], ['7911 123456', '44', '447911123456', true],
+      ['06 12 34 56 78', '33', '33612345678', true], ['(212) 555-0147', '1', '12125550147', true], ['(212) 555-0147', '49', '492125550147', true],
+      ['06 1234 5678', '39', '390612345678', true], ['4915123456789', '33', '4915123456789', false], ['+1 (212) 555-0147', '49', '12125550147', false],
+      ['0049 (0)151-2345 6789', '44', '4915123456789', false], ['0151 2345 6789', '', '', false], ['Emma', '49', '', false],
+      ['151 23456789', '49', '4915123456789', true], ['17612345678', '49', '4917612345678', true], ['33612345678', '49', '33612345678', false],
+      ['447911123456', '49', '447911123456', false], ['612345678', '34', '34612345678', true], ['3471234567', '39', '393471234567', true],
+    ];
+    const bad = fill.filter(([raw, cc, want, added]) => { const p = P(raw, cc); return p.digits !== want || p.added !== added; }).map(([raw, cc]) => `${raw}（${cc || '无'}）`);
+    check(!bad.length, `开聊补国家码（${fill.length} 种，错的：${bad.join(' | ') || '无'}）`);
+    check(P('0151 2345 6789', '').err === 'need_cc' && P('Emma', '49').err === 'bad', '开聊：账号没有自己的号码时不补，要用户带上国家码');
+    check(userPhone('0151 2345 6789', '49') === '4915123456789' && userPhone('0151 2345 6789') === '', 'chat-open.js 的 normalizePhone 只在给了国家码时补');
+    const names = [['+49 30 1234567', '德国'], ['+1 416 555 0147', '加拿大'], ['+1 212 555 0147', '美国'], ['+7 701 123 4567', '哈萨克斯坦'], ['+7 916 123 45 67', '俄罗斯'], ['+44 7911 123456', '英国']];
+    const wrongName = names.filter(([raw, c]) => P(raw, '').country !== c).map(([raw]) => raw);
+    check(!wrongName.length, `开聊认出国家（错的：${wrongName.join(' | ') || '无'}）`);
+    check(P('+49 30 1234567', '').formatted === '+49 30 1234567' && P('06 12 34 56 78', '33').formatted === '+33 6 12 34 56 78' && P('+1 212 555 0147', '').formatted === '+1 212-555-0147', '开聊：号码按当地习惯分组');
+    const short = P('+33 6 12 34 56', '');
+    check(short.digits === '336123456' && !short.lenOk && short.expect.join() === '9', '开聊：法国号码少了两位，提醒一般 9 位，号码照样认');
+    check(P('+33 6 12 34 56 78', '').lenOk && P('+49 1512 3456789', '').lenOk, '开聊：位数对的不提醒');
+    check(ccOf('+49 151 2345678') === '49' && ccOf('+1 (212) 555-0147') === '1' && ccOf('0151 2345678') === '' && ccOf('') === '' && ccOf('4915123456789') === '49', '账号自己号码的国家码');
+  }
+  // 开聊历史（open-history.js）：重复的挪到最上、最多 50 条、文件坏了从空的开始、删掉的号不显示
+  {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'waswitch-oh-'));
+    const file = path.join(dir, 'open-history.json');
+    const h1 = createOpenHistory(file);
+    h1.add('a', '4915123456789', 1); h1.add('b', '4915123456789', 2); h1.add('a', '33612345678', 3); h1.add('a', '4915123456789', 4);
+    const order = h1.list().map((e) => `${e.accountId}:${e.digits}`).join(',');
+    check(order === 'a:4915123456789,a:33612345678,b:4915123456789', `开聊历史：同一个号下的同一个号码挪到最上，别的号下的另算（${order}）`);
+    check(createOpenHistory(file).list().length === 3, '开聊历史：存进文件，重开还在');
+    for (let i = 0; i < 60; i++) h1.add('a', String(4915100000000 + i), 10 + i);
+    check(createOpenHistory(file).list().length === OPEN_KEEP, `开聊历史：最多留 ${OPEN_KEEP} 条`);
+    fs.writeFileSync(file, '{oops');
+    check(createOpenHistory(file).list().length === 0, '开聊历史：文件坏了从空的开始');
+    const shown = shownOpens([{ accountId: 'gone' }, ...Array.from({ length: 10 }, (_, i) => ({ accountId: i % 2 ? 'a' : 'lite' }))], (id) => id === 'a');
+    check(shown.length === 5 && shown.every((e) => e.accountId === 'a'), '开聊历史：删掉的号、轻量号下的不显示，最多显示 8 条');
+    check(shownOpens(Array.from({ length: 20 }, () => ({ accountId: 'a' })), () => true).length === 8, '开聊历史：页面上最多 8 条');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   // 用户在打字（就在我们的面板里输入号码）也直接开，不问
   {
     const { st, opener } = fakeDeps({ busy: true, peerAfterNav: { title: '+49 151 23456789', chat: '' } });
@@ -253,8 +297,8 @@ async function checkUserOpen() {
   }
   // main.js：开聊只记号码和名字，不碰 WhatsApp 的通讯录
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
-  const block = main.slice(main.indexOf('function rememberNumber'), main.indexOf("handleShell('chat:openNumber'") + 1200);
-  check(/openForUser/.test(block) && /normalizePhone\(phone\)/.test(block) && !/executeJavaScript|sendInputEvent|insertText/.test(block), 'main.js 的开聊先整理号码再交给 openForUser，没有注入和按键');
+  const block = main.slice(main.indexOf('function rememberNumber'), main.indexOf("handleShell('chat:openNumber'") + 1600);
+  check(/openForUser/.test(block) && /parsePhone\(phone, ccOf\(acc\.phone\)\)/.test(block) && !/executeJavaScript|sendInputEvent|insertText/.test(block), 'main.js 的开聊先整理号码再交给 openForUser，没有注入和按键');
 }
 
 // ---------- MCP 这边：open_chat 工具 ----------
