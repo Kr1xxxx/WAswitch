@@ -281,5 +281,20 @@
       <div class="ur-row"><button class="ur-done" aria-label="完成「Marie Dubois」"><span class="ur-circle"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></button><button class="ov-row ur-open two"><span class="sw" style="background: var(--green-9)"></span><span class="ur-main"><span class="ov-name"><span class="seg">Marie Dubois</span><span class="seg"><span class="hint">Sales FR</span></span></span><span class="ur-what">确认交期后回复客户并发送新的价目表和合同</span></span><span class="hint ur-wait">2 天</span></button></div>
     </div>
   </section>
+  <section data-shot="opennum">
+    <h2>开聊</h2>
+    <!-- 账号用一排按钮选：选中、悬停、没有 emoji 的号、名字太长的号 -->
+    <div class="box op-form" style="width: 520px">
+      <div class="field"><span class="op-label">账号</span><div class="op-accs" role="radiogroup" aria-label="账号">
+        <button type="button" class="op-acc on" role="radio" aria-checked="true" tabindex="0"><img class="emo" src="../../src/emoji/svg/avocado.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales DE</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1" data-force="hover"><img class="emo" src="../../src/emoji/svg/bee.svg" width="20" height="20" alt=""><span class="op-acc-name">Sales FR</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><span class="sw" style="background: var(--orange-9)"></span><span class="op-acc-name">Sales UK</span></button>
+        <button type="button" class="op-acc" role="radio" aria-checked="false" tabindex="-1"><img class="emo" src="../../src/emoji/svg/apple.svg" width="20" height="20" alt=""><span class="op-acc-name">Lyon Beauty Supplies Export Team Europe</span></button>
+      </div></div>
+      <label class="field">号码<input inputmode="tel" placeholder="+49 151 2345678" aria-label="号码"></label>
+      <label class="field">名字<input value="Lena Fischer" placeholder="可不填" aria-label="名字"></label>
+      <div class="btns"><button type="button" class="btn primary">开聊</button></div>
+    </div>
+  </section>
 </body>
 </html>

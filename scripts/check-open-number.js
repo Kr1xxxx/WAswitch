@@ -3,7 +3,7 @@
 // 首页是登录后的样子（对话列表 + 打开着 Emma 的对话，消息是真实结构：data-id 在外层、气泡尾巴、发送人标签）；
 // /send?phone=号码 和真 WhatsApp 一样打开这个号码的新对话（顶栏是格式化的号码，还没有消息）。
 // 两个网页号（德国、英国）和一个轻量号；两个网页页面按时区（指纹按地区设的）认出是哪个号的。
-//   1. 侧栏「工具」里有「开聊」；账号只列两个网页号，默认选当前的号；光标在号码框里
+//   1. 侧栏「工具」里有「开聊」；账号只列两个网页号（一排按钮，不是系统下拉框），默认选当前的号；光标在号码框里；方向键换号
 //   2. 选另一个号（英国号），填号码（一个字一个字地输，带 (0) 的德国写法）和名字，按回车：
 //      切到英国号、只有英国号的页面跳到 /send?phone=4915123456789（网址里只有号码）、对话出现、客户资料里这条记在英国号下
 //   3. 输入框里有没发的字：不跳也不切号，提示会丢字，按钮变「仍然打开」，点了才跳
@@ -131,7 +131,8 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
       await waitFor(async () => (await st("s.page")) === 'opennum' && !!(await shell.evaluate(`!!${input(0)}`)), 4000);
       await sleep(300);
     };
-    const pick = (id) => shell.evaluate(`(() => { const el = document.querySelector('#content .op-form select'); el.value = ${JSON.stringify(id)}; el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    const pick = (id) => shell.evaluate(`(() => { const el = document.querySelector('#content .op-acc[data-id="${id}"]'); el.click(); return true; })()`);
+    const picked = () => shell.evaluate("[...document.querySelectorAll('#content .op-acc')].filter((b) => b.getAttribute('aria-checked') === 'true').map((b) => b.dataset.id).join(',')");
     // 一个字一个字地输（整段赋值会藏住 bug）
     const type = (i, text) => shell.evaluate(`(() => { const el = ${input(i)}; el.focus(); for (const c of ${JSON.stringify(text)}) { el.value += c; el.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
     const enter = (i, composing = false) => shell.evaluate(`${input(i)}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: ${composing}, bubbles: true, cancelable: true }))`);
@@ -143,12 +144,24 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
     check(await st('s.activeId') === '1', '开始时在德国号上');
     await toPage();
     check(await st('s.page') === 'opennum', '点「开聊」打开开聊页');
-    const opts = await shell.evaluate("[...document.querySelectorAll('#content .op-form select option')].map((o) => o.value + ':' + o.textContent).join(',')");
+    const opts = await shell.evaluate("[...document.querySelectorAll('#content .op-acc')].map((o) => o.dataset.id + ':' + o.textContent).join(',')");
     check(opts === '1:德国号,3:英国号', `账号只列网页号（${opts}）`);
-    check(await shell.evaluate("document.querySelector('#content .op-form select').value") === '1', '默认选当前的号');
+    check(await picked() === '1', '默认选当前的号');
+    check(!(await shell.evaluate("!!document.querySelector('#content select')")), '不用系统下拉框');
     check(await shell.evaluate(`document.activeElement === ${input(0)}`), '进来光标就在号码框里');
     check(!(await shell.evaluate("[...document.querySelectorAll('#content *')].some((el) => el.children.length === 0 && /·/.test(el.textContent))")), '页面里没有「·」');
     shot('page.png');
+
+    // 1b. 键盘：Tab 到选中的号，方向键换号，焦点跟着走，重画后还在
+    const tabIdx = await shell.evaluate("[...document.querySelectorAll('#content .op-acc')].map((b) => b.tabIndex).join(',')");
+    check(tabIdx === '0,-1', `只有选中的号能 Tab 到（${tabIdx}）`);
+    const arrow = (key) => shell.evaluate(`(() => { const el = document.querySelector('#content .op-acc.on'); el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', { key: '${key}', bubbles: true, cancelable: true })); return true; })()`);
+    await arrow('ArrowRight');
+    await sleep(200);
+    check(await picked() === '3' && await shell.evaluate("document.activeElement?.dataset?.id") === '3', '按右方向键换到英国号，焦点也在英国号上');
+    await arrow('ArrowRight');
+    await sleep(200);
+    check(await picked() === '1' && await shell.evaluate("document.activeElement?.dataset?.id") === '1', '到头再按回到第一个号');
 
     // 2. 选英国号开聊
     await pick('3');
@@ -156,7 +169,7 @@ const page = (title, msgs) => `<!doctype html><html><head><meta charset="utf-8">
     await type(0, '+49 (0)151 2345 6789');
     await type(1, 'Lena Fischer');
     await sleep(200);
-    check(await shell.evaluate("document.querySelector('#content .op-form select').value") === '3', '打字时选的号没被重画冲掉');
+    check(await picked() === '3', '打字时选的号没被重画冲掉');
     shot('form.png');
     await enter(1, true);
     await sleep(500);
