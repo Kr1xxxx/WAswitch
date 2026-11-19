@@ -175,6 +175,8 @@ const LIST_CODE = (opts) => `((S, opts) => {
       // 群里别人发的最后一条，预览前面有「发送人: 」（发送人和冒号是单独的一段；中文界面可能是全角「：」）。头像是照片的群只能这样认出来
       const prev = titled.slice(1).find((t) => t !== name) || '';
       chat.sender = texts.some((t) => t === ':' || t === '：' || (t.length > 1 && t.length <= 60 && /[:：]$/.test(t) && t !== name && prev.startsWith(t) && prev.length > t.length));
+      // 预览文字（客户最后一句），待回复页的第二行用，只在本机
+      chat.last = prev.slice(0, 120);
     }
     if (opts.includePreview) {
       const preview = titled.slice(1).find((t) => t !== name) || '';
@@ -199,7 +201,7 @@ const LIST_CODE = (opts) => `((S, opts) => {
   return out;
 })(${JSON.stringify(SELECTORS)}, ${JSON.stringify(opts)})`;
 
-// reply：每个对话多带 out（最后一条是自己发的）、age（最后一条至少过了几分钟，认不出是 null）和 sender（预览前面有群里的发送人），
+// reply：每个对话多带 out（最后一条是自己发的）、age（最后一条至少过了几分钟，认不出是 null）、sender（预览前面有群里的发送人）和 last（预览文字），
 // 结果多带 atTop 和 icons，给「待回复」用
 async function readChatList(wc, { includePreview = false, reply = false } = {}) {
   if (wc.isDestroyed() || wc.isLoading()) return { ok: false, reason: 'loading' };
