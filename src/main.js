@@ -28,7 +28,8 @@ const waSound = require('./wa-sound');
 const { EventLog } = require('./eventlog');
 const records = require('./records');
 const { UndoSlot, shortName } = require('./undo');
-const { Unreplied, createUnrepliedOpener, withTimeout } = require('./unreplied');
+const { Unreplied, createUnrepliedOpener, withTimeout, todoKey } = require('./unreplied');
+const { Followup, chatOf } = require('./followup');
 const { customerHooks } = require('./customer-mcp');
 const { Translator, DEFAULT_MODES, retireModes, updateModes } = require('./translate');
 const memory = require('./memory');
@@ -1018,7 +1019,7 @@ const chatOpener = createChatOpener({
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 
-// ---- 待回复：客户说了话、我们 2 小时以上没回的对话（见 unreplied.js） ----
+// ---- 待回复：客户说了话、我们 30 分钟以上没回的对话（见 unreplied.js） ----
 const unrepliedFile = () => path.join(app.getPath('userData'), 'unreplied.json');
 let unrepliedPending = null;
 let unrepliedTimer = null;
@@ -1047,43 +1048,91 @@ let unrepliedScanning = false;
 // 每分钟读一遍每个号：网页号只读左侧对话列表（隔离环境），轻量号读本机聊天缓存。锁着、出错、没登录的号跳过。
 // 每一步都有超时：主进程卡过以后页面可能停在空地址上，在里面跑脚本永远等不到回音（见 docs/testing-pitfalls.md），不能让以后的读取都卡住
 const UNREPLIED_STEP_MS = 5000;
+// 每个号读到了什么，变了才往日志写一行：只有计数和 WhatsApp 的图标名，没有名字、号码和聊天内容
+const unrepliedLogged = new Map();
+function logUnreplied(id, line) {
+  if (unrepliedLogged.get(id) === line) return;
+  unrepliedLogged.set(id, line);
+  console.log(`待回复 ${id}: ${line}`);
+}
 async function scanUnreplied() {
   if (unrepliedScanning || locked || loginLocked()) return;
   unrepliedScanning = true;
   const store = unrepliedStore();
   try {
     for (const acc of visibleAccounts()) {
-      if (locked || problems.has(acc.id) || loginStates.get(acc.id) !== 'logged_in') continue;
+      if (locked) break;
+      if (problems.has(acc.id)) { logUnreplied(acc.id, '跳过 problem'); continue; }
+      if (loginStates.get(acc.id) !== 'logged_in') { logUnreplied(acc.id, `跳过 login=${loginStates.get(acc.id) || 'none'}`); continue; }
       if (isLite(acc)) {
-        if (!liteHost || liteStates.get(acc.id)?.status !== 'open') continue;
+        if (!liteHost || liteStates.get(acc.id)?.status !== 'open') { logUnreplied(acc.id, '跳过 lite 没连上'); continue; }
         const list = await withTimeout(liteHost.chatList(acc.id), UNREPLIED_STEP_MS, null);
-        if (Array.isArray(list) && findAcc(acc.id)) store.ingestLite(acc.id, list);
+        if (!Array.isArray(list)) { logUnreplied(acc.id, 'lite 读取失败'); continue; }
+        if (findAcc(acc.id)) store.ingestLite(acc.id, list);
+        logUnreplied(acc.id, `lite 对话 ${list.length} 客户最后说话 ${list.filter((c) => c && !c.group && c.me === false && c.wait > 0).length}`);
         continue;
       }
       const view = views.get(acc.id);
-      if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) continue;
+      if (!view || pendingLoad.has(acc.id) || view.webContents.isDestroyed()) { logUnreplied(acc.id, '跳过 没有页面'); continue; }
       const wc = view.webContents;
-      if (!isWhatsAppUrl(wc.getURL())) continue;
+      if (!isWhatsAppUrl(wc.getURL())) { logUnreplied(acc.id, '跳过 不在 WhatsApp 页面'); continue; }
       const r = await withTimeout(waPage.readChatList(wc, { reply: true }), UNREPLIED_STEP_MS, null);
-      if (!r || !r.ok || !findAcc(acc.id) || !store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true })) continue;
-      // 新记下的对话查一次号码（只读 WhatsApp 本地的联系人）：查到才列，群和查不到的不列
-      for (const { key, name } of store.needsNumber(acc.id)) {
-        if (wc.isDestroyed()) break;
-        const found = await withTimeout(waPage.lookupPeerPhone(wc, { title: name }), UNREPLIED_STEP_MS, null);
-        if (!found) break;
-        store.setNumber(acc.id, key, found.digits, /^(notfound|samename|nodb|noidb)$/.test(found.why || ''));
-      }
+      if (!r || !r.ok) { logUnreplied(acc.id, `读列表失败 ${(r && r.reason) || 'timeout'}`); continue; }
+      if (!findAcc(acc.id)) continue;
+      const st = store.ingestWeb(acc.id, r.chats, { filtered: !!r.filtered, atTop: r.atTop === true });
+      const icons = Array.isArray(r.icons) ? r.icons.filter((n) => typeof n === 'string' && /^[\w-]{1,40}$/.test(n)).join(',') : '';
+      logUnreplied(acc.id, st.ok
+        ? `行 ${st.rows} 群 ${st.groups} 私聊 ${st.solo} 有勾 ${st.out} 未读 ${st.unread} 认出时间 ${st.aged}${st.noTick ? ' 勾认不出' : ''} 顶上 ${r.atTop === true} 记下 ${store.byAcc.get(acc.id)?.size || 0} 图标 ${icons}`
+        : `不用 ${r.filtered ? 'filtered' : 'bad'}`);
     }
   } catch (e) {
     console.warn('待回复读取失败', e && e.message);
   } finally {
     unrepliedScanning = false;
   }
-  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key]));
+  unrepliedPushIfChanged();
+}
+function unrepliedPushIfChanged() {
+  const sig = JSON.stringify(unrepliedList().map((e) => [e.accountId, e.key, e.kind, e.what || '']));
   if (sig !== unrepliedSig) { unrepliedSig = sig; pushState(); }
 }
 function unrepliedList() {
   return unrepliedStore().list(new Set(visibleAccounts().map((a) => a.id)));
+}
+// ---- 待跟进：AI 看打开的对话，我们还欠客户什么（见 followup.js）。来财的 ai/status 说支持（todo: true）才发请求 ----
+const TODO_STATUS_MS = 30 * 60 * 1000;
+let todoStatus = { at: 0, ok: false };
+async function todoSupported() {
+  if (locked || loginLocked() || !translator || !translator.cloud()) return false;
+  const now = Date.now();
+  if (now - todoStatus.at < TODO_STATUS_MS) return todoStatus.ok;
+  let r = null;
+  try { r = await translator.cloudStatus(); } catch { r = null; }
+  // 问不到（断网、超时）：5 分钟后再问；问到了 30 分钟后再问
+  todoStatus = r && !r.error ? { at: Date.now(), ok: r.todo === true } : { at: Date.now() - TODO_STATUS_MS + 5 * 60 * 1000, ok: false };
+  return todoStatus.ok;
+}
+const followup = new Followup({
+  analyzed: (id, key) => unrepliedStore().analyzed(id, key),
+  supported: todoSupported,
+  // 排在翻译后面：用户点的翻译、收到消息的自动翻译（正在翻的和排着的）都没有时才问。后台补翻不算，不然可能一直等
+  idle: () => {
+    if (!translator || translator.busy) return false;
+    const fc = trIpc.floatCore;
+    return !fc || (fc.active - fc.slowRun.size <= 0 && !fc.queue.some((q) => !q.slow));
+  },
+  send: (messages) => translator.todo(messages),
+  onResult: (id, key, info, result, meta) => {
+    if (!findAcc(id)) return;
+    unrepliedStore().setTodo(id, key, info, result, meta);
+    unrepliedPushIfChanged();
+  },
+});
+// 翻译读到了当前打开的对话（translate-ipc.js 的 floatTick）：jid = 轻量号正在看的对话，网页号是 null。只看私聊（见 followup.js 的 chatOf）
+function followupSeen(accId, jid, r) {
+  if (locked || !findAcc(accId)) return;
+  const c = chatOf(r, jid, todoKey);
+  if (c) followup.observe(accId, c.key, c.info, r.msgs);
 }
 // 点了「待回复」里的一个对话：切到那个号并打开这个对话（做法见 unreplied.js 的 createUnrepliedOpener）
 const unrepliedOpener = createUnrepliedOpener({
@@ -2583,6 +2632,7 @@ async function removeAccount(id, { timeoutMs } = {}) {
   liteUnreadChats.delete(id);
   liteOpen.delete(id);
   unrepliedStore().drop(id);
+  followup.forget(id);
   mcp?.controller.gate.clearAccount(id);
   notifier.forget(id);
   if (translator) translator.forgetAccount(id);
@@ -3198,6 +3248,7 @@ app.whenReady().then(async () => {
   setInterval(recheckUnread, RECHECK_MS);
   setInterval(checkLogins, LOGIN_CHECK_MS);
   setInterval(scanUnreplied, UNREPLIED_SCAN_MS);
+  setInterval(() => { if (!locked && !loginLocked()) followup.tick().catch((e) => console.warn('待跟进分析失败', e && e.message)); }, 15 * 1000);
   setTimeout(scanUnreplied, 20 * 1000);
   setTimeout(checkLogins, 60 * 1000);
   setInterval(watchExits, EXIT_WATCH_MS);
@@ -3271,7 +3322,7 @@ onShell('add', async () => { if (await confirmLeaveEditor()) openEditor(null); }
 onShell('edit', async (id) => { if (findAcc(id) && await confirmLeaveEditor()) openEditor(id); });
 // 编辑页的“取消”是明确放弃，不再问（discard 为 true）
 onShell('page', async (p, discard) => {
-  if (!['account', 'settings', 'overview', 'translate', 'unreplied'].includes(p)) return;
+  if (!['account', 'settings', 'overview', 'translate', 'unreplied', 'opennum'].includes(p)) return;
   if (discard !== true && !(await confirmLeaveEditor())) return;
   editorDirty = false;
   showPage(p);
@@ -3294,7 +3345,7 @@ handleShell('notif:clear', () => {
   }
   return true;
 });
-// 待回复：点一个对话打开它；「忽略」直接去掉，给几秒撤销
+// 待回复：点一个对话打开它；点圆圈（办完了）直接去掉，给几秒撤销
 handleShell('unreplied:open', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return { result: 'gone' };
   return unrepliedOpener.open(data.accountId, data.key, data.force === true);
@@ -3302,10 +3353,10 @@ handleShell('unreplied:open', (data) => {
 handleShell('unreplied:dismiss', (data) => {
   if (!data || typeof data.accountId !== 'string' || typeof data.key !== 'string') return false;
   const store = unrepliedStore();
-  const old = store.dismiss(data.accountId, data.key);
+  const old = store.done(data.accountId, data.key);
   if (!old) return false;
-  pushState();
-  offerUndo({ kind: 'state', where: 'body', text: `已忽略「${shortName(old.name)}」` }, () => { store.undismiss(data.accountId, data.key); pushState(); });
+  unrepliedPushIfChanged();
+  offerUndo({ kind: 'state', where: 'body', text: `已完成「${shortName(old.name)}」` }, () => { store.undone(data.accountId, data.key, old); unrepliedPushIfChanged(); });
   return true;
 });
 // ---- 撤销：删除、清空、解散分组以后，界面给几秒“撤销”（见 undo.js） ----
@@ -3382,7 +3433,7 @@ async function insertText(accountId, text) {
   });
 }
 handleShell('panel:insert', ({ accountId, text } = {}) => insertText(accountId, text));
-// 客户资料页的「开聊」：用户粘贴号码（可填名字），在当前网页号里打开和这个号码的对话（做法见 chat-open.js），
+// 侧栏工具「开聊」：用户选一个网页号、粘贴号码（可填名字），切到这个号并打开和这个号码的对话（做法见 chat-open.js），
 // 号码和名字记进客户资料（同一个号下号码相同的只留一条；填了名字就改成这个名字）。不碰 WhatsApp 的通讯录
 function rememberNumber(accountId, digits, name) {
   const d = (p) => String(p || '').replace(/\D/g, '');
@@ -3395,14 +3446,17 @@ function rememberNumber(accountId, digits, name) {
 }
 handleShell('chat:openNumber', async ({ accountId, phone, name, force } = {}) => {
   const acc = typeof accountId === 'string' ? findAcc(accountId) : null;
-  if (!acc || accountId !== activeId || page !== 'account' || locked) return { result: 'failed', reason: 'changed' };
+  if (!acc || page !== 'opennum' || loginLocked()) return { result: 'failed', reason: 'changed' };
+  if (locked) return { result: 'failed', reason: 'locked' };
   if (isLite(acc)) return { result: 'failed', reason: 'lite' };
   const digits = normalizePhone(phone);
   if (!digits) return { result: 'failed', reason: 'bad_phone' };
+  // 输入框有字时 openForUser 先停下、不切号；要打开时它把页面切到这个号（和点侧栏的号一样会离开开聊页）
   const r = await chatOpener.openForUser({ accountId, phone: digits, force: force === true });
   // 页面已经跳过去了（包括 40 秒还没看到对话的）才记，号码格式不对、页面没好、正在开别的都不记
   if (r.result === 'opened' || r.result === 'already' || r.reason === 'no_chat') {
     try { rememberNumber(accountId, digits, name); } catch (e) { console.warn(`开聊的号码没记进客户资料：${e.code || e.message}`); }
+    if (r.result !== 'failed' && accountId === activeId && page === 'account') focusActive(); // 光标给 WhatsApp，直接能打字
   }
   return r;
 });
@@ -3478,6 +3532,7 @@ const ctx = {
   get liteGuardHits() { return liteGuardHits; },
   get liteHost() { return liteHost; },
   offerUndo,
+  followupSeen,
   handleShell, onShell, findAcc, isParked, isLite, visibleAccounts, parkedCustomer, panelShown,
   // 轻量号正在看的对话和后台进程推来的内容（翻译页用）
   liteChat: (id) => ({ status: liteStates.get(id)?.status || '', jid: liteOpen.get(id) || null, view: liteViews.get(id) || null }),

@@ -689,9 +689,26 @@ class Translator {
       const j = res.json;
       if (!res.ok) { const e = cloudError(res.status, j, res.retryAfter); return { error: e.text, kind: e.kind }; }
       if (!j || j.ok !== true) return { error: '来财没有回答', kind: 'other' };
-      return { ready: j.ready === true, overBudget: j.over_budget === true };
+      // todo：来财能做「待跟进」分析（purpose: 'todo' 只走聊天大模型）。旧的来财没有这个字段
+      return { ready: j.ready === true, overBudget: j.over_budget === true, todo: j.todo === true };
     } catch (e) {
       return { error: (e && e.text) || '连不上来财', kind: (e && e.kind) || 'network' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // 「待回复」的待跟进分析（followup.js）：单独一次小请求，只带 messages，purpose: 'todo'，不重试。
+  // 返回模型的原话（由 followup.js 解析）；失败抛出 { kind, text }。不占翻译的通道（this.busy）
+  async todo(messages) {
+    if (!this.cloud()) throw { ...NO_LOGIN };
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort('timeout'), TIMEOUT_MS);
+    try {
+      const res = await this.callCloud('ai/chat', { messages, temperature: 0, max_tokens: 100, purpose: 'todo' }, ac.signal);
+      const j = res.json;
+      if (!res.ok) throw cloudError(res.status, j, res.retryAfter);
+      return j && j.ok === true && typeof j.text === 'string' ? j.text.slice(0, 2000) : '';
     } finally {
       clearTimeout(timer);
     }

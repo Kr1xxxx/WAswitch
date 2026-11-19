@@ -222,10 +222,23 @@ const chats=()=>cloud.calls.filter((c)=>c.route==='ai/chat');
   const pr=tr.raceFree({text:'a',mode},{signal:ac.signal}); setTimeout(()=>ac.abort(),20);
   assert.equal((await pr).kind,'cancel');
   // 设置页：来财开通了没有
-  cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:false});
+  cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:false,todo:false});
   assert.equal(cloud.calls[0].route,'ai/status'); assert.deepEqual(cloud.calls[0].body,{v:1});
-  cloud.next({status:200,body:{ok:true,ready:false,over_budget:false}}); assert.deepEqual(await tr.cloudStatus(),{ready:false,overBudget:false});
-  cloud.next({status:200,body:{ok:true,ready:true,over_budget:true}}); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:true});
+  cloud.next({status:200,body:{ok:true,ready:false,over_budget:false}}); assert.deepEqual(await tr.cloudStatus(),{ready:false,overBudget:false,todo:false});
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:true}}); assert.deepEqual(await tr.cloudStatus(),{ready:true,overBudget:true,todo:false});
+  // 来财能做待跟进分析：ai/status 带 todo: true（只认 true）
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:false,todo:true}}); assert.equal((await tr.cloudStatus()).todo,true);
+  cloud.next({status:200,body:{ok:true,ready:true,over_budget:false,todo:'yes'}}); assert.equal((await tr.cloudStatus()).todo,false);
+  // 待跟进分析：只带 messages、purpose todo、temperature 0、max_tokens 100，回答原样交回去；不占翻译的通道
+  cloud.reset(); cloud.next({status:200,body:{ok:true,text:'{"todo": true, "what": "发报价单", "when": "soon"}'}});
+  const todoMsgs=[{role:'system',content:'s'},{role:'user',content:'<chat>\n我：I will send it\n</chat>'}];
+  assert.equal(await tr.todo(todoMsgs),'{"todo": true, "what": "发报价单", "when": "soon"}');
+  assert.deepEqual(cloud.calls[0].body,{v:1,messages:todoMsgs,temperature:0,max_tokens:100,purpose:'todo'});
+  assert.equal(tr.busy,null);
+  cloud.next({status:402,error:'over_budget'}); await assert.rejects(tr.todo(todoMsgs),(e)=>e.kind==='quota');
+  cloud.next({status:429,error:'busy'}); await assert.rejects(tr.todo(todoMsgs),(e)=>e.kind==='overload');
+  assert.equal(cloud.calls.length,3,'待跟进分析失败不重试');
+  cloud.logout(); await assert.rejects(tr.todo(todoMsgs),(e)=>e.kind==='auth'); cloud.loginAgain();
   cloud.next({status:403,error:'revoked'}); assert.deepEqual(await tr.cloudStatus(),{error:'团队登录失效，请重新登录',kind:'auth'});
   cloud.next('net'); assert.equal((await tr.cloudStatus()).kind,'network');
   cloud.logout(); cloud.reset(); assert.deepEqual(await tr.cloudStatus(),{error:'先登录团队才能翻译',kind:'auth'}); assert.equal(cloud.calls.length,0); cloud.loginAgain();
