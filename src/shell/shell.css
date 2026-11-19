@@ -848,3 +848,12 @@ button, select, a, .row, .tab { transition: background-color var(--fx) var(--fx-
 .morph[data-st="err"]:not(.primary) { color: var(--danger); }
 .mb-spin { width: .9em; height: .9em; border-radius: var(--r-full); border: 1.5px solid currentColor; border-right-color: transparent; opacity: .7; animation: spin .9s linear infinite; }
 @keyframes mb-in { from { opacity: 0; transform: scale(.9); } }
+/* ---------- 开聊：账号用一排按钮选，号码、名字 ---------- */
+.op-accs { display: flex; flex-wrap: wrap; gap: 8px; }
+.op-acc { display: flex; align-items: center; gap: 8px; height: 40px; max-width: 100%; padding: 0 14px 0 10px; border: var(--hair) solid var(--slate-6); border-radius: var(--r-m); background: var(--white); font-size: var(--fs-m); font-weight: 500; white-space: nowrap; }
+.op-acc:hover:not(:disabled) { border-color: var(--slate-8); }
+.op-acc.on, .op-acc.on:hover:not(:disabled) { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.op-acc:disabled { opacity: .5; cursor: default; }
+.op-acc .sw { width: 10px; height: 10px; border-radius: var(--r-full); flex: none; }
+.op-acc-name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.op-form input::placeholder { color: var(--slate-10); opacity: 1; }

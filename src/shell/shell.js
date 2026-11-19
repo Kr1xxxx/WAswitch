@@ -962,23 +962,41 @@ async function openNumber() {
   op.msg = done && r.reason !== 'no_chat' ? '' : !r ? '没有打开' : r.result === 'busy' ? '正在打开另一个对话，稍后再试' : r.result === 'gone' ? OPEN_FAIL.changed : OPEN_FAIL[r.reason] || '没有打开';
   render(true);
 }
+// 账号用一排按钮选（不用系统下拉框：Mac 上弹出来是深色的系统菜单），方向键在里面换，和单选一样
+function opPick(id) {
+  if (op.busy || id === op.acc) return;
+  op.acc = id; op.force = false; op.msg = '';
+  render(true);
+}
+function opAccKey(e) {
+  const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const list = webAccs();
+  const i = list.findIndex((a) => a.id === op.acc);
+  if (list.length) opPick(list[(i + d + list.length) % list.length].id);
+}
 function openNumPage(entering) {
-  const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'));
+  const page = h('div', { class: 'page narrow' }, h('h1', null, '开聊'),
+    h('p', { class: 'lead' }, '不用先存进通讯录，填上客户的号码就能直接打开对话。号码和名字会记进客户资料。'));
   const list = webAccs();
   if (entering) { opPickDefault(); if (!op.busy) { op.msg = ''; op.force = false; } } // 上次的提示（多半是在账号页上没看到的）不留到这次
   else if (!list.some((a) => a.id === op.acc)) opPickDefault();
   if (!list.length) { page.append(h('div', { class: 'box' }, h('span', { class: 'hint' }, '没有网页号。'))); return page; }
   const enter = (e) => { if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; e.preventDefault(); openNumber(); };
-  const acc = h('select', { 'aria-label': '账号', disabled: op.busy, onchange: (e) => { op.acc = e.target.value; op.force = false; op.msg = ''; render(true); } },
-    list.map((a) => h('option', { value: a.id }, a.name)));
-  acc.value = op.acc;
-  const phone = h('input', { value: op.phone, maxlength: '80', inputmode: 'tel', 'aria-label': '号码', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.phone = e.target.value; } });
-  const name = h('input', { value: op.name, maxlength: '60', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
+  const acc = h('div', { class: 'op-accs', role: 'radiogroup', 'aria-label': '账号', onkeydown: opAccKey },
+    list.map((a) => {
+      const on = a.id === op.acc;
+      return h('button', { type: 'button', class: `op-acc${on ? ' on' : ''}`, role: 'radio', 'aria-checked': on ? 'true' : 'false', tabindex: on ? '0' : '-1', 'data-id': a.id, disabled: op.busy, title: a.name, onclick: () => opPick(a.id) },
+        emojiImg(a, 20) || mini(a), h('span', { class: 'op-acc-name' }, a.name));
+    }));
+  const phone = h('input', { value: op.phone, maxlength: '80', inputmode: 'tel', placeholder: '+49 151 2345678', 'aria-label': '号码', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.phone = e.target.value; } });
+  const name = h('input', { value: op.name, maxlength: '60', placeholder: '可不填', 'aria-label': '名字', disabled: op.busy, onkeydown: enter, oninput: (e) => { op.name = e.target.value; } });
   if (entering && !op.busy) requestAnimationFrame(() => { if (phone.isConnected) phone.focus(); });
   page.append(h('div', { class: 'box op-form' },
-    h('label', { class: 'field' }, '账号', acc),
+    h('div', { class: 'field' }, h('span', { class: 'op-label' }, '账号'), acc),
     h('label', { class: 'field' }, '号码', phone),
-    h('label', { class: 'field' }, '名字（可不填）', name),
+    h('label', { class: 'field' }, '名字', name),
     op.msg ? h('div', { class: 'note bad', role: 'status' }, op.msg) : null,
     h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: op.busy, onclick: openNumber }, op.busy ? '正在打开' : op.force ? '仍然打开' : '开聊'))));
   return page;
@@ -2316,8 +2334,11 @@ function render(forceContent = false) {
     if (forceContent || key !== shown || sig !== ur.sig) { ur.sig = sig; $content.replaceChildren(unrepliedPage()); }
   } else if (s.page === 'opennum') {
     // 开聊页：打字时不重画（状态推过来也不打断输入），换了号或点了按钮才重画
-    const typing = $content.contains(document.activeElement) && ['INPUT', 'SELECT'].includes(document.activeElement.tagName);
+    const typing = $content.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+    const onAcc = $content.contains(document.activeElement) && document.activeElement.classList.contains('op-acc');
     if (forceContent || key !== shown || !typing) $content.replaceChildren(openNumPage(key !== shown));
+    // 用键盘在账号里换：重画以后焦点留在选中的那个号上
+    if (onAcc && key === shown) $content.querySelector('.op-acc.on')?.focus();
   } else if (s.page === 'translate') {
     // 翻译页：同一个元素原地更新，不重建（打字、按钮动画不会被打断）
     const el = trPage(key !== shown);
