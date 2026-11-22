@@ -682,6 +682,7 @@ const notifier = new Notifier({
   isMuted: (acc) => isMuted(acc),
   getWindow: () => win,
   activate: (id) => { userActivate(id); },
+  focusActive: () => focusActive(),
   isOffline: (id) => offlineWatch.marked(id),
   quit: () => { quitting = true; app.quit(); },
   memoryOf: (id) => memoryManager.usageMB.get(id) || 0,
@@ -3129,7 +3130,8 @@ app.whenReady().then(async () => {
     title: 'WAswitch', backgroundColor: RADIX.hex('slate', 3),
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     // Mac 不进全屏：绿色按钮只做放大/还原，双击标题栏缩放也保留
-    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false } : {}),
+    // acceptFirstMouse：软件不在前台时点页面，这一下也算数（不然第一下只用来激活窗口）
+    ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false, acceptFirstMouse: true } : {}),
   });
   notifier.init();
   // 窗口隐藏到托盘时，当前账号也算后台

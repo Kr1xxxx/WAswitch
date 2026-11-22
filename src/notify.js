@@ -165,11 +165,37 @@ class Notifier {
   showWindow() {
     const win = this.hooks.getWindow();
     if (!win) return;
+    const mac = process.platform === 'darwin';
+    // Mac：从弹窗（不抢焦点的小窗口）点“打开”时，软件本身不在前台，要先把软件叫到前台
+    if (mac) app.focus({ steal: true });
     if (win.isMinimized()) win.restore();
     win.show();
-    // Mac：从弹窗（不抢焦点的小窗口）点“打开”时，软件本身不在前台，要先把软件叫到前台
-    if (process.platform === 'darwin') app.focus({ steal: true });
     win.focus();
+    if (mac) this.refocusWhenActive(win);
+  }
+
+  // Mac 上软件到前台是异步的：上面那次 win.focus() 常在软件真正到前台之前，不算数，窗口没成为当前窗口，
+  // 用户在页面上的前几下点击只是在激活窗口（shen 2026-11-22）。等软件到前台（did-become-active）再给一次焦点，
+  // 300 ms 后窗口还没拿到焦点再给一次；顺便把键盘焦点交回当前账号页面。每次都往日志写一行，没成功时能查
+  refocusWhenActive(win) {
+    if (this.refocusing) this.refocusing();
+    const t0 = Date.now();
+    const again = (why) => {
+      if (win.isDestroyed() || !win.isVisible()) return;
+      if (!win.isFocused()) win.focus();
+      if (this.hooks.focusActive) this.hooks.focusActive();
+      console.log(`显示窗口 ${why} ${Date.now() - t0}ms 软件在前台=${app.isActive()} 窗口有焦点=${win.isFocused()}`);
+    };
+    const onActive = () => again('软件到前台');
+    const retry = setTimeout(() => { if (!win.isDestroyed() && !win.isFocused()) again('重试'); }, 300);
+    const stop = setTimeout(() => { console.log(`显示窗口 1500ms 软件在前台=${app.isActive()} 窗口有焦点=${win.isDestroyed() ? '-' : win.isFocused()}`); done(); }, 1500);
+    const done = () => {
+      clearTimeout(retry); clearTimeout(stop);
+      app.removeListener('did-become-active', onActive);
+      if (this.refocusing === done) this.refocusing = null;
+    };
+    app.on('did-become-active', onActive);
+    this.refocusing = done;
   }
 
   // 这个号开始重连（切网络、页面重新加载 / 重试、轻量号断开重连）：记下现在的未读对话数，
