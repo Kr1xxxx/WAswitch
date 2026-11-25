@@ -3,11 +3,12 @@ name: font-probe
 on:
   push:
     branches: [claude/project-thread-ex4h1e]
-    paths: ['scripts/font-probe/**', '.github/workflows/font-probe.yml']
+    paths: ['scripts/font-probe/**', '.github/workflows/font-probe.yml', 'src/ui-fonts.js', 'remote/**']
 permissions:
   contents: read
 jobs:
   probe:
+    if: false
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -35,3 +36,15 @@ jobs:
         run: python scripts/font-probe/names.py "$env:RUNNER_TEMP\names.json" oppo "$env:RUNNER_TEMP\fonts\oppo.ttf" noto "$env:RUNNER_TEMP\fonts\noto.ttf"
       - name: 试验
         run: node scripts/font-probe/run.mjs "$env:RUNNER_TEMP\fonts\oppo.ttf" "$env:RUNNER_TEMP\fonts\noto.ttf"
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 真注册表跑安装代码
+        run: npx electron scripts/font-probe/e2e.js

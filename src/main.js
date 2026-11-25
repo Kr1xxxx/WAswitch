@@ -70,6 +70,7 @@ const DEFAULT_ZOOM = 0.9;
 // ---------- 账号数据放哪（Windows：D 盘能用就放 D:\WAswitch\data，见 datadir.js）----------
 // 要在单实例锁（按 userData 路径算）和 app ready 之前定下来
 const datadir = require('./datadir');
+const { UiFonts, electronFetcher } = require('./ui-fonts');
 const dataStart = datadir.apply(app);
 
 // ---------- 只允许运行一个 WAswitch ----------
@@ -610,6 +611,7 @@ const isLite = (acc) => acc && acc.mode === 'lite';
 
 // 团队模式（在 app ready 之后创建）。被后台收回、电脑被停用、或后台不允许的私人号都“停着”：不运行、不显示，数据保留
 let team = null;
+let uiFonts = null; // Windows：团队登录后自动装界面字体（src/ui-fonts.js）
 const isParked = (acc) => !!(team && acc && team.isParked(acc));
 // 后台要求必须登录、而这台电脑没登录（或被停用、7 天连不上）：所有号停着，只显示登录页。自动更新不看这个
 const loginLocked = () => !!(team && team.locked());
@@ -1535,6 +1537,7 @@ function pushState() {
       electron: process.versions.electron,
       chrome: process.versions.chrome,
       dataDir: app.getPath('userData'),
+      uiFonts: uiFonts ? uiFonts.installed() : [],
     },
   });
 }
@@ -3290,6 +3293,19 @@ app.whenReady().then(async () => {
   try { await mcpModule.init(); } catch (e) { console.warn(`MCP 没能启动：${e.message}`); }
   setupUpdater();
   team.start();
+  // 字体清单的地址只有从源码运行时能换（自检用本机假服务器）
+  const fontsTest = !app.isPackaged && process.env.WASWITCH_TEST_UI_FONTS_MANIFEST;
+  uiFonts = new UiFonts({
+    userData: app.getPath('userData'),
+    enrolled: () => !!(team && team.enrolled()),
+    idleSeconds: () => powerMonitor.getSystemIdleTime(),
+    fetch: electronFetcher(session.fromPartition('waswitch-fonts', { cache: false })),
+    manifestUrl: fontsTest || undefined,
+    loopback: !!fontsTest,
+    onChange: pushState,
+    log: (msg) => console.log(msg),
+  });
+  uiFonts.start();
   notifier.refresh();
 });
 

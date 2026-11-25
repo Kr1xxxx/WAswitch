@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "fonts": [
+    {
+      "id": "oppo-sans-4",
+      "name": "OPPO Sans 4.0",
+      "url": "https://openfs.oppomobile.com/open/oop/202412/05/0f155015fff7700fbbcef7fa2aad78dc.zip",
+      "zipEntry": "OPPO_Sans_4.0/OPPO Sans 4.0.ttf",
+      "size": 22775460,
+      "sha256": "4f58dbaeaea78ebe9dafaadd2bec60f50983ef15de31605beff55aac94420dd2",
+      "file": "OPPOSans4.0",
+      "reg": "OPPO Sans 4.0 (TrueType)"
+    },
+    {
+      "id": "noto-serif-sc",
+      "name": "Noto Serif SC",
+      "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf",
+      "size": 25125512,
+      "sha256": "050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9",
+      "file": "NotoSerifSC",
+      "reg": "Noto Serif SC (TrueType)",
+      "extras": [
+        {
+          "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifsc/OFL.txt",
+          "sha256": "5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6",
+          "file": "NotoSerifSC-OFL.txt"
+        }
+      ]
+    }
+  ]
+}
