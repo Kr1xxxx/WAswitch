@@ -63,7 +63,10 @@
 - Windows 安装包测试：安装、更新后约 1 秒内系统会锁 WAswitch.exe 0.3–0.5 秒，卸载器只删一次就跳过了，看起来像卡住 240 秒。卸载前等 exe 能删；判断卸完看注册表键不看文件，注册表键最后才清，要等它。
 - windows-latest 能收真实鼠标：PowerShell 调 user32 的 mouse_event。Electron 的转发钩子不认 SetCursorPos，用 mouse_event(0x8001, 绝对坐标) 移动（代码已删，要用时看 #324 的提交记录）。
 
-- 按当前用户装字体（`%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU 的 Fonts）后，Chrome、Edge、Electron 不用重启，约 1 秒后新开的标签页、窗口就认得 local()；装之前已打开的页面刷新也认不到，要关掉重开；广播 WM_FONTCHANGE 没用。可变字体的 local() 只认命名实例的全名（`OPPO Sans 4.0 Regular`，不认 `OPPO Sans 4.0` 和 PostScript 名），粗细跟 @font-face 的 font-weight 范围走（试验脚本在 #394 的「临时」提交里）。
+- 团队网页用 Windows 上按当前用户装的字体（`%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU 的 Fonts，不要管理员）：2026-11-25 在 windows-latest 上用 Chrome 157、Edge 157、Electron 44 试过，三个结果一样（试验脚本在 #394 的「临时」提交里；软件自己装字体的功能后来撤了，字体包由团队网页那边单独出）。
+  - local() 名字：OPPO Sans 4.0 用 `local("OPPO Sans 4.0 Regular")`（Light、Medium、SemiBold、Bold 也行），`"OPPO Sans 4.0"` 和 PostScript 名 `OPPOSans40` 认不到；Noto Serif SC 用 `local("Noto Serif SC")`（`"Noto Serif SC Bold"`、`"NotoSerifSC-Bold"` 也行），`"Noto Serif SC Regular"`、`"NotoSerifSC-Regular"` 认不到。
+  - 字重：local() 拿到的是整个可变字体，粗细跟 @font-face 的 font-weight 走。写范围（OPPO `100 700`，Noto `200 900`）才有 400 和 700；写 400 或不写就没有粗体。
+  - 装好前已经开着的页面（刷新也一样）认不到，要关掉标签页或浏览器重开；装好约 1 秒后新开的标签页就认得，不用重启浏览器。广播 WM_FONTCHANGE 没用。不写 @font-face、直接写 `font-family: "OPPO Sans 4.0"` 要重启浏览器才生效。
 
 **合并前**
 

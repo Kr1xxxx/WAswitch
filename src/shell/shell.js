@@ -2207,7 +2207,6 @@ function settingsPage() {
       h('div', { class: 'kv' },
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
-        ...(a.uiFonts && a.uiFonts.length ? [h('span', null, '已安装界面字体'), h('span', null, a.uiFonts.join('、'))] : []),
         ...(s.team && s.team.login === 'none' ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => window.wa.showLogin() }, '登录…'))] : [])),
       updateBox(s.update),
       h('div', { class: 'btns' },
