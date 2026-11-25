@@ -79,6 +79,8 @@ jobs:
         run: xvfb-run -a npx electron --no-sandbox scripts/check-topbar-fit.js
       - name: 没有顶栏的页面（待回复、翻译页、总览）顶上能拖动窗口，按钮照常点
         run: xvfb-run -a -s "-screen 0 1920x1200x24" npx electron --no-sandbox scripts/check-drag-top.js
+      - name: Windows 界面字体（登录后空闲时装、校验 sha256、哈希变了换新的；关于页一行）
+        run: xvfb-run -a npx electron --no-sandbox scripts/check-ui-fonts.js 2>&1 | tee /tmp/ui-fonts.log && grep -q "check-ui-fonts: ok" /tmp/ui-fonts.log
       # 任何一步失败都会走到这里；只有像素比对不一样时 visual-diff/ 里才有图（实际、基准、红点差异）
       - name: 上传组件截图差异图
         if: failure()

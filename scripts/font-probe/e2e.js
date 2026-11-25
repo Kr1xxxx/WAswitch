@@ -21,8 +21,13 @@ app.whenReady().then(async () => {
   now += 25 * 3600 * 1000;
   t = Date.now();
   out('second: ' + JSON.stringify(await mk().tick()) + ` ${(Date.now() - t) / 1000}s`);
-  const w = new BrowserWindow({ show: true });
-  await w.loadURL('data:text/html,<body></body>');
-  out('local(): ' + await w.webContents.executeJavaScript(`Promise.all(['OPPO Sans 4.0 Regular','Noto Serif SC Bold'].map(n => new FontFace('x'+n.length, 'local("'+n+'")', {weight:'100 900'}).load().then(()=>n+' ok', e=>n+' '+e.name))).then(a=>a.join(', '))`));
+  const probe = async (label) => {
+    const w = new BrowserWindow({ show: true });
+    await w.loadURL('data:text/html,<body></body>');
+    out(label + ' local(): ' + await w.webContents.executeJavaScript(`Promise.all(['OPPO Sans 4.0 Regular','Noto Serif SC Bold'].map(n => new FontFace('x'+n.length, 'local("'+n+'")', {weight:'100 900'}).load().then(()=>n+' ok', e=>n+' '+e.name))).then(a=>a.join(', '))`));
+    w.destroy();
+  };
+  const t0 = Date.now();
+  for (const ms of [0, 1000, 3000, 6000, 12000, 25000]) { await new Promise((r) => setTimeout(r, Math.max(0, t0 + ms - Date.now()))); await probe(`+${ms}ms`); }
   app.exit(0);
 }).catch((e) => { out('E2E FAIL ' + (e && e.stack || e)); app.exit(1); });
