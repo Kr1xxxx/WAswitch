@@ -415,6 +415,49 @@ function make(readChats, { win = null, laterMs } = {}) {
   check(q.items[0].leftMs === 4000, '时长变了：按新时长从头算');
   check(q.remove(q.items[0].uid) && q.size === 0, '点了打开/稍后/关闭：收走这一张');
 
+  // ---------- Mac：点通知打开窗口，软件到前台以后再给一次焦点 ----------
+  {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const listeners = new Map();
+    const order = [];
+    let active = false;
+    Object.assign(fakeElectron.app, {
+      focus: () => order.push('app.focus'),
+      isActive: () => active,
+      on: (ev, fn) => listeners.set(ev, fn),
+      removeListener: (ev, fn) => { if (listeners.get(ev) === fn) listeners.delete(ev); },
+    });
+    let keyWin = false;
+    let focusCalls = 0;
+    const w = { isMinimized: () => false, restore() {}, show: () => order.push('show'), isDestroyed: () => false, isVisible: () => true,
+      isFocused: () => keyWin, focus() { focusCalls += 1; order.push('focus'); if (active) keyWin = true; } };
+    let pageFocus = 0;
+    const nm = new Notifier({ getAccounts: () => [], getWindow: () => w, activate() {}, quit() {}, popup: fakePopup(), focusActive: () => { pageFocus += 1; } });
+    const log = console.log; const lines = []; console.log = (x) => { lines.push(String(x)); log(x); };
+    nm.showWindow();
+    check(order.join(',') === 'app.focus,show,focus', `先把软件叫到前台，再显示、给焦点（${order.join(',')}）`);
+    check(!keyWin && listeners.has('did-become-active'), '软件还没到前台：这次焦点不算数，等软件到前台');
+    active = true;
+    listeners.get('did-become-active')();
+    check(keyWin && focusCalls === 2 && pageFocus === 1, '软件到前台后：窗口再要一次焦点，键盘焦点交回页面');
+    await tick(350);
+    check(focusCalls === 2, '300 ms 时窗口已经有焦点：不再重试');
+    await tick(1300);
+    check(!listeners.has('did-become-active'), '1.5 秒后不再等软件到前台（以后点 Dock 不会被这里抢焦点）');
+    // 软件一直没报到前台：300 ms 时重试一次
+    active = false; keyWin = false; focusCalls = 0; pageFocus = 0;
+    nm.showWindow();
+    nm.showWindow();
+    active = true;
+    await tick(350);
+    check(keyWin && pageFocus === 1, `没等到“到前台”：300 ms 时重试一次，连点两下也只重试一次（页面焦点 ${pageFocus} 次）`);
+    check(lines.some((x) => x.includes('窗口有焦点=true')), '日志里记下了焦点情况');
+    console.log = log;
+    await tick(1300);
+    Object.defineProperty(process, 'platform', realPlatform);
+  }
+
   console.log(failures ? `\n有 ${failures} 项失败` : '\n全部通过');
   process.exit(failures ? 1 : 0);
 })();
