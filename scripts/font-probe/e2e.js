@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { UiFonts, electronFetcher } = require('../../src/ui-fonts');
-const out = (m) => fs.writeSync(1, m + '\n');
+const LOG = path.join(process.env.RUNNER_TEMP || '.', 'e2e.log');
+const out = (m) => fs.appendFileSync(LOG, m + '\n');
 app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
   let now = Date.now();

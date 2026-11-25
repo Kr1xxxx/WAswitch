@@ -47,4 +47,4 @@ jobs:
           cache: npm
       - run: npm ci
       - name: 真注册表跑安装代码
-        run: npx electron scripts/font-probe/e2e.js
+        run: npx electron scripts/font-probe/e2e.js; Get-Content "$env:RUNNER_TEMP\e2e.log"
