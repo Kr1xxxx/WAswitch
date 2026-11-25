@@ -34,4 +34,4 @@ jobs:
       - name: 字体名字
         run: python scripts/font-probe/names.py "$env:RUNNER_TEMP\names.json" oppo "$env:RUNNER_TEMP\fonts\oppo.ttf" noto "$env:RUNNER_TEMP\fonts\noto.ttf"
       - name: 试验
-        run: node scripts/font-probe/run.mjs "$env:RUNNER_TEMP\names.json" "$env:RUNNER_TEMP\fonts\oppo.ttf" "$env:RUNNER_TEMP\fonts\noto.ttf"
+        run: node scripts/font-probe/run.mjs "$env:RUNNER_TEMP\fonts\oppo.ttf" "$env:RUNNER_TEMP\fonts\noto.ttf"

@@ -14,9 +14,9 @@
   let i = 0;
   for (const f of spec.faces) {
     const fam = `p${i++}_${Math.random().toString(36).slice(2, 8)}`;
-    const r = { font: f.font, src: f.src };
+    const r = { font: f.font, src: f.src, desc: f.weight || 'none' };
     try {
-      const ff = new FontFace(fam, f.src, { weight: '100 900' });
+      const ff = new FontFace(fam, f.src, f.weight ? { weight: f.weight } : {});
       await ff.load();
       document.fonts.add(ff);
       r.load = 'ok';

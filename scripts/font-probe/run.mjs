@@ -1,106 +1,84 @@
-// 试验：按当前用户装字体前后，Electron / Chrome / Edge 里 local() 认不认、字重变不变、要不要重启
-// node run.mjs <names.json> <oppo.ttf> <noto.ttf>
+// 试验第二轮：装字体前已开着的页面（同一个 http 源）装完后：原页面、刷新、同源新标签、别的源新标签；
+// 以及 @font-face 的 font-weight 描述符怎么写，local() 才拿得到 400 和 700
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
 const electronPath = require('electron');
-const results = {};
-const [namesFile, oppoFile, notoFile] = process.argv.slice(2);
-const names = JSON.parse(fs.readFileSync(namesFile, 'utf8'));
+const [oppoFile, notoFile] = process.argv.slice(2);
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const probeSrc = fs.readFileSync(path.join(here, 'probe.js'), 'utf8');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const T0 = Date.now();
 const log = (...a) => console.log(`+${((Date.now() - T0) / 1000).toFixed(1)}s`, ...a);
-setTimeout(() => { log('WATCHDOG: 7 分钟没跑完，退出'); console.log(JSON.stringify(results)); process.exit(1); }, 7 * 60 * 1000).unref();
+setTimeout(() => { log('WATCHDOG'); process.exit(1); }, 7 * 60 * 1000).unref();
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout ' + what)), ms))]);
 
-function cands(key, extra) {
-  const d = names[key]; const set = new Set(extra);
-  for (const k of ['family', 'full', 'ps', 'typo']) if (d[k]) set.add(d[k]);
-  const fam = d.typo || d.family;
-  for (const i of d.instances) { if (i.sub) set.add(`${fam} ${i.sub}`); if (i.ps) set.add(i.ps); }
-  return [...set];
-}
-const oppoNames = cands('oppo', ['OPPO Sans 4.0', 'OPPOSans4.0', 'OPPO Sans 4.0 Regular', 'OPPO Sans 4.0 Bold']);
-const notoNames = cands('noto', ['Noto Serif SC Bold', 'NotoSerifSC-Bold', 'Noto Serif SC', 'Noto Serif SC Regular', 'NotoSerifSC-Regular']);
-const spec = {
-  text: 'Hamburgefonstiv WAswitch 0123456789 你好世界中文字重',
-  faces: [...oppoNames.map((n) => ({ font: 'oppo', src: `local("${n}")` })), ...notoNames.map((n) => ({ font: 'noto', src: `local("${n}")` }))],
-  families: [...new Set([names.oppo.family, names.oppo.typo, names.noto.family, names.noto.typo, 'OPPO Sans 4.0', 'Noto Serif SC'].filter(Boolean))],
-};
+const faces = [];
+for (const n of ['OPPO Sans 4.0 Regular', 'OPPO Sans 4.0 Bold', 'OPPO Sans 4.0', 'OPPOSans40']) for (const w of ['100 700', '400', '700', '']) faces.push({ font: 'oppo', src: `local("${n}")`, weight: w });
+for (const n of ['Noto Serif SC', 'Noto Serif SC Regular', 'Noto Serif SC Bold', 'NotoSerifSC-Regular', 'NotoSerifSC-Bold']) for (const w of ['200 900', '400', '700', '']) faces.push({ font: 'noto', src: `local("${n}")`, weight: w });
+// 网页实际会写的：两个 face 分别对应 400 和 700
+const spec = { text: 'Hamburgefonstiv WAswitch 0123456789 你好世界中文字重', faces, families: ['OPPO Sans 4.0', 'Noto Serif SC'] };
+const quick = { ...spec, faces: [{ font: 'oppo', src: 'local("OPPO Sans 4.0 Regular")', weight: '100 700' }, { font: 'noto', src: 'local("Noto Serif SC")', weight: '200 900' }] };
 
-// ---- Electron 一直开着
+const page = '<!doctype html><meta charset=utf-8><body></body>';
+const mk = () => new Promise((r) => { const s = http.createServer((q, res) => { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(page); }).listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${s.address().port}/`)); });
+const originA = await mk();
+const originB = (await mk()).replace('127.0.0.1', 'localhost');
+
+function short(x) {
+  if (typeof x === 'string') return 'ERROR ' + x;
+  const ok = x.faces.filter((f) => f.load === 'ok');
+  const fam = x.families.map((f) => `${f.fam}:${f.w400 === x.base.w400 ? 'fallback' : 'found'}`).join(',');
+  return `${ok.length}/${x.faces.length} local ok; ${fam}`;
+}
+function full(x) {
+  for (const f of x.faces) console.log(`    ${f.src} desc=${f.desc}: ${f.load}${f.load === 'ok' ? ` 400=${f.w400} 700=${f.w700}${f.w400 !== f.w700 ? ' DIFF' : ' SAME'}` : ''}`);
+  for (const f of x.families) console.log(`    family ${f.fam}: 400=${f.w400} 700=${f.w700} (fallback ${x.base.w400})`);
+}
+
+// Electron：一直开着，按命令在原窗口、刷新后、新窗口里量
 const edir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-'));
-let eN = 0;
-function startElectron(tag) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `fp-${tag}-`));
-  const p = spawn(electronPath, [path.join(here, 'electron-main.js'), dir], { stdio: 'inherit' });
-  return { dir, p, n: 0 };
-}
+fs.writeFileSync(path.join(edir, 'url'), originA);
+const ep = spawn(electronPath, [path.join(here, 'electron-main2.js'), edir], { stdio: 'inherit' });
+let en = 0;
 async function waitFile(f, ms = 60000) { const t = Date.now(); while (!fs.existsSync(f)) { if (Date.now() - t > ms) throw new Error('timeout ' + f); await sleep(200); } await sleep(100); return fs.readFileSync(f, 'utf8'); }
-async function eCheck(e) { const n = e.n++; fs.writeFileSync(path.join(e.dir, `cmd-${n}.json`), JSON.stringify(spec)); return JSON.parse(await waitFile(path.join(e.dir, `res-${n}.json`))); }
-async function eQuit(e) { fs.writeFileSync(path.join(e.dir, `cmd-${e.n}.json`), JSON.stringify({ quit: true })); await sleep(1000); try { e.p.kill(); } catch {} }
+async function eCmd(mode, sp) { const n = en++; fs.writeFileSync(path.join(edir, `cmd-${n}.json`), JSON.stringify({ mode, spec: sp })); return JSON.parse(await waitFile(path.join(edir, `res-${n}.json`))); }
+await waitFile(path.join(edir, 'ready'));
 
-async function bOpen(channel) { const b = await chromium.launch({ channel, headless: false }); const page = await b.newPage(); await page.goto('data:text/html,<!doctype html><meta charset=utf-8><body></body>'); return { b, page, ver: b.version() }; }
-async function bCheck(o) {
-  const same = await o.page.evaluate(`(${probeSrc})(${JSON.stringify(spec)})`);
-  const p2 = await o.b.newPage(); await p2.goto('data:text/html,<!doctype html><meta charset=utf-8><body></body>');
-  const fresh = await p2.evaluate(`(${probeSrc})(${JSON.stringify(spec)})`); await p2.close();
-  return { samePage: same, newWindow: fresh };
-}
+const C = await chromium.launch({ channel: 'chrome', headless: false });
+const cp = await C.newPage(); await cp.goto(originA);
+const ev = (p, sp) => p.evaluate(`(${probeSrc})(${JSON.stringify(sp)})`);
+log('before: chrome', short(await ev(cp, quick)), '| electron', short(await eCmd('same', quick)));
 
-function install() {
-  const dir = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'Fonts');
-  fs.mkdirSync(dir, { recursive: true });
-  const key = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts';
-  for (const [src, base, reg] of [[oppoFile, 'OPPOSans4.0-4f58dbae.ttf', 'OPPO Sans 4.0 (TrueType)'], [notoFile, 'NotoSerifSC-050080d9.ttf', 'Noto Serif SC (TrueType)']]) {
-    const dst = path.join(dir, base);
-    fs.copyFileSync(src, dst);
-    execFileSync('reg', ['add', key, '/v', reg, '/t', 'REG_SZ', '/d', dst, '/f'], { stdio: 'inherit' });
-  }
+const dir = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'Fonts');
+fs.mkdirSync(dir, { recursive: true });
+const key = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts';
+for (const [src, base, reg] of [[oppoFile, 'OPPOSans4.0-4f58dbaeaea7.ttf', 'OPPO Sans 4.0 (TrueType)'], [notoFile, 'NotoSerifSC-050080d9255a.ttf', 'Noto Serif SC (TrueType)']]) {
+  fs.copyFileSync(src, path.join(dir, base));
+  execFileSync('reg', ['add', key, '/v', reg, '/t', 'REG_SZ', '/d', path.join(dir, base), '/f']);
 }
-function broadcast() {
-  const ps = `Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern System.IntPtr SendMessageTimeout(System.IntPtr h, uint m, System.UIntPtr w, System.IntPtr l, uint f, uint t, out System.UIntPtr r);'; $r=[System.UIntPtr]::Zero; [W.U]::SendMessageTimeout([System.IntPtr]0xffff, 0x001D, [System.UIntPtr]::Zero, [System.IntPtr]::Zero, 2, 2000, [ref]$r) | Out-Null; 'WM_FONTCHANGE sent'`;
-  execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit' });
-}
-
-function summarize(phase, who, r) {
-  results[`${phase}/${who}`] = r;
-  for (const kind of ['samePage', 'newWindow']) {
-    const x = r[kind]; if (typeof x === 'string') { console.log(`[${phase}] ${who} ${kind}: ERROR ${x}`); continue; }
-    const ok = x.faces.filter((f) => f.load === 'ok').map((f) => `${f.src}${f.w400 !== f.w700 ? ' [400≠700]' : ' [400=700]'} ${f.w400}/${f.w700}`);
-    const fam = x.families.map((f) => `${f.fam}:${f.w400 === x.base.w400 ? 'fallback' : 'found'}${f.w400 !== f.w700 ? '[400≠700]' : '[400=700]'} ${f.w400}/${f.w700}`);
-    console.log(`[${phase}] ${who} ${kind}: local ok = ${ok.length ? '\n    ' + ok.join('\n    ') : '(none)'}\n  family: ${fam.join(' | ')}  base ${x.base.w400}/${x.base.w700}`);
-  }
-}
-
-log('start electron', electronPath);
-const E1 = startElectron('e1');
-console.log('electron chrome', await waitFile(path.join(E1.dir, 'ready')));
-log('start chrome');
-const C1 = await withTimeout(bOpen('chrome'), 90000, 'chrome'); console.log('chrome', C1.ver);
-log('start edge');
-const M1 = await withTimeout(bOpen('msedge'), 90000, 'edge'); console.log('edge', M1.ver);
-const all = async (phase, list) => { for (const [who, fn] of list) { log('check', phase, who); try { summarize(phase, who, await withTimeout(fn(), 90000, phase + who)); } catch (e) { log('FAIL', phase, who, String(e)); } } };
-await all('1-before', [['electron', () => eCheck(E1)], ['chrome', () => bCheck(C1)], ['edge', () => bCheck(M1)]]);
-install();
+log('installed');
 await sleep(3000);
-await all('2-after-install', [['electron', () => eCheck(E1)], ['chrome', () => bCheck(C1)], ['edge', () => bCheck(M1)]]);
-await sleep(30000);
-await all('3-after-30s', [['electron', () => eCheck(E1)], ['chrome', () => bCheck(C1)], ['edge', () => bCheck(M1)]]);
-broadcast();
-await sleep(3000);
-await all('4-after-WM_FONTCHANGE', [['electron', () => eCheck(E1)], ['chrome', () => bCheck(C1)], ['edge', () => bCheck(M1)]]);
-await eQuit(E1); await C1.b.close(); await M1.b.close();
-const E2 = startElectron('e2'); await waitFile(path.join(E2.dir, 'ready'));
-const C2 = await bOpen('chrome'); const M2 = await bOpen('msedge');
-await all('5-restarted', [['electron', () => eCheck(E2)], ['chrome', () => bCheck(C2)], ['edge', () => bCheck(M2)]]);
-await eQuit(E2); await C2.b.close(); await M2.b.close();
-fs.writeFileSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'font-probe.json'), JSON.stringify(results, null, 1));
-console.log('DONE');
+log('chrome same page', short(await ev(cp, quick)));
+await cp.reload(); log('chrome same page after reload', short(await ev(cp, quick)));
+const cp2 = await C.newPage(); await cp2.goto(originA); log('chrome new tab same origin', short(await ev(cp2, quick)));
+const cp3 = await C.newPage(); await cp3.goto(originB); log('chrome new tab other origin', short(await ev(cp3, quick)));
+await cp3.reload(); log('chrome other origin reload', short(await ev(cp3, quick)));
+await cp.goto(originB); log('chrome old tab navigate to other origin', short(await ev(cp, quick)));
+await cp2.close(); await cp3.close();
+const cp4 = await C.newPage(); await cp4.goto(originA); log('chrome new tab same origin after closing others', short(await ev(cp4, quick)));
+log('electron same', short(await eCmd('same', quick)));
+log('electron reload', short(await eCmd('reload', quick)));
+log('electron new window', short(await eCmd('new', quick)));
+// 描述符细节，在认得字体的新标签里量
+const cp5 = await C.newPage(); await cp5.goto(originB);
+log('descriptor details (chrome, fresh tab):'); full(await ev(cp5, spec));
+fs.writeFileSync(path.join(edir, `cmd-${en}.json`), JSON.stringify({ mode: 'quit' }));
+await C.close();
+log('DONE');
 process.exit(0);
