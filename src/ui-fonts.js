@@ -6,7 +6,7 @@
 // - 装到 %LOCALAPPDATA%\Microsoft\Windows\Fonts（文件名带哈希，旧字体被占用时不冲突），
 //   再写 HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts。不需要管理员权限。
 // - 已装且哈希一致就跳过；清单里哈希变了就装新的，旧文件删得掉就删，被占用就下次再删。
-// - 装完不用重启浏览器：新开的标签页就认得（Windows 上试过 Chrome、Edge、Electron）；装之前已经打开的页面要关掉重开。
+// - 装完不用重启浏览器：约 1 秒后新开的标签页就认得（Windows 上试过 Chrome、Edge、Electron）；装之前已经打开的页面刷新也不行，要关掉重开。
 // - Mac 不装：Safari 不认用户自己装的字体，Mac 正文本来就是系统自带的苹方。
 // - 卸载 WAswitch 时字体留着。
 // - 网络：专用的内存会话，跟电脑的系统代理（GitHub 直连常连不上），不用任何账号的代理，不带任何 cookie。

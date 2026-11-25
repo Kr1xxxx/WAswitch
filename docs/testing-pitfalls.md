@@ -63,7 +63,7 @@
 - Windows 安装包测试：安装、更新后约 1 秒内系统会锁 WAswitch.exe 0.3–0.5 秒，卸载器只删一次就跳过了，看起来像卡住 240 秒。卸载前等 exe 能删；判断卸完看注册表键不看文件，注册表键最后才清，要等它。
 - windows-latest 能收真实鼠标：PowerShell 调 user32 的 mouse_event。Electron 的转发钩子不认 SetCursorPos，用 mouse_event(0x8001, 绝对坐标) 移动（代码已删，要用时看 #324 的提交记录）。
 
-- 按当前用户装字体（`%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU 的 Fonts）后，Chrome、Edge、Electron 不用重启，新开的标签页、窗口就认得 local()；装之前已打开的页面刷新也认不到，要关掉重开；广播 WM_FONTCHANGE 没用。可变字体的 local() 只认命名实例的全名（`OPPO Sans 4.0 Regular`，不认 `OPPO Sans 4.0` 和 PostScript 名），粗细跟 @font-face 的 font-weight 范围走（试验见 #PR 的 font-probe 提交）。
+- 按当前用户装字体（`%LOCALAPPDATA%\Microsoft\Windows\Fonts` + HKCU 的 Fonts）后，Chrome、Edge、Electron 不用重启，约 1 秒后新开的标签页、窗口就认得 local()；装之前已打开的页面刷新也认不到，要关掉重开；广播 WM_FONTCHANGE 没用。可变字体的 local() 只认命名实例的全名（`OPPO Sans 4.0 Regular`，不认 `OPPO Sans 4.0` 和 PostScript 名），粗细跟 @font-face 的 font-weight 范围走（试验见 #PR 的 font-probe 提交）。
 
 **合并前**
 
