@@ -8,11 +8,16 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
 const electronPath = require('electron');
+const results = {};
 const [namesFile, oppoFile, notoFile] = process.argv.slice(2);
 const names = JSON.parse(fs.readFileSync(namesFile, 'utf8'));
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const probeSrc = fs.readFileSync(path.join(here, 'probe.js'), 'utf8');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const T0 = Date.now();
+const log = (...a) => console.log(`+${((Date.now() - T0) / 1000).toFixed(1)}s`, ...a);
+setTimeout(() => { log('WATCHDOG: 7 分钟没跑完，退出'); console.log(JSON.stringify(results)); process.exit(1); }, 7 * 60 * 1000).unref();
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout ' + what)), ms))]);
 
 function cands(key, extra) {
   const d = names[key]; const set = new Set(extra);
@@ -64,7 +69,6 @@ function broadcast() {
   execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit' });
 }
 
-const results = {};
 function summarize(phase, who, r) {
   results[`${phase}/${who}`] = r;
   for (const kind of ['samePage', 'newWindow']) {
@@ -75,11 +79,14 @@ function summarize(phase, who, r) {
   }
 }
 
+log('start electron', electronPath);
 const E1 = startElectron('e1');
 console.log('electron chrome', await waitFile(path.join(E1.dir, 'ready')));
-const C1 = await bOpen('chrome'); console.log('chrome', C1.ver);
-const M1 = await bOpen('msedge'); console.log('edge', M1.ver);
-const all = async (phase, list) => { for (const [who, fn] of list) summarize(phase, who, await fn()); };
+log('start chrome');
+const C1 = await withTimeout(bOpen('chrome'), 90000, 'chrome'); console.log('chrome', C1.ver);
+log('start edge');
+const M1 = await withTimeout(bOpen('msedge'), 90000, 'edge'); console.log('edge', M1.ver);
+const all = async (phase, list) => { for (const [who, fn] of list) { log('check', phase, who); try { summarize(phase, who, await withTimeout(fn(), 90000, phase + who)); } catch (e) { log('FAIL', phase, who, String(e)); } } };
 await all('1-before', [['electron', () => eCheck(E1)], ['chrome', () => bCheck(C1)], ['edge', () => bCheck(M1)]]);
 install();
 await sleep(3000);
