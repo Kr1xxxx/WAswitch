@@ -1532,11 +1532,20 @@ function pushState() {
     canLoginItem,
     about: {
       version: app.getVersion(),
+      updated: builtDateTaipei(),
       electron: process.versions.electron,
       chrome: process.versions.chrome,
       dataDir: app.getPath('userData'),
     },
   });
+}
+
+// 这一版打包的日期（台北时间）。release.yml 打包前写 src/build-info.json；从源码运行、本地打包没有，关于页就不显示这一行。
+function builtDateTaipei() {
+  let t;
+  try { t = Date.parse(JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')).builtAt); } catch { return null; }
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + 8 * 3600e3).toISOString().slice(0, 10); // 台北 UTC+8，没有夏令时
 }
 
 function refresh() {

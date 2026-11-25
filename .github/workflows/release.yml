@@ -49,6 +49,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       os: ${{ steps.tag.outputs.os }}
+      built: ${{ steps.tag.outputs.built }}
     env:
       PUBLIC_REPO: Kr1xxxx/WAswitch
       SAME_REPO: ${{ github.repository == 'Kr1xxxx/WAswitch' }}
@@ -73,6 +74,8 @@ jobs:
             fi
           fi
           echo "tag=$v" >> "$GITHUB_OUTPUT"
+          # 打包时间只取一次，Mac 和 Windows 安装包里一样；关于页按台北时间显示成「最后更新」的日期
+          echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           case "$WINDOWS" in
             true) echo 'os=["windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT" ;;
             false) echo 'os=["macos-latest"]' >> "$GITHUB_OUTPUT" ;;
@@ -127,6 +130,13 @@ jobs:
       - name: 安装包带上 MCP 文件的校验值
         shell: bash
         run: cp dist-mcp/mcp-module.json src/mcp-module.json && cat src/mcp-module.json
+      - name: 安装包带上打包时间（关于页的「最后更新」）
+        shell: bash
+        env:
+          BUILT: ${{ needs.mcp-module.outputs.built }}
+        run: |
+          test -n "$BUILT"
+          printf '{"builtAt":"%s"}\n' "$BUILT" > src/build-info.json && cat src/build-info.json
       # 没有代码签名证书：不自动找签名证书，也不在打包时发布
       - run: npx electron-builder --publish never
         env:
