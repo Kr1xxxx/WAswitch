@@ -21,6 +21,8 @@ const copyText = require('./copy-text').makeCopyText(clipboard);
 const { addMenuTemplate } = require('./add-menu');
 const dnd = require('./dnd');
 const { dndMenuItem } = dnd;
+// 勿扰选时长只在 Mac 上有（shen 2026-11-26「仅限 MAC」）。开发版设 WASWITCH_TEST_MAC_DND=1 时在别的系统上也给，自检用
+const macDnd = process.platform === 'darwin' || (!app.isPackaged && process.env.WASWITCH_TEST_MAC_DND === '1');
 const { pageMenuTemplate } = require('./page-menu');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
@@ -675,7 +677,8 @@ const notifier = new Notifier({
   readChats: (acc) => readUnreadChats(acc),
   popup,
   openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
-  dndMenu: () => dndMenuItem({ settings, set: setDndFor }),
+  // 勿扰选时长只在 Mac 上有，Windows 托盘还是原来的勾选项
+  ...(macDnd ? { dndMenu: () => dndMenuItem({ settings, set: setDndFor }) } : { setDnd: (on) => setSetting('popupDnd', on === true) }),
   isActive: (id) => id === activeId && page === 'account',
   onNew: (e) => addNotifLog(e),
   // 弹过哪一条（只存指纹，不存消息内容）：软件重启后同一条不再弹
@@ -2697,7 +2700,7 @@ function applyLoginItem() {
   app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, args: ['--hidden'] });
 }
 
-// 勿扰选了时长（Mac 菜单栏图标、Dock 图标、侧栏右键账号，见 dnd.js）。hours 是 0 表示关掉
+// 勿扰选了时长（只在 Mac 上：菜单栏图标、Dock 图标、侧栏右键账号，见 dnd.js）。hours 是 0 表示关掉
 function setDndFor(hours) {
   if (!dnd.DND_HOURS.includes(hours) && hours !== 0) return;
   Object.assign(settings, dnd.dndPatch(hours));
@@ -3823,8 +3826,8 @@ onShell('context', (id, from) => {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
-    // 勿扰管所有号（和菜单栏图标、Dock 图标里的是同一个）
-    dndMenuItem({ settings, set: setDndFor }),
+    // 勿扰管所有号（和菜单栏图标、Dock 图标里的是同一个），只在 Mac 上有
+    ...(macDnd ? [dndMenuItem({ settings, set: setDndFor })] : []),
     {
       label: isLite(acc) ? '拼写检查（轻量模式不支持）'
         : process.platform === 'darwin' ? '拼写检查（英文）'

@@ -466,7 +466,9 @@ class Notifier {
       { type: 'separator' },
       ...items,
       { type: 'separator' },
-      ...(this.hooks.dndMenu ? [this.hooks.dndMenu()] : []),
+      // Mac：勿扰选时长（dnd.js）；Windows：和以前一样一个勾选项
+      ...(this.hooks.dndMenu ? [this.hooks.dndMenu()]
+        : this.hooks.setDnd ? [{ label: '勿扰（新消息不弹窗）', type: 'checkbox', checked: this.dnd, click: () => this.hooks.setDnd(!this.dnd) }] : []),
       ...(this.hooks.settingsMenu ? [...this.hooks.settingsMenu(), { type: 'separator' }] : []),
       { label: '退出 WAswitch', click: () => this.hooks.quit() },
     ]));

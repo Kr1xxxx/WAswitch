@@ -3,7 +3,7 @@
 // 改标题 "(N) WhatsApp" 并用不挂在页面上的 new Audio 放提示音。主进程开 --inspect，每 20 毫秒看一遍所有页面
 // （网页号页面、WAswitch 的弹窗）是不是在出声且没静音，出声一次记一次。
 //   1. 窗口缩到托盘（没看着这个号）：只有 WAswitch 弹窗响，WhatsApp 页面静音
-//   1b. 托盘菜单里选「勿扰 › 1 小时」：什么都不响；「关闭勿扰」后照常
+//   1b. 托盘菜单（Mac）里选「勿扰 › 1 小时」：什么都不响；「关闭勿扰」后照常
 //   2. 窗口在前台开着这个号：WAswitch 不弹，只有 WhatsApp 自己响
 // 运行：xvfb-run -a node scripts/check-wa-sound-app.js
 const { spawn, execFileSync } = require('child_process');
@@ -92,7 +92,8 @@ const SAMPLER = `(() => {
   fs.writeFileSync(path.join(home, 'waswitch', 'settings.json'), JSON.stringify({ popupDnd: true, popupDndUntil: Date.now() - 60 * 1000 }));
   const port = await freePort();
   const inspect = await freePort();
-  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
+  // 勿扰选时长只在 Mac 上有：开发版用 WASWITCH_TEST_MAC_DND 在 Linux 上也给
+  const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, WASWITCH_TEST_MAC_DND: '1', ...teamOff(path.join(home, 'waswitch')) };
   for (const k of Object.keys(env)) if (/^(https?|all|no)_proxy$/i.test(k)) delete env[k];
   delete env.NODE_OPTIONS;
   const child = spawn(electron, ['--no-sandbox', `--inspect=${inspect}`, `--remote-debugging-port=${port}`, '--ignore-certificate-errors',

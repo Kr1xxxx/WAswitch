@@ -80,5 +80,15 @@ n.refresh();
 dndItem = lastTemplate.find((x) => x && Array.isArray(x.submenu) && /^勿扰/.test(x.label));
 check(/^勿扰到 明天 \d\d:\d\d$/.test(dndItem.label), `勿扰 24 小时：托盘菜单写到明天几点（${dndItem.label}）`);
 
+// ---------- Windows：托盘还是原来的勾选项（main.js 只在 Mac 上给 dndMenu） ----------
+let dndSet = null;
+const pop = { dnd: false };
+const nw = new Notifier({ getAccounts: () => [], getWindow: () => null, activate() {}, quit() {}, popup: pop, setDnd: (on) => { dndSet = on; } });
+nw.init();
+const box = lastTemplate.find((x) => x && x.type === 'checkbox' && /^勿扰/.test(x.label));
+check(!!box && box.label === '勿扰（新消息不弹窗）' && !lastTemplate.some((x) => x && Array.isArray(x.submenu) && /^勿扰/.test(x.label)), 'Windows：托盘里是原来的「勿扰（新消息不弹窗）」勾选项，没有时长');
+box.click();
+check(dndSet === true, 'Windows：点勾选项打开勿扰');
+
 console.log(failures ? `\n有 ${failures} 项失败` : '\n全部通过');
 process.exit(failures ? 1 : 0);
