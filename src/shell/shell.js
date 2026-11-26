@@ -2205,6 +2205,7 @@ function settingsPage() {
         h('img', { class: 'about-icon', src: '../../assets/icon.png', alt: '', width: '64', height: '64' }),
         h('div', { class: 'col', style: { gap: '2px' } }, h('h1', null, 'WAswitch'), h('span', { class: 'hint', style: { fontSize: 'var(--fs-m)' } }, `版本 ${a.version}`))),
       h('div', { class: 'kv' },
+        ...(a.updated ? [h('span', null, '最后更新'), h('span', null, a.updated)] : []),
         h('span', null, '浏览器版本'), h('span', null, `Chrome ${a.chrome}`),
         h('span', null, '源码'), h('span', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); window.wa.openSource(); } }, 'github.com/Kr1xxxx/WAswitch')),
         ...(s.team && s.team.login === 'none' ? [h('span', null, '团队'), h('span', null, h('button', { class: 'link-btn', type: 'button', onclick: () => window.wa.showLogin() }, '登录…'))] : [])),

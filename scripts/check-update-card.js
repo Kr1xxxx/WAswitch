@@ -1,6 +1,6 @@
 // 更新卡片和关于页的文案（shen 2026-10-29：按钮叫「立即更新」；点完自动完成更新，不二次确认；下载完没点就不自己重启）。
 // 真的 shell 页面 + 假的主进程。检查侧栏卡片和关于页在这几种状态下的字：下载中（点过和没点过）、下好后、点过更新后在等手上的事、Mac 手动；
-// 都没有「重启」，按钮是「立即更新」，「稍后」只在等手上的事时通知主进程；900×600 下文字不被裁掉。SHOT_DIR 设了就存截图。
+// 都没有「重启」，按钮是「立即更新」，「稍后」只在等手上的事时通知主进程；关于页有打包日期时第一行是「最后更新」；900×600 下文字不被裁掉。SHOT_DIR 设了就存截图。
 // 用法：xvfb-run -a npx electron --no-sandbox scripts/check-update-card.js
 const path = require('path');
 const fs = require('fs');
@@ -107,5 +107,14 @@ app.whenReady().then(async () => {
   assert(a.text.includes('检查更新失败') && a.text.includes('连不上来财（连接超时）') && !/没检查成功|已是最新|下载页|GitHub/.test(a.text), `关于页检查失败：${a.text}`);
   assert((a.text.match(/连不上来财/g) || []).length === 1, `失败原因只写一次：${a.text}`);
   await shot('about-error');
+
+  // 「最后更新」：有打包日期才显示，排在第一行；从源码运行（没有日期）不显示
+  const kv = () => js(() => [...document.querySelectorAll('.kv > span')].map((n) => n.innerText.trim()));
+  assert(!(await kv()).includes('最后更新'), '没有打包日期时不显示「最后更新」');
+  await state({ ...base(upd({ status: 'none', version: '', current: '1.0.21', lastResult: '已是最新版本' }), 'settings'), about: { version: '1.0.21', chrome: '152.0.7977.169', updated: '2026-11-25' } });
+  const k = await kv();
+  assert.deepStrictEqual(k.slice(0, 4), ['最后更新', '2026-11-25', '浏览器版本', 'Chrome 152.0.7977.169'], `关于页的行：${k}`);
+  assert(await js(() => [...document.querySelectorAll('.kv > span')].every((n) => n.getBoundingClientRect().height < 30)), '「最后更新」这一行不换行');
+  await shot('about-updated');
   done(0, 'check-update-card: ok');
 }).catch((e) => done(1, `check-update-card 失败：${e && e.stack || e}`));

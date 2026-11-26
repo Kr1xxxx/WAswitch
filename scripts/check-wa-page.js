@@ -140,6 +140,57 @@ app.whenReady().then(async () => {
   check(await waPage.focusCompose(cw) === 'none', '没有输入框（没打开对话）：返回 none');
   chat.destroy();
 
+  // 新版（真实结构）对话列表里 WhatsApp 静音的群和人：读得出 muted，有新消息也不弹（shen 2026-11-26）
+  // 照 main.js 的 readUnreadChats：includePreview 读列表，交给真的 Notifier
+  const real = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
+  await real.loadFile(path.join(__dirname, 'fixtures', 'wa-chatlist-real.html'));
+  const rw = real.webContents;
+  // 测试页自己的环境里给某一行加未读角标（真 WhatsApp 的样子：带 aria-label 的数字，放在静音图标同一格里）；row 是名字
+  const badge = (row, n) => rw.executeJavaScript(`(() => {
+    const t = [...document.querySelectorAll('[role=row]')].find((r) => r.querySelector('span[title=' + JSON.stringify(${JSON.stringify(row)}) + ']'));
+    const cell = t.querySelector('[role=gridcell][aria-colindex="1"] > span');
+    cell.querySelectorAll('._ahlk').forEach((x) => x.remove());
+    cell.insertAdjacentHTML('beforeend', '<div class="_ahlk"><span class="x140p0ai x1gqmxyu" aria-label="${n} unread messages">${n}</span></div>');
+  })()`);
+  // 再做一个静音的个人对话：给 Emma Wilson 那行加上静音图标
+  await rw.executeJavaScript(`(() => {
+    const t = [...document.querySelectorAll('[role=row]')].find((r) => r.querySelector('span[title="Emma Wilson"]'));
+    t.querySelector('[role=gridcell][aria-colindex="1"] > span').insertAdjacentHTML('afterbegin', '<span data-icon="muted"><svg></svg></span>');
+  })()`);
+  const readReal = async () => { const x = await waPage.readChatList(rw, { includePreview: true }); return x && x.ok ? x.chats : null; };
+  const clean = (c) => c.name.replace(/[\u202a-\u202e]/g, '');
+  const { Notifier } = require('../src/notify');
+  const cards = [];
+  const fakePop = { dnd: false, show: (c) => { cards.push(c); return true; }, dropAccount() {}, dropKey() {} };
+  const acc = { id: 'w1', name: 'Sales FR' };
+  const nt = new Notifier({ getAccounts: () => [acc], getWindow: () => null, activate() {}, quit() {}, readChats: () => readReal(), popup: fakePop });
+  nt.update(acc, 1, { isActive: false }); // 测试页本来就有 +44 那个 2 条未读
+  await new Promise((r) => setTimeout(r, 50));
+  cards.length = 0;
+  await badge('Lash Supply EU', 3);
+  const list1 = await readReal();
+  const lash = list1.find((c) => clean(c) === 'Lash Supply EU');
+  check(lash && lash.muted === true && lash.unread === 3 && lash.is_group === true, `静音的群：读得出 muted、未读 3（${JSON.stringify(lash)}）`);
+  nt.update(acc, 2, { isActive: false });
+  await new Promise((r) => setTimeout(r, 50));
+  check(cards.length === 0, `静音的群来了 3 条：不弹，也不补「有 N 个未读对话」（弹了 ${cards.map((c) => c.chat || c.text).join(' / ')}）`);
+  await badge('Emma Wilson', 1);
+  const emma = (await readReal()).find((c) => clean(c) === 'Emma Wilson');
+  check(emma && emma.muted === true && emma.unread === 1, `静音的个人对话：读得出 muted（${JSON.stringify(emma)}）`);
+  nt.update(acc, 3, { isActive: false });
+  await new Promise((r) => setTimeout(r, 50));
+  check(cards.length === 0, '静音的人来了消息：不弹');
+  await badge('Lash Supply EU', 4);
+  nt.recheck(acc, { isActive: false });
+  await new Promise((r) => setTimeout(r, 50));
+  check(cards.length === 0, '静音的群又来一条（未读对话数没变）：不弹');
+  await badge('Sophie Martin', 1);
+  nt.update(acc, 4, { isActive: false });
+  await new Promise((r) => setTimeout(r, 50));
+  check(cards.length === 1 && cards[0].chat.replace(/[\u202a-\u202e]/g, '') === 'Sophie Martin', `没静音的客户来消息：照弹，只弹她（${cards.map((c) => c.chat).join(' / ')}）`);
+  check(!(await readReal()).find((c) => clean(c) === 'Sophie Martin').muted, '没静音的对话 muted 是 false');
+  real.destroy();
+
   console.log(failures ? `\n${failures} 项失败` : '\n全部通过');
   app.exit(failures ? 1 : 0);
 });

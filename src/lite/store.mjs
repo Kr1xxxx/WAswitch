@@ -20,6 +20,16 @@ export const toNumber = (t) => {
   return Number(t) || 0;
 };
 
+// WhatsApp 里设了静音：muteEndTime 是静音到什么时候。历史同步里是秒，在线改的（app state 的 muteAction）是毫秒；
+// -1（或别的负数）是一直静音，null / 0 是没静音。返回毫秒，一直静音返回 -1，没静音返回 0
+export function muteUntil(v) {
+  const n = toNumber(v);
+  if (n < 0) return -1;
+  if (!n) return 0;
+  return n > 1e12 ? n : n * 1000;
+}
+export const isMutedChat = (c, now = Date.now()) => !!c && (c.mute === -1 || (c.mute > 0 && c.mute > now));
+
 const LABELS = {
   imageMessage: '[图片]',
   videoMessage: '[视频]',
@@ -126,6 +136,10 @@ export class ChatStore {
     }
     const ts = toNumber(c.conversationTimestamp);
     if (ts > chat.ts) chat.ts = ts;
+    if (c.muteEndTime !== undefined) {
+      const mute = muteUntil(c.muteEndTime);
+      if (mute) chat.mute = mute; else delete chat.mute;
+    }
     this.save.schedule();
   }
 
@@ -236,7 +250,7 @@ export class ChatStore {
       .filter((c) => c.ts || c.preview)
       .sort((a, b) => b.ts - a.ts)
       .slice(0, limit)
-      .map((c) => ({ jid: c.jid, name: this.nameOf(c.jid) || shortJid(c.jid), unread: c.unread, ts: c.ts, preview: c.preview, group: isJidGroup(c.jid) }));
+      .map((c) => ({ jid: c.jid, name: this.nameOf(c.jid) || shortJid(c.jid), unread: c.unread, ts: c.ts, preview: c.preview, group: isJidGroup(c.jid), muted: isMutedChat(c) }));
   }
 
   messages(jid, limit = 200) {

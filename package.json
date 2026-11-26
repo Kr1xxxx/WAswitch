@@ -29,7 +29,7 @@
     "check:shell-stall": "node scripts/check-shell-stall.js",
     "check:memory": "node scripts/check-memory.js",
     "check:offline": "node scripts/check-offline.js",
-    "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js",
+    "check:notify": "node scripts/check-notify.js && node scripts/check-notify-reconnect.js && node scripts/check-dnd.js",
     "check:unreplied": "node scripts/check-unreplied.js && node scripts/check-followup.js",
     "check:popup": "electron scripts/check-popup.js",
     "check:wa-sound": "electron scripts/check-wa-sound.js && node scripts/check-wa-sound-app.js",

@@ -56,6 +56,8 @@ function fakeSock() {
     if (msg.pushName && !msg.key.fromMe) ev.emit('contacts.update', [{ id: msg.key.remoteJid, notify: msg.pushName }]);
     await processMessage(msg, { shouldProcessHistoryMsg: false, ev, creds: { me: { id: ME } }, signalRepository: {}, keyStore: {}, logger: silent, options: {}, getMessage: async () => undefined });
   });
+  // 在手机上静音 / 取消静音（app state 同步）。until：静音到什么时候（毫秒），null 是取消
+  sock.syncMute = (jid, until) => processSyncAction({ syncAction: { value: { muteAction: until === null ? { muted: false } : { muted: true, muteEndTimestamp: until } } }, index: ['mute', jid] }, ev, { id: ME }, undefined, silent);
   // 在手机上读了 / 标成未读（app state 同步）
   sock.syncRead = (jid, read) => processSyncAction({ syncAction: { value: { markChatAsReadAction: { read } } }, index: ['markChatAsRead', jid] }, ev, { id: ME }, undefined, silent);
   return sock;
@@ -170,6 +172,41 @@ try {
   await a.message(EMMA, 'Emma Schneider', 'Super, danke!');
   await settle();
   check(a.unread(EMMA) === 1 && a.take() === 'Emma Schneider:1', `回过以后她再发：从 1 条开始，弹（${a.unread(EMMA)}）`);
+
+  // ---------- WhatsApp 里静音的人和群：未读照记，不弹（shen 2026-11-26） ----------
+  // 在手机上把 Anna 静音 8 小时（app state 的 muteAction，到期时间是毫秒）
+  a.sock.syncMute(ANNA, Date.now() + 8 * 3600 * 1000);
+  await settle();
+  await a.message(ANNA, 'Anna Weber', 'Hast du kurz Zeit?');
+  await settle();
+  check(a.unread(ANNA) === 1 && a.pushed.find((c) => c.jid === ANNA)?.muted === true, `静音的 Anna：未读照记 1 条，推给主进程时带 muted（${a.unread(ANNA)}）`);
+  check(a.take() === '', '静音的 Anna 发来消息：不弹');
+  await a.message(ANNA, 'Anna Weber', 'Noch eine Frage');
+  await settle();
+  check(a.unread(ANNA) === 2 && a.take() === '', '静音的 Anna 又发一条：还是不弹');
+  // 一直静音的群（历史同步里的 muteEndTime 是 -1）
+  const GROUP = '120363012345678901@g.us';
+  a.sock.ev.emit('messaging-history.set', { chats: [{ id: GROUP, name: 'Lash Supply EU', muteEndTime: -1 }], contacts: [], messages: [] });
+  await settle();
+  await a.sock.upsert({ key: { remoteJid: GROUP, id: 'G1', fromMe: false, participant: JOHN }, message: { conversation: 'see you in Paris' }, messageTimestamp: (a.ts += 60), pushName: 'John' }, 'notify');
+  await settle();
+  check(a.unread(GROUP) === 1 && a.take() === '', `一直静音的群来了消息：未读照记，不弹（${a.unread(GROUP)}）`);
+  // 没静音的 Emma 照弹
+  await a.message(EMMA, 'Emma Schneider', 'Und der Preis?');
+  await settle();
+  check(a.take() === 'Emma Schneider:2', '没静音的客户：照弹');
+  // 在手机上取消 Anna 的静音：她再发就弹
+  a.sock.syncMute(ANNA, null);
+  await settle();
+  await a.message(ANNA, 'Anna Weber', 'Bist du da?');
+  await settle();
+  check(a.take() === 'Anna Weber:3', '取消静音后 Anna 再发：弹');
+  // 静音到期了（到期时间已经过了）：当成没静音；历史同步里的秒也认得
+  a.sock.syncMute(JOHN, Date.now() - 1000);
+  a.sock.ev.emit('messaging-history.set', { chats: [{ id: ANNA, muteEndTime: Math.floor(Date.now() / 1000) + 3600 }], contacts: [], messages: [] });
+  await settle();
+  check(a.session.store.summary().find((c) => c.jid === JOHN)?.muted === false, '静音已经到期：不算静音');
+  check(a.session.store.summary().find((c) => c.jid === ANNA)?.muted === true, '历史同步里按秒记的静音：认得出');
   a.stop();
 
   // ---------- 断线期间收到的消息（重连后补发，type append） ----------

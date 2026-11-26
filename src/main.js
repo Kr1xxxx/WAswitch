@@ -19,6 +19,10 @@ const proxy = require('./proxy');
 const errtext = require('./errtext');
 const copyText = require('./copy-text').makeCopyText(clipboard);
 const { addMenuTemplate } = require('./add-menu');
+const dnd = require('./dnd');
+const { dndMenuItem } = dnd;
+// 勿扰选时长只在 Mac 上有（shen 2026-11-26「仅限 MAC」）。开发版设 WASWITCH_TEST_MAC_DND=1 时在别的系统上也给，自检用
+const macDnd = process.platform === 'darwin' || (!app.isPackaged && process.env.WASWITCH_TEST_MAC_DND === '1');
 const { pageMenuTemplate } = require('./page-menu');
 const ports = require('./ports');
 const { regionLabel } = require('./regions');
@@ -673,7 +677,8 @@ const notifier = new Notifier({
   readChats: (acc) => readUnreadChats(acc),
   popup,
   openChat: (id, jid) => { const acc = findAcc(id); if (isLite(acc) && typeof jid === 'string' && jid) { liteOpen.set(id, jid); syncLiteWatch(); pushState(); } },
-  setDnd: (on) => setSetting('popupDnd', on === true),
+  // 勿扰选时长只在 Mac 上有，Windows 托盘还是原来的勾选项
+  ...(macDnd ? { dndMenu: () => dndMenuItem({ settings, set: setDndFor }) } : { setDnd: (on) => setSetting('popupDnd', on === true) }),
   isActive: (id) => id === activeId && page === 'account',
   onNew: (e) => addNotifLog(e),
   // 弹过哪一条（只存指纹，不存消息内容）：软件重启后同一条不再弹
@@ -1346,7 +1351,7 @@ function syncWaSound() {
     waSound.apply(view.webContents, waSound.wantMute({
       looking: notifier.looking(id === activeId && page === 'account'),
       sound: settings.popupSound,
-      dnd: settings.popupDnd,
+      dnd: settings.popupDnd && !dnd.dndExpired(settings),
       muted: isMuted(acc),
       calls: callsOn(acc),
     }));
@@ -1532,11 +1537,20 @@ function pushState() {
     canLoginItem,
     about: {
       version: app.getVersion(),
+      updated: builtDateTaipei(),
       electron: process.versions.electron,
       chrome: process.versions.chrome,
       dataDir: app.getPath('userData'),
     },
   });
+}
+
+// 这一版打包的日期（台北时间）。release.yml 打包前写 src/build-info.json；从源码运行、本地打包没有，关于页就不显示这一行。
+function builtDateTaipei() {
+  let t;
+  try { t = Date.parse(JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')).builtAt); } catch { return null; }
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + 8 * 3600e3).toISOString().slice(0, 10); // 台北 UTC+8，没有夏令时
 }
 
 function refresh() {
@@ -2686,6 +2700,37 @@ function applyLoginItem() {
   app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, args: ['--hidden'] });
 }
 
+// 勿扰选了时长（只在 Mac 上：菜单栏图标、Dock 图标、侧栏右键账号，见 dnd.js）。hours 是 0 表示关掉
+function setDndFor(hours) {
+  if (!dnd.DND_HOURS.includes(hours) && hours !== 0) return;
+  Object.assign(settings, dnd.dndPatch(hours));
+  dndChanged();
+}
+function dndChanged() {
+  memory.saveSettings(settings);
+  popup.refresh();
+  notifier.refresh();
+  refreshDockMenu();
+  scheduleDndEnd();
+  refresh();
+}
+// 限时的勿扰到点自动关。每 30 秒看一次，电脑睡眠醒来时也看（睡眠期间定时器不走）
+let dndTimer = null;
+function scheduleDndEnd() {
+  clearInterval(dndTimer);
+  dndTimer = null;
+  if (!settings.popupDnd || !(settings.popupDndUntil > 0)) return;
+  dndTimer = setInterval(checkDndEnd, 30 * 1000);
+}
+function checkDndEnd() {
+  if (dnd.dndExpired(settings)) setDndFor(0);
+}
+// Mac 的 Dock 图标右键菜单：勿扰
+function refreshDockMenu() {
+  if (process.platform !== 'darwin' || !app.dock) return;
+  app.dock.setMenu(Menu.buildFromTemplate([dndMenuItem({ settings, set: setDndFor })]));
+}
+
 function setSetting(key, value) {
   if (key === 'recycleMB') {
     if (value !== 0 && !memory.RECYCLE_CHOICES.includes(value)) return;
@@ -2705,6 +2750,8 @@ function setSetting(key, value) {
   memory.saveSettings(settings);
   if (key === 'openAtLogin') applyLoginItem();
   if (key === 'popupLater' && !value) notifier.cancelLater(); // 关掉：已经点过“稍后”的也不再弹
+  // 设置里的勿扰开关：不限时，要手动关
+  if (key === 'popupDnd') { settings.popupDndUntil = 0; dndChanged(); return; }
   if (key.startsWith('popup')) popup.refresh();
   notifier.refresh();
   refresh();
@@ -3133,7 +3180,11 @@ app.whenReady().then(async () => {
     // acceptFirstMouse：软件不在前台时点页面，这一下也算数（不然第一下只用来激活窗口）
     ...(mac ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 }, fullscreenable: false, acceptFirstMouse: true } : {}),
   });
+  // 关着软件时限时的勿扰到期了：打开时就关掉（这时界面还没建好，只改设置）
+  if (dnd.dndExpired(settings)) { Object.assign(settings, dnd.dndPatch(0)); memory.saveSettings(settings); }
   notifier.init();
+  scheduleDndEnd();
+  refreshDockMenu();
   // 窗口隐藏到托盘时，当前账号也算后台
   win.on('hide', layout);
   win.on('show', () => { layout(); armQrWatch(); });
@@ -3238,6 +3289,7 @@ app.whenReady().then(async () => {
   // 系统锁屏时直接锁上，回来解开系统锁屏后还要右滑一次
   powerMonitor.on('lock-screen', () => { if (settings.lockMinutes) setLocked(true); });
   powerMonitor.on('suspend', () => { if (settings.lockMinutes) setLocked(true); });
+  powerMonitor.on('resume', () => checkDndEnd());
   powerMonitor.on('resume', () => {
     offlineWatch.restart();
     setTimeout(() => directTz.sync().catch(() => {}), 10000);
@@ -3774,6 +3826,8 @@ onShell('context', (id, from) => {
       label: '不弹通知', type: 'checkbox', checked: acc.muted,
       click: () => { acc.muted = !acc.muted; saveAccounts(); notifier.refresh(); pushState(); },
     },
+    // 勿扰管所有号（和菜单栏图标、Dock 图标里的是同一个），只在 Mac 上有
+    ...(macDnd ? [dndMenuItem({ settings, set: setDndFor })] : []),
     {
       label: isLite(acc) ? '拼写检查（轻量模式不支持）'
         : process.platform === 'darwin' ? '拼写检查（英文）'

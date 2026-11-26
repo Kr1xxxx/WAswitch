@@ -19,6 +19,7 @@ const path = require('path');
 const { PopupQueue } = require('./popup-queue');
 const EMOJI = require('./emoji/list');
 const RADIX = require('./colors/radix');
+const { dndExpired } = require('./dnd');
 
 const CARD_W = 344;
 const PAD = { top: 10, right: 8, bottom: 24, left: 24 }; // 卡片四周留给阴影的透明边；上边要放得下 Mac 左上角伸出去的关闭按钮和它的阴影
@@ -71,7 +72,8 @@ class PopupWindow {
     return Number.isInteger(s) && s >= 0 ? s * 1000 : 6000;
   }
 
-  get dnd() { return !!this.hooks.settings().popupDnd; }
+  // 限时的勿扰过了时间就不算（主进程每 30 秒才去关一次）
+  get dnd() { const s = this.hooks.settings(); return !!s.popupDnd && !dndExpired(s, this.now()); }
 
   // 系统多少秒没有键盘鼠标输入；拿不到就当作一直在用（倒计时照走）
   idleSeconds() {
