@@ -304,12 +304,12 @@ class Notifier {
     // 正看着 / 勿扰 / 第一次看这个号的列表：只记下来，不弹以前的未读
     const quiet = silent || (poll && !prevSeen);
     this.notePopped(acc.id, chats, { record: quiet });
-    const { fresh: list, seen, dup } = grownChats(prevSeen, chats, fresh, 3, this.popped.get(acc.id));
+    const { fresh: list, seen, dup, muted } = grownChats(prevSeen, chats, fresh, 3, this.popped.get(acc.id));
     this.seen.set(acc.id, seen);
     if (quiet) return;
     if (!list.length) {
-      // 变多的客户都是弹过的那一条（页面刷新、重连后数字掉了又回来）：不弹，也不补号的卡
-      if (dup) return;
+      // 变多的客户都是弹过的那一条（页面刷新、重连后数字掉了又回来），或者是 WhatsApp 里静音的人和群：不弹，也不补号的卡
+      if (dup || muted) return;
       // 列表里找不到新客户（被搜索筛掉了、还没排好）：刚弹过就算了，没弹过补一张号的卡
       if (!poll && !this.restored(acc.id, n) && Date.now() - (this.lastPop.get(acc.id) || 0) > RECENT_POP_MS) this.popAccount(acc, count || n, unreadNames(chats));
       return;
@@ -466,7 +466,9 @@ class Notifier {
       { type: 'separator' },
       ...items,
       { type: 'separator' },
-      ...(this.hooks.setDnd ? [{ label: '勿扰（新消息不弹窗）', type: 'checkbox', checked: this.dnd, click: () => this.hooks.setDnd(!this.dnd) }] : []),
+      // Mac：勿扰选时长（dnd.js）；Windows：和以前一样一个勾选项
+      ...(this.hooks.dndMenu ? [this.hooks.dndMenu()]
+        : this.hooks.setDnd ? [{ label: '勿扰（新消息不弹窗）', type: 'checkbox', checked: this.dnd, click: () => this.hooks.setDnd(!this.dnd) }] : []),
       ...(this.hooks.settingsMenu ? [...this.hooks.settingsMenu(), { type: 'separator' }] : []),
       { label: '退出 WAswitch', click: () => this.hooks.quit() },
     ]));

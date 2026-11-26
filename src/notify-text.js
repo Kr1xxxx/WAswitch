@@ -72,7 +72,7 @@ function wasPopped(popped, key, c, n) {
 // chats：对话列表 { name, unread, preview?, muted?, jid?, ts?, time? }，最近的在前
 // firstLimit：没记过时最多挑几个（只挑列表最上面的，免得把以前的未读全弹一遍）
 // popped：已经弹过的 key -> { sig, unread }（见 wasPopped），弹过的同一条不再弹
-// 返回 { fresh: [{ key, name, unread, preview, jid, sig, t }], seen: 新的 Map, dup: 因为弹过而跳过了几个 }
+// 返回 { fresh: [{ key, name, unread, preview, jid, sig, t }], seen: 新的 Map, dup: 因为弹过而跳过了几个, muted: 因为静音而跳过了几个 }
 function grownChats(seen, chats, firstLimit = 1, limit = 3, popped = null) {
   const next = new Map(seen || []);
   const list = Array.isArray(chats) ? chats.filter((c) => c && chatKey(c)) : [];
@@ -86,15 +86,15 @@ function grownChats(seen, chats, firstLimit = 1, limit = 3, popped = null) {
     }
     if (n > 0) next.set(key, n); else next.delete(key);
   }
-  // 静音的对话（WhatsApp 里设了静音）不单独弹，除非只有它们
+  // WhatsApp 里设了静音的人和群不弹（shen 2026-11-26），只有它们来了消息也不弹
   const loud = grown.filter((g) => !g.c.muted);
-  const pick = (loud.length ? loud : grown).slice(0, seen ? limit : Math.max(1, Math.min(firstLimit, limit)));
+  const pick = loud.slice(0, seen ? limit : Math.max(1, Math.min(firstLimit, limit)));
   const fresh = pick.map(({ key, c, n }) => {
     let name = (c.name || key).replace(/\s+/g, ' ').trim();
     if ([...name].length > MAX_LEN) name = `${[...name].slice(0, MAX_LEN).join('')}…`;
     return { key, name, unread: n, preview: cleanPreview(c.preview), jid: typeof c.jid === 'string' ? c.jid : '', sig: popSig(c), t: clockOf(c) };
   });
-  return { fresh, seen: next, dup };
+  return { fresh, seen: next, dup, muted: grown.length - loud.length };
 }
 
 module.exports = { unreadNames, unreadBody, grownChats, cleanPreview, chatKey, popSig, clockOf, wasPopped, MAX_NAMES, MAX_LEN, MAX_PREVIEW };
