@@ -3,6 +3,7 @@
 // 改标题 "(N) WhatsApp" 并用不挂在页面上的 new Audio 放提示音。主进程开 --inspect，每 20 毫秒看一遍所有页面
 // （网页号页面、WAswitch 的弹窗）是不是在出声且没静音，出声一次记一次。
 //   1. 窗口缩到托盘（没看着这个号）：只有 WAswitch 弹窗响，WhatsApp 页面静音
+//   1b. 托盘菜单里选「勿扰 › 1 小时」：什么都不响；「关闭勿扰」后照常
 //   2. 窗口在前台开着这个号：WAswitch 不弹，只有 WhatsApp 自己响
 // 运行：xvfb-run -a node scripts/check-wa-sound-app.js
 const { spawn, execFileSync } = require('child_process');
@@ -87,6 +88,8 @@ const SAMPLER = `(() => {
     id: '1', name: 'Emma', color: '#16A34A', proxy: '', mode: 'web', primary: true,
     fingerprint: { version: 2, os: process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux', region: 'DE', seed: 1 },
   }]));
+  // 上次关软件前开了限时勿扰，现在已经过了时间：打开软件就关掉，新消息照常弹
+  fs.writeFileSync(path.join(home, 'waswitch', 'settings.json'), JSON.stringify({ popupDnd: true, popupDndUntil: Date.now() - 60 * 1000 }));
   const port = await freePort();
   const inspect = await freePort();
   const env = { ...process.env, XDG_CONFIG_HOME: home, HOME: home, ...teamOff(path.join(home, 'waswitch')) };
@@ -131,6 +134,35 @@ const SAMPLER = `(() => {
     let m = await message();
     check(m.r === 'played', `WhatsApp 页面放了提示音（${m.r}）`);
     check(m.heard.length === 1 && m.heard[0] === 'waswitch', `1. 窗口在托盘里：只听到 WAswitch 弹窗一次（听到：${m.heard.join('、') || '没有'}）`);
+    const boot = JSON.parse(fs.readFileSync(path.join(home, 'waswitch', 'settings.json'), 'utf8'));
+    check(boot.popupDnd === false && boot.popupDndUntil === 0, '关着软件时勿扰到期了：打开软件就关掉');
+
+    // 1b. 托盘菜单（Mac 顶部菜单栏图标）里选「勿扰 › 1 小时」：新消息不弹也不响；「关闭勿扰」后照常
+    //     主进程里记下最近一次带「勿扰」子菜单的菜单模板（托盘菜单每次刷新都重建），像用户那样点里面的项
+    await main.evaluate(`(() => {
+      const { Menu } = process.mainModule.require('electron');
+      if (!globalThis.__origBuild) globalThis.__origBuild = Menu.buildFromTemplate;
+      Menu.buildFromTemplate = (t) => { const d = t.find((x) => x && Array.isArray(x.submenu) && /^勿扰/.test(x.label || '')); if (d) globalThis.__dnd = d; return globalThis.__origBuild.call(Menu, t); };
+      return true;
+    })()`);
+    await message(); // 来一条让托盘菜单刷新一次
+    const dndLabel = () => main.evaluate('globalThis.__dnd ? globalThis.__dnd.label : ""');
+    check(await dndLabel() === '勿扰', `托盘菜单里有「勿扰」（${await dndLabel()}）`);
+    await main.evaluate('globalThis.__dnd.submenu.find((x) => x.label === "1 小时").click(); true');
+    await sleep(300);
+    check(/^勿扰到 /.test(await dndLabel()), `选了 1 小时：菜单写到几点（${await dndLabel()}）`);
+    const saved = JSON.parse(fs.readFileSync(path.join(home, 'waswitch', 'settings.json'), 'utf8'));
+    check(saved.popupDnd === true && Math.abs(saved.popupDndUntil - Date.now() - 3600 * 1000) < 60 * 1000, '设置文件里记下勿扰和到期时间');
+    m = await message();
+    check(m.heard.length === 0, `勿扰中来消息：什么都没响（听到：${m.heard.join('、') || '没有'}）`);
+    await main.evaluate('globalThis.__dnd.submenu.find((x) => x.label === "关闭勿扰").click(); true');
+    await sleep(300);
+    check(await dndLabel() === '勿扰', '点「关闭勿扰」：菜单回到「勿扰」');
+    // 假页面的对话列表上没有未读角标，新消息只能弹号的卡，而号的卡 15 秒内弹过就不再补（notify.js 的 RECENT_POP_MS）
+    await sleep(12000);
+    m = await message();
+    check(m.heard.length === 1 && m.heard[0] === 'waswitch', `关了勿扰再来消息：照常响 WAswitch 弹窗一次（听到：${m.heard.join('、') || '没有'}）`);
+    await main.evaluate('process.mainModule.require("electron").Menu.buildFromTemplate = globalThis.__origBuild; true');
 
     // 2. 窗口在前台开着这个号
     await win('w.show(); w.focus(); return true;');

@@ -45,6 +45,10 @@ g2 = grownChats(g2.seen, [{ name: 'Emma Schneider', unread: 3 }, { name: 'John M
 check(g2.fresh.length === 0, '没有变化：不弹');
 const g3 = grownChats(new Map(), [{ name: 'Team Berlin', unread: 4, muted: true }, { name: 'Lucas Martin', unread: 1 }], 1);
 check(g3.fresh.length === 1 && g3.fresh[0].name === 'Lucas Martin', 'WhatsApp 里静音的群：有别的客户时不单独弹');
+const g5 = grownChats(new Map(), [{ name: 'Team Berlin', unread: 4, muted: true }, { name: 'Lucas Martin', unread: 0 }], 1);
+check(g5.fresh.length === 0 && g5.muted === 1 && g5.seen.get('Team Berlin') === 4, 'WhatsApp 里静音的群：只有它来了消息也不弹，记下条数');
+const g6 = grownChats(null, [{ name: 'Muted Klaus', unread: 1, muted: true }, { name: 'Team Berlin', unread: 2, muted: true }], 2);
+check(g6.fresh.length === 0 && g6.muted === 2, 'WhatsApp 里静音的人和群：第一次看列表也不弹');
 const g4 = grownChats(null, [{ jid: '491701234567@s.whatsapp.net', name: 'Emma', unread: 1, preview: 'Hi' }], 1);
 check(g4.fresh[0].key === '491701234567@s.whatsapp.net' && g4.fresh[0].jid, '轻量号按 jid 区分客户，点打开能直接开这个对话');
 check(cleanPreview('x'.repeat(300)).length === 161, '预览最多 160 字');
@@ -136,6 +140,21 @@ function make(readChats, { win = null, laterMs } = {}) {
   n.update({ ...acc, muted: true }, 2, { isActive: false });
   await tick(10);
   check(popup.cards.length === 0 && asked === 0 && logs[0].popped === false, '关了通知的号：不读、不弹，记录写“没弹”');
+
+  // WhatsApp 里静音的群来了消息：不弹，也不补「有 N 个未读对话」号的卡；之后没静音的客户来消息照弹
+  let mutedList = [{ name: 'Team Berlin', unread: 3, muted: true, preview: 'Anna: Meeting at 10' }, { name: 'Emma Schneider', unread: 0 }];
+  ({ n, popup } = make(async () => mutedList));
+  n.update(acc, 1, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, 'WhatsApp 里静音的群来了消息：不弹，不补号的卡');
+  mutedList = [{ name: 'Team Berlin', unread: 5, muted: true }, { name: 'Emma Schneider', unread: 0 }];
+  n.recheck(acc, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 0, 'WhatsApp 里静音的群又来一条：还是不弹');
+  mutedList = [{ name: 'Emma Schneider', unread: 1, preview: 'Hallo' }, { name: 'Team Berlin', unread: 5, muted: true }];
+  n.update(acc, 2, { isActive: false });
+  await tick(10);
+  check(popup.cards.length === 1 && popup.cards[0].chat === 'Emma Schneider', '没静音的客户来消息：照弹，只弹她');
 
   // 正看着这个号（WAswitch 在前台、开着这个号）：不弹；看着别的号时，这个号的消息照弹
   const focusedWin = { isVisible: () => true, isFocused: () => true };

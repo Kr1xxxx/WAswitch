@@ -322,8 +322,8 @@ export class Session {
     // 带上最近几个有未读的对话（名字、未读条数、最后一条预览），主进程弹窗用。
     // 未读对话数没变、但某个客户又发了一条（未读条数变了）也推一次
     const chats = this.store.summary().filter((c) => c.unread > 0).slice(0, 5)
-      .map((c) => ({ jid: c.jid, name: c.name, unread: c.unread, ts: c.ts, preview: String(c.preview || '').slice(0, 160) }));
-    const sig = `${unread}|${chats.map((c) => `${c.jid}:${c.unread}`).join(',')}`;
+      .map((c) => ({ jid: c.jid, name: c.name, unread: c.unread, ts: c.ts, preview: String(c.preview || '').slice(0, 160), muted: c.muted }));
+    const sig = `${unread}|${chats.map((c) => `${c.jid}:${c.unread}${c.muted ? 'm' : ''}`).join(',')}`;
     if (sig !== this.lastUnreadSig) {
       this.lastUnreadSig = sig;
       this.lastUnread = unread;
